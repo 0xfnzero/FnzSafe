@@ -400,7 +400,7 @@ make package
 | 变量 | 用途 |
 |---|---|
 | `FNZERO_SAFE_API_TOKEN` | 桌面/Web 开发使用的固定本地 API token |
-| `FNZERO_SAFE_DB_PATH` | 覆盖钱包数据库路径 |
+| `FNZERO_SAFE_DB_PATH` | 覆盖钱包数据库路径。`make dev` 会优先沿用已有的 `apps/desktop/data/sol-safekey.sqlite3` 旧开发钱包库，否则使用 `apps/desktop/data/fnzero-safe.sqlite3`。 |
 | `FNZERO_SAFE_ALLOWED_ORIGINS` | 额外允许访问本地 API 的 origin，多个用逗号分隔 |
 | `FNZERO_SAFE_ALLOW_SECRET_EXPORT=true` | 允许非桌面本机调试上下文导出明文私钥/助记词 |
 | `FNZERO_SAFE_ALLOW_DIRECT_SECRET_INPUT=true` | 允许 Web 调试上下文直接提交明文私钥 |

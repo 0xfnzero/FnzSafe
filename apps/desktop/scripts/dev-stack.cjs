@@ -1,5 +1,6 @@
 const { spawn } = require("node:child_process");
 const { randomBytes } = require("node:crypto");
+const fs = require("node:fs");
 const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
@@ -10,6 +11,16 @@ const children = [];
 function sharedApiToken() {
   const existing = String(process.env.FNZERO_SAFE_API_TOKEN || process.env.SOL_SAFEKEY_API_TOKEN || "").trim();
   return existing || randomBytes(32).toString("base64url");
+}
+
+function desktopDatabasePath() {
+  const existing = String(process.env.FNZERO_SAFE_DB_PATH || process.env.SOL_SAFEKEY_DB_PATH || "").trim();
+  if (existing) return existing;
+
+  const legacyPath = path.join(root, "data", "sol-safekey.sqlite3");
+  if (fs.existsSync(legacyPath)) return legacyPath;
+
+  return path.join(root, "data", "fnzero-safe.sqlite3");
 }
 
 function spawnManaged(label, command, args, env) {
@@ -71,6 +82,7 @@ const env = {
   NEXT_PUBLIC_FNZERO_SAFE_API_TOKEN: token,
   SOL_SAFEKEY_API_TOKEN: token,
   NEXT_PUBLIC_SOL_SAFEKEY_API_TOKEN: token,
+  FNZERO_SAFE_DB_PATH: desktopDatabasePath(),
 };
 
 spawnManaged("Next.js", "npm", ["exec", "--", "next", "dev", "-H", "127.0.0.1", "-p", "3840"], env);
