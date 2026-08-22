@@ -7,6 +7,7 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use bip39::{Language, Mnemonic};
 use fnzero_safe::{KeyManager, Keypair, Pubkey, Signer};
+use fnzero_safe_evm_services as evm;
 use serde::{Deserialize, Serialize};
 use solana_account_decoder_client_types::UiAccountData;
 use solana_client::rpc_client::RpcClient;
@@ -37,6 +38,11 @@ pub mod capabilities {
     pub const PUMP_TRADING: &str = "pump_trading";
     pub const DAPP_SIGNING: &str = "dapp_signing";
     pub const SQUADS_MULTISIG: &str = "squads_multisig";
+    pub const EVM_CHAINS: &str = "evm_chains";
+    pub const EVM_WALLETS: &str = "evm_wallets";
+    pub const EVM_ASSETS: &str = "evm_assets";
+    pub const EVM_PAYMENTS: &str = "evm_payments";
+    pub const EVM_DAPP_SIGNING: &str = "evm_dapp_signing";
 }
 
 const TOKEN_PROGRAM_ID: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
@@ -75,8 +81,39 @@ pub enum MobileErrorCode {
     UserRejected,
     BiometricCancelled,
     TotpInvalid,
+    UnsupportedChain,
+    GasEstimateFailed,
+    InvalidChainId,
+    InvalidTypedData,
+    HistoryUnavailable,
     Unsupported,
     NotImplemented,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChainFamily {
+    Solana,
+    Evm,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WalletFamily {
+    Solana,
+    Evm,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppChain {
+    pub family: ChainFamily,
+    pub chain_id: Option<u64>,
+    pub network: Option<AppNetwork>,
+    pub name: String,
+    pub native_symbol: String,
+    pub rpc_url: Option<String>,
+    pub explorer_url: Option<String>,
+    pub testnet: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -150,6 +187,11 @@ pub fn mobile_capabilities() -> SurfaceCapabilities {
             capabilities::PUMP_TRADING,
             capabilities::DAPP_SIGNING,
             capabilities::SQUADS_MULTISIG,
+            capabilities::EVM_CHAINS,
+            capabilities::EVM_WALLETS,
+            capabilities::EVM_ASSETS,
+            capabilities::EVM_PAYMENTS,
+            capabilities::EVM_DAPP_SIGNING,
         ],
         excluded: vec![
             "program_deploy",
@@ -165,6 +207,76 @@ pub struct WalletSummary {
     pub id: String,
     pub name: String,
     pub public_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmChainConfig {
+    pub chain_id: u64,
+    pub name: String,
+    pub native_symbol: String,
+    pub rpc_url: String,
+    pub explorer_url: Option<String>,
+    pub testnet: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmWalletSummary {
+    pub id: String,
+    pub name: String,
+    pub address: String,
+    pub derivation_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmWalletKeystore {
+    pub wallet: EvmWalletSummary,
+    pub keystore_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmCreateWalletRequest {
+    pub name: String,
+    pub password: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmImportPrivateKeyRequest {
+    pub name: String,
+    pub private_key_hex: String,
+    pub password: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmImportMnemonicRequest {
+    pub name: String,
+    pub mnemonic: String,
+    pub derivation_path: Option<String>,
+    pub password: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmImportKeystoreRequest {
+    pub name: String,
+    pub keystore_json: String,
+    pub password: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmUnlockWalletRequest {
+    pub keystore_json: String,
+    pub password: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmExportPrivateKeyRequest {
+    pub keystore_json: String,
+    pub password: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmExportPrivateKeyResponse {
+    pub address: String,
+    pub private_key_hex: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -255,6 +367,46 @@ pub struct AssetSnapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmTokenQuery {
+    pub contract_address: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmAssetQueryRequest {
+    pub chain: EvmChainConfig,
+    pub wallet_address: String,
+    pub tokens: Vec<EvmTokenQuery>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmTokenAsset {
+    pub contract_address: String,
+    pub symbol: String,
+    pub name: String,
+    pub balance: String,
+    pub decimals: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmAssetSnapshot {
+    pub chain: EvmChainConfig,
+    pub wallet_address: String,
+    pub native_balance_wei: String,
+    pub tokens: Vec<EvmTokenAsset>,
+    pub recent_transactions: Vec<EvmTransactionHistoryEntry>,
+    pub history_status: String,
+    pub history_message: Option<String>,
+    pub refreshed_at_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmTransactionHistoryEntry {
+    pub hash: String,
+    pub block_number: Option<u64>,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssetQueryRequest {
     pub network: AppNetwork,
     pub wallet_public_key: String,
@@ -308,12 +460,83 @@ pub struct PaymentSubmitRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmPaymentPreviewRequest {
+    pub chain: EvmChainConfig,
+    pub wallet_address: String,
+    pub recipient: String,
+    pub amount_wei_or_units: String,
+    pub token_contract: Option<String>,
+    pub memo: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmPaymentPreview {
+    pub preview_id: String,
+    pub chain: EvmChainConfig,
+    pub wallet_address: String,
+    pub recipient: String,
+    pub token_contract: Option<String>,
+    pub amount_wei_or_units: String,
+    pub gas_limit: String,
+    pub gas_price_wei: String,
+    pub max_fee_per_gas_wei: Option<String>,
+    pub max_priority_fee_per_gas_wei: Option<String>,
+    pub fee_model: String,
+    pub nonce: String,
+    pub estimated_fee_wei: String,
+    pub summary: String,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmPaymentSubmitRequest {
+    pub preview_id: String,
+    pub approved: bool,
+    pub chain: EvmChainConfig,
+    pub keystore_json: String,
+    pub password: String,
+    pub recipient: String,
+    pub amount_wei_or_units: String,
+    pub token_contract: Option<String>,
+    pub gas_limit: Option<String>,
+    pub gas_price_wei: Option<String>,
+    pub max_fee_per_gas_wei: Option<String>,
+    pub max_priority_fee_per_gas_wei: Option<String>,
+    pub nonce: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TransactionSubmitResult {
     pub signature: String,
     pub slot: Option<u64>,
     pub network: AppNetwork,
     pub submitted_at: String,
     pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmTransactionSubmitResult {
+    pub transaction_hash: String,
+    pub chain: EvmChainConfig,
+    pub submitted_at: String,
+    pub status: String,
+    pub block_number: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmTransactionStatusRequest {
+    pub chain: EvmChainConfig,
+    pub transaction_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmTransactionStatus {
+    pub transaction_hash: String,
+    pub chain: EvmChainConfig,
+    pub block_number: Option<u64>,
+    pub status: String,
+    pub gas_used: Option<String>,
+    pub effective_gas_price_wei: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -357,6 +580,47 @@ pub struct DappSignSubmitResult {
     pub signed_payload_base64: Option<String>,
     pub signed_payloads_base64: Vec<String>,
     pub transaction: Option<TransactionSubmitResult>,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmDappSignPreviewRequest {
+    pub chain: EvmChainConfig,
+    pub wallet_address: String,
+    pub app_name: String,
+    pub app_url: String,
+    pub method: String,
+    pub payload_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmDappSignPreview {
+    pub preview_id: String,
+    pub chain: EvmChainConfig,
+    pub wallet_address: String,
+    pub app_name: String,
+    pub app_url: String,
+    pub method: String,
+    pub summary: String,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmDappSignSubmitRequest {
+    pub preview_id: String,
+    pub approved: bool,
+    pub chain: EvmChainConfig,
+    pub keystore_json: String,
+    pub password: String,
+    pub method: String,
+    pub payload_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmDappSignSubmitResult {
+    pub signature: Option<String>,
+    pub signed_transaction: Option<String>,
+    pub transaction: Option<EvmTransactionSubmitResult>,
     pub status: String,
 }
 
@@ -653,6 +917,214 @@ fn map_rpc_error(message: impl ToString) -> AppServiceError {
         MobileErrorCode::RpcUnavailable,
         "Solana RPC request failed; check network and RPC settings",
     )
+}
+
+fn map_evm_error(error: evm::EvmServiceError) -> AppServiceError {
+    use evm::EvmServiceError;
+    match error {
+        EvmServiceError::InvalidInput(message) => {
+            AppServiceError::mobile(MobileErrorCode::InvalidInput, message)
+        }
+        EvmServiceError::WrongPassword => {
+            AppServiceError::mobile(MobileErrorCode::WrongPassword, "Wrong password")
+        }
+        EvmServiceError::UnsupportedChain => {
+            AppServiceError::mobile(MobileErrorCode::UnsupportedChain, "Unsupported EVM chain")
+        }
+        EvmServiceError::RpcUnavailable => AppServiceError::mobile(
+            MobileErrorCode::RpcUnavailable,
+            "EVM RPC request failed; check chain and RPC settings",
+        ),
+        EvmServiceError::GasEstimateFailed => AppServiceError::mobile(
+            MobileErrorCode::GasEstimateFailed,
+            "EVM gas estimation failed",
+        ),
+        EvmServiceError::InsufficientFunds => {
+            AppServiceError::mobile(MobileErrorCode::InsufficientFunds, "Insufficient funds")
+        }
+        EvmServiceError::InvalidChainId => {
+            AppServiceError::mobile(MobileErrorCode::InvalidChainId, "Invalid EVM chain id")
+        }
+        EvmServiceError::UserRejected => AppServiceError::mobile(
+            MobileErrorCode::UserRejected,
+            "User rejected the signing request",
+        ),
+        EvmServiceError::InvalidTypedData => {
+            AppServiceError::mobile(MobileErrorCode::InvalidTypedData, "Invalid EVM typed data")
+        }
+        EvmServiceError::HistoryUnavailable => AppServiceError::mobile(
+            MobileErrorCode::HistoryUnavailable,
+            "EVM transaction history is unavailable",
+        ),
+    }
+}
+
+impl From<evm::EvmChainConfig> for EvmChainConfig {
+    fn from(value: evm::EvmChainConfig) -> Self {
+        Self {
+            chain_id: value.chain_id,
+            name: value.name,
+            native_symbol: value.native_symbol,
+            rpc_url: value.rpc_url,
+            explorer_url: value.explorer_url,
+            testnet: value.testnet,
+        }
+    }
+}
+
+impl From<EvmChainConfig> for evm::EvmChainConfig {
+    fn from(value: EvmChainConfig) -> Self {
+        Self {
+            chain_id: value.chain_id,
+            name: value.name,
+            native_symbol: value.native_symbol,
+            rpc_url: value.rpc_url,
+            explorer_url: value.explorer_url,
+            testnet: value.testnet,
+        }
+    }
+}
+
+impl From<evm::EvmWalletSummary> for EvmWalletSummary {
+    fn from(value: evm::EvmWalletSummary) -> Self {
+        Self {
+            id: value.id,
+            name: value.name,
+            address: value.address,
+            derivation_path: value.derivation_path,
+        }
+    }
+}
+
+impl From<evm::EvmWalletKeystore> for EvmWalletKeystore {
+    fn from(value: evm::EvmWalletKeystore) -> Self {
+        Self {
+            wallet: value.wallet.into(),
+            keystore_json: value.keystore_json,
+        }
+    }
+}
+
+impl From<EvmTokenQuery> for evm::EvmTokenQuery {
+    fn from(value: EvmTokenQuery) -> Self {
+        Self {
+            contract_address: value.contract_address,
+        }
+    }
+}
+
+impl From<evm::EvmTokenAsset> for EvmTokenAsset {
+    fn from(value: evm::EvmTokenAsset) -> Self {
+        Self {
+            contract_address: value.contract_address,
+            symbol: value.symbol,
+            name: value.name,
+            balance: value.balance,
+            decimals: value.decimals,
+        }
+    }
+}
+
+impl From<evm::EvmTransactionHistoryEntry> for EvmTransactionHistoryEntry {
+    fn from(value: evm::EvmTransactionHistoryEntry) -> Self {
+        Self {
+            hash: value.hash,
+            block_number: value.block_number,
+            status: value.status,
+        }
+    }
+}
+
+impl From<evm::EvmAssetSnapshot> for EvmAssetSnapshot {
+    fn from(value: evm::EvmAssetSnapshot) -> Self {
+        Self {
+            chain: value.chain.into(),
+            wallet_address: value.wallet_address,
+            native_balance_wei: value.native_balance_wei,
+            tokens: value.tokens.into_iter().map(Into::into).collect(),
+            recent_transactions: value
+                .recent_transactions
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            history_status: value.history_status,
+            history_message: value.history_message,
+            refreshed_at_ms: value.refreshed_at_ms,
+        }
+    }
+}
+
+impl From<evm::EvmPaymentPreview> for EvmPaymentPreview {
+    fn from(value: evm::EvmPaymentPreview) -> Self {
+        Self {
+            preview_id: value.preview_id,
+            chain: value.chain.into(),
+            wallet_address: value.wallet_address,
+            recipient: value.recipient,
+            token_contract: value.token_contract,
+            amount_wei_or_units: value.amount_wei_or_units,
+            gas_limit: value.gas_limit,
+            gas_price_wei: value.gas_price_wei,
+            max_fee_per_gas_wei: value.max_fee_per_gas_wei,
+            max_priority_fee_per_gas_wei: value.max_priority_fee_per_gas_wei,
+            fee_model: value.fee_model,
+            nonce: value.nonce,
+            estimated_fee_wei: value.estimated_fee_wei,
+            summary: value.summary,
+            warnings: value.warnings,
+        }
+    }
+}
+
+impl From<evm::EvmTransactionSubmitResult> for EvmTransactionSubmitResult {
+    fn from(value: evm::EvmTransactionSubmitResult) -> Self {
+        Self {
+            transaction_hash: value.transaction_hash,
+            chain: value.chain.into(),
+            submitted_at: value.submitted_at,
+            status: value.status,
+            block_number: value.block_number,
+        }
+    }
+}
+
+impl From<evm::EvmTransactionStatus> for EvmTransactionStatus {
+    fn from(value: evm::EvmTransactionStatus) -> Self {
+        Self {
+            transaction_hash: value.transaction_hash,
+            chain: value.chain.into(),
+            block_number: value.block_number,
+            status: value.status,
+            gas_used: value.gas_used,
+            effective_gas_price_wei: value.effective_gas_price_wei,
+        }
+    }
+}
+
+impl From<evm::EvmDappSignPreview> for EvmDappSignPreview {
+    fn from(value: evm::EvmDappSignPreview) -> Self {
+        Self {
+            preview_id: value.preview_id,
+            chain: value.chain.into(),
+            wallet_address: value.wallet_address,
+            app_name: value.app_name,
+            app_url: value.app_url,
+            method: value.method,
+            summary: value.summary,
+            warnings: value.warnings,
+        }
+    }
+}
+
+impl From<evm::EvmDappSignSubmitResult> for EvmDappSignSubmitResult {
+    fn from(value: evm::EvmDappSignSubmitResult) -> Self {
+        Self {
+            signature: value.signature,
+            signed_transaction: value.signed_transaction,
+            transaction: value.transaction.map(Into::into),
+            status: value.status,
+        }
+    }
 }
 
 fn keypair_from_mobile_keystore(keystore_json: &str, password: &str) -> AppServiceResult<Keypair> {
@@ -1261,6 +1733,79 @@ pub fn create_wallet(req: CreateWalletRequest) -> AppServiceResult<WalletKeystor
     })
 }
 
+pub fn evm_builtin_chains() -> Vec<EvmChainConfig> {
+    evm::builtin_chains().into_iter().map(Into::into).collect()
+}
+
+pub fn evm_wallet_create(req: EvmCreateWalletRequest) -> AppServiceResult<EvmWalletKeystore> {
+    evm::create_wallet(evm::EvmCreateWalletRequest {
+        name: req.name,
+        password: req.password,
+    })
+    .map(Into::into)
+    .map_err(map_evm_error)
+}
+
+pub fn evm_wallet_import_private_key(
+    req: EvmImportPrivateKeyRequest,
+) -> AppServiceResult<EvmWalletKeystore> {
+    evm::import_private_key(evm::EvmImportPrivateKeyRequest {
+        name: req.name,
+        private_key_hex: req.private_key_hex,
+        password: req.password,
+    })
+    .map(Into::into)
+    .map_err(map_evm_error)
+}
+
+pub fn evm_wallet_import_mnemonic(
+    req: EvmImportMnemonicRequest,
+) -> AppServiceResult<EvmWalletKeystore> {
+    evm::import_mnemonic(evm::EvmImportMnemonicRequest {
+        name: req.name,
+        mnemonic: req.mnemonic,
+        derivation_path: req.derivation_path,
+        password: req.password,
+    })
+    .map(Into::into)
+    .map_err(map_evm_error)
+}
+
+pub fn evm_wallet_import_keystore(
+    req: EvmImportKeystoreRequest,
+) -> AppServiceResult<EvmWalletKeystore> {
+    evm::import_keystore(evm::EvmImportKeystoreRequest {
+        name: req.name,
+        keystore_json: req.keystore_json,
+        password: req.password,
+    })
+    .map(Into::into)
+    .map_err(map_evm_error)
+}
+
+pub fn evm_wallet_unlock(req: EvmUnlockWalletRequest) -> AppServiceResult<EvmWalletSummary> {
+    evm::unlock_wallet(evm::EvmUnlockWalletRequest {
+        keystore_json: req.keystore_json,
+        password: req.password,
+    })
+    .map(Into::into)
+    .map_err(map_evm_error)
+}
+
+pub fn evm_wallet_export_private_key(
+    req: EvmExportPrivateKeyRequest,
+) -> AppServiceResult<EvmExportPrivateKeyResponse> {
+    evm::export_private_key(evm::EvmExportPrivateKeyRequest {
+        keystore_json: req.keystore_json,
+        password: req.password,
+    })
+    .map(|value| EvmExportPrivateKeyResponse {
+        address: value.address,
+        private_key_hex: value.private_key_hex,
+    })
+    .map_err(map_evm_error)
+}
+
 pub fn import_keystore(req: ImportKeystoreRequest) -> AppServiceResult<WalletKeystore> {
     let name = require_non_empty(&req.name, "wallet name")?;
     require_non_empty(&req.keystore_json, "keystore json")?;
@@ -1417,6 +1962,16 @@ pub fn load_asset_snapshot(req: AssetQueryRequest) -> AppServiceResult<AssetSnap
     })
 }
 
+pub fn evm_load_asset_snapshot(req: EvmAssetQueryRequest) -> AppServiceResult<EvmAssetSnapshot> {
+    evm::load_asset_snapshot(evm::EvmAssetQueryRequest {
+        chain: req.chain.into(),
+        wallet_address: req.wallet_address,
+        tokens: req.tokens.into_iter().map(Into::into).collect(),
+    })
+    .map(Into::into)
+    .map_err(map_evm_error)
+}
+
 pub fn preview_payment(req: PaymentPreviewRequest) -> AppServiceResult<SigningPreview> {
     require_non_empty(&req.wallet_public_key, "wallet public key")?;
     require_non_empty(&req.recipient, "recipient")?;
@@ -1500,6 +2055,52 @@ pub fn submit_payment(req: PaymentSubmitRequest) -> AppServiceResult<Transaction
         submitted_at: submitted_at(),
         status: "confirmed".to_string(),
     })
+}
+
+pub fn evm_payment_preview(req: EvmPaymentPreviewRequest) -> AppServiceResult<EvmPaymentPreview> {
+    evm::preview_payment(evm::EvmPaymentPreviewRequest {
+        chain: req.chain.into(),
+        wallet_address: req.wallet_address,
+        recipient: req.recipient,
+        amount_wei_or_units: req.amount_wei_or_units,
+        token_contract: req.token_contract,
+        memo: req.memo,
+    })
+    .map(Into::into)
+    .map_err(map_evm_error)
+}
+
+pub fn evm_payment_submit(
+    req: EvmPaymentSubmitRequest,
+) -> AppServiceResult<EvmTransactionSubmitResult> {
+    evm::submit_payment(evm::EvmPaymentSubmitRequest {
+        preview_id: req.preview_id,
+        approved: req.approved,
+        chain: req.chain.into(),
+        keystore_json: req.keystore_json,
+        password: req.password,
+        recipient: req.recipient,
+        amount_wei_or_units: req.amount_wei_or_units,
+        token_contract: req.token_contract,
+        gas_limit: req.gas_limit,
+        gas_price_wei: req.gas_price_wei,
+        max_fee_per_gas_wei: req.max_fee_per_gas_wei,
+        max_priority_fee_per_gas_wei: req.max_priority_fee_per_gas_wei,
+        nonce: req.nonce,
+    })
+    .map(Into::into)
+    .map_err(map_evm_error)
+}
+
+pub fn evm_transaction_status(
+    req: EvmTransactionStatusRequest,
+) -> AppServiceResult<EvmTransactionStatus> {
+    evm::transaction_status(evm::EvmTransactionStatusRequest {
+        chain: req.chain.into(),
+        transaction_hash: req.transaction_hash,
+    })
+    .map(Into::into)
+    .map_err(map_evm_error)
 }
 
 pub fn preview_pump_trade(req: PumpPreviewRequest) -> AppServiceResult<SigningPreview> {
@@ -1672,6 +2273,37 @@ pub fn submit_dapp_signing(req: DappSignSubmitRequest) -> AppServiceResult<DappS
             "Unsupported dApp signing method",
         )),
     }
+}
+
+pub fn evm_dapp_sign_preview(
+    req: EvmDappSignPreviewRequest,
+) -> AppServiceResult<EvmDappSignPreview> {
+    evm::preview_dapp_signing(evm::EvmDappSignPreviewRequest {
+        chain: req.chain.into(),
+        wallet_address: req.wallet_address,
+        app_name: req.app_name,
+        app_url: req.app_url,
+        method: req.method,
+        payload_json: req.payload_json,
+    })
+    .map(Into::into)
+    .map_err(map_evm_error)
+}
+
+pub fn evm_dapp_sign_submit(
+    req: EvmDappSignSubmitRequest,
+) -> AppServiceResult<EvmDappSignSubmitResult> {
+    evm::submit_dapp_signing(evm::EvmDappSignSubmitRequest {
+        preview_id: req.preview_id,
+        approved: req.approved,
+        chain: req.chain.into(),
+        keystore_json: req.keystore_json,
+        password: req.password,
+        method: req.method,
+        payload_json: req.payload_json,
+    })
+    .map(Into::into)
+    .map_err(map_evm_error)
 }
 
 pub fn preview_squads_action(req: SquadsPreviewRequest) -> AppServiceResult<SigningPreview> {

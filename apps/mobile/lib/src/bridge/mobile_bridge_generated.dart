@@ -140,6 +140,125 @@ class GeneratedMobileBridgeBackend implements MobileBridgeBackend {
   }
 
   @override
+  Future<List<EvmChainConfig>> evmChains() {
+    return _guard(() async {
+      await _ensureInitialized();
+      final chains = await gen.evmChainsBuiltin();
+      return [for (final chain in chains) _evmChainFromGenerated(chain)];
+    });
+  }
+
+  @override
+  Future<WalletKeystore> createEvmWallet({
+    required String name,
+    required String password,
+  }) {
+    return _guard(() async {
+      await _ensureInitialized();
+      final created = await gen.evmWalletCreateBridge(
+        req: gen.EvmCreateWalletRequest(name: name, password: password),
+      );
+      return _evmWalletKeystore(created);
+    });
+  }
+
+  @override
+  Future<WalletKeystore> importEvmPrivateKey({
+    required String name,
+    required String privateKeyHex,
+    required String password,
+  }) {
+    return _guard(() async {
+      await _ensureInitialized();
+      final imported = await gen.evmWalletImportPrivateKeyBridge(
+        req: gen.EvmImportPrivateKeyRequest(
+          name: name,
+          privateKeyHex: privateKeyHex,
+          password: password,
+        ),
+      );
+      return _evmWalletKeystore(imported);
+    });
+  }
+
+  @override
+  Future<WalletKeystore> importEvmMnemonic({
+    required String name,
+    required String mnemonic,
+    required String password,
+    String? derivationPath,
+  }) {
+    return _guard(() async {
+      await _ensureInitialized();
+      final imported = await gen.evmWalletImportMnemonicBridge(
+        req: gen.EvmImportMnemonicRequest(
+          name: name,
+          mnemonic: mnemonic,
+          derivationPath: derivationPath,
+          password: password,
+        ),
+      );
+      return _evmWalletKeystore(imported);
+    });
+  }
+
+  @override
+  Future<WalletKeystore> importEvmKeystore({
+    required String name,
+    required String keystoreJson,
+    required String password,
+  }) {
+    return _guard(() async {
+      await _ensureInitialized();
+      final imported = await gen.evmWalletImportKeystoreBridge(
+        req: gen.EvmImportKeystoreRequest(
+          name: name,
+          keystoreJson: keystoreJson,
+          password: password,
+        ),
+      );
+      return _evmWalletKeystore(imported);
+    });
+  }
+
+  @override
+  Future<WalletSummary> unlockEvmWallet({
+    required String keystoreJson,
+    required String password,
+  }) {
+    return _guard(() async {
+      await _ensureInitialized();
+      final unlocked = await gen.evmWalletUnlockBridge(
+        req: gen.EvmUnlockWalletRequest(
+          keystoreJson: keystoreJson,
+          password: password,
+        ),
+      );
+      return _evmWalletSummary(unlocked);
+    });
+  }
+
+  @override
+  Future<EvmExportPrivateKeyResponse> exportEvmPrivateKey({
+    required String keystoreJson,
+    required String password,
+  }) {
+    return _guard(() async {
+      await _ensureInitialized();
+      final exported = await gen.evmWalletExportPrivateKeyBridge(
+        req: gen.EvmExportPrivateKeyRequest(
+          keystoreJson: keystoreJson,
+          password: password,
+        ),
+      );
+      return EvmExportPrivateKeyResponse(
+        address: exported.address,
+        privateKeyHex: exported.privateKeyHex,
+      );
+    });
+  }
+
+  @override
   Future<AssetSnapshot> loadAssets({
     required AppNetwork network,
     required String walletPublicKey,
@@ -153,6 +272,28 @@ class GeneratedMobileBridgeBackend implements MobileBridgeBackend {
         ),
       );
       return _assetSnapshot(snapshot);
+    });
+  }
+
+  @override
+  Future<EvmAssetSnapshot> loadEvmAssets({
+    required EvmChainConfig chain,
+    required String walletAddress,
+    List<String> tokenContracts = const [],
+  }) {
+    return _guard(() async {
+      await _ensureInitialized();
+      final snapshot = await gen.evmAssetsSnapshot(
+        req: gen.EvmAssetQueryRequest(
+          chain: _evmChainToGenerated(chain),
+          walletAddress: walletAddress,
+          tokens: [
+            for (final contract in tokenContracts)
+              gen.EvmTokenQuery(contractAddress: contract),
+          ],
+        ),
+      );
+      return _evmAssetSnapshot(snapshot);
     });
   }
 
@@ -215,6 +356,78 @@ class GeneratedMobileBridgeBackend implements MobileBridgeBackend {
         submittedAt: result.submittedAt,
         status: result.status,
       );
+    });
+  }
+
+  @override
+  Future<EvmPaymentPreview> previewEvmPayment({
+    required EvmChainConfig chain,
+    required String walletAddress,
+    required String recipient,
+    required String amountWeiOrUnits,
+    String? tokenContract,
+    String? memo,
+  }) {
+    return _guard(() async {
+      await _ensureInitialized();
+      final preview = await gen.evmPaymentPreviewBridge(
+        req: gen.EvmPaymentPreviewRequest(
+          chain: _evmChainToGenerated(chain),
+          walletAddress: walletAddress,
+          recipient: recipient,
+          amountWeiOrUnits: amountWeiOrUnits,
+          tokenContract: tokenContract,
+          memo: memo,
+        ),
+      );
+      return _evmPaymentPreview(preview);
+    });
+  }
+
+  @override
+  Future<EvmTransactionSubmitResult> confirmEvmPayment({
+    required EvmPaymentPreview preview,
+    required bool approved,
+    required String keystoreJson,
+    required String password,
+  }) {
+    return _guard(() async {
+      await _ensureInitialized();
+      final result = await gen.evmPaymentConfirmBridge(
+        req: gen.EvmPaymentSubmitRequest(
+          previewId: preview.previewId,
+          approved: approved,
+          chain: _evmChainToGenerated(preview.chain),
+          keystoreJson: keystoreJson,
+          password: password,
+          recipient: preview.recipient,
+          amountWeiOrUnits: preview.amountWeiOrUnits,
+          tokenContract: preview.tokenContract,
+          gasLimit: preview.gasLimit,
+          gasPriceWei: preview.gasPriceWei,
+          maxFeePerGasWei: preview.maxFeePerGasWei,
+          maxPriorityFeePerGasWei: preview.maxPriorityFeePerGasWei,
+          nonce: preview.nonce,
+        ),
+      );
+      return _evmTransactionSubmitResult(result);
+    });
+  }
+
+  @override
+  Future<EvmTransactionStatus> evmTransactionStatus({
+    required EvmChainConfig chain,
+    required String transactionHash,
+  }) {
+    return _guard(() async {
+      await _ensureInitialized();
+      final status = await gen.evmTransactionStatusBridge(
+        req: gen.EvmTransactionStatusRequest(
+          chain: _evmChainToGenerated(chain),
+          transactionHash: transactionHash,
+        ),
+      );
+      return _evmTransactionStatus(status);
     });
   }
 
@@ -338,6 +551,64 @@ class GeneratedMobileBridgeBackend implements MobileBridgeBackend {
                 submittedAt: result.transaction!.submittedAt,
                 status: result.transaction!.status,
               ),
+      );
+    });
+  }
+
+  @override
+  Future<EvmDappSignPreview> previewEvmDappSign({
+    required EvmChainConfig chain,
+    required String walletAddress,
+    required String appName,
+    required String appUrl,
+    required String method,
+    required String payloadJson,
+  }) {
+    return _guard(() async {
+      await _ensureInitialized();
+      final preview = await gen.evmDappSignPreviewBridge(
+        req: gen.EvmDappSignPreviewRequest(
+          chain: _evmChainToGenerated(chain),
+          walletAddress: walletAddress,
+          appName: appName,
+          appUrl: appUrl,
+          method: method,
+          payloadJson: payloadJson,
+        ),
+      );
+      return _evmDappSignPreview(preview);
+    });
+  }
+
+  @override
+  Future<EvmDappSignSubmitResult> confirmEvmDappSign({
+    required EvmDappSignPreview preview,
+    required bool approved,
+    required String keystoreJson,
+    required String password,
+    required String method,
+    required String payloadJson,
+  }) {
+    return _guard(() async {
+      await _ensureInitialized();
+      final result = await gen.evmDappSignConfirmBridge(
+        req: gen.EvmDappSignSubmitRequest(
+          previewId: preview.previewId,
+          approved: approved,
+          chain: _evmChainToGenerated(preview.chain),
+          keystoreJson: keystoreJson,
+          password: password,
+          method: method,
+          payloadJson: payloadJson,
+        ),
+      );
+      return EvmDappSignSubmitResult(
+        status: result.status,
+        signature: result.signature,
+        signedTransaction: result.signedTransaction,
+        transaction: result.transaction == null
+            ? null
+            : _evmTransactionSubmitResult(result.transaction!),
       );
     });
   }
@@ -592,6 +863,23 @@ WalletSummary _walletSummary(gen.WalletSummary value) {
   );
 }
 
+WalletSummary _evmWalletSummary(gen.EvmWalletSummary value) {
+  return WalletSummary(
+    id: value.id,
+    name: value.name,
+    publicKey: value.address,
+    family: WalletFamily.evm,
+    derivationPath: value.derivationPath,
+  );
+}
+
+WalletKeystore _evmWalletKeystore(gen.EvmWalletKeystore value) {
+  return WalletKeystore(
+    wallet: _evmWalletSummary(value.wallet),
+    keystoreJson: value.keystoreJson,
+  );
+}
+
 AssetSnapshot _assetSnapshot(gen.AssetSnapshot value) {
   return AssetSnapshot(
     network: _networkFromGenerated(value.network),
@@ -602,6 +890,36 @@ AssetSnapshot _assetSnapshot(gen.AssetSnapshot value) {
       for (final entry in value.recentTransactions) _historyEntry(entry)
     ],
     refreshedAtMs: value.refreshedAtMs.toInt(),
+  );
+}
+
+EvmAssetSnapshot _evmAssetSnapshot(gen.EvmAssetSnapshot value) {
+  return EvmAssetSnapshot(
+    chain: _evmChainFromGenerated(value.chain),
+    walletAddress: value.walletAddress,
+    nativeBalanceWei: value.nativeBalanceWei,
+    tokens: [for (final token in value.tokens) _evmTokenAsset(token)],
+    recentTransactions: [
+      for (final entry in value.recentTransactions)
+        EvmTransactionHistoryEntry(
+          hash: entry.hash,
+          blockNumber: entry.blockNumber?.toInt(),
+          status: entry.status,
+        ),
+    ],
+    historyStatus: value.historyStatus,
+    historyMessage: value.historyMessage,
+    refreshedAtMs: value.refreshedAtMs.toInt(),
+  );
+}
+
+EvmTokenAsset _evmTokenAsset(gen.EvmTokenAsset value) {
+  return EvmTokenAsset(
+    contractAddress: value.contractAddress,
+    symbol: value.symbol,
+    name: value.name,
+    balance: value.balance,
+    decimals: value.decimals,
   );
 }
 
@@ -635,6 +953,61 @@ TransactionSubmitResult _transactionSubmitResult(
     network: _networkFromGenerated(value.network),
     submittedAt: value.submittedAt,
     status: value.status,
+  );
+}
+
+EvmTransactionSubmitResult _evmTransactionSubmitResult(
+    gen.EvmTransactionSubmitResult value) {
+  return EvmTransactionSubmitResult(
+    transactionHash: value.transactionHash,
+    chain: _evmChainFromGenerated(value.chain),
+    submittedAt: value.submittedAt,
+    status: value.status,
+    blockNumber: value.blockNumber?.toInt(),
+  );
+}
+
+EvmTransactionStatus _evmTransactionStatus(gen.EvmTransactionStatus value) {
+  return EvmTransactionStatus(
+    transactionHash: value.transactionHash,
+    chain: _evmChainFromGenerated(value.chain),
+    blockNumber: value.blockNumber?.toInt(),
+    status: value.status,
+    gasUsed: value.gasUsed,
+    effectiveGasPriceWei: value.effectiveGasPriceWei,
+  );
+}
+
+EvmPaymentPreview _evmPaymentPreview(gen.EvmPaymentPreview value) {
+  return EvmPaymentPreview(
+    previewId: value.previewId,
+    chain: _evmChainFromGenerated(value.chain),
+    walletAddress: value.walletAddress,
+    recipient: value.recipient,
+    tokenContract: value.tokenContract,
+    amountWeiOrUnits: value.amountWeiOrUnits,
+    gasLimit: value.gasLimit,
+    gasPriceWei: value.gasPriceWei,
+    maxFeePerGasWei: value.maxFeePerGasWei,
+    maxPriorityFeePerGasWei: value.maxPriorityFeePerGasWei,
+    feeModel: value.feeModel,
+    nonce: value.nonce,
+    estimatedFeeWei: value.estimatedFeeWei,
+    summary: value.summary,
+    warnings: value.warnings,
+  );
+}
+
+EvmDappSignPreview _evmDappSignPreview(gen.EvmDappSignPreview value) {
+  return EvmDappSignPreview(
+    previewId: value.previewId,
+    chain: _evmChainFromGenerated(value.chain),
+    walletAddress: value.walletAddress,
+    appName: value.appName,
+    appUrl: value.appUrl,
+    method: value.method,
+    summary: value.summary,
+    warnings: value.warnings,
   );
 }
 
@@ -709,6 +1082,28 @@ AppNetwork _networkFromGenerated(gen.AppNetwork value) => switch (value) {
       gen.AppNetwork.devnet => AppNetwork.devnet,
       gen.AppNetwork.testnet => AppNetwork.testnet,
     };
+
+gen.EvmChainConfig _evmChainToGenerated(EvmChainConfig value) {
+  return gen.EvmChainConfig(
+    chainId: BigInt.from(value.chainId),
+    name: value.name,
+    nativeSymbol: value.nativeSymbol,
+    rpcUrl: value.rpcUrl,
+    explorerUrl: value.explorerUrl,
+    testnet: value.testnet,
+  );
+}
+
+EvmChainConfig _evmChainFromGenerated(gen.EvmChainConfig value) {
+  return EvmChainConfig(
+    chainId: value.chainId.toInt(),
+    name: value.name,
+    nativeSymbol: value.nativeSymbol,
+    rpcUrl: value.rpcUrl,
+    explorerUrl: value.explorerUrl,
+    testnet: value.testnet,
+  );
+}
 
 gen.PaymentOperation _paymentOperationToGenerated(PaymentOperation value) =>
     switch (value) {

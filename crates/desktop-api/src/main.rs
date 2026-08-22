@@ -23,6 +23,7 @@ use base64::{
 use bip39::{Language, Mnemonic};
 use fnzero_safe::solana_utils::{lamports_to_sol, SolanaClient};
 use fnzero_safe::{KeyManager, KeystoreVersion};
+use fnzero_safe_app_services as app_services;
 use futures::{
     future::join_all,
     stream::{self, StreamExt},
@@ -3454,6 +3455,56 @@ async fn main() -> anyhow::Result<()> {
         // Health
         .route("/api/health", get(health))
         .route("/api/health/", get(health))
+        .route("/api/evm/chains", get(evm_chains))
+        .route("/api/evm/chains/", get(evm_chains))
+        .route("/api/evm/wallet/create", post(evm_wallet_create))
+        .route("/api/evm/wallet/create/", post(evm_wallet_create))
+        .route(
+            "/api/evm/wallet/import-private-key",
+            post(evm_wallet_import_private_key),
+        )
+        .route(
+            "/api/evm/wallet/import-private-key/",
+            post(evm_wallet_import_private_key),
+        )
+        .route(
+            "/api/evm/wallet/import-mnemonic",
+            post(evm_wallet_import_mnemonic),
+        )
+        .route(
+            "/api/evm/wallet/import-mnemonic/",
+            post(evm_wallet_import_mnemonic),
+        )
+        .route(
+            "/api/evm/wallet/import-keystore",
+            post(evm_wallet_import_keystore),
+        )
+        .route(
+            "/api/evm/wallet/import-keystore/",
+            post(evm_wallet_import_keystore),
+        )
+        .route("/api/evm/wallet/unlock", post(evm_wallet_unlock))
+        .route("/api/evm/wallet/unlock/", post(evm_wallet_unlock))
+        .route(
+            "/api/evm/wallet/export",
+            post(evm_wallet_export_private_key),
+        )
+        .route(
+            "/api/evm/wallet/export/",
+            post(evm_wallet_export_private_key),
+        )
+        .route("/api/evm/assets", post(evm_assets))
+        .route("/api/evm/assets/", post(evm_assets))
+        .route("/api/evm/payment/preview", post(evm_payment_preview))
+        .route("/api/evm/payment/preview/", post(evm_payment_preview))
+        .route("/api/evm/payment/submit", post(evm_payment_submit))
+        .route("/api/evm/payment/submit/", post(evm_payment_submit))
+        .route("/api/evm/transaction/status", post(evm_transaction_status))
+        .route("/api/evm/transaction/status/", post(evm_transaction_status))
+        .route("/api/evm/dapp/preview", post(evm_dapp_preview))
+        .route("/api/evm/dapp/preview/", post(evm_dapp_preview))
+        .route("/api/evm/dapp/submit", post(evm_dapp_submit))
+        .route("/api/evm/dapp/submit/", post(evm_dapp_submit))
         .route("/api/secure/session", get(secure_session))
         .route("/api/secure/session/", get(secure_session))
         // Core Functions (1-3)
@@ -3747,7 +3798,7 @@ async fn health() -> Json<serde_json::Value> {
         "status": "ok",
         "service": "fnzero-safe",
         "version": env!("CARGO_PKG_VERSION"),
-        "features": ["keys", "wallet", "faucet", "transfer", "wsol", "token", "nonce", "program", "squads-v4"]
+        "features": ["keys", "wallet", "faucet", "transfer", "wsol", "token", "nonce", "program", "squads-v4", "evm"]
     }))
 }
 
@@ -3762,6 +3813,113 @@ async fn secure_session() -> Result<Json<SecureSessionResponse>, ApiError> {
             .is_none()
             .then(|| local_api_token().to_string()),
     }))
+}
+
+async fn evm_chains() -> Json<Vec<app_services::EvmChainConfig>> {
+    Json(app_services::evm_builtin_chains())
+}
+
+async fn evm_wallet_create(
+    Json(req): Json<app_services::EvmCreateWalletRequest>,
+) -> Result<Json<app_services::EvmWalletKeystore>, ApiError> {
+    app_services::evm_wallet_create(req)
+        .map(Json)
+        .map_err(api_error_from_app_service)
+}
+
+async fn evm_wallet_import_private_key(
+    Json(req): Json<app_services::EvmImportPrivateKeyRequest>,
+) -> Result<Json<app_services::EvmWalletKeystore>, ApiError> {
+    app_services::evm_wallet_import_private_key(req)
+        .map(Json)
+        .map_err(api_error_from_app_service)
+}
+
+async fn evm_wallet_import_mnemonic(
+    Json(req): Json<app_services::EvmImportMnemonicRequest>,
+) -> Result<Json<app_services::EvmWalletKeystore>, ApiError> {
+    app_services::evm_wallet_import_mnemonic(req)
+        .map(Json)
+        .map_err(api_error_from_app_service)
+}
+
+async fn evm_wallet_import_keystore(
+    Json(req): Json<app_services::EvmImportKeystoreRequest>,
+) -> Result<Json<app_services::EvmWalletKeystore>, ApiError> {
+    app_services::evm_wallet_import_keystore(req)
+        .map(Json)
+        .map_err(api_error_from_app_service)
+}
+
+async fn evm_wallet_unlock(
+    Json(req): Json<app_services::EvmUnlockWalletRequest>,
+) -> Result<Json<app_services::EvmWalletSummary>, ApiError> {
+    app_services::evm_wallet_unlock(req)
+        .map(Json)
+        .map_err(api_error_from_app_service)
+}
+
+async fn evm_wallet_export_private_key(
+    Json(req): Json<app_services::EvmExportPrivateKeyRequest>,
+) -> Result<Json<app_services::EvmExportPrivateKeyResponse>, ApiError> {
+    app_services::evm_wallet_export_private_key(req)
+        .map(Json)
+        .map_err(api_error_from_app_service)
+}
+
+async fn evm_assets(
+    Json(req): Json<app_services::EvmAssetQueryRequest>,
+) -> Result<Json<app_services::EvmAssetSnapshot>, ApiError> {
+    app_services::evm_load_asset_snapshot(req)
+        .map(Json)
+        .map_err(api_error_from_app_service)
+}
+
+async fn evm_payment_preview(
+    Json(req): Json<app_services::EvmPaymentPreviewRequest>,
+) -> Result<Json<app_services::EvmPaymentPreview>, ApiError> {
+    app_services::evm_payment_preview(req)
+        .map(Json)
+        .map_err(api_error_from_app_service)
+}
+
+async fn evm_payment_submit(
+    Json(req): Json<app_services::EvmPaymentSubmitRequest>,
+) -> Result<Json<app_services::EvmTransactionSubmitResult>, ApiError> {
+    app_services::evm_payment_submit(req)
+        .map(Json)
+        .map_err(api_error_from_app_service)
+}
+
+async fn evm_transaction_status(
+    Json(req): Json<app_services::EvmTransactionStatusRequest>,
+) -> Result<Json<app_services::EvmTransactionStatus>, ApiError> {
+    app_services::evm_transaction_status(req)
+        .map(Json)
+        .map_err(api_error_from_app_service)
+}
+
+async fn evm_dapp_preview(
+    Json(req): Json<app_services::EvmDappSignPreviewRequest>,
+) -> Result<Json<app_services::EvmDappSignPreview>, ApiError> {
+    app_services::evm_dapp_sign_preview(req)
+        .map(Json)
+        .map_err(api_error_from_app_service)
+}
+
+async fn evm_dapp_submit(
+    Json(req): Json<app_services::EvmDappSignSubmitRequest>,
+) -> Result<Json<app_services::EvmDappSignSubmitResult>, ApiError> {
+    app_services::evm_dapp_sign_submit(req)
+        .map(Json)
+        .map_err(api_error_from_app_service)
+}
+
+fn api_error_from_app_service(error: app_services::AppServiceError) -> ApiError {
+    let mobile = error.to_mobile_error();
+    ApiError {
+        message: format!("{:?}: {}", mobile.code, mobile.message),
+    }
 }
 
 // ============= Helper Functions =============

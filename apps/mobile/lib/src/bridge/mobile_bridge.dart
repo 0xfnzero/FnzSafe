@@ -73,12 +73,87 @@ class MobileBridge {
         keystoreJson: keystoreJson, password: password);
   }
 
+  Future<List<EvmChainConfig>> evmChains() => _backend.evmChains();
+
+  Future<WalletKeystore> createEvmWallet({
+    required String name,
+    required String password,
+  }) {
+    return _backend.createEvmWallet(name: name, password: password);
+  }
+
+  Future<WalletKeystore> importEvmPrivateKey({
+    required String name,
+    required String privateKeyHex,
+    required String password,
+  }) {
+    return _backend.importEvmPrivateKey(
+      name: name,
+      privateKeyHex: privateKeyHex,
+      password: password,
+    );
+  }
+
+  Future<WalletKeystore> importEvmMnemonic({
+    required String name,
+    required String mnemonic,
+    required String password,
+    String? derivationPath,
+  }) {
+    return _backend.importEvmMnemonic(
+      name: name,
+      mnemonic: mnemonic,
+      password: password,
+      derivationPath: derivationPath,
+    );
+  }
+
+  Future<WalletKeystore> importEvmKeystore({
+    required String name,
+    required String keystoreJson,
+    required String password,
+  }) {
+    return _backend.importEvmKeystore(
+      name: name,
+      keystoreJson: keystoreJson,
+      password: password,
+    );
+  }
+
+  Future<WalletSummary> unlockEvmWallet({
+    required String keystoreJson,
+    required String password,
+  }) {
+    return _backend.unlockEvmWallet(
+        keystoreJson: keystoreJson, password: password);
+  }
+
+  Future<EvmExportPrivateKeyResponse> exportEvmPrivateKey({
+    required String keystoreJson,
+    required String password,
+  }) {
+    return _backend.exportEvmPrivateKey(
+        keystoreJson: keystoreJson, password: password);
+  }
+
   Future<AssetSnapshot> loadAssets({
     required AppNetwork network,
     required String walletPublicKey,
   }) {
     return _backend.loadAssets(
         network: network, walletPublicKey: walletPublicKey);
+  }
+
+  Future<EvmAssetSnapshot> loadEvmAssets({
+    required EvmChainConfig chain,
+    required String walletAddress,
+    List<String> tokenContracts = const [],
+  }) {
+    return _backend.loadEvmAssets(
+      chain: chain,
+      walletAddress: walletAddress,
+      tokenContracts: tokenContracts,
+    );
   }
 
   Future<SigningPreview> previewPayment({
@@ -118,6 +193,48 @@ class MobileBridge {
       amountBaseUnits: amountBaseUnits,
       operation: operation,
       mint: mint,
+    );
+  }
+
+  Future<EvmPaymentPreview> previewEvmPayment({
+    required EvmChainConfig chain,
+    required String walletAddress,
+    required String recipient,
+    required String amountWeiOrUnits,
+    String? tokenContract,
+    String? memo,
+  }) {
+    return _backend.previewEvmPayment(
+      chain: chain,
+      walletAddress: walletAddress,
+      recipient: recipient,
+      amountWeiOrUnits: amountWeiOrUnits,
+      tokenContract: tokenContract,
+      memo: memo,
+    );
+  }
+
+  Future<EvmTransactionSubmitResult> confirmEvmPayment({
+    required EvmPaymentPreview preview,
+    required bool approved,
+    required String keystoreJson,
+    required String password,
+  }) {
+    return _backend.confirmEvmPayment(
+      preview: preview,
+      approved: approved,
+      keystoreJson: keystoreJson,
+      password: password,
+    );
+  }
+
+  Future<EvmTransactionStatus> evmTransactionStatus({
+    required EvmChainConfig chain,
+    required String transactionHash,
+  }) {
+    return _backend.evmTransactionStatus(
+      chain: chain,
+      transactionHash: transactionHash,
     );
   }
 
@@ -179,6 +296,42 @@ class MobileBridge {
       method: method,
       payloadBase64: payloadBase64,
       transactionFormat: transactionFormat,
+    );
+  }
+
+  Future<EvmDappSignPreview> previewEvmDappSign({
+    required EvmChainConfig chain,
+    required String walletAddress,
+    required String appName,
+    required String appUrl,
+    required String method,
+    required String payloadJson,
+  }) {
+    return _backend.previewEvmDappSign(
+      chain: chain,
+      walletAddress: walletAddress,
+      appName: appName,
+      appUrl: appUrl,
+      method: method,
+      payloadJson: payloadJson,
+    );
+  }
+
+  Future<EvmDappSignSubmitResult> confirmEvmDappSign({
+    required EvmDappSignPreview preview,
+    required bool approved,
+    required String keystoreJson,
+    required String password,
+    required String method,
+    required String payloadJson,
+  }) {
+    return _backend.confirmEvmDappSign(
+      preview: preview,
+      approved: approved,
+      keystoreJson: keystoreJson,
+      password: password,
+      method: method,
+      payloadJson: payloadJson,
     );
   }
 
@@ -360,6 +513,11 @@ class DevelopmentMobileBridgeBackend implements MobileBridgeBackend {
         'pump_trading',
         'dapp_signing',
         'squads_multisig',
+        'evm_chains',
+        'evm_wallets',
+        'evm_assets',
+        'evm_payments',
+        'evm_dapp_signing',
       ],
       excluded: [
         'program_deploy',
@@ -478,6 +636,115 @@ class DevelopmentMobileBridgeBackend implements MobileBridgeBackend {
   }
 
   @override
+  Future<List<EvmChainConfig>> evmChains() async => _developmentEvmChains;
+
+  @override
+  Future<WalletKeystore> createEvmWallet({
+    required String name,
+    required String password,
+  }) async {
+    if (password.isEmpty) {
+      throw const MobileBridgeException(
+          'invalid_input', 'Password is required');
+    }
+    final suffix = DateTime.now().millisecondsSinceEpoch.toRadixString(16);
+    return WalletKeystore(
+      wallet: WalletSummary(
+        id: 'evm-development-$suffix',
+        name: name.trim().isEmpty ? 'EVM Wallet' : name.trim(),
+        publicKey: '0x${suffix.padLeft(40, '0').substring(0, 40)}',
+        family: WalletFamily.evm,
+        derivationPath: "m/44'/60'/0'/0/0",
+      ),
+      keystoreJson: '{"version":1,"wallet_family":"evm","mobile_stub":true}',
+    );
+  }
+
+  @override
+  Future<WalletKeystore> importEvmPrivateKey({
+    required String name,
+    required String privateKeyHex,
+    required String password,
+  }) async {
+    if (privateKeyHex.trim().isEmpty || password.isEmpty) {
+      throw const MobileBridgeException(
+          'invalid_input', 'Private key and password are required');
+    }
+    return createEvmWallet(name: name, password: password);
+  }
+
+  @override
+  Future<WalletKeystore> importEvmMnemonic({
+    required String name,
+    required String mnemonic,
+    required String password,
+    String? derivationPath,
+  }) async {
+    if (mnemonic.trim().split(RegExp(r'\s+')).length < 12 || password.isEmpty) {
+      throw const MobileBridgeException(
+          'invalid_input', 'Mnemonic and password are required');
+    }
+    final created = await createEvmWallet(name: name, password: password);
+    return WalletKeystore(
+      wallet: WalletSummary(
+        id: created.wallet.id,
+        name: created.wallet.name,
+        publicKey: created.wallet.publicKey,
+        family: WalletFamily.evm,
+        derivationPath: derivationPath ?? "m/44'/60'/0'/0/0",
+      ),
+      keystoreJson: created.keystoreJson,
+    );
+  }
+
+  @override
+  Future<WalletKeystore> importEvmKeystore({
+    required String name,
+    required String keystoreJson,
+    required String password,
+  }) async {
+    if (keystoreJson.trim().isEmpty || password.isEmpty) {
+      throw const MobileBridgeException(
+          'invalid_input', 'Keystore and password are required');
+    }
+    return createEvmWallet(name: name, password: password);
+  }
+
+  @override
+  Future<WalletSummary> unlockEvmWallet({
+    required String keystoreJson,
+    required String password,
+  }) async {
+    if (keystoreJson.trim().isEmpty || password.isEmpty) {
+      throw const MobileBridgeException(
+          'invalid_input', 'Keystore and password are required');
+    }
+    return const WalletSummary(
+      id: 'evm-development-unlocked',
+      name: 'Unlocked EVM Wallet',
+      publicKey: '0x0000000000000000000000000000000000000001',
+      family: WalletFamily.evm,
+      derivationPath: "m/44'/60'/0'/0/0",
+    );
+  }
+
+  @override
+  Future<EvmExportPrivateKeyResponse> exportEvmPrivateKey({
+    required String keystoreJson,
+    required String password,
+  }) async {
+    if (keystoreJson.trim().isEmpty || password.isEmpty) {
+      throw const MobileBridgeException(
+          'invalid_input', 'Keystore and password are required');
+    }
+    return const EvmExportPrivateKeyResponse(
+      address: '0x0000000000000000000000000000000000000001',
+      privateKeyHex:
+          '0x0000000000000000000000000000000000000000000000000000000000000001',
+    );
+  }
+
+  @override
   Future<AssetSnapshot> loadAssets({
     required AppNetwork network,
     required String walletPublicKey,
@@ -488,6 +755,33 @@ class DevelopmentMobileBridgeBackend implements MobileBridgeBackend {
       solBalanceLamports: 0,
       tokens: const [],
       recentTransactions: const [],
+      refreshedAtMs: 0,
+    );
+  }
+
+  @override
+  Future<EvmAssetSnapshot> loadEvmAssets({
+    required EvmChainConfig chain,
+    required String walletAddress,
+    List<String> tokenContracts = const [],
+  }) async {
+    return EvmAssetSnapshot(
+      chain: chain,
+      walletAddress: walletAddress,
+      nativeBalanceWei: '0',
+      tokens: [
+        for (final contract in tokenContracts)
+          EvmTokenAsset(
+            contractAddress: contract,
+            symbol: 'ERC20',
+            name: 'Development Token',
+            balance: '0',
+            decimals: 18,
+          ),
+      ],
+      recentTransactions: const [],
+      historyStatus: 'unsupported',
+      historyMessage: 'Development bridge does not query explorer history.',
       refreshedAtMs: 0,
     );
   }
@@ -536,6 +830,68 @@ class DevelopmentMobileBridgeBackend implements MobileBridgeBackend {
           'development-signature-${DateTime.now().millisecondsSinceEpoch}',
       network: preview.network,
       submittedAt: DateTime.now().toUtc().toIso8601String(),
+      status: 'development_fallback',
+    );
+  }
+
+  @override
+  Future<EvmPaymentPreview> previewEvmPayment({
+    required EvmChainConfig chain,
+    required String walletAddress,
+    required String recipient,
+    required String amountWeiOrUnits,
+    String? tokenContract,
+    String? memo,
+  }) async {
+    return EvmPaymentPreview(
+      previewId: 'evm-payment-${DateTime.now().millisecondsSinceEpoch}',
+      chain: chain,
+      walletAddress: walletAddress,
+      recipient: recipient,
+      tokenContract: tokenContract,
+      amountWeiOrUnits: amountWeiOrUnits,
+      gasLimit:
+          tokenContract == null || tokenContract.isEmpty ? '21000' : '65000',
+      gasPriceWei: '1000000000',
+      maxFeePerGasWei: '2000000000',
+      maxPriorityFeePerGasWei: '1000000000',
+      feeModel: 'eip1559',
+      nonce: '0',
+      estimatedFeeWei: tokenContract == null || tokenContract.isEmpty
+          ? '21000000000000'
+          : '65000000000000',
+      summary: 'Prepare EVM transfer on ${chain.name}',
+      warnings: const [
+        'Review chain id, recipient, token, and gas before signing.'
+      ],
+    );
+  }
+
+  @override
+  Future<EvmTransactionSubmitResult> confirmEvmPayment({
+    required EvmPaymentPreview preview,
+    required bool approved,
+    required String keystoreJson,
+    required String password,
+  }) async {
+    _requireDevSigning(approved, keystoreJson, password);
+    return EvmTransactionSubmitResult(
+      transactionHash: '0xdevelopment${DateTime.now().millisecondsSinceEpoch}',
+      chain: preview.chain,
+      submittedAt: DateTime.now().toUtc().toIso8601String(),
+      status: 'development_fallback',
+      blockNumber: null,
+    );
+  }
+
+  @override
+  Future<EvmTransactionStatus> evmTransactionStatus({
+    required EvmChainConfig chain,
+    required String transactionHash,
+  }) async {
+    return EvmTransactionStatus(
+      transactionHash: transactionHash,
+      chain: chain,
       status: 'development_fallback',
     );
   }
@@ -629,6 +985,44 @@ class DevelopmentMobileBridgeBackend implements MobileBridgeBackend {
       signedPayloadBase64: payloadBase64,
       signedPayloadsBase64:
           method == 'signAllTransactions' ? [payloadBase64] : const [],
+    );
+  }
+
+  @override
+  Future<EvmDappSignPreview> previewEvmDappSign({
+    required EvmChainConfig chain,
+    required String walletAddress,
+    required String appName,
+    required String appUrl,
+    required String method,
+    required String payloadJson,
+  }) async {
+    return EvmDappSignPreview(
+      previewId: 'evm-dapp-${DateTime.now().millisecondsSinceEpoch}',
+      chain: chain,
+      walletAddress: walletAddress,
+      appName: appName,
+      appUrl: appUrl,
+      method: method,
+      summary: '$appName requested $method from $appUrl',
+      warnings: const ['Only approve EVM dApp requests from sites you trust.'],
+    );
+  }
+
+  @override
+  Future<EvmDappSignSubmitResult> confirmEvmDappSign({
+    required EvmDappSignPreview preview,
+    required bool approved,
+    required String keystoreJson,
+    required String password,
+    required String method,
+    required String payloadJson,
+  }) async {
+    _requireDevSigning(approved, keystoreJson, password);
+    return const EvmDappSignSubmitResult(
+      status: 'development_fallback',
+      signature: '0xdevelopment-evm-signature',
+      signedTransaction: null,
     );
   }
 
@@ -825,3 +1219,30 @@ class DevelopmentMobileBridgeBackend implements MobileBridgeBackend {
     );
   }
 }
+
+const _developmentEvmChains = [
+  EvmChainConfig(
+    chainId: 11155111,
+    name: 'Ethereum Sepolia',
+    nativeSymbol: 'ETH',
+    rpcUrl: 'https://ethereum-sepolia-rpc.publicnode.com',
+    explorerUrl: 'https://sepolia.etherscan.io',
+    testnet: true,
+  ),
+  EvmChainConfig(
+    chainId: 84532,
+    name: 'Base Sepolia',
+    nativeSymbol: 'ETH',
+    rpcUrl: 'https://sepolia.base.org',
+    explorerUrl: 'https://sepolia.basescan.org',
+    testnet: true,
+  ),
+  EvmChainConfig(
+    chainId: 1,
+    name: 'Ethereum',
+    nativeSymbol: 'ETH',
+    rpcUrl: 'https://ethereum-rpc.publicnode.com',
+    explorerUrl: 'https://etherscan.io',
+    testnet: false,
+  ),
+];

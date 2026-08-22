@@ -39,6 +39,9 @@ class _SendScreenState extends ConsumerState<SendScreen> {
 
     final wallet = ref.watch(activeWalletProvider);
     final network = ref.watch(activeNetworkProvider);
+    final chains = ref.watch(evmChainsProvider);
+    final evmChain = ref.watch(activeEvmChainProvider);
+    final isEvm = wallet?.family == WalletFamily.evm;
     final needsRecipient = _operation == PaymentOperation.solTransfer ||
         _operation == PaymentOperation.splTokenTransfer;
     final needsMint = _operation == PaymentOperation.splTokenTransfer;
@@ -73,31 +76,54 @@ class _SendScreenState extends ConsumerState<SendScreen> {
             ),
           ),
           const SizedBox(height: 16),
-          DropdownButtonFormField<PaymentOperation>(
-            initialValue: _operation,
-            decoration: const InputDecoration(
-                labelText: 'Operation', border: OutlineInputBorder()),
-            items: const [
-              DropdownMenuItem(
-                  value: PaymentOperation.solTransfer,
-                  child: Text('SOL transfer')),
-              DropdownMenuItem(
-                  value: PaymentOperation.splTokenTransfer,
-                  child: Text('SPL token transfer')),
-              DropdownMenuItem(
-                  value: PaymentOperation.wsolWrap, child: Text('Wrap SOL')),
-              DropdownMenuItem(
-                  value: PaymentOperation.wsolUnwrap,
-                  child: Text('Unwrap WSOL')),
-              DropdownMenuItem(
-                  value: PaymentOperation.wsolCloseAta,
-                  child: Text('Close WSOL ATA')),
-            ],
-            onChanged: (value) {
-              if (value != null) setState(() => _operation = value);
-            },
-          ),
-          if (needsRecipient) ...[
+          if (isEvm) ...[
+            chains.when(
+              data: (items) => DropdownButtonFormField<EvmChainConfig>(
+                initialValue: evmChain,
+                decoration: const InputDecoration(
+                  labelText: 'EVM chain',
+                  border: OutlineInputBorder(),
+                ),
+                items: [
+                  for (final chain in items)
+                    DropdownMenuItem(
+                      value: chain,
+                      child: Text(chain.label),
+                    ),
+                ],
+                onChanged: (value) =>
+                    ref.read(activeEvmChainProvider.notifier).state = value,
+              ),
+              error: (error, stackTrace) => Text(error.toString()),
+              loading: () => const LinearProgressIndicator(),
+            ),
+          ] else ...[
+            DropdownButtonFormField<PaymentOperation>(
+              initialValue: _operation,
+              decoration: const InputDecoration(
+                  labelText: 'Operation', border: OutlineInputBorder()),
+              items: const [
+                DropdownMenuItem(
+                    value: PaymentOperation.solTransfer,
+                    child: Text('SOL transfer')),
+                DropdownMenuItem(
+                    value: PaymentOperation.splTokenTransfer,
+                    child: Text('SPL token transfer')),
+                DropdownMenuItem(
+                    value: PaymentOperation.wsolWrap, child: Text('Wrap SOL')),
+                DropdownMenuItem(
+                    value: PaymentOperation.wsolUnwrap,
+                    child: Text('Unwrap WSOL')),
+                DropdownMenuItem(
+                    value: PaymentOperation.wsolCloseAta,
+                    child: Text('Close WSOL ATA')),
+              ],
+              onChanged: (value) {
+                if (value != null) setState(() => _operation = value);
+              },
+            ),
+          ],
+          if (isEvm || needsRecipient) ...[
             const SizedBox(height: 12),
             TextField(
               controller: _recipientController,
@@ -105,24 +131,28 @@ class _SendScreenState extends ConsumerState<SendScreen> {
                   labelText: 'Recipient', border: OutlineInputBorder()),
             ),
           ],
-          if (needsMint) ...[
+          if (isEvm || needsMint) ...[
             const SizedBox(height: 12),
             TextField(
               controller: _mintController,
-              decoration: const InputDecoration(
-                  labelText: 'Token mint', border: OutlineInputBorder()),
+              decoration: InputDecoration(
+                labelText: isEvm ? 'ERC-20 contract (optional)' : 'Token mint',
+                border: const OutlineInputBorder(),
+              ),
             ),
           ],
-          if (needsAmount) ...[
+          if (isEvm || needsAmount) ...[
             const SizedBox(height: 12),
             TextField(
               controller: _amountController,
               keyboardType:
                   const TextInputType.numberWithOptions(decimal: true),
               decoration: InputDecoration(
-                labelText: _operation == PaymentOperation.splTokenTransfer
-                    ? 'Amount in token base units'
-                    : 'Amount in SOL',
+                labelText: isEvm
+                    ? 'Amount in wei or token base units'
+                    : _operation == PaymentOperation.splTokenTransfer
+                        ? 'Amount in token base units'
+                        : 'Amount in SOL',
                 border: const OutlineInputBorder(),
               ),
             ),
@@ -137,13 +167,62 @@ class _SendScreenState extends ConsumerState<SendScreen> {
           FilledButton.icon(
             onPressed: wallet == null || _busy
                 ? null
-                : () => _preview(wallet, network),
+                : () => isEvm
+                    ? _previewEvm(wallet, evmChain)
+                    : _preview(wallet, network),
             icon: const Icon(Icons.fact_check_outlined),
             label: Text(_busy ? 'Preparing' : 'Preview'),
           ),
         ],
       ),
     );
+  }
+
+  Future<void> _previewEvm(WalletSummary wallet, EvmChainConfig? chain) async {
+    if (chain == null) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Select an EVM chain')));
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      final recipient = _recipientController.text.trim();
+      final tokenContract = _mintController.text.trim();
+      final preview = await ref.read(mobileBridgeProvider).previewEvmPayment(
+            chain: chain,
+            walletAddress: wallet.publicKey,
+            recipient: recipient,
+            amountWeiOrUnits: _amountController.text.trim(),
+            tokenContract: tokenContract.isEmpty ? null : tokenContract,
+            memo: _memoController.text.trim().isEmpty
+                ? null
+                : _memoController.text.trim(),
+          );
+      ref.read(signingPreviewProvider.notifier).state = SigningPreview(
+        id: preview.previewId,
+        title: tokenContract.isEmpty ? 'EVM Payment' : 'ERC-20 Payment',
+        network: AppNetwork.mainnet,
+        walletPublicKey: wallet.publicKey,
+        summary: preview.summary,
+        warnings: preview.warnings,
+      );
+      ref.read(evmPaymentSigningDraftProvider.notifier).state =
+          EvmPaymentSigningDraft(
+        preview: preview,
+        recipient: recipient,
+        amountWeiOrUnits: _amountController.text.trim(),
+        tokenContract: tokenContract.isEmpty ? null : tokenContract,
+      );
+      ref.read(paymentSigningDraftProvider.notifier).state = null;
+      if (mounted) context.go('/confirm');
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(error.toString())));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Future<void> _preview(WalletSummary wallet, AppNetwork network) async {

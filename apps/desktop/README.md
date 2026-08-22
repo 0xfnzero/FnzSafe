@@ -42,7 +42,7 @@ Development endpoints:
 Build and check the integrated application with:
 
 ```bash
-make package-mac
+make package-macos
 make package-windows
 ```
 

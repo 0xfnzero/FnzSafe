@@ -1,10 +1,10 @@
 <div align="center">
     <h1>FnzeroSafe</h1>
-    <h3><em>本地优先的 Solana 钱包、安全 Keystore、桌面端与 iOS/Android 移动端应用</em></h3>
+    <h3><em>本地优先的 Solana 与 EVM 钱包、安全 Keystore、桌面端与 iOS/Android 移动端应用</em></h3>
 </div>
 
 <p align="center">
-    <strong>FnzeroSafe 是一个开源 Solana 钱包安全工作区，覆盖加密 Keystore、桌面端签名、移动端钱包、dApp 签名、Pump 交易、Squads 多签、Bot 集成，以及仅桌面端开放的高级 Program 工作流。</strong>
+    <strong>FnzeroSafe 是一个开源 Solana 与 EVM 钱包安全工作区，覆盖加密 Keystore、桌面端签名、移动端钱包、dApp 签名、Pump 交易、Squads 多签、Bot 集成，以及仅桌面端开放的高级 Program 工作流。</strong>
 </p>
 
 <p align="center">
@@ -25,6 +25,7 @@
 <p align="center">
     <img src="https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white" alt="Rust">
     <img src="https://img.shields.io/badge/Solana-9945FF?style=for-the-badge&logo=solana&logoColor=white" alt="Solana">
+    <img src="https://img.shields.io/badge/EVM-3C3C3D?style=for-the-badge&logo=ethereum&logoColor=white" alt="EVM">
     <img src="https://img.shields.io/badge/Next.js-000000?style=for-the-badge&logo=nextdotjs&logoColor=white" alt="Next.js">
     <img src="https://img.shields.io/badge/Tauri-24C8DB?style=for-the-badge&logo=tauri&logoColor=white" alt="Tauri">
     <img src="https://img.shields.io/badge/Flutter-02569B?style=for-the-badge&logo=flutter&logoColor=white" alt="Flutter">
@@ -77,7 +78,7 @@
 
 ### 1.1 FnzeroSafe 适合什么场景
 
-FnzeroSafe 是一个本地优先的 Solana 钱包与密钥管理工作区。仓库内同时包含 Rust 核心库、交互式 CLI、本地桌面 API、Next.js 前端、Tauri 桌面壳，以及面向 iOS/Android 的 Flutter 移动端应用。
+FnzeroSafe 是一个本地优先的 Solana 与 EVM 钱包和密钥管理工作区。仓库内同时包含 Rust 核心库、交互式 CLI、本地桌面 API、Next.js 前端、Tauri 桌面壳，以及面向 iOS/Android 的 Flutter 移动端应用。
 
 | 方向 | 覆盖范围 |
 |---|---|
@@ -90,6 +91,7 @@ FnzeroSafe 是一个本地优先的 Solana 钱包与密钥管理工作区。仓�
 | 交易 | Pump.fun 与 PumpSwap 卖出流程、返现查看与领取、SWQoS token 配置 |
 | Program | 仅桌面端开放 Program 部署、升级、源码构建、权限与部署管理 |
 | 自动化 | Rust SDK、CLI helper、本地 API、Bot 集成示例 |
+| EVM | 内置 EVM 链注册表、自定义 RPC 模型、secp256k1 钱包、ERC-20 资产、EIP-1559 转账、EIP-712/dApp 签名 |
 
 ### 1.2 产品形态
 
@@ -108,6 +110,10 @@ FnzeroSafe 是一个本地优先的 Solana 钱包与密钥管理工作区。仓�
 | 钱包创建/导入/解锁/导出 | 支持 | 支持 | 支持 | Secret 保存在加密 Keystore 中 |
 | SOL/SPL 资产和交易历史 | 支持 | 支持 | 支持 | 使用 Solana RPC |
 | SOL/SPL/WSOL 转账 | 支持 | 支持 | 支持 | 必须用户确认 |
+| EVM 钱包和自定义 RPC 链 | 支持 | 支持 | 支持 | 内置常见链，也支持用户提供 EVM RPC |
+| EVM native/ERC-20 资产 | 支持 | 支持 | 支持 | native 余额、ERC-20 元数据、token 余额 |
+| EVM native/ERC-20 转账 | 支持 | 支持 | 支持 | 优先 EIP-1559 type-2，必要时回退 legacy gas |
+| EVM dApp 签名/发送 | 支持 | 支持 | 支持 | `personal_sign`、`eth_signTypedData_v4`、`eth_signTransaction`、`eth_sendTransaction` |
 | dApp 消息签名 | 支持 | 支持 | 支持 | 移动端通过 WebView/provider 流程 |
 | dApp 交易签名/发送 | 支持 | 支持 | 支持 | 必须用户确认 |
 | Squads 多签 | 支持 | 支持 | 支持 | 创建、proposal、approve/reject/execute |
@@ -138,6 +144,7 @@ FnzeroSafe 是一个本地优先的 Solana 钱包与密钥管理工作区。仓�
 ├─ Makefile
 ├─ crates/
 │  ├─ core/                      # Rust SDK 与 CLI 二进制：fnzero-safe
+│  ├─ evm-services/              # 通用 EVM 链、钱包、资产、fee、交易和 dApp 服务
 │  ├─ app-services/              # 共享钱包/资产/转账/dApp/Squads 服务
 │  ├─ desktop-api/               # 桌面端/Web 使用的本地 Axum API
 │  └─ mobile-bridge/             # flutter_rust_bridge FFI 层

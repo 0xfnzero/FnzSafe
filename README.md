@@ -1,10 +1,10 @@
 <div align="center">
     <h1>FnzeroSafe</h1>
-    <h3><em>Local-first Solana wallet, secure keystore, desktop app, and iOS/Android app</em></h3>
+    <h3><em>Local-first Solana and EVM wallet, secure keystore, desktop app, and iOS/Android app</em></h3>
 </div>
 
 <p align="center">
-    <strong>FnzeroSafe is an open-source Solana wallet security workspace for encrypted keystores, desktop signing, mobile wallets, dApp signing, Pump trading, Squads multisig, bot integration, and advanced desktop-only Program workflows.</strong>
+    <strong>FnzeroSafe is an open-source Solana and EVM wallet security workspace for encrypted keystores, desktop signing, mobile wallets, dApp signing, Pump trading, Squads multisig, bot integration, and advanced desktop-only Program workflows.</strong>
 </p>
 
 <p align="center">
@@ -25,6 +25,7 @@
 <p align="center">
     <img src="https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white" alt="Rust">
     <img src="https://img.shields.io/badge/Solana-9945FF?style=for-the-badge&logo=solana&logoColor=white" alt="Solana">
+    <img src="https://img.shields.io/badge/EVM-3C3C3D?style=for-the-badge&logo=ethereum&logoColor=white" alt="EVM">
     <img src="https://img.shields.io/badge/Next.js-000000?style=for-the-badge&logo=nextdotjs&logoColor=white" alt="Next.js">
     <img src="https://img.shields.io/badge/Tauri-24C8DB?style=for-the-badge&logo=tauri&logoColor=white" alt="Tauri">
     <img src="https://img.shields.io/badge/Flutter-02569B?style=for-the-badge&logo=flutter&logoColor=white" alt="Flutter">
@@ -77,7 +78,7 @@
 
 ### 1.1 What FnzeroSafe Is For
 
-FnzeroSafe is a local-first Solana wallet and key-management workspace. It combines a Rust core crate, an interactive CLI, a local desktop API, a Next.js web interface, a Tauri desktop shell, and a Flutter mobile app for iOS and Android.
+FnzeroSafe is a local-first Solana and EVM wallet and key-management workspace. It combines a Rust core crate, an interactive CLI, a local desktop API, a Next.js web interface, a Tauri desktop shell, and a Flutter mobile app for iOS and Android.
 
 | Area | Coverage |
 |---|---|
@@ -90,6 +91,7 @@ FnzeroSafe is a local-first Solana wallet and key-management workspace. It combi
 | Trading | Pump.fun and PumpSwap sell flows, cashback views and claims, SWQoS token configuration |
 | Programs | Desktop-only Program deploy, upgrade, source build, authority and deployment workflows |
 | Automation | Rust SDK, CLI helpers, local API, examples for bot integration |
+| EVM | Built-in EVM chain registry, custom RPC-ready model, secp256k1 wallets, ERC-20 assets, EIP-1559 transfers, EIP-712/dApp signing |
 
 ### 1.2 Product Editions
 
@@ -108,6 +110,10 @@ FnzeroSafe is a local-first Solana wallet and key-management workspace. It combi
 | Wallet create/import/unlock/export | Yes | Yes | Yes | Secrets stay in encrypted keystores |
 | SOL/SPL assets and history | Yes | Yes | Yes | Uses Solana RPC |
 | SOL/SPL/WSOL payments | Yes | Yes | Yes | User confirmation required |
+| EVM wallets and custom RPC chains | Yes | Yes | Yes | Built-in popular chains plus user-provided EVM RPC |
+| EVM native/ERC-20 assets | Yes | Yes | Yes | Native balance, ERC-20 metadata, token balances |
+| EVM native/ERC-20 transfers | Yes | Yes | Yes | EIP-1559 type-2 preferred; legacy gas fallback |
+| EVM dApp signing/sending | Yes | Yes | Yes | `personal_sign`, `eth_signTypedData_v4`, `eth_signTransaction`, `eth_sendTransaction` |
 | dApp message signing | Yes | Yes | Yes | WebView/provider flow on mobile |
 | dApp transaction signing/sending | Yes | Yes | Yes | User confirmation required |
 | Squads multisig | Yes | Yes | Yes | Create, proposals, approve/reject/execute |
@@ -138,6 +144,7 @@ FnzeroSafe is a local-first Solana wallet and key-management workspace. It combi
 ├─ Makefile
 ├─ crates/
 │  ├─ core/                      # Rust SDK and CLI binary: fnzero-safe
+│  ├─ evm-services/              # Generic EVM chain, wallet, asset, fee, transaction, and dApp services
 │  ├─ app-services/              # Shared wallet/assets/payments/dApp/Squads services
 │  ├─ desktop-api/               # Local Axum API used by desktop/web
 │  └─ mobile-bridge/             # flutter_rust_bridge FFI layer

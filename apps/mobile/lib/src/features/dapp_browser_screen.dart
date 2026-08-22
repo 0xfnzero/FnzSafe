@@ -119,12 +119,17 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
   Future<void> _injectProvider() {
     final wallet = ref.read(activeWalletProvider);
     final publicKey = wallet?.publicKey;
+    final isEvm = wallet?.family == WalletFamily.evm;
+    final evmChain = ref.read(activeEvmChainProvider);
+    final evmChainId =
+        evmChain == null ? '0x1' : '0x${evmChain.chainId.toRadixString(16)}';
     final script = '''
 (() => {
   if (window.fnzeroSafe) return;
   const pending = new Map();
   let connected = ${publicKey == null ? 'false' : 'true'};
   let publicKeyValue = ${jsonEncode(publicKey)};
+  let ethereumChainId = ${jsonEncode(evmChainId)};
   const toSerializable = (value) => {
     if (value instanceof Uint8Array) return { __fnzeroBytes: Array.from(value) };
     if (value && value.constructor && value.constructor.name === 'Buffer') {
@@ -171,7 +176,22 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
         signedTransactionBytes: payload.signedTransaction ? base64ToBytes(payload.signedTransaction) : undefined
       };
     }
+    if (method && method.startsWith('eth_')) {
+      if (method === 'eth_chainId') return payload.chainId;
+      if (method === 'eth_accounts' || method === 'eth_requestAccounts') return payload.accounts || [];
+      if (method === 'personal_sign' || method === 'eth_sign' || method === 'eth_signTypedData_v4') return payload.signature;
+      if (method === 'eth_sendTransaction') return payload.transactionHash || payload.signature;
+      if (method === 'eth_signTransaction') return payload.signedTransaction;
+    }
+    if (method === 'wallet_switchEthereumChain' || method === 'wallet_addEthereumChain') return null;
     return payload;
+  };
+  const listeners = new Map();
+  const emit = (event, value) => {
+    const callbacks = listeners.get(event) || [];
+    callbacks.forEach((callback) => {
+      try { callback(value); } catch (_) {}
+    });
   };
   const provider = {
     isFnzeroSafe: true,
@@ -221,6 +241,7 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
     if (ok) {
       if (payload && payload.connected !== undefined) connected = !!payload.connected;
       if (payload && payload.publicKey !== undefined) publicKeyValue = payload.publicKey;
+      if (payload && payload.chainId !== undefined) ethereumChainId = payload.chainId;
       entry.resolve(normalizeSuccess(entry, payload || {}));
     } else {
       const error = new Error(payload && payload.message ? payload.message : 'FnzeroSafe request rejected');
@@ -229,7 +250,46 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
     }
   };
   window.fnzeroSafe = provider;
-  window.solana = provider;
+  window.fnzeroSafeSetEthereumState = (nextChainId, selectedAddress, nextConnected) => {
+    if (nextChainId && ethereumChainId !== nextChainId) {
+      ethereumChainId = nextChainId;
+      emit('chainChanged', ethereumChainId);
+    }
+    if (selectedAddress !== undefined && publicKeyValue !== selectedAddress) {
+      publicKeyValue = selectedAddress;
+      emit('accountsChanged', publicKeyValue ? [publicKeyValue] : []);
+    }
+    if (nextConnected !== undefined && connected !== !!nextConnected) {
+      connected = !!nextConnected;
+      emit('connect', { chainId: ethereumChainId });
+    }
+  };
+  if (${isEvm ? 'true' : 'false'}) {
+    const ethereum = {
+      isFnzeroSafe: true,
+      isMetaMask: true,
+      get chainId() { return ethereumChainId; },
+      get networkVersion() { return String(parseInt(ethereumChainId, 16)); },
+      get selectedAddress() { return connected ? publicKeyValue : null; },
+      get isConnected() { return connected; },
+      request: (payload) => provider.request(payload),
+      enable: () => provider.request({ method: 'eth_requestAccounts' }),
+      on: (event, callback) => {
+        const callbacks = listeners.get(event) || [];
+        callbacks.push(callback);
+        listeners.set(event, callbacks);
+        return ethereum;
+      },
+      removeListener: (event, callback) => {
+        const callbacks = listeners.get(event) || [];
+        listeners.set(event, callbacks.filter((item) => item !== callback));
+        return ethereum;
+      }
+    };
+    window.ethereum = ethereum;
+  } else {
+    window.solana = provider;
+  }
   window.dispatchEvent(new Event('fnzero#initialized'));
 })();
 ''';
@@ -247,6 +307,11 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
           decoded is Map<String, Object?> ? decoded : <String, Object?>{};
       final method = payload['method']?.toString() ?? 'request';
       final requestId = payload['__fnzeroRequestId']?.toString();
+      if (wallet.family == WalletFamily.evm) {
+        await _handleEvmProviderMessage(
+            wallet, method, requestId, payload, message);
+        return;
+      }
       if (method == 'connect') {
         await _deliverProviderResponse(
           requestId,
@@ -297,6 +362,122 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
     }
   }
 
+  Future<void> _handleEvmProviderMessage(
+    WalletSummary wallet,
+    String method,
+    String? requestId,
+    Map<String, Object?> payload,
+    String rawMessage,
+  ) async {
+    final chain = ref.read(activeEvmChainProvider);
+    if (chain == null) {
+      throw StateError('Select an EVM chain before using EVM dApps');
+    }
+    if (method == 'eth_chainId') {
+      await _deliverProviderResponse(
+        requestId,
+        true,
+        {'chainId': '0x${chain.chainId.toRadixString(16)}'},
+      );
+      return;
+    }
+    if (method == 'eth_accounts' || method == 'eth_requestAccounts') {
+      await _deliverProviderResponse(
+        requestId,
+        true,
+        {
+          'accounts': [wallet.publicKey],
+          'connected': true,
+          'publicKey': wallet.publicKey,
+        },
+      );
+      return;
+    }
+    if (method == 'wallet_switchEthereumChain') {
+      final requestedChainId = _requestedEvmChainId(payload);
+      if (requestedChainId == null) {
+        await _deliverProviderResponse(
+          requestId,
+          false,
+          {'code': 4902, 'message': 'Invalid EVM chain id'},
+        );
+        return;
+      }
+      final chains = await ref.read(evmChainsProvider.future);
+      final nextChain = _findEvmChain(chains, requestedChainId);
+      if (nextChain == null) {
+        await _deliverProviderResponse(
+          requestId,
+          false,
+          {'code': 4902, 'message': 'Unknown EVM chain'},
+        );
+        return;
+      }
+      ref.read(activeEvmChainProvider.notifier).state = nextChain;
+      await _setEthereumProviderState(nextChain, wallet);
+      await _deliverProviderResponse(
+        requestId,
+        true,
+        {'chainId': _hexChainId(nextChain.chainId)},
+      );
+      return;
+    }
+    if (method == 'wallet_addEthereumChain') {
+      final nextChain = _chainFromAddEthereumChain(payload);
+      if (nextChain == null) {
+        await _deliverProviderResponse(
+          requestId,
+          false,
+          {'code': 4902, 'message': 'Invalid EVM chain configuration'},
+        );
+        return;
+      }
+      await ref.read(mobileWalletStoreProvider).saveCustomEvmChain(nextChain);
+      ref.invalidate(evmChainsProvider);
+      ref.read(activeEvmChainProvider.notifier).state = nextChain;
+      await _setEthereumProviderState(nextChain, wallet);
+      await _deliverProviderResponse(
+        requestId,
+        true,
+        {'chainId': _hexChainId(nextChain.chainId)},
+      );
+      return;
+    }
+    if (method == 'net_version') {
+      await _deliverProviderResponse(
+        requestId,
+        true,
+        {'networkVersion': chain.chainId.toString()},
+      );
+      return;
+    }
+
+    final preview = await ref.read(mobileBridgeProvider).previewEvmDappSign(
+          chain: chain,
+          walletAddress: wallet.publicKey,
+          appName: Uri.tryParse(_urlController.text)?.host ?? 'dApp',
+          appUrl: _urlController.text,
+          method: method,
+          payloadJson: jsonEncode(payload),
+        );
+    ref.read(signingPreviewProvider.notifier).state = SigningPreview(
+      id: preview.previewId,
+      title: 'EVM dApp Request',
+      network: AppNetwork.mainnet,
+      walletPublicKey: wallet.publicKey,
+      summary: preview.summary,
+      warnings: preview.warnings,
+    );
+    ref.read(evmDappSigningDraftProvider.notifier).state = EvmDappSigningDraft(
+      preview: preview,
+      method: method,
+      payloadJson: jsonEncode(payload),
+      requestId: requestId,
+    );
+    ref.read(dappSigningDraftProvider.notifier).state = null;
+    if (mounted) await context.push('/confirm');
+  }
+
   String _signingPayloadBase64(
     String method,
     Map<String, Object?> payload,
@@ -321,7 +502,9 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
 
   String? _transactionFormat(String method) {
     return switch (method) {
-      'signTransaction' || 'signAndSendTransaction' || 'signAllTransactions' =>
+      'signTransaction' ||
+      'signAndSendTransaction' ||
+      'signAllTransactions' =>
         'auto',
       _ => null,
     };
@@ -404,16 +587,21 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
               'signatureBase64': response.signatureBase64,
             if (response.signedPayloadBase64 != null)
               'signedTransaction': response.signedPayloadBase64,
+            if (response.signedTransaction != null)
+              'signedTransaction': response.signedTransaction,
             if (response.signedPayloadsBase64.isNotEmpty)
               'signedTransactions': response.signedPayloadsBase64,
             if (response.transactionSignature != null)
               'transactionSignature': response.transactionSignature,
+            if (response.transactionSignature != null)
+              'transactionHash': response.transactionSignature,
           }
         : {
             'message': response.error ?? 'FnzeroSafe request rejected',
             'code': 4001,
           };
-    await _deliverProviderResponse(response.requestId, response.approved, payload);
+    await _deliverProviderResponse(
+        response.requestId, response.approved, payload);
   }
 
   Future<void> _deliverProviderResponse(
@@ -426,4 +614,94 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
         'window.fnzeroSafeResolve(${jsonEncode(requestId)}, $approved, ${jsonEncode(payload)});';
     await _controller.runJavaScript(script);
   }
+
+  Future<void> _setEthereumProviderState(
+    EvmChainConfig chain,
+    WalletSummary wallet,
+  ) {
+    final script =
+        'window.fnzeroSafeSetEthereumState && window.fnzeroSafeSetEthereumState(${jsonEncode(_hexChainId(chain.chainId))}, ${jsonEncode(wallet.publicKey)}, true);';
+    return _controller.runJavaScript(script);
+  }
+
+  EvmChainConfig? _findEvmChain(List<EvmChainConfig> chains, int chainId) {
+    for (final chain in chains) {
+      if (chain.chainId == chainId) return chain;
+    }
+    return null;
+  }
+
+  int? _requestedEvmChainId(Map<String, Object?> payload) {
+    final params = payload['params'];
+    Object? value;
+    if (params is List<Object?> && params.isNotEmpty) {
+      final first = params.first;
+      if (first is Map<String, Object?>) value = first['chainId'];
+    } else if (params is Map<String, Object?>) {
+      value = params['chainId'];
+    }
+    return _parseEvmChainId(value);
+  }
+
+  EvmChainConfig? _chainFromAddEthereumChain(Map<String, Object?> payload) {
+    final params = payload['params'];
+    Object? raw;
+    if (params is List<Object?> && params.isNotEmpty) {
+      raw = params.first;
+    } else if (params is Map<String, Object?>) {
+      raw = params;
+    }
+    if (raw is! Map<String, Object?>) return null;
+
+    final chainId = _parseEvmChainId(raw['chainId']);
+    final name = raw['chainName']?.toString().trim();
+    final nativeCurrency = raw['nativeCurrency'];
+    final symbol = nativeCurrency is Map<String, Object?>
+        ? nativeCurrency['symbol']?.toString().trim()
+        : null;
+    final rpcUrls = raw['rpcUrls'];
+    final rpcUrl = rpcUrls is List<Object?> && rpcUrls.isNotEmpty
+        ? rpcUrls.first?.toString().trim()
+        : null;
+    final explorerUrls = raw['blockExplorerUrls'];
+    final explorerUrl = explorerUrls is List<Object?> && explorerUrls.isNotEmpty
+        ? explorerUrls.first?.toString().trim()
+        : null;
+
+    if (chainId == null ||
+        chainId <= 0 ||
+        name == null ||
+        name.isEmpty ||
+        symbol == null ||
+        symbol.isEmpty ||
+        rpcUrl == null ||
+        !rpcUrl.startsWith(RegExp(r'https?://'))) {
+      return null;
+    }
+
+    return EvmChainConfig(
+      chainId: chainId,
+      name: name,
+      nativeSymbol: symbol,
+      rpcUrl: rpcUrl,
+      explorerUrl:
+          explorerUrl == null || explorerUrl.isEmpty ? null : explorerUrl,
+      testnet: chainId != 1,
+    );
+  }
+
+  int? _parseEvmChainId(Object? value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    if (value is String) {
+      final trimmed = value.trim().toLowerCase();
+      if (trimmed.startsWith('0x')) {
+        return int.tryParse(trimmed.substring(2), radix: 16);
+      }
+      return int.tryParse(trimmed);
+    }
+    return null;
+  }
+
+  String _hexChainId(int chainId) => '0x${chainId.toRadixString(16)}';
 }

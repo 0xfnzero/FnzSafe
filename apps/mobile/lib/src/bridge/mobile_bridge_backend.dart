@@ -39,9 +39,51 @@ abstract interface class MobileBridgeBackend {
     required String password,
   });
 
+  Future<List<EvmChainConfig>> evmChains();
+
+  Future<WalletKeystore> createEvmWallet({
+    required String name,
+    required String password,
+  });
+
+  Future<WalletKeystore> importEvmPrivateKey({
+    required String name,
+    required String privateKeyHex,
+    required String password,
+  });
+
+  Future<WalletKeystore> importEvmMnemonic({
+    required String name,
+    required String mnemonic,
+    required String password,
+    String? derivationPath,
+  });
+
+  Future<WalletKeystore> importEvmKeystore({
+    required String name,
+    required String keystoreJson,
+    required String password,
+  });
+
+  Future<WalletSummary> unlockEvmWallet({
+    required String keystoreJson,
+    required String password,
+  });
+
+  Future<EvmExportPrivateKeyResponse> exportEvmPrivateKey({
+    required String keystoreJson,
+    required String password,
+  });
+
   Future<AssetSnapshot> loadAssets({
     required AppNetwork network,
     required String walletPublicKey,
+  });
+
+  Future<EvmAssetSnapshot> loadEvmAssets({
+    required EvmChainConfig chain,
+    required String walletAddress,
+    List<String> tokenContracts = const [],
   });
 
   Future<SigningPreview> previewPayment({
@@ -62,6 +104,27 @@ abstract interface class MobileBridgeBackend {
     required int amountBaseUnits,
     required PaymentOperation operation,
     String? mint,
+  });
+
+  Future<EvmPaymentPreview> previewEvmPayment({
+    required EvmChainConfig chain,
+    required String walletAddress,
+    required String recipient,
+    required String amountWeiOrUnits,
+    String? tokenContract,
+    String? memo,
+  });
+
+  Future<EvmTransactionSubmitResult> confirmEvmPayment({
+    required EvmPaymentPreview preview,
+    required bool approved,
+    required String keystoreJson,
+    required String password,
+  });
+
+  Future<EvmTransactionStatus> evmTransactionStatus({
+    required EvmChainConfig chain,
+    required String transactionHash,
   });
 
   Future<TotpSetup> setupTotp(String account);
@@ -96,6 +159,24 @@ abstract interface class MobileBridgeBackend {
     required String method,
     required String payloadBase64,
     String? transactionFormat,
+  });
+
+  Future<EvmDappSignPreview> previewEvmDappSign({
+    required EvmChainConfig chain,
+    required String walletAddress,
+    required String appName,
+    required String appUrl,
+    required String method,
+    required String payloadJson,
+  });
+
+  Future<EvmDappSignSubmitResult> confirmEvmDappSign({
+    required EvmDappSignPreview preview,
+    required bool approved,
+    required String keystoreJson,
+    required String password,
+    required String method,
+    required String payloadJson,
   });
 
   Future<SigningPreview> previewSquadsAction({

@@ -1388,6 +1388,87 @@ interface WalletTransactionsState {
   error?: string;
 }
 
+interface DesktopEvmChainConfig {
+  chain_id: number;
+  name: string;
+  native_symbol: string;
+  rpc_url: string;
+  explorer_url?: string | null;
+  testnet: boolean;
+}
+
+interface DesktopEvmWalletSummary {
+  id: string;
+  name: string;
+  address: string;
+  derivation_path?: string | null;
+}
+
+interface DesktopEvmWalletKeystore {
+  wallet: DesktopEvmWalletSummary;
+  keystore_json: string;
+}
+
+interface DesktopEvmTokenAsset {
+  contract_address: string;
+  symbol: string;
+  name: string;
+  balance: string;
+  decimals: number;
+}
+
+interface DesktopEvmTransactionHistoryEntry {
+  hash: string;
+  block_number?: number | null;
+  status: string;
+}
+
+interface DesktopEvmAssetSnapshot {
+  chain: DesktopEvmChainConfig;
+  wallet_address: string;
+  native_balance_wei: string;
+  tokens: DesktopEvmTokenAsset[];
+  recent_transactions: DesktopEvmTransactionHistoryEntry[];
+  history_status: string;
+  history_message?: string | null;
+  refreshed_at_ms: number;
+}
+
+interface DesktopEvmPaymentPreview {
+  preview_id: string;
+  chain: DesktopEvmChainConfig;
+  wallet_address: string;
+  recipient: string;
+  token_contract?: string | null;
+  amount_wei_or_units: string;
+  gas_limit: string;
+  gas_price_wei: string;
+  max_fee_per_gas_wei?: string | null;
+  max_priority_fee_per_gas_wei?: string | null;
+  fee_model: string;
+  nonce: string;
+  estimated_fee_wei: string;
+  summary: string;
+  warnings: string[];
+}
+
+interface DesktopEvmTransactionSubmitResult {
+  transaction_hash: string;
+  chain: DesktopEvmChainConfig;
+  submitted_at: string;
+  status: string;
+  block_number?: number | null;
+}
+
+interface DesktopEvmTransactionStatus {
+  transaction_hash: string;
+  chain: DesktopEvmChainConfig;
+  block_number?: number | null;
+  status: string;
+  gas_used?: string | null;
+  effective_gas_price_wei?: string | null;
+}
+
 interface NonceAccountRecord {
   id: string;
   wallet_id?: string;
@@ -1975,6 +2056,11 @@ export default function Home() {
           icon: <RefreshCw className="w-4 h-4" />,
           network: true,
         },
+        {
+          id: "evm-workbench",
+          label: tf("features.evm-workbench.title", "EVM Wallet"),
+          icon: <ArrowRightLeft className="w-4 h-4" />,
+        },
       ],
     },
     {
@@ -2161,6 +2247,31 @@ export default function Home() {
   const walletTransactionsRef = useRef<WalletTransactionsState | null>(null);
   const walletAssetsInFlightRef = useRef<Map<string, Promise<WalletAssetsState | null>>>(new Map());
   const walletTransactionsInFlightRef = useRef<Map<string, Promise<void>>>(new Map());
+  const [evmChains, setEvmChains] = useState<DesktopEvmChainConfig[]>([]);
+  const [evmChainId, setEvmChainId] = useState("");
+  const [evmWallet, setEvmWallet] = useState<DesktopEvmWalletSummary | null>(null);
+  const [evmKeystoreJson, setEvmKeystoreJson] = useState("");
+  const [evmPassword, setEvmPassword] = useState("");
+  const [evmPrivateKey, setEvmPrivateKey] = useState("");
+  const [evmRecipient, setEvmRecipient] = useState("");
+  const [evmAmount, setEvmAmount] = useState("");
+  const [evmTokenContract, setEvmTokenContract] = useState("");
+  const [evmTokenContracts, setEvmTokenContracts] = useState<string[]>([]);
+  const [evmNewTokenContract, setEvmNewTokenContract] = useState("");
+  const [evmAssets, setEvmAssets] = useState<DesktopEvmAssetSnapshot | null>(null);
+  const [evmPreview, setEvmPreview] = useState<DesktopEvmPaymentPreview | null>(null);
+  const [evmSubmitResult, setEvmSubmitResult] = useState<DesktopEvmTransactionSubmitResult | null>(null);
+  const [evmTransactionStatus, setEvmTransactionStatus] = useState<DesktopEvmTransactionStatus | null>(null);
+  const [evmBusy, setEvmBusy] = useState(false);
+  const [evmError, setEvmError] = useState<string | null>(null);
+  const [evmNewChain, setEvmNewChain] = useState({
+    chainId: "",
+    name: "",
+    nativeSymbol: "",
+    rpcUrl: "",
+    explorerUrl: "",
+    testnet: true,
+  });
   const nonceAccountsInFlightRef = useRef<Map<string, Promise<void>>>(new Map());
   const pendingTokenBalanceAdjustmentRef = useRef<PendingTokenBalanceAdjustment | undefined>(undefined);
   const lastAssetRefreshRef = useRef<Map<string, number>>(new Map());
@@ -2179,6 +2290,193 @@ export default function Home() {
   const [tokenMintInfo, setTokenMintInfo] = useState<TokenMintInfoState | null>(null);
   const walletAuth = (formId: string): WalletAuthTab =>
     normalizeWalletAuth((authMethod[formId] ?? "keystore") as WalletAuthTab);
+  const activeEvmChain =
+    evmChains.find((chain) => String(chain.chain_id) === evmChainId) || evmChains[0];
+
+  const loadEvmChains = useCallback(async () => {
+    const response = await apiFetch("evm/chains", {});
+    const data = await response.json();
+    if (!response.ok || !Array.isArray(data)) {
+      throw new Error(data?.error || "Failed to load EVM chains");
+    }
+    setEvmChains(data as DesktopEvmChainConfig[]);
+    setEvmChainId((previous) => previous || String((data[0] as DesktopEvmChainConfig | undefined)?.chain_id || ""));
+  }, []);
+
+  useEffect(() => {
+    void loadEvmChains().catch((error) => setEvmError(errorMessage(error, "Failed to load EVM chains")));
+  }, [loadEvmChains]);
+
+  const withEvmBusy = useCallback(async (run: () => Promise<void>) => {
+    setEvmBusy(true);
+    setEvmError(null);
+    try {
+      await run();
+    } catch (error) {
+      const message = errorMessage(error, "EVM operation failed");
+      setEvmError(message);
+      toast.error(message);
+    } finally {
+      setEvmBusy(false);
+    }
+  }, []);
+
+  const createEvmWallet = () => withEvmBusy(async () => {
+    if (!evmPassword.trim()) throw new Error("Wallet password is required");
+    const response = await apiFetch("evm/wallet/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Desktop EVM Wallet", password: evmPassword }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Failed to create EVM wallet");
+    const created = data as DesktopEvmWalletKeystore;
+    setEvmWallet(created.wallet);
+    setEvmKeystoreJson(created.keystore_json);
+    setEvmPreview(null);
+    setEvmSubmitResult(null);
+    toast.success("EVM wallet created");
+  });
+
+  const importEvmPrivateKey = () => withEvmBusy(async () => {
+    if (!evmPrivateKey.trim() || !evmPassword.trim()) {
+      throw new Error("Private key and password are required");
+    }
+    const response = await apiFetch("evm/wallet/import-private-key", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Imported EVM Wallet",
+        private_key_hex: evmPrivateKey.trim(),
+        password: evmPassword,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Failed to import EVM wallet");
+    const imported = data as DesktopEvmWalletKeystore;
+    setEvmWallet(imported.wallet);
+    setEvmKeystoreJson(imported.keystore_json);
+    setEvmPrivateKey("");
+    setEvmPreview(null);
+    setEvmSubmitResult(null);
+    toast.success("EVM wallet imported");
+  });
+
+  const addDesktopEvmChain = () => {
+    const chainId = Number(evmNewChain.chainId);
+    const rpcUrl = evmNewChain.rpcUrl.trim();
+    if (!Number.isSafeInteger(chainId) || chainId <= 0 || !evmNewChain.name.trim() || !evmNewChain.nativeSymbol.trim()) {
+      setEvmError("Chain id, name, and native symbol are required");
+      return;
+    }
+    if (!/^https?:\/\//.test(rpcUrl)) {
+      setEvmError("RPC URL must start with http:// or https://");
+      return;
+    }
+    const nextChain: DesktopEvmChainConfig = {
+      chain_id: chainId,
+      name: evmNewChain.name.trim(),
+      native_symbol: evmNewChain.nativeSymbol.trim(),
+      rpc_url: rpcUrl,
+      explorer_url: evmNewChain.explorerUrl.trim() || null,
+      testnet: evmNewChain.testnet,
+    };
+    setEvmChains((previous) => {
+      const merged = new Map(previous.map((chain) => [chain.chain_id, chain]));
+      merged.set(nextChain.chain_id, nextChain);
+      return Array.from(merged.values()).sort((a, b) => a.chain_id - b.chain_id);
+    });
+    setEvmChainId(String(nextChain.chain_id));
+    setEvmNewChain({ chainId: "", name: "", nativeSymbol: "", rpcUrl: "", explorerUrl: "", testnet: true });
+    setEvmAssets(null);
+  };
+
+  const addDesktopEvmToken = () => {
+    const contract = evmNewTokenContract.trim();
+    if (!contract) return;
+    setEvmTokenContracts((previous) =>
+      Array.from(new Map([...previous, contract].map((item) => [item.toLowerCase(), item])).values()),
+    );
+    setEvmNewTokenContract("");
+  };
+
+  const refreshEvmAssets = () => withEvmBusy(async () => {
+    if (!activeEvmChain || !evmWallet) throw new Error("Select an EVM chain and wallet first");
+    const response = await apiFetch("evm/assets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chain: activeEvmChain,
+        wallet_address: evmWallet.address,
+        tokens: evmTokenContracts.map((contract_address) => ({ contract_address })),
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Failed to refresh EVM assets");
+    setEvmAssets(data as DesktopEvmAssetSnapshot);
+  });
+
+  const previewEvmPayment = () => withEvmBusy(async () => {
+    if (!activeEvmChain || !evmWallet) throw new Error("Select an EVM chain and wallet first");
+    const response = await apiFetch("evm/payment/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chain: activeEvmChain,
+        wallet_address: evmWallet.address,
+        recipient: evmRecipient.trim(),
+        amount_wei_or_units: evmAmount.trim(),
+        token_contract: evmTokenContract.trim() || null,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Failed to preview EVM payment");
+    setEvmPreview(data as DesktopEvmPaymentPreview);
+    setEvmSubmitResult(null);
+    setEvmTransactionStatus(null);
+  });
+
+  const submitEvmPayment = (approved: boolean) => withEvmBusy(async () => {
+    if (!evmPreview) throw new Error("Create a payment preview first");
+    const response = await apiFetch("evm/payment/submit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        preview_id: evmPreview.preview_id,
+        approved,
+        chain: evmPreview.chain,
+        keystore_json: approved ? evmKeystoreJson : "",
+        password: approved ? evmPassword : "",
+        recipient: evmPreview.recipient,
+        amount_wei_or_units: evmPreview.amount_wei_or_units,
+        token_contract: evmPreview.token_contract,
+        gas_limit: evmPreview.gas_limit,
+        gas_price_wei: evmPreview.gas_price_wei,
+        max_fee_per_gas_wei: evmPreview.max_fee_per_gas_wei,
+        max_priority_fee_per_gas_wei: evmPreview.max_priority_fee_per_gas_wei,
+        nonce: evmPreview.nonce,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || (approved ? "Failed to submit EVM payment" : "User rejected"));
+    setEvmSubmitResult(data as DesktopEvmTransactionSubmitResult);
+    toast.success(approved ? "EVM transaction submitted" : "EVM transaction rejected");
+  });
+
+  const refreshEvmTransactionStatus = () => withEvmBusy(async () => {
+    if (!activeEvmChain || !evmSubmitResult) throw new Error("Submit a transaction first");
+    const response = await apiFetch("evm/transaction/status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chain: activeEvmChain,
+        transaction_hash: evmSubmitResult.transaction_hash,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Failed to load EVM transaction status");
+    setEvmTransactionStatus(data as DesktopEvmTransactionStatus);
+  });
 
   useEffect(() => {
     setAppTheme(loadAppUiTheme());
@@ -13403,10 +13701,182 @@ export default function Home() {
       );
     };
 
+    const renderEvmWorkbench = () => (
+      <div className="space-y-5">
+        <section className="space-y-3 rounded-lg border border-white/10 bg-white/[0.03] p-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase text-emerald-300">EVM</p>
+              <h2 className="text-2xl font-semibold text-white">{tf("features.evm-workbench.title", "EVM Wallet")}</h2>
+              <p className="mt-1 text-sm text-gray-400">
+                {tf("features.evm-workbench.subtitle", "Generic EVM chains, EOA wallets, ERC-20 assets, transfers, and receipt polling.")}
+              </p>
+            </div>
+            <button type="button" onClick={() => void loadEvmChains()} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-200 hover:bg-white/10">
+              <RefreshCw className="h-4 w-4" />
+              Refresh chains
+            </button>
+          </div>
+          {evmError && <div className="rounded-lg border border-red-400/30 bg-red-500/10 p-3 text-sm text-red-100">{evmError}</div>}
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+            <label className="space-y-1 text-sm text-gray-300">
+              Chain
+              <select
+                value={evmChainId}
+                onChange={(event) => {
+                  setEvmChainId(event.target.value);
+                  setEvmAssets(null);
+                  setEvmPreview(null);
+                  setEvmSubmitResult(null);
+                  setEvmTransactionStatus(null);
+                }}
+                className="h-10 w-full rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none"
+              >
+                {evmChains.map((chain) => (
+                  <option key={chain.chain_id} value={chain.chain_id}>
+                    {chain.name} ({chain.chain_id}) {chain.testnet ? "testnet" : "mainnet"}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-sm text-gray-300">
+              <p className="font-medium text-white">{activeEvmChain?.native_symbol || "EVM"}</p>
+              <p className="mt-1 break-all text-xs text-gray-500">{activeEvmChain?.rpc_url || "No RPC selected"}</p>
+              <p className="mt-1 break-all text-xs text-gray-500">{activeEvmChain?.explorer_url || "No explorer configured"}</p>
+            </div>
+          </div>
+          <div className="grid gap-2 lg:grid-cols-6">
+            <input value={evmNewChain.chainId} onChange={(event) => setEvmNewChain((prev) => ({ ...prev, chainId: event.target.value }))} placeholder="Chain ID" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
+            <input value={evmNewChain.name} onChange={(event) => setEvmNewChain((prev) => ({ ...prev, name: event.target.value }))} placeholder="Name" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
+            <input value={evmNewChain.nativeSymbol} onChange={(event) => setEvmNewChain((prev) => ({ ...prev, nativeSymbol: event.target.value }))} placeholder="Symbol" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
+            <input value={evmNewChain.rpcUrl} onChange={(event) => setEvmNewChain((prev) => ({ ...prev, rpcUrl: event.target.value }))} placeholder="RPC URL" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none lg:col-span-2" />
+            <button type="button" onClick={addDesktopEvmChain} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-500 px-3 text-sm font-semibold text-black hover:bg-emerald-400">
+              <Plus className="h-4 w-4" />
+              Add
+            </button>
+          </div>
+        </section>
+
+        <section className="grid gap-4 lg:grid-cols-2">
+          <div className="space-y-3 rounded-lg border border-white/10 bg-white/[0.03] p-4">
+            <h3 className="text-lg font-semibold text-white">Wallet</h3>
+            <input value={evmPassword} onChange={(event) => setEvmPassword(event.target.value)} type="password" placeholder="Wallet password" className="h-10 w-full rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
+            <textarea value={evmPrivateKey} onChange={(event) => setEvmPrivateKey(event.target.value)} placeholder="Private key hex for import" rows={3} className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none" />
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={createEvmWallet} disabled={evmBusy} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-white px-3 text-sm font-semibold text-black disabled:opacity-50">
+                <Wallet className="h-4 w-4" />
+                Create
+              </button>
+              <button type="button" onClick={importEvmPrivateKey} disabled={evmBusy} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-100 hover:bg-white/10 disabled:opacity-50">
+                <Upload className="h-4 w-4" />
+                Import
+              </button>
+            </div>
+            {evmWallet && (
+              <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-sm">
+                <p className="font-medium text-white">{evmWallet.name}</p>
+                <p className="mt-1 break-all text-gray-400">{evmWallet.address}</p>
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-3 rounded-lg border border-white/10 bg-white/[0.03] p-4">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-lg font-semibold text-white">Assets</h3>
+              <button type="button" onClick={refreshEvmAssets} disabled={evmBusy || !evmWallet} className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-100 hover:bg-white/10 disabled:opacity-50">
+                <RefreshCw className="h-4 w-4" />
+                Refresh
+              </button>
+            </div>
+            <div className="flex gap-2">
+              <input value={evmNewTokenContract} onChange={(event) => setEvmNewTokenContract(event.target.value)} placeholder="ERC-20 contract" className="h-10 min-w-0 flex-1 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
+              <button type="button" onClick={addDesktopEvmToken} className="inline-flex h-10 items-center justify-center rounded-lg bg-emerald-500 px-3 text-sm font-semibold text-black hover:bg-emerald-400">
+                Add token
+              </button>
+            </div>
+            <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-sm text-gray-300">
+              <p>{activeEvmChain?.native_symbol || "Native"} balance: {evmAssets?.native_balance_wei ?? "-"} wei</p>
+              <p className="mt-1 text-xs text-gray-500">History: {evmAssets?.history_status ?? "not loaded"} {evmAssets?.history_message ? `- ${evmAssets.history_message}` : ""}</p>
+            </div>
+            <div className="space-y-2">
+              {(evmAssets?.tokens || []).map((token) => (
+                <div key={token.contract_address} className="rounded-lg border border-white/10 bg-black/20 p-3 text-sm">
+                  <p className="font-medium text-white">{token.symbol} {token.balance}</p>
+                  <p className="break-all text-xs text-gray-500">{token.name} · {token.contract_address}</p>
+                </div>
+              ))}
+              {(evmAssets?.recent_transactions || []).map((entry) => (
+                <div key={entry.hash} className="rounded-lg border border-white/10 bg-black/20 p-3 text-sm">
+                  <p className="text-white">{entry.status} · block {entry.block_number ?? "-"}</p>
+                  <p className="break-all text-xs text-gray-500">{entry.hash}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="space-y-3 rounded-lg border border-white/10 bg-white/[0.03] p-4">
+          <h3 className="text-lg font-semibold text-white">Transfer Preview</h3>
+          <div className="grid gap-3 lg:grid-cols-3">
+            <input value={evmRecipient} onChange={(event) => setEvmRecipient(event.target.value)} placeholder="Recipient" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
+            <input value={evmAmount} onChange={(event) => setEvmAmount(event.target.value)} placeholder="Amount in wei or token units" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
+            <input value={evmTokenContract} onChange={(event) => setEvmTokenContract(event.target.value)} placeholder="ERC-20 contract optional" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={previewEvmPayment} disabled={evmBusy || !evmWallet} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-white px-3 text-sm font-semibold text-black disabled:opacity-50">
+              <ShieldCheck className="h-4 w-4" />
+              Preview
+            </button>
+            <button type="button" onClick={() => void submitEvmPayment(true)} disabled={evmBusy || !evmPreview} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-500 px-3 text-sm font-semibold text-black hover:bg-emerald-400 disabled:opacity-50">
+              <Send className="h-4 w-4" />
+              Confirm submit
+            </button>
+            <button type="button" onClick={() => void submitEvmPayment(false)} disabled={evmBusy || !evmPreview} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-100 hover:bg-white/10 disabled:opacity-50">
+              <X className="h-4 w-4" />
+              Reject
+            </button>
+          </div>
+          {evmPreview && (
+            <div className="grid gap-2 rounded-lg border border-emerald-300/20 bg-emerald-300/10 p-3 text-sm text-emerald-50 lg:grid-cols-2">
+              <p>Chain ID: {evmPreview.chain.chain_id}</p>
+              <p>Nonce: {evmPreview.nonce}</p>
+              <p>Gas limit: {evmPreview.gas_limit}</p>
+              <p>Fee model: {evmPreview.fee_model}</p>
+              <p>Gas price: {evmPreview.gas_price_wei} wei</p>
+              <p>Estimated fee: {evmPreview.estimated_fee_wei} wei</p>
+              <p className="break-all lg:col-span-2">Recipient: {evmPreview.recipient}</p>
+              {evmPreview.token_contract && <p className="break-all lg:col-span-2">Token: {evmPreview.token_contract}</p>}
+            </div>
+          )}
+          {evmSubmitResult && (
+            <div className="space-y-3 rounded-lg border border-white/10 bg-black/20 p-3 text-sm text-gray-300">
+              <p>Status: {evmSubmitResult.status}</p>
+              <p className="break-all">Hash: {evmSubmitResult.transaction_hash}</p>
+              <button type="button" onClick={refreshEvmTransactionStatus} disabled={evmBusy} className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-100 hover:bg-white/10 disabled:opacity-50">
+                <RefreshCw className="h-4 w-4" />
+                Check receipt
+              </button>
+              {evmTransactionStatus && (
+                <div className="grid gap-1 text-xs text-gray-400 lg:grid-cols-2">
+                  <p>Status: {evmTransactionStatus.status}</p>
+                  <p>Block: {evmTransactionStatus.block_number ?? "-"}</p>
+                  <p>Gas used: {evmTransactionStatus.gas_used ?? "-"}</p>
+                  <p>Effective gas: {evmTransactionStatus.effective_gas_price_wei ?? "-"}</p>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+      </div>
+    );
+
     const renderFormBody = () => {
       switch (formId) {
       case "wallet-list":
         return renderWalletListPanel();
+
+      case "evm-workbench":
+        return renderEvmWorkbench();
 
       case "dapp-store":
         return (

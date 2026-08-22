@@ -6,6 +6,11 @@ const mobileEnabledCapabilities = <String>[
   'pump_trading',
   'dapp_signing',
   'squads_multisig',
+  'evm_chains',
+  'evm_wallets',
+  'evm_assets',
+  'evm_payments',
+  'evm_dapp_signing',
 ];
 
 const mobileExcludedCapabilities = <String>[

@@ -30,6 +30,23 @@ final storedActiveWalletProvider = FutureProvider<WalletSummary?>((ref) {
 final activeNetworkProvider =
     StateProvider<AppNetwork>((ref) => AppNetwork.devnet);
 
+final evmChainsProvider = FutureProvider<List<EvmChainConfig>>((ref) async {
+  final builtins = await ref.watch(mobileBridgeProvider).evmChains();
+  final custom =
+      await ref.watch(mobileWalletStoreProvider).loadCustomEvmChains();
+  final merged = <int, EvmChainConfig>{
+    for (final chain in builtins) chain.chainId: chain,
+    for (final chain in custom) chain.chainId: chain,
+  };
+  return merged.values.toList(growable: false)
+    ..sort((a, b) {
+      if (a.testnet != b.testnet) return a.testnet ? 1 : -1;
+      return a.chainId.compareTo(b.chainId);
+    });
+});
+
+final activeEvmChainProvider = StateProvider<EvmChainConfig?>((ref) => null);
+
 final activeWalletProvider = StateProvider<WalletSummary?>((ref) => null);
 
 final signingPreviewProvider = StateProvider<SigningPreview?>((ref) => null);
@@ -37,8 +54,14 @@ final signingPreviewProvider = StateProvider<SigningPreview?>((ref) => null);
 final paymentSigningDraftProvider =
     StateProvider<PaymentSigningDraft?>((ref) => null);
 
+final evmPaymentSigningDraftProvider =
+    StateProvider<EvmPaymentSigningDraft?>((ref) => null);
+
 final dappSigningDraftProvider =
     StateProvider<DappSigningDraft?>((ref) => null);
+
+final evmDappSigningDraftProvider =
+    StateProvider<EvmDappSigningDraft?>((ref) => null);
 
 final dappSignResponseProvider =
     StateProvider<DappSignResponse?>((ref) => null);
