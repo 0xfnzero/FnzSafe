@@ -400,7 +400,7 @@ This runs Android, iOS, macOS, and Windows package targets in sequence. For CI, 
 | Variable | Purpose |
 |---|---|
 | `FNZERO_SAFE_API_TOKEN` | Fixed local API token for desktop/web development |
-| `FNZERO_SAFE_DB_PATH` | Override wallet database path. `make dev` defaults to `apps/desktop/data/sol-safekey.sqlite3` when an older dev wallet database exists, otherwise `apps/desktop/data/fnzero-safe.sqlite3`. |
+| `FNZERO_SAFE_DB_PATH` | Override wallet database path. `make dev` uses `apps/desktop/data/fnzero-safe.sqlite3` and automatically copies an older `apps/desktop/data/sol-safekey.sqlite3` dev wallet database into that path when the new file does not exist. |
 | `FNZERO_SAFE_ALLOWED_ORIGINS` | Comma-separated list of additional trusted local API origins |
 | `FNZERO_SAFE_ALLOW_SECRET_EXPORT=true` | Allow plaintext private key/mnemonic export from non-desktop local debugging contexts |
 | `FNZERO_SAFE_ALLOW_DIRECT_SECRET_INPUT=true` | Allow direct plaintext private key submission from web debugging contexts |

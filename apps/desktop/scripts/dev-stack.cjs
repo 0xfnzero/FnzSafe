@@ -18,9 +18,15 @@ function desktopDatabasePath() {
   if (existing) return existing;
 
   const legacyPath = path.join(root, "data", "sol-safekey.sqlite3");
-  if (fs.existsSync(legacyPath)) return legacyPath;
+  const nextPath = path.join(root, "data", "fnzero-safe.sqlite3");
+  if (!fs.existsSync(nextPath) && fs.existsSync(legacyPath)) {
+    fs.mkdirSync(path.dirname(nextPath), { recursive: true, mode: 0o700 });
+    fs.copyFileSync(legacyPath, nextPath);
+    fs.chmodSync(nextPath, 0o600);
+    console.log(`[dev:stack] migrated legacy wallet database to ${nextPath}`);
+  }
 
-  return path.join(root, "data", "fnzero-safe.sqlite3");
+  return nextPath;
 }
 
 function spawnManaged(label, command, args, env) {
