@@ -71,7 +71,7 @@ function matchingProjectPids() {
     "tauri dev",
     "scripts/dev-stack.cjs",
     "scripts/desktop-dev.cjs",
-    "build-cache/debug/FnzeroSafe",
+    "build-cache/debug/FnzSafe",
     "build-cache/release/fnzero-safe-desktop-api",
   ];
   const pids = new Set();

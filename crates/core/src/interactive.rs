@@ -146,7 +146,7 @@ struct Texts {
 impl Texts {
     fn chinese() -> Self {
         Self {
-            title: "  FnzeroSafe - Solana 密钥管理工具",
+            title: "  FnzSafe - Solana 密钥管理工具",
             core_functions: "核心功能 (只需3个操作):",
             create_plain: "  {}  创建明文私钥",
             create_encrypted: "  {}  创建加密私钥(bot)",
@@ -219,7 +219,7 @@ impl Texts {
 
     fn english() -> Self {
         Self {
-            title: "  FnzeroSafe - Solana Key Management Tool",
+            title: "  FnzSafe - Solana Key Management Tool",
             core_functions: "Core Functions (3 operations):",
             create_plain: "  {}  Create Plain Private Key",
             create_encrypted: "  {}  Create Encrypted Private Key (Bot)",
@@ -1355,7 +1355,7 @@ fn setup_2fa_interactive(language: Language) -> Result<(), String> {
     use rpassword;
 
     let account = "wallet";
-    let issuer = "FnzeroSafe";
+    let issuer = "FnzSafe";
 
     println!("\n{}", "=".repeat(50).bright_magenta());
     if language == Language::Chinese {

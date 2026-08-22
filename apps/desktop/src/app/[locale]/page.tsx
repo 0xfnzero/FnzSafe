@@ -1038,6 +1038,7 @@ interface DappSignRequestEvent {
   transaction_base64: string;
   transaction_format: "legacy" | "versioned" | "v0" | "auto" | string;
   message_base64?: string;
+  callback_url?: string;
   created_at_ms: number;
 }
 
@@ -8377,8 +8378,8 @@ export default function Home() {
 
   const sensitiveExportContent = (preview: SensitiveExportPreview): string => [
     preview.kind === "mnemonic"
-      ? "FnzeroSafe plaintext mnemonic export"
-      : "FnzeroSafe plaintext private key export",
+      ? "FnzSafe plaintext mnemonic export"
+      : "FnzSafe plaintext private key export",
     `Wallet: ${preview.walletName}`,
     `Public Key: ${preview.publicKey}`,
     "",
@@ -10850,7 +10851,7 @@ export default function Home() {
               hardware_fingerprint: formData.hardware_fingerprint,
               master_password: masterPassword,
               account: formData.account || "fnzero-safe",
-              issuer: formData.issuer || "FnzeroSafe",
+              issuer: formData.issuer || "FnzSafe",
             }),
           });
           const data = await response.json();

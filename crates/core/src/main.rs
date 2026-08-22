@@ -66,7 +66,7 @@ enum Commands {
 /// Print colored help message with bilingual content
 fn print_colored_help() {
     println!("{}", "=".repeat(60).cyan());
-    println!("{}", "  FnzeroSafe - Solana 密钥管理工具".cyan().bold());
+    println!("{}", "  FnzSafe - Solana 密钥管理工具".cyan().bold());
     println!("{}", "  Solana Security Key Management Tool".cyan());
     println!("{}", "=".repeat(60).cyan());
     println!();
@@ -377,7 +377,7 @@ fn main() {
         }
         Commands::Setup2FA => {
             let account = "wallet";
-            let issuer = "FnzeroSafe";
+            let issuer = "FnzSafe";
 
             println!("{}", "🔐 三因子 2FA 安全设置".bright_cyan().bold());
             println!();
@@ -598,7 +598,7 @@ fn main() {
                 hardware_fp.as_str(),
                 &master_password,
                 "wallet",
-                "FnzeroSafe",
+                "FnzSafe",
             ) {
                 Ok(secret) => secret,
                 Err(e) => {
@@ -610,7 +610,7 @@ fn main() {
             let config = TOTPConfig {
                 secret: twofa_secret.clone(),
                 account: "wallet".to_string(),
-                issuer: "FnzeroSafe".to_string(),
+                issuer: "FnzSafe".to_string(),
                 algorithm: "SHA1".to_string(),
                 digits: 6,
                 step: 30,

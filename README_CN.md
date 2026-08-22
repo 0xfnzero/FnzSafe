@@ -1,10 +1,10 @@
 <div align="center">
-    <h1>FnzeroSafe</h1>
+    <h1>FnzSafe</h1>
     <h3><em>本地优先的 Solana 与 EVM 钱包、安全 Keystore、桌面端与 iOS/Android 移动端应用</em></h3>
 </div>
 
 <p align="center">
-    <strong>FnzeroSafe 是一个开源 Solana 与 EVM 钱包安全工作区，覆盖加密 Keystore、桌面端签名、移动端钱包、dApp 签名、Pump 交易、Squads 多签、Bot 集成，以及仅桌面端开放的高级 Program 工作流。</strong>
+    <strong>FnzSafe 是一个开源 Solana 与 EVM 钱包安全工作区，覆盖加密 Keystore、桌面端签名、移动端钱包、dApp 签名、Pump 交易、Squads 多签、Bot 集成，以及仅桌面端开放的高级 Program 工作流。</strong>
 </p>
 
 <p align="center">
@@ -44,7 +44,7 @@
 ## 文档大纲
 
 1. [项目概览](#1-项目概览)
-   1. [FnzeroSafe 适合什么场景](#11-fnzerosafe-适合什么场景)
+   1. [FnzSafe 适合什么场景](#11-fnzsafe-适合什么场景)
    2. [产品形态](#12-产品形态)
    3. [能力矩阵](#13-能力矩阵)
    4. [平台矩阵](#14-平台矩阵)
@@ -58,6 +58,7 @@
    2. [iOS 端](#42-ios-端)
    3. [Android 端](#43-android-端)
    4. [CLI](#44-cli)
+   5. [官网钱包接入](#45-官网钱包接入)
 5. [打包发布](#5-打包发布)
    1. [Release 目录](#51-release-目录)
    2. [macOS 桌面端](#52-macos-桌面端)
@@ -76,9 +77,9 @@
 
 ## 1. 项目概览
 
-### 1.1 FnzeroSafe 适合什么场景
+### 1.1 FnzSafe 适合什么场景
 
-FnzeroSafe 是一个本地优先的 Solana 与 EVM 钱包和密钥管理工作区。仓库内同时包含 Rust 核心库、交互式 CLI、本地桌面 API、Next.js 前端、Tauri 桌面壳，以及面向 iOS/Android 的 Flutter 移动端应用。
+FnzSafe 是一个本地优先的 Solana 与 EVM 钱包和密钥管理工作区。仓库内同时包含 Rust 核心库、交互式 CLI、本地桌面 API、Next.js 前端、Tauri 桌面壳，以及面向 iOS/Android 的 Flutter 移动端应用。
 
 | 方向 | 覆盖范围 |
 |---|---|
@@ -158,7 +159,7 @@ FnzeroSafe 是一个本地优先的 Solana 与 EVM 钱包和密钥管理工作�
 └─ release/                      # 打包产物目录，已被 Git 忽略
 ```
 
-对外产品名统一是 **FnzeroSafe**。`fnzero-safe-core`、`fnzero-safe-desktop-api`、`fnzero-safe-mobile-bridge` 这类名称只是 Cargo workspace 内部包名，用来保证各 crate 名称唯一。
+对外产品名统一是 **FnzSafe**。`fnzero-safe-core`、`fnzero-safe-desktop-api`、`fnzero-safe-mobile-bridge` 这类名称只是 Cargo workspace 内部包名，用来保证各 crate 名称唯一。
 
 ---
 
@@ -278,6 +279,46 @@ cargo install --path crates/core --features full
 fnzero-safe start
 ```
 
+### 4.5 官网钱包接入
+
+官网应该继续保留 Phantom、Solflare、Backpack、OKX 等标准
+wallet-adapter 连接流程。FnzSafe 可以排在钱包列表前面；当用户选择
+FnzSafe 时，官网可以通过下面的协议链接拉起桌面端：
+
+```text
+fnzsafe://sign?method=signMessage&wallet_public_key=<SOLANA_PUBLIC_KEY>&network=devnet&message_base64=<BASE64_MESSAGE>&app_name=Fnzero%20Website&app_url=https%3A%2F%2Ffnzero.dev%2F&callback_url=https%3A%2F%2Ffnzero.dev%2Fwallet%2Fcallback
+```
+
+可复用的官网 helper 放在
+`packages/shared-contracts/fnzsafe-deep-link.ts`：
+
+```ts
+import {
+  buildFnzSafeSignDeepLink,
+  openFnzSafeDeepLinkWithFallback,
+  prioritizeFnzSafeWallets,
+} from "./packages/shared-contracts/fnzsafe-deep-link";
+
+const wallets = prioritizeFnzSafeWallets(adapterWallets);
+
+const deepLink = buildFnzSafeSignDeepLink({
+  method: "signMessage",
+  walletPublicKey,
+  network: "devnet",
+  messageBase64,
+  appName: "Fnzero Website",
+  appUrl: "https://fnzero.dev/",
+  callbackUrl: "https://fnzero.dev/wallet/callback",
+});
+
+openFnzSafeDeepLinkWithFallback(deepLink, {
+  onFallback: () => openGenericWalletPicker(wallets),
+});
+```
+
+浏览器无法在打开前可靠判断自定义协议是否已安装。helper 会先尝试
+`fnzsafe://...`；如果页面没有失焦，再回退到普通钱包选择器，不影响其它钱包连接。
+
 ---
 
 ## 5. 打包发布
@@ -294,8 +335,8 @@ release/
 ├─ ios/
 │  └─ *.app 或 *.ipa
 ├─ macos/
-│  ├─ FnzeroSafe.app
-│  └─ FnzeroSafe_*.dmg
+│  ├─ FnzSafe.app
+│  └─ FnzSafe_*.dmg
 └─ windows/
    └─ *.msi 和/或 *.exe
 ```
@@ -429,7 +470,7 @@ make package
 7. **明文导出控制**：明文私钥和助记词导出有意加限制，只应临时用于迁移或本机调试。
 8. **移动端不开放 Program 工作流**：移动端不暴露 Program deploy、upgrade、source build 或 generic invoke API。
 
-存入资产前请先备份加密 Keystore。密码、私钥、助记词无法由 FnzeroSafe 恢复。
+存入资产前请先备份加密 Keystore。密码、私钥、助记词无法由 FnzSafe 恢复。
 
 ---
 

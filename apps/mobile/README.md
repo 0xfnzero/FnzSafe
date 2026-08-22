@@ -1,4 +1,4 @@
-# FnzeroSafe Mobile
+# FnzSafe Mobile
 
 Flutter mobile app for iOS and Android.
 

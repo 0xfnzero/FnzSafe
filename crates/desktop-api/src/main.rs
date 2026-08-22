@@ -3783,7 +3783,7 @@ async fn main() -> anyhow::Result<()> {
     let host: IpAddr = host.parse()?;
     if !host.is_loopback() {
         anyhow::bail!(
-            "FnzeroSafe API contains local-only wallet operations and must bind to a loopback address"
+            "FnzSafe API contains local-only wallet operations and must bind to a loopback address"
         );
     }
     let addr = SocketAddr::new(host, port);
@@ -13228,7 +13228,7 @@ async fn setup_2fa(Json(req): Json<Setup2faRequest>) -> Result<Json<Setup2faResp
     let account = validate_optional_label(req.account, "账户名称")?
         .unwrap_or_else(|| "fnzero-safe".to_string());
     let issuer =
-        validate_optional_label(req.issuer, "发行者")?.unwrap_or_else(|| "FnzeroSafe".to_string());
+        validate_optional_label(req.issuer, "发行者")?.unwrap_or_else(|| "FnzSafe".to_string());
 
     let totp_secret = fnzero_safe::derive_totp_secret_from_hardware_and_password(
         &req.hardware_fingerprint,

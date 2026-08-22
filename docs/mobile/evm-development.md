@@ -1,8 +1,8 @@
-# FnzeroSafe Mobile EVM Development Notes
+# FnzSafe Mobile EVM Development Notes
 
 ## Scope
 
-FnzeroSafe treats EVM support as one generic wallet flow driven by `chain_id`,
+FnzSafe treats EVM support as one generic wallet flow driven by `chain_id`,
 `rpc_url`, `explorer_url`, and `native_symbol`. Built-in chains and user-defined
 chains use the same Rust services and Flutter UI.
 

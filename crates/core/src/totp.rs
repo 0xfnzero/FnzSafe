@@ -20,7 +20,7 @@ impl Default for TOTPConfig {
     fn default() -> Self {
         Self {
             secret: String::new(),
-            issuer: "FnzeroSafe".to_string(),
+            issuer: "FnzSafe".to_string(),
             account: "master-key".to_string(),
             algorithm: "SHA1".to_string(),
             digits: 6,

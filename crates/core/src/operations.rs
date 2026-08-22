@@ -64,10 +64,10 @@ pub fn show_operations_menu(keypair: &Keypair, language: Language) -> Result<(),
         if language == Language::English {
             println!(
                 "  {} - Solana Operations",
-                "🔧 FnzeroSafe".bright_yellow().bold()
+                "🔧 FnzSafe".bright_yellow().bold()
             );
         } else {
-            println!("  {} - Solana 操作", "🔧 FnzeroSafe".bright_yellow().bold());
+            println!("  {} - Solana 操作", "🔧 FnzSafe".bright_yellow().bold());
         }
         println!(
             "{}",

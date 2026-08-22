@@ -280,7 +280,7 @@ class _WalletsScreenState extends ConsumerState<WalletsScreen> {
       await SharePlus.instance.share(
         ShareParams(
           text: exportedText,
-          subject: 'FnzeroSafe private key export',
+          subject: 'FnzSafe private key export',
         ),
       );
       _passwordController.clear();

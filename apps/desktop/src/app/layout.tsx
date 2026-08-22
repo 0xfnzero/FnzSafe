@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "FnzeroSafe - Solana Wallet Management",
+  title: "FnzSafe - Solana Wallet Management",
   description: "Complete Solana wallet management tool with advanced security features",
 };
 

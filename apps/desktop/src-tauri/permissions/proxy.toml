@@ -1,4 +1,4 @@
 [[permission]]
 identifier = "allow-proxy-api-request"
-description = "Proxy HTTP calls from the desktop app to the local FnzeroSafe API (reqwest in Rust)."
+description = "Proxy HTTP calls from the desktop app to the local FnzSafe API (reqwest in Rust)."
 commands.allow = ["proxy_api_request"]

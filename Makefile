@@ -19,7 +19,7 @@ ANDROID_ENV := $(if $(ANDROID_JAVA_HOME),JAVA_HOME="$(ANDROID_JAVA_HOME)" PATH="
 .PHONY: help dev package package-android package-ios package-macos package-windows prepare-release-dir
 
 help:
-	@echo "FnzeroSafe commands"
+	@echo "FnzSafe commands"
 	@echo "  make dev              Start the desktop dev app; old local dev processes are stopped first"
 	@echo "  make package          Build Android, iOS, macOS, and Windows packages into ./release"
 	@echo "  make package-android  Build Android APK/AAB into ./release/android"

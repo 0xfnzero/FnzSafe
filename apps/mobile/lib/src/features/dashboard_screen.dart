@@ -26,7 +26,7 @@ class DashboardScreen extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('FnzeroSafe'),
+        title: const Text('FnzSafe'),
         centerTitle: false,
       ),
       body: ListView(

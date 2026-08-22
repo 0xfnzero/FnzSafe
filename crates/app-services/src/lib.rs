@@ -2857,7 +2857,7 @@ pub fn setup_totp(account: String) -> AppServiceResult<TotpSetup> {
 
     Ok(TotpSetup {
         secret: fnzero_safe::totp::TOTPManager::generate_secret(),
-        issuer: "FnzeroSafe".to_string(),
+        issuer: "FnzSafe".to_string(),
         account,
     })
 }
@@ -2868,7 +2868,7 @@ pub fn verify_totp(req: TotpVerifyRequest) -> AppServiceResult<bool> {
 
     let manager = fnzero_safe::totp::TOTPManager::new(fnzero_safe::totp::TOTPConfig {
         secret,
-        issuer: "FnzeroSafe".to_string(),
+        issuer: "FnzSafe".to_string(),
         account: "mobile-wallet".to_string(),
         algorithm: "SHA1".to_string(),
         digits: 6,

@@ -25,7 +25,7 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..addJavaScriptChannel(
-        'FnzeroSafeProvider',
+        'FnzSafeProvider',
         onMessageReceived: (message) {
           _handleProviderMessage(message.message);
         },
@@ -194,7 +194,7 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
     });
   };
   const provider = {
-    isFnzeroSafe: true,
+    isFnzSafe: true,
     isPhantom: true,
     get isConnected() { return connected; },
     get publicKey() {
@@ -225,7 +225,7 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
     }),
     request: (payload) => {
       const id = `\${Date.now()}-\${Math.random().toString(36).slice(2)}`;
-      FnzeroSafeProvider.postMessage(JSON.stringify({ ...(payload || {}), __fnzeroRequestId: id }, (_, value) => toSerializable(value)));
+      FnzSafeProvider.postMessage(JSON.stringify({ ...(payload || {}), __fnzeroRequestId: id }, (_, value) => toSerializable(value)));
       return new Promise((resolve, reject) => pending.set(id, {
         resolve,
         reject,
@@ -256,7 +256,7 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
       }
       entry.resolve(normalizeSuccess(entry, payload || {}));
     } else {
-      const error = new Error(payload && payload.message ? payload.message : 'FnzeroSafe request rejected');
+      const error = new Error(payload && payload.message ? payload.message : 'FnzSafe request rejected');
       error.code = payload && payload.code ? payload.code : 4001;
       entry.reject(error);
     }
@@ -282,7 +282,7 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
   };
   if (${isEvm ? 'true' : 'false'}) {
     const ethereum = {
-      isFnzeroSafe: true,
+      isFnzSafe: true,
       isMetaMask: true,
       get chainId() { return ethereumChainId; },
       get networkVersion() { return String(parseInt(ethereumChainId, 16)); },
@@ -650,7 +650,7 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
               'transactionHash': response.transactionSignature,
           }
         : {
-            'message': response.error ?? 'FnzeroSafe request rejected',
+            'message': response.error ?? 'FnzSafe request rejected',
             'code': 4001,
           };
     await _deliverProviderResponse(

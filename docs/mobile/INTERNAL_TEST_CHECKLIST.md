@@ -1,4 +1,4 @@
-# FnzeroSafe Mobile Internal Test Checklist
+# FnzSafe Mobile Internal Test Checklist
 
 ## Build
 

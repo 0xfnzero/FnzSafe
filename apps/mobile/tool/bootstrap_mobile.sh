@@ -22,8 +22,8 @@ if [[ -f ios/Podfile ]]; then
 fi
 
 if [[ -f ios/Runner/Info.plist ]]; then
-  /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName FnzeroSafe" ios/Runner/Info.plist 2>/dev/null \
-    || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string FnzeroSafe" ios/Runner/Info.plist
+  /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName FnzSafe" ios/Runner/Info.plist 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string FnzSafe" ios/Runner/Info.plist
   /usr/libexec/PlistBuddy -c "Add :NSCameraUsageDescription string Scan wallet addresses and dApp URLs." ios/Runner/Info.plist 2>/dev/null \
     || /usr/libexec/PlistBuddy -c "Set :NSCameraUsageDescription Scan wallet addresses and dApp URLs." ios/Runner/Info.plist
   /usr/libexec/PlistBuddy -c "Add :NSFaceIDUsageDescription string Confirm wallet unlock and signing actions." ios/Runner/Info.plist 2>/dev/null \
@@ -49,7 +49,7 @@ if [[ -f android/app/src/main/AndroidManifest.xml ]]; then
     || perl -0pi -e "s|<manifest([^>]*)>|<manifest\$1>\n    <uses-permission android:name=\"android.permission.CAMERA\" />|" "$manifest"
   grep -q "android.permission.USE_BIOMETRIC" "$manifest" \
     || perl -0pi -e "s|<manifest([^>]*)>|<manifest\$1>\n    <uses-permission android:name=\"android.permission.USE_BIOMETRIC\" />|" "$manifest"
-  perl -0pi -e "s/android:label=\"[^\"]+\"/android:label=\"FnzeroSafe\"/" "$manifest"
+  perl -0pi -e "s/android:label=\"[^\"]+\"/android:label=\"FnzSafe\"/" "$manifest"
 fi
 
 echo "Mobile Flutter shell is ready."

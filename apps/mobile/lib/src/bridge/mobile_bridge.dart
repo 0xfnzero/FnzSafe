@@ -912,7 +912,7 @@ class DevelopmentMobileBridgeBackend implements MobileBridgeBackend {
   Future<TotpSetup> setupTotp(String account) async {
     return TotpSetup(
       secret: 'DEVELOPMENTTOTPSECRET',
-      issuer: 'FnzeroSafe',
+      issuer: 'FnzSafe',
       account: account,
     );
   }

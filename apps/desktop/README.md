@@ -1,6 +1,6 @@
-# FnzeroSafe UI
+# FnzSafe UI
 
-This directory contains the integrated Next.js interface, local Rust API, and Tauri desktop shell for FnzeroSafe. The API uses the root workspace crate through a local path dependency; do not clone or vendor another copy of `fnzero-safe` here.
+This directory contains the integrated Next.js interface, local Rust API, and Tauri desktop shell for FnzSafe. The API uses the root workspace crate through a local path dependency; do not clone or vendor another copy of `fnzero-safe` here.
 
 ## User guides
 

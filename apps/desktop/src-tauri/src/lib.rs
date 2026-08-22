@@ -15,6 +15,7 @@ use tauri::{
     Emitter, LogicalPosition, LogicalSize, Manager, Position, Rect, Size, WebviewBuilder,
     WebviewUrl,
 };
+use tauri_plugin_deep_link::DeepLinkExt;
 use zeroize::Zeroizing;
 
 /// Must match `DEFAULT_API_PORT` in `src/lib/api.ts`
@@ -31,7 +32,7 @@ const DAPP_TAB_URL_EVENT: &str = "dapp://tab-url";
 const DAPP_TAB_TITLE_EVENT: &str = "dapp://tab-title";
 const DAPP_NEW_WINDOW_EVENT: &str = "dapp://new-window";
 const DAPP_REQUEST_TTL_MS: u64 = 3 * 60 * 1000;
-const DAPP_WALLET_NAME: &str = "FnzeroSafe";
+const DAPP_WALLET_NAME: &str = "FnzSafe";
 #[cfg(target_os = "macos")]
 const BIOMETRIC_WALLET_PASSWORD_SERVICE: &str = "dev.fnzero-safe.wallet.password.v3";
 
@@ -51,7 +52,7 @@ struct DappSession {
     opened_at_ms: u64,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct DappSignRequestEvent {
     request_id: String,
     app_id: String,
@@ -64,6 +65,8 @@ struct DappSignRequestEvent {
     transaction_format: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     message_base64: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    callback_url: Option<String>,
     created_at_ms: u64,
 }
 
@@ -844,6 +847,255 @@ fn dapp_request_id() -> String {
     format!("dapp-{}-{}", now_ms(), BASE64.encode(random)).replace(['+', '/', '='], "")
 }
 
+fn deep_link_query_param(url: &tauri::Url, name: &str) -> Option<String> {
+    url.query_pairs()
+        .find(|(key, _)| key == name)
+        .map(|(_, value)| value.into_owned())
+}
+
+fn validate_short_deep_link_text(
+    value: &str,
+    field: &str,
+    max_len: usize,
+) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.len() > max_len || trimmed.chars().any(|ch| ch.is_control()) {
+        return Err(format!("invalid {field}"));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn validate_dapp_network(network: &str) -> Result<String, String> {
+    let trimmed = network.trim();
+    if trimmed.is_empty() || trimmed.len() > 256 || trimmed.chars().any(|ch| ch.is_control()) {
+        return Err("invalid network".to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
+fn validate_deep_link_request_id(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || trimmed.len() > 128
+        || !trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_' | ':'))
+    {
+        return Err("invalid request_id".to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
+fn validate_deep_link_app_url(value: &str) -> Result<tauri::Url, String> {
+    let url = parse_dapp_browser_url(value)?;
+    if url.scheme() != "https" && !matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1"))
+    {
+        return Err("deep link app_url must be https or localhost http".to_string());
+    }
+    Ok(url)
+}
+
+fn related_callback_host(app_host: &str, callback_host: &str) -> bool {
+    app_host == callback_host
+        || callback_host.ends_with(&format!(".{app_host}"))
+        || app_host.ends_with(&format!(".{callback_host}"))
+}
+
+fn validate_deep_link_callback_url(
+    callback_url: Option<String>,
+    app_url: &tauri::Url,
+) -> Result<Option<String>, String> {
+    let Some(callback_url) = callback_url else {
+        return Ok(None);
+    };
+    let trimmed = callback_url.trim();
+    if !is_allowed_external_https_url(trimmed) {
+        return Err("callback_url must be a valid https URL".to_string());
+    }
+    let callback = trimmed
+        .parse::<tauri::Url>()
+        .map_err(|error| format!("invalid callback_url: {error}"))?;
+    let app_host = app_url
+        .host_str()
+        .ok_or_else(|| "app_url host is required".to_string())?
+        .to_ascii_lowercase();
+    let callback_host = callback
+        .host_str()
+        .ok_or_else(|| "callback_url host is required".to_string())?
+        .to_ascii_lowercase();
+    if !related_callback_host(&app_host, &callback_host) {
+        return Err("callback_url must belong to the same site as app_url".to_string());
+    }
+    Ok(Some(trimmed.to_string()))
+}
+
+fn is_sign_deep_link(url: &tauri::Url) -> bool {
+    if url.scheme() != "fnzsafe" {
+        return false;
+    }
+    let host_is_sign = url.host_str().is_some_and(|host| host == "sign");
+    let path_is_sign = url.path().trim_matches('/') == "sign";
+    host_is_sign || path_is_sign
+}
+
+fn parse_sign_deep_link(url: &tauri::Url) -> Result<DappSignRequestEvent, String> {
+    if !is_sign_deep_link(url) {
+        return Err("unsupported fnzsafe deep link".to_string());
+    }
+
+    let method = validate_dapp_method(
+        deep_link_query_param(url, "method")
+            .as_deref()
+            .ok_or_else(|| "method is required".to_string())?,
+    )?;
+    let wallet_public_key = validate_short_deep_link_text(
+        deep_link_query_param(url, "wallet_public_key")
+            .as_deref()
+            .ok_or_else(|| "wallet_public_key is required".to_string())?,
+        "wallet_public_key",
+        64,
+    )?;
+    if !is_likely_solana_pubkey(&wallet_public_key) {
+        return Err("invalid wallet public key".to_string());
+    }
+    let network = validate_dapp_network(
+        deep_link_query_param(url, "network")
+            .as_deref()
+            .unwrap_or("mainnet"),
+    )?;
+    let app_url = validate_deep_link_app_url(
+        deep_link_query_param(url, "app_url")
+            .as_deref()
+            .ok_or_else(|| "app_url is required".to_string())?,
+    )?;
+    let app_url_string = app_url.as_str().to_string();
+    let app_name = deep_link_query_param(url, "app_name")
+        .map(|value| validate_short_deep_link_text(&value, "app_name", 80))
+        .transpose()?
+        .unwrap_or_else(|| {
+            app_url
+                .host_str()
+                .map(|host| host.to_string())
+                .unwrap_or_else(|| "FnzSafe Web".to_string())
+        });
+    let request_id = deep_link_query_param(url, "request_id")
+        .map(|value| validate_deep_link_request_id(&value))
+        .transpose()?
+        .unwrap_or_else(dapp_request_id);
+    let callback_url =
+        validate_deep_link_callback_url(deep_link_query_param(url, "callback_url"), &app_url)?;
+
+    let (transaction_base64, transaction_format, message_base64) = if method == "signMessage" {
+        let message_base64 = validate_dapp_message_base64(
+            deep_link_query_param(url, "message_base64")
+                .as_deref()
+                .ok_or_else(|| "message payload is required".to_string())?,
+        )?;
+        ("".to_string(), "message".to_string(), Some(message_base64))
+    } else {
+        let transaction_base64 = validate_dapp_transaction_base64(
+            deep_link_query_param(url, "transaction_base64")
+                .as_deref()
+                .ok_or_else(|| "transaction payload is required".to_string())?,
+        )?;
+        let transaction_format = validate_transaction_format(
+            deep_link_query_param(url, "transaction_format")
+                .as_deref()
+                .unwrap_or("auto"),
+        )?;
+        (transaction_base64, transaction_format, None)
+    };
+
+    Ok(DappSignRequestEvent {
+        request_id,
+        app_id: "fnzsafe-deep-link".to_string(),
+        app_name,
+        app_url: app_url_string,
+        method,
+        wallet_public_key,
+        network,
+        transaction_base64,
+        transaction_format,
+        message_base64,
+        callback_url,
+        created_at_ms: now_ms(),
+    })
+}
+
+fn enqueue_dapp_sign_request(
+    app: &tauri::AppHandle,
+    state: &DappBridgeState,
+    webview_label: String,
+    event: DappSignRequestEvent,
+) -> Result<(), String> {
+    let mut requests = state
+        .requests
+        .lock()
+        .map_err(|_| "dapp request lock poisoned".to_string())?;
+    requests.retain(|_, pending| {
+        now_ms().saturating_sub(pending.event.created_at_ms) <= DAPP_REQUEST_TTL_MS
+            && pending.result.is_none()
+    });
+    if requests.contains_key(&event.request_id) {
+        return Err("dapp signing request id is already pending".to_string());
+    }
+    requests.insert(
+        event.request_id.clone(),
+        DappPendingRequest {
+            webview_label,
+            event: event.clone(),
+            result: None,
+        },
+    );
+    drop(requests);
+
+    app.emit_to("main", DAPP_SIGN_REQUEST_EVENT, event)
+        .map_err(|error| format!("failed to notify main window: {error}"))
+}
+
+fn focus_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+fn append_dapp_result_to_callback_url(
+    callback_url: &str,
+    request_id: &str,
+    result: &DappSignResult,
+) -> Result<String, String> {
+    let mut url = callback_url
+        .parse::<tauri::Url>()
+        .map_err(|error| format!("invalid callback_url: {error}"))?;
+    {
+        let mut query = url.query_pairs_mut();
+        query.append_pair("request_id", request_id);
+        query.append_pair("approved", if result.approved { "true" } else { "false" });
+        if let Some(error) = result.error.as_deref() {
+            query.append_pair("error", error);
+        }
+        if let Some(signature) = result.signature.as_deref() {
+            query.append_pair("signature", signature);
+        }
+        if let Some(raw_transaction) = result.raw_transaction.as_deref() {
+            query.append_pair("raw_transaction", raw_transaction);
+        }
+        if let Some(recent_blockhash) = result.recent_blockhash.as_deref() {
+            query.append_pair("recent_blockhash", recent_blockhash);
+        }
+    }
+    Ok(url.to_string())
+}
+
+fn handle_sign_deep_link(app: &tauri::AppHandle, url: &tauri::Url) -> Result<(), String> {
+    let event = parse_sign_deep_link(url)?;
+    focus_main_window(app);
+    let state = app.state::<DappBridgeState>();
+    enqueue_dapp_sign_request(app, state.inner(), "deep-link".to_string(), event)
+}
+
 fn dapp_provider_script(
     dapp: &AllowedDapp,
     wallet_public_key: &str,
@@ -875,7 +1127,7 @@ fn dapp_provider_script(
 	  function tauriInvoke(command, args) {{
 	    const invoke = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
 	    if (typeof invoke !== "function") {{
-	      throw new Error("FnzeroSafe bridge is unavailable");
+	      throw new Error("FnzSafe bridge is unavailable");
 	    }}
 	    return invoke(command, args || {{}});
 	  }}
@@ -982,10 +1234,10 @@ fn dapp_provider_script(
       const poll = await tauriInvoke("dapp_poll_sign_request", {{ requestId }});
       if (poll.status === "approved") return poll.result || {{}};
       if (poll.status === "rejected") throw new Error(poll.result?.error || "User rejected the request");
-      if (poll.status === "expired") throw new Error("FnzeroSafe signing request expired");
+      if (poll.status === "expired") throw new Error("FnzSafe signing request expired");
       await sleep(500);
     }}
-    throw new Error("FnzeroSafe signing request timed out");
+    throw new Error("FnzSafe signing request timed out");
   }}
   async function requestMessageSignature(message) {{
     let messageBytes;
@@ -1009,10 +1261,10 @@ fn dapp_provider_script(
       const poll = await tauriInvoke("dapp_poll_sign_request", {{ requestId }});
       if (poll.status === "approved") return poll.result || {{}};
       if (poll.status === "rejected") throw new Error(poll.result?.error || "User rejected the request");
-      if (poll.status === "expired") throw new Error("FnzeroSafe signing request expired");
+      if (poll.status === "expired") throw new Error("FnzSafe signing request expired");
       await sleep(500);
     }}
-    throw new Error("FnzeroSafe signing request timed out");
+    throw new Error("FnzSafe signing request timed out");
   }}
   function emit(event, value) {{
     const handlers = listeners.get(event);
@@ -1094,11 +1346,11 @@ fn dapp_provider_script(
       if (method === "signAllTransactions") return this.signAllTransactions(params?.transactions || params?.[0] || params);
       if (method === "signMessage") return this.signMessage(params?.message ?? params?.[0] ?? params);
       if (method === "signAndSendTransaction") return this.signAndSendTransaction(params?.transaction || params?.[0] || params);
-      throw new Error("Unsupported FnzeroSafe provider method: " + method);
+      throw new Error("Unsupported FnzSafe provider method: " + method);
     }},
     async signTransaction(transaction) {{
       const result = await requestSignature("signTransaction", transaction);
-      if (!result.raw_transaction) throw new Error("FnzeroSafe did not return a signed transaction");
+      if (!result.raw_transaction) throw new Error("FnzSafe did not return a signed transaction");
       return hydrateSignedTransaction(transaction, result.raw_transaction);
     }},
     async signAllTransactions(transactions) {{
@@ -1111,7 +1363,7 @@ fn dapp_provider_script(
     async signAndSendTransaction(input) {{
       const transaction = input?.transaction || input;
       const result = await requestSignature("signAndSendTransaction", transaction);
-      if (!result.signature) throw new Error("FnzeroSafe did not return a transaction signature");
+      if (!result.signature) throw new Error("FnzSafe did not return a transaction signature");
       return {{ signature: result.signature }};
     }},
     async sendTransaction(transaction, connection, options) {{
@@ -1121,12 +1373,12 @@ fn dapp_provider_script(
         return connection.sendRawTransaction(raw, options || {{}});
       }}
       const result = await requestSignature("sendTransaction", transaction);
-      if (!result.signature) throw new Error("FnzeroSafe did not return a transaction signature");
+      if (!result.signature) throw new Error("FnzSafe did not return a transaction signature");
       return result.signature;
     }},
     async signMessage(message) {{
       const result = await requestMessageSignature(message);
-      if (!result.signature) throw new Error("FnzeroSafe did not return a message signature");
+      if (!result.signature) throw new Error("FnzSafe did not return a message signature");
       return base58Decode(result.signature);
     }},
   }};
@@ -1175,16 +1427,16 @@ fn dapp_provider_script(
             while (Date.now() - started < 180000) {{
               const poll = await tauriInvoke("dapp_poll_sign_request", {{ requestId }});
               if (poll.status === "approved") {{
-                if (!poll.result?.raw_transaction) throw new Error("FnzeroSafe did not return a signed transaction");
+                if (!poll.result?.raw_transaction) throw new Error("FnzSafe did not return a signed transaction");
                 signed.push({{ signedTransaction: base64ToBytes(poll.result.raw_transaction) }});
                 resolved = true;
                 break;
               }}
               if (poll.status === "rejected") throw new Error(poll.result?.error || "User rejected the request");
-              if (poll.status === "expired") throw new Error("FnzeroSafe signing request expired");
+              if (poll.status === "expired") throw new Error("FnzSafe signing request expired");
               await sleep(500);
             }}
-            if (!resolved) throw new Error("FnzeroSafe signing request timed out");
+            if (!resolved) throw new Error("FnzSafe signing request timed out");
           }}
 	          return signed;
 	        }},
@@ -1206,16 +1458,16 @@ fn dapp_provider_script(
 	            while (Date.now() - started < 180000) {{
 	              const poll = await tauriInvoke("dapp_poll_sign_request", {{ requestId }});
 	              if (poll.status === "approved") {{
-	                if (!poll.result?.signature) throw new Error("FnzeroSafe did not return a transaction signature");
+	                if (!poll.result?.signature) throw new Error("FnzSafe did not return a transaction signature");
 	                signed.push({{ signature: base58Decode(poll.result.signature) }});
 	                resolved = true;
 	                break;
 	              }}
 	              if (poll.status === "rejected") throw new Error(poll.result?.error || "User rejected the request");
-	              if (poll.status === "expired") throw new Error("FnzeroSafe signing request expired");
+	              if (poll.status === "expired") throw new Error("FnzSafe signing request expired");
 	              await sleep(500);
 	            }}
-	            if (!resolved) throw new Error("FnzeroSafe signing request timed out");
+	            if (!resolved) throw new Error("FnzSafe signing request timed out");
 	          }}
 	          return signed;
 	        }},
@@ -1227,7 +1479,7 @@ fn dapp_provider_script(
           for (const input of inputs) {{
             const message = input?.message || input;
             const result = await requestMessageSignature(message);
-            if (!result.signature) throw new Error("FnzeroSafe did not return a message signature");
+            if (!result.signature) throw new Error("FnzSafe did not return a message signature");
             const messageBytes = message instanceof Uint8Array
               ? message
               : message instanceof ArrayBuffer
@@ -1242,7 +1494,7 @@ fn dapp_provider_script(
       }},
     }},
   }};
-  function isFnzeroSafeEntry(entry) {{
+  function isFnzSafeEntry(entry) {{
     const maybeWallet = entry?.wallet || entry?.adapter?.wallet || entry?.adapter || entry;
     return (
       maybeWallet === standardWallet ||
@@ -1254,15 +1506,15 @@ fn dapp_provider_script(
   function moveFnzeroFirst(list) {{
     try {{
       if (!Array.isArray(list)) return;
-      const index = list.findIndex(isFnzeroSafeEntry);
+      const index = list.findIndex(isFnzSafeEntry);
       if (index > 0) list.unshift(list.splice(index, 1)[0]);
     }} catch (_) {{}}
   }}
   const fnzeroWalletRegistrar = Object.assign(({{ register }}) => register(standardWallet), {{ __fnzeroWallet: true }});
-  function prioritizeFnzeroSafes(api) {{
+  function prioritizeFnzSafes(api) {{
     try {{
       const wallets = window.navigator.wallets || (window.navigator.wallets = []);
-      const existing = wallets.findIndex(isFnzeroSafeEntry);
+      const existing = wallets.findIndex(isFnzSafeEntry);
       if (existing >= 0) wallets.splice(existing, 1);
       wallets.unshift(fnzeroWalletRegistrar);
     }} catch (_) {{}}
@@ -1284,7 +1536,7 @@ fn dapp_provider_script(
     return String(element?.textContent || "").replace(/\s+/g, " ").trim();
   }}
   function textLooksLikeWalletOption(text) {{
-    return /FnzeroSafe|Solflare|Phantom|Backpack|OKX|Binance|Magic Eden|SquadsX|Coinbase|Glow|Slope|Torus|Ledger|Wallet/i.test(text);
+    return /FnzSafe|Solflare|Phantom|Backpack|OKX|Binance|Magic Eden|SquadsX|Coinbase|Glow|Slope|Torus|Ledger|Wallet/i.test(text);
   }}
   function elementLooksLikeWalletItem(element) {{
     if (!element || element.nodeType !== 1 || !visibleElement(element)) return false;
@@ -1318,7 +1570,7 @@ fn dapp_provider_script(
     fnzeroExpandAttemptedAt = now;
     allWallets.click();
   }}
-  function prioritizeFnzeroSafeDom() {{
+  function prioritizeFnzSafeDom() {{
     try {{
       const matches = Array.from(document.querySelectorAll("button, [role='button'], a, li, [data-testid], [class*='wallet'], [class*='Wallet']"))
         .map(walletOptionItem)
@@ -1335,19 +1587,19 @@ fn dapp_provider_script(
       }}
     }} catch (_) {{}}
   }}
-  function schedulePrioritizeFnzeroSafeDom() {{
+  function schedulePrioritizeFnzSafeDom() {{
     if (fnzeroDomPrioritizePending) return;
     fnzeroDomPrioritizePending = true;
     window.requestAnimationFrame(() => {{
       fnzeroDomPrioritizePending = false;
-      prioritizeFnzeroSafeDom();
+      prioritizeFnzSafeDom();
     }});
   }}
-  function installFnzeroSafeDomPrioritizer() {{
+  function installFnzSafeDomPrioritizer() {{
     try {{
-      prioritizeFnzeroSafeDom();
+      prioritizeFnzSafeDom();
       const observer = new MutationObserver(() => {{
-        schedulePrioritizeFnzeroSafeDom();
+        schedulePrioritizeFnzSafeDom();
       }});
       observer.observe(document.documentElement, {{ childList: true, subtree: true }});
     }} catch (_) {{}}
@@ -1356,7 +1608,7 @@ fn dapp_provider_script(
     const callback = (api) => {{
       if (!api || typeof api.register !== "function") return;
       api.register(wallet);
-      prioritizeFnzeroSafes(api);
+      prioritizeFnzSafes(api);
       window.setTimeout(announceConnected, 0);
       window.setTimeout(announceConnected, 250);
     }};
@@ -1374,7 +1626,7 @@ fn dapp_provider_script(
     }} catch (_) {{}}
     try {{
       const wallets = window.navigator.wallets || (window.navigator.wallets = []);
-      const existing = wallets.findIndex(isFnzeroSafeEntry);
+      const existing = wallets.findIndex(isFnzSafeEntry);
       if (existing >= 0) wallets.splice(existing, 1);
       wallets.unshift(fnzeroWalletRegistrar);
     }} catch (_) {{}}
@@ -1386,9 +1638,9 @@ fn dapp_provider_script(
   Object.defineProperty(window, "solflare", {{ value: provider, configurable: true }});
   Object.defineProperty(window, "fnzeroWallet", {{ value: provider, configurable: true }});
   registerStandardWallet(standardWallet);
-  installFnzeroSafeDomPrioritizer();
-  [0, 250, 750, 1500, 3000].forEach((delay) => window.setTimeout(prioritizeFnzeroSafes, delay));
-  [0, 250, 750, 1500, 3000].forEach((delay) => window.setTimeout(prioritizeFnzeroSafeDom, delay));
+  installFnzSafeDomPrioritizer();
+  [0, 250, 750, 1500, 3000].forEach((delay) => window.setTimeout(prioritizeFnzSafes, delay));
+  [0, 250, 750, 1500, 3000].forEach((delay) => window.setTimeout(prioritizeFnzSafeDom, delay));
   [0, 250, 750, 1500, 3000].forEach((delay) => window.setTimeout(announceConnected, delay));
 }})();
 "#
@@ -1442,10 +1694,7 @@ fn dapp_open_tab(
         }
         (None, _) => None,
     };
-    let network = network.trim().to_string();
-    if network.is_empty() || network.len() > 256 || network.chars().any(|ch| ch.is_control()) {
-        return Err("invalid network".to_string());
-    }
+    let network = validate_dapp_network(&network)?;
 
     if let Some(existing) = app.get_webview(&label) {
         let _ = existing.close();
@@ -1710,29 +1959,11 @@ fn dapp_submit_sign_request(
         transaction_base64,
         transaction_format,
         message_base64,
+        callback_url: None,
         created_at_ms: now_ms(),
     };
 
-    let mut requests = state
-        .requests
-        .lock()
-        .map_err(|_| "dapp request lock poisoned".to_string())?;
-    requests.retain(|_, pending| {
-        now_ms().saturating_sub(pending.event.created_at_ms) <= DAPP_REQUEST_TTL_MS
-            && pending.result.is_none()
-    });
-    requests.insert(
-        request_id.clone(),
-        DappPendingRequest {
-            webview_label,
-            event: event.clone(),
-            result: None,
-        },
-    );
-    drop(requests);
-
-    app.emit_to("main", DAPP_SIGN_REQUEST_EVENT, event)
-        .map_err(|error| format!("failed to notify main window: {error}"))?;
+    enqueue_dapp_sign_request(&app, state.inner(), webview_label, event)?;
     Ok(request_id)
 }
 
@@ -1791,6 +2022,7 @@ fn resolve_dapp_sign_request(
     result: DappSignResult,
 ) -> Result<(), String> {
     let request_id = request_id.trim();
+    let mut callback_target = None;
     let mut requests = state
         .requests
         .lock()
@@ -1802,7 +2034,19 @@ fn resolve_dapp_sign_request(
         requests.remove(request_id);
         return Err("dapp signing request expired".to_string());
     }
+    if let Some(callback_url) = pending.event.callback_url.as_deref() {
+        callback_target = Some(append_dapp_result_to_callback_url(
+            callback_url,
+            request_id,
+            &result,
+        )?);
+    }
     pending.result = Some(result);
+    drop(requests);
+
+    if let Some(callback_target) = callback_target {
+        spawn_system_browser(&callback_target)?;
+    }
     Ok(())
 }
 
@@ -1913,6 +2157,8 @@ fn open_download_file_location(path: String) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_single_instance::Builder::new().build())
         .manage(DappBridgeState::default())
         .invoke_handler(tauri::generate_handler![
             proxy_api_request,
@@ -1939,6 +2185,20 @@ pub fn run() {
                         .level(log::LevelFilter::Info)
                         .build(),
                 )?;
+            }
+            app.deep_link().on_open_url({
+                let app = app.handle().clone();
+                move |event| {
+                    for url in event.urls() {
+                        if let Err(error) = handle_sign_deep_link(&app, &url) {
+                            log::warn!("ignored fnzsafe deep link: {error}");
+                        }
+                    }
+                }
+            });
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
+            if let Err(error) = app.deep_link().register_all() {
+                log::warn!("failed to register fnzsafe deep link scheme: {error}");
             }
             Ok(())
         })
@@ -2065,5 +2325,75 @@ mod tests {
         assert!(!is_allowed_connected_dapp_navigation_url(
             &pumpfun, &data_page
         ));
+    }
+
+    #[test]
+    fn sign_deep_link_parses_host_action() {
+        let url = "fnzsafe://sign?method=signMessage&wallet_public_key=11111111111111111111111111111111&network=devnet&message_base64=aGVsbG8=&app_name=Fnzero%20Website&app_url=https%3A%2F%2Ffnzero.dev%2F&callback_url=https%3A%2F%2Ffnzero.dev%2Fwallet%2Fcallback"
+            .parse::<tauri::Url>()
+            .unwrap();
+
+        let request = parse_sign_deep_link(&url).unwrap();
+        assert_eq!(request.app_id, "fnzsafe-deep-link");
+        assert_eq!(request.app_name, "Fnzero Website");
+        assert_eq!(request.method, "signMessage");
+        assert_eq!(request.network, "devnet");
+        assert_eq!(request.message_base64.as_deref(), Some("aGVsbG8="));
+        assert_eq!(
+            request.callback_url.as_deref(),
+            Some("https://fnzero.dev/wallet/callback")
+        );
+    }
+
+    #[test]
+    fn sign_deep_link_parses_path_action_and_transaction() {
+        let url = "fnzsafe:///sign?method=signTransaction&wallet_public_key=11111111111111111111111111111111&transaction_base64=AQID&transaction_format=v0&app_url=https%3A%2F%2Fwww.fnzero.dev%2F"
+            .parse::<tauri::Url>()
+            .unwrap();
+
+        let request = parse_sign_deep_link(&url).unwrap();
+        assert_eq!(request.app_name, "www.fnzero.dev");
+        assert_eq!(request.method, "signTransaction");
+        assert_eq!(request.network, "mainnet");
+        assert_eq!(request.transaction_base64, "AQID");
+        assert_eq!(request.transaction_format, "v0");
+        assert!(request.message_base64.is_none());
+    }
+
+    #[test]
+    fn sign_deep_link_rejects_cross_site_callback() {
+        let url = "fnzsafe://sign?method=signMessage&wallet_public_key=11111111111111111111111111111111&message_base64=aGVsbG8=&app_url=https%3A%2F%2Ffnzero.dev%2F&callback_url=https%3A%2F%2Fevil.example%2Fcallback"
+            .parse::<tauri::Url>()
+            .unwrap();
+
+        let error = parse_sign_deep_link(&url).unwrap_err();
+        assert_eq!(
+            error,
+            "callback_url must belong to the same site as app_url"
+        );
+    }
+
+    #[test]
+    fn callback_url_appends_dapp_result() {
+        let result = DappSignResult {
+            approved: true,
+            error: None,
+            signature: Some("sig123".to_string()),
+            raw_transaction: None,
+            recent_blockhash: Some("hash123".to_string()),
+        };
+
+        let callback = append_dapp_result_to_callback_url(
+            "https://fnzero.dev/callback?source=wallet",
+            "req-1",
+            &result,
+        )
+        .unwrap();
+        assert!(callback.starts_with("https://fnzero.dev/callback?"));
+        assert!(callback.contains("source=wallet"));
+        assert!(callback.contains("request_id=req-1"));
+        assert!(callback.contains("approved=true"));
+        assert!(callback.contains("signature=sig123"));
+        assert!(callback.contains("recent_blockhash=hash123"));
     }
 }

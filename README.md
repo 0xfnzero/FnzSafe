@@ -1,10 +1,10 @@
 <div align="center">
-    <h1>FnzeroSafe</h1>
+    <h1>FnzSafe</h1>
     <h3><em>Local-first Solana and EVM wallet, secure keystore, desktop app, and iOS/Android app</em></h3>
 </div>
 
 <p align="center">
-    <strong>FnzeroSafe is an open-source Solana and EVM wallet security workspace for encrypted keystores, desktop signing, mobile wallets, dApp signing, Pump trading, Squads multisig, bot integration, and advanced desktop-only Program workflows.</strong>
+    <strong>FnzSafe is an open-source Solana and EVM wallet security workspace for encrypted keystores, desktop signing, mobile wallets, dApp signing, Pump trading, Squads multisig, bot integration, and advanced desktop-only Program workflows.</strong>
 </p>
 
 <p align="center">
@@ -44,7 +44,7 @@
 ## Document Outline
 
 1. [Project Overview](#1-project-overview)
-   1. [What FnzeroSafe Is For](#11-what-fnzerosafe-is-for)
+   1. [What FnzSafe Is For](#11-what-fnzsafe-is-for)
    2. [Product Editions](#12-product-editions)
    3. [Capability Matrix](#13-capability-matrix)
    4. [Platform Matrix](#14-platform-matrix)
@@ -58,6 +58,7 @@
    2. [iOS App](#42-ios-app)
    3. [Android App](#43-android-app)
    4. [CLI](#44-cli)
+   5. [Website Wallet Integration](#45-website-wallet-integration)
 5. [Package For Release](#5-package-for-release)
    1. [Release Directory](#51-release-directory)
    2. [macOS Desktop](#52-macos-desktop)
@@ -76,9 +77,9 @@
 
 ## 1. Project Overview
 
-### 1.1 What FnzeroSafe Is For
+### 1.1 What FnzSafe Is For
 
-FnzeroSafe is a local-first Solana and EVM wallet and key-management workspace. It combines a Rust core crate, an interactive CLI, a local desktop API, a Next.js web interface, a Tauri desktop shell, and a Flutter mobile app for iOS and Android.
+FnzSafe is a local-first Solana and EVM wallet and key-management workspace. It combines a Rust core crate, an interactive CLI, a local desktop API, a Next.js web interface, a Tauri desktop shell, and a Flutter mobile app for iOS and Android.
 
 | Area | Coverage |
 |---|---|
@@ -158,7 +159,7 @@ FnzeroSafe is a local-first Solana and EVM wallet and key-management workspace. 
 └─ release/                      # Package output directory, ignored by Git
 ```
 
-The public product name is **FnzeroSafe**. Internal Cargo package names such as `fnzero-safe-core`, `fnzero-safe-desktop-api`, and `fnzero-safe-mobile-bridge` keep workspace crates unique.
+The public product name is **FnzSafe**. Internal Cargo package names such as `fnzero-safe-core`, `fnzero-safe-desktop-api`, and `fnzero-safe-mobile-bridge` keep workspace crates unique.
 
 ---
 
@@ -278,6 +279,47 @@ cargo install --path crates/core --features full
 fnzero-safe start
 ```
 
+### 4.5 Website Wallet Integration
+
+The official website should keep the normal wallet-adapter flow for Phantom,
+Solflare, Backpack, OKX, and other wallets. FnzSafe can be shown first, and when
+the user chooses it the site can launch the desktop app with:
+
+```text
+fnzsafe://sign?method=signMessage&wallet_public_key=<SOLANA_PUBLIC_KEY>&network=devnet&message_base64=<BASE64_MESSAGE>&app_name=Fnzero%20Website&app_url=https%3A%2F%2Ffnzero.dev%2F&callback_url=https%3A%2F%2Ffnzero.dev%2Fwallet%2Fcallback
+```
+
+Reusable website helpers live in
+`packages/shared-contracts/fnzsafe-deep-link.ts`:
+
+```ts
+import {
+  buildFnzSafeSignDeepLink,
+  openFnzSafeDeepLinkWithFallback,
+  prioritizeFnzSafeWallets,
+} from "./packages/shared-contracts/fnzsafe-deep-link";
+
+const wallets = prioritizeFnzSafeWallets(adapterWallets);
+
+const deepLink = buildFnzSafeSignDeepLink({
+  method: "signMessage",
+  walletPublicKey,
+  network: "devnet",
+  messageBase64,
+  appName: "Fnzero Website",
+  appUrl: "https://fnzero.dev/",
+  callbackUrl: "https://fnzero.dev/wallet/callback",
+});
+
+openFnzSafeDeepLinkWithFallback(deepLink, {
+  onFallback: () => openGenericWalletPicker(wallets),
+});
+```
+
+Browsers cannot reliably tell whether a custom protocol is installed before
+opening it. The helper therefore tries `fnzsafe://...` first and falls back to
+the normal wallet picker if the page does not lose focus.
+
 ---
 
 ## 5. Package For Release
@@ -294,8 +336,8 @@ release/
 ├─ ios/
 │  └─ *.app or *.ipa
 ├─ macos/
-│  ├─ FnzeroSafe.app
-│  └─ FnzeroSafe_*.dmg
+│  ├─ FnzSafe.app
+│  └─ FnzSafe_*.dmg
 └─ windows/
    └─ *.msi and/or *.exe
 ```
@@ -429,7 +471,7 @@ Legacy `SOL_SAFEKEY_*` variables are still accepted as fallbacks for existing lo
 7. **Plaintext export controls**: plaintext private key and mnemonic export are intentionally gated and should be used only for migration or local debugging.
 8. **No mobile Program workflows**: mobile builds do not expose Program deploy, upgrade, source build, or generic invoke APIs.
 
-Always back up encrypted keystores before depositing funds. Passwords and seed phrases cannot be recovered by FnzeroSafe.
+Always back up encrypted keystores before depositing funds. Passwords and seed phrases cannot be recovered by FnzSafe.
 
 ---
 

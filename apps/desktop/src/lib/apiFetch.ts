@@ -193,7 +193,7 @@ async function withApiToken(cleanPath: string, init: RequestInit): Promise<Reque
     throw new Error("Failed to initialize local API token.");
   }
   const headers = new Headers(init.headers);
-  headers.set("X-FnzeroSafe-Token", sessionToken);
+  headers.set("X-Fnzero-Safe-Token", sessionToken);
   return { ...init, headers };
 }
 

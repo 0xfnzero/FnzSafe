@@ -30,5 +30,5 @@ commands.allow = ["dapp_poll_sign_request"]
 
 [[permission]]
 identifier = "allow-resolve-dapp-sign-request"
-description = "Allow the main FnzeroSafe window to approve or reject a pending DApp signing request."
+description = "Allow the main FnzSafe window to approve or reject a pending DApp signing request."
 commands.allow = ["resolve_dapp_sign_request"]
