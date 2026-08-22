@@ -91,6 +91,8 @@ abstract interface class MobileBridgeBackend {
     required String walletPublicKey,
     required String recipient,
     required String amount,
+    required PaymentOperation operation,
+    required int amountBaseUnits,
     String? mint,
     String? memo,
   });
@@ -149,6 +151,7 @@ abstract interface class MobileBridgeBackend {
     required String appUrl,
     required String method,
     required String payloadBase64,
+    String? transactionFormat,
   });
 
   Future<DappSignSubmitResult> confirmDappSign({
@@ -156,6 +159,8 @@ abstract interface class MobileBridgeBackend {
     required bool approved,
     required String keystoreJson,
     required String password,
+    required String appName,
+    required String appUrl,
     required String method,
     required String payloadBase64,
     String? transactionFormat,

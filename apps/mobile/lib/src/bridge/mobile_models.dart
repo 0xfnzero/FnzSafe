@@ -310,6 +310,8 @@ class EvmPaymentPreview {
 class DappSigningDraft {
   const DappSigningDraft({
     required this.preview,
+    required this.appName,
+    required this.appUrl,
     required this.method,
     required this.payloadBase64,
     this.requestId,
@@ -317,6 +319,8 @@ class DappSigningDraft {
   });
 
   final SigningPreview preview;
+  final String appName;
+  final String appUrl;
   final String method;
   final String payloadBase64;
   final String? requestId;

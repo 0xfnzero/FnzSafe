@@ -21,6 +21,7 @@ class MobileWalletStore {
   static const _biometricEnabledKey = 'fnzero.mobile.biometric_enabled.v1';
   static const _customEvmChainsKey = 'fnzero.mobile.evm.custom_chains.v1';
   static const _customEvmTokensPrefix = 'fnzero.mobile.evm.tokens.v1';
+  static final _evmAddressPattern = RegExp(r'^0x[0-9a-fA-F]{40}$');
 
   final FlutterSecureStorage _secureStorage;
 
@@ -28,11 +29,19 @@ class MobileWalletStore {
     final encoded = await _secureStorage.read(key: _walletsKey);
     if (encoded == null || encoded.trim().isEmpty) return const [];
 
-    final decoded = jsonDecode(encoded) as List<dynamic>;
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(encoded);
+    } catch (_) {
+      return const [];
+    }
+    if (decoded is! List<dynamic>) return const [];
     return [
       for (final item in decoded)
-        WalletSummary.fromJson(
-            Map<String, Object?>.from(item as Map<dynamic, dynamic>)),
+        if (item is Map<dynamic, dynamic>)
+          if (_normalizeWallet(Map<String, Object?>.from(item))
+              case final wallet?)
+            wallet,
     ];
   }
 
@@ -108,21 +117,30 @@ class MobileWalletStore {
   Future<List<EvmChainConfig>> loadCustomEvmChains() async {
     final encoded = await _secureStorage.read(key: _customEvmChainsKey);
     if (encoded == null || encoded.trim().isEmpty) return const [];
-
-    final decoded = jsonDecode(encoded) as List<dynamic>;
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(encoded);
+    } catch (_) {
+      return const [];
+    }
+    if (decoded is! List<dynamic>) return const [];
     return [
       for (final item in decoded)
-        EvmChainConfig.fromJson(
-            Map<String, Object?>.from(item as Map<dynamic, dynamic>)),
+        if (item is Map<dynamic, dynamic>)
+          if (_normalizeEvmChain(Map<String, Object?>.from(item))
+              case final chain?)
+            chain,
     ];
   }
 
   Future<void> saveCustomEvmChain(EvmChainConfig chain) async {
+    final normalized = _normalizeEvmChain(chain.toJson());
+    if (normalized == null) return;
     final chains = await loadCustomEvmChains();
     final next = [
       for (final item in chains)
-        if (item.chainId != chain.chainId) item,
-      chain,
+        if (item.chainId != normalized.chainId) item,
+      normalized,
     ]..sort((a, b) => a.chainId.compareTo(b.chainId));
     await _secureStorage.write(
       key: _customEvmChainsKey,
@@ -148,10 +166,17 @@ class MobileWalletStore {
     final encoded = await _secureStorage.read(
         key: _customEvmTokenKey(chainId, walletAddress));
     if (encoded == null || encoded.trim().isEmpty) return const [];
-    final decoded = jsonDecode(encoded) as List<dynamic>;
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(encoded);
+    } catch (_) {
+      return const [];
+    }
+    if (decoded is! List<dynamic>) return const [];
     return [
       for (final item in decoded)
-        if (item is String) item,
+        if (item is String && _evmAddressPattern.hasMatch(item.trim()))
+          item.trim(),
     ];
   }
 
@@ -161,7 +186,7 @@ class MobileWalletStore {
     required String contractAddress,
   }) async {
     final normalized = contractAddress.trim();
-    if (normalized.isEmpty) return;
+    if (!_evmAddressPattern.hasMatch(normalized)) return;
     final tokens = await loadCustomEvmTokens(
         chainId: chainId, walletAddress: walletAddress);
     final next = {
@@ -194,6 +219,64 @@ class MobileWalletStore {
 
   String _customEvmTokenKey(int chainId, String walletAddress) {
     return '$_customEvmTokensPrefix.$chainId.${walletAddress.toLowerCase()}';
+  }
+
+  WalletSummary? _normalizeWallet(Map<String, Object?> json) {
+    try {
+      final wallet = WalletSummary.fromJson(json);
+      if (wallet.id.trim().isEmpty ||
+          wallet.name.trim().isEmpty ||
+          wallet.publicKey.trim().isEmpty) {
+        return null;
+      }
+      if (wallet.family == WalletFamily.evm &&
+          !_evmAddressPattern.hasMatch(wallet.publicKey.trim())) {
+        return null;
+      }
+      return WalletSummary(
+        id: wallet.id.trim(),
+        name: wallet.name.trim(),
+        publicKey: wallet.publicKey.trim(),
+        family: wallet.family,
+        derivationPath: wallet.derivationPath?.trim(),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  EvmChainConfig? _normalizeEvmChain(Map<String, Object?> json) {
+    try {
+      final chain = EvmChainConfig.fromJson(json);
+      final rpcUri = Uri.tryParse(chain.rpcUrl.trim());
+      final explorerUri = chain.explorerUrl == null
+          ? null
+          : Uri.tryParse(chain.explorerUrl!.trim());
+      final validRpc = rpcUri != null &&
+          (rpcUri.scheme == 'http' || rpcUri.scheme == 'https');
+      final validExplorer = explorerUri == null ||
+          explorerUri.scheme == 'http' ||
+          explorerUri.scheme == 'https';
+      if (chain.chainId <= 0 ||
+          chain.name.trim().isEmpty ||
+          chain.nativeSymbol.trim().isEmpty ||
+          !validRpc ||
+          !validExplorer) {
+        return null;
+      }
+      return EvmChainConfig(
+        chainId: chain.chainId,
+        name: chain.name.trim(),
+        nativeSymbol: chain.nativeSymbol.trim(),
+        rpcUrl: chain.rpcUrl.trim(),
+        explorerUrl: chain.explorerUrl?.trim().isEmpty ?? true
+            ? null
+            : chain.explorerUrl!.trim(),
+        testnet: chain.testnet,
+      );
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<File> _keystoreFile(String walletId) async {

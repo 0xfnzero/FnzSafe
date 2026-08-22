@@ -20,7 +20,6 @@ use sha3::{Digest, Keccak256};
 use std::str::FromStr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
-use uuid::Uuid;
 use zeroize::{Zeroize, Zeroizing};
 
 const DEFAULT_EVM_DERIVATION_PATH: &str = "m/44'/60'/0'/0/0";
@@ -226,6 +225,7 @@ pub struct EvmPaymentSubmitRequest {
     pub preview_id: String,
     pub approved: bool,
     pub chain: EvmChainConfig,
+    pub wallet_address: String,
     pub keystore_json: String,
     pub password: String,
     pub recipient: String,
@@ -290,6 +290,9 @@ pub struct EvmDappSignSubmitRequest {
     pub preview_id: String,
     pub approved: bool,
     pub chain: EvmChainConfig,
+    pub wallet_address: String,
+    pub app_name: String,
+    pub app_url: String,
     pub keystore_json: String,
     pub password: String,
     pub method: String,
@@ -557,7 +560,7 @@ pub fn load_asset_snapshot(req: EvmAssetQueryRequest) -> EvmResult<EvmAssetSnaps
         "eth_getBalance",
         serde_json::json!([wallet_address, "latest"]),
     )
-    .and_then(|value| hex_quantity_to_decimal(value.as_str().unwrap_or("0x0")))
+    .and_then(rpc_hex_quantity_to_decimal)
     .map_err(|_| EvmServiceError::RpcUnavailable)?;
 
     let mut tokens = Vec::new();
@@ -611,14 +614,27 @@ pub fn preview_payment(req: EvmPaymentPreviewRequest) -> EvmResult<EvmPaymentPre
         "eth_getTransactionCount",
         serde_json::json!([wallet_address, "pending"]),
     )
-    .and_then(|value| hex_quantity_to_decimal(value.as_str().unwrap_or("0x0")))
+    .and_then(rpc_hex_quantity_to_decimal)
     .map_err(|_| EvmServiceError::RpcUnavailable)?;
     let fee_quote = load_fee_quote(&req.chain)?;
     let gas_limit = estimate_gas(&req.chain, &wallet_address, &to, value, &data)?;
     let estimated_fee_wei = decimal_mul(&fee_quote.max_fee_per_gas_wei(), &gas_limit)?;
 
+    let preview_id = payment_preview_id(&PaymentPreviewIdInput {
+        chain: &req.chain,
+        wallet_address: &wallet_address,
+        recipient: &recipient,
+        token_contract: token_contract.as_deref(),
+        amount_wei_or_units: &amount,
+        gas_limit: &gas_limit,
+        gas_price_wei: &fee_quote.gas_price_wei,
+        max_fee_per_gas_wei: fee_quote.max_fee_per_gas_wei.as_deref(),
+        max_priority_fee_per_gas_wei: fee_quote.max_priority_fee_per_gas_wei.as_deref(),
+        nonce: &nonce,
+    });
+
     Ok(EvmPaymentPreview {
-        preview_id: Uuid::new_v4().to_string(),
+        preview_id,
         chain: req.chain,
         wallet_address,
         recipient,
@@ -644,8 +660,7 @@ pub fn submit_payment(req: EvmPaymentSubmitRequest) -> EvmResult<EvmTransactionS
         return Err(EvmServiceError::UserRejected);
     }
     validate_chain(&req.chain)?;
-    let signing_key = decrypt_keystore(&req.keystore_json, &req.password)?;
-    let from = address_from_signing_key(&signing_key);
+    let wallet_address = normalize_address(&req.wallet_address, "wallet address")?;
     let recipient = normalize_address(&req.recipient, "recipient")?;
     let amount = normalize_decimal(&req.amount_wei_or_units, "amount")?;
     let token_contract = req
@@ -658,21 +673,54 @@ pub fn submit_payment(req: EvmPaymentSubmitRequest) -> EvmResult<EvmTransactionS
         .map(|_| erc20_transfer_calldata(&recipient, &amount))
         .transpose()?
         .unwrap_or_default();
-    let to = token_contract.unwrap_or(recipient);
+    let to = token_contract.clone().unwrap_or_else(|| recipient.clone());
     let value = if data.is_empty() {
         amount.as_str()
     } else {
         "0"
     };
-    let nonce = match req.nonce {
-        Some(value) => normalize_decimal(&value, "nonce")?,
-        None => load_nonce(&req.chain, &from)?,
-    };
-    let gas_limit = match req.gas_limit {
-        Some(value) => normalize_decimal(&value, "gas limit")?,
-        None => estimate_gas(&req.chain, &from, &to, value, &data)?,
-    };
-    let fee_quote = load_fee_quote(&req.chain)?;
+    let nonce = required_decimal_option(req.nonce.as_deref(), "nonce")?;
+    let gas_limit = required_decimal_option(req.gas_limit.as_deref(), "gas limit")?;
+    let gas_price_wei = required_decimal_option(req.gas_price_wei.as_deref(), "gas price")?;
+    let max_fee_per_gas_wei = req
+        .max_fee_per_gas_wei
+        .as_deref()
+        .map(|value| normalize_decimal(value, "max fee per gas"))
+        .transpose()?;
+    let max_priority_fee_per_gas_wei = req
+        .max_priority_fee_per_gas_wei
+        .as_deref()
+        .map(|value| normalize_decimal(value, "max priority fee per gas"))
+        .transpose()?;
+    if max_fee_per_gas_wei.is_some() != max_priority_fee_per_gas_wei.is_some() {
+        return Err(EvmServiceError::InvalidInput(
+            "EIP-1559 fee fields must be submitted together".to_string(),
+        ));
+    }
+    let expected_preview_id = payment_preview_id(&PaymentPreviewIdInput {
+        chain: &req.chain,
+        wallet_address: &wallet_address,
+        recipient: &recipient,
+        token_contract: token_contract.as_deref(),
+        amount_wei_or_units: &amount,
+        gas_limit: &gas_limit,
+        gas_price_wei: &gas_price_wei,
+        max_fee_per_gas_wei: max_fee_per_gas_wei.as_deref(),
+        max_priority_fee_per_gas_wei: max_priority_fee_per_gas_wei.as_deref(),
+        nonce: &nonce,
+    });
+    if req.preview_id != expected_preview_id {
+        return Err(EvmServiceError::InvalidInput(
+            "EVM payment preview is stale or mismatched".to_string(),
+        ));
+    }
+    let signing_key = decrypt_keystore(&req.keystore_json, &req.password)?;
+    let from = address_from_signing_key(&signing_key);
+    if !address_eq(&from, &wallet_address) {
+        return Err(EvmServiceError::InvalidInput(
+            "EVM keystore does not match preview wallet address".to_string(),
+        ));
+    }
     let raw_tx = sign_evm_transaction(&EvmTxSigningInput {
         signing_key: &signing_key,
         chain_id: req.chain.chain_id,
@@ -681,18 +729,9 @@ pub fn submit_payment(req: EvmPaymentSubmitRequest) -> EvmResult<EvmTransactionS
         to: &to,
         value,
         data: &data,
-        gas_price_wei: req
-            .gas_price_wei
-            .as_deref()
-            .unwrap_or(&fee_quote.gas_price_wei),
-        max_fee_per_gas_wei: req
-            .max_fee_per_gas_wei
-            .as_deref()
-            .or(fee_quote.max_fee_per_gas_wei.as_deref()),
-        max_priority_fee_per_gas_wei: req
-            .max_priority_fee_per_gas_wei
-            .as_deref()
-            .or(fee_quote.max_priority_fee_per_gas_wei.as_deref()),
+        gas_price_wei: &gas_price_wei,
+        max_fee_per_gas_wei: max_fee_per_gas_wei.as_deref(),
+        max_priority_fee_per_gas_wei: max_priority_fee_per_gas_wei.as_deref(),
     })?;
     let tx_hash = send_raw_transaction(&req.chain, &raw_tx)?;
 
@@ -707,19 +746,27 @@ pub fn submit_payment(req: EvmPaymentSubmitRequest) -> EvmResult<EvmTransactionS
 
 pub fn preview_dapp_signing(req: EvmDappSignPreviewRequest) -> EvmResult<EvmDappSignPreview> {
     validate_chain(&req.chain)?;
-    normalize_address(&req.wallet_address, "wallet address")?;
-    require_non_empty(&req.app_name, "dApp name")?;
-    require_non_empty(&req.app_url, "dApp URL")?;
-    require_non_empty(&req.method, "dApp method")?;
-    require_non_empty(&req.payload_json, "dApp payload")?;
+    let wallet_address = normalize_address(&req.wallet_address, "wallet address")?;
+    let app_name = require_non_empty(&req.app_name, "dApp name")?;
+    let app_url = require_non_empty(&req.app_url, "dApp URL")?;
+    let method = require_non_empty(&req.method, "dApp method")?;
+    let payload_json = require_non_empty(&req.payload_json, "dApp payload")?;
+    let preview_id = dapp_sign_preview_id(&DappSignPreviewIdInput {
+        chain: &req.chain,
+        wallet_address: &wallet_address,
+        app_name: &app_name,
+        app_url: &app_url,
+        method: &method,
+        payload_json: &payload_json,
+    });
     Ok(EvmDappSignPreview {
-        preview_id: Uuid::new_v4().to_string(),
+        preview_id,
         chain: req.chain,
-        wallet_address: req.wallet_address,
-        app_name: req.app_name,
-        app_url: req.app_url.clone(),
-        method: req.method.clone(),
-        summary: format!("{} requested {}", req.app_url, req.method),
+        wallet_address,
+        app_name,
+        app_url: app_url.clone(),
+        method: method.clone(),
+        summary: format!("{app_url} requested {method}"),
         warnings: vec!["Only approve EVM dApp requests from sites you trust.".to_string()],
     })
 }
@@ -730,11 +777,34 @@ pub fn submit_dapp_signing(req: EvmDappSignSubmitRequest) -> EvmResult<EvmDappSi
         return Err(EvmServiceError::UserRejected);
     }
     validate_chain(&req.chain)?;
-    let signing_key = decrypt_keystore(&req.keystore_json, &req.password)?;
+    let wallet_address = normalize_address(&req.wallet_address, "wallet address")?;
+    let app_name = require_non_empty(&req.app_name, "dApp name")?;
+    let app_url = require_non_empty(&req.app_url, "dApp URL")?;
     let method = require_non_empty(&req.method, "dApp method")?;
+    let payload_json = require_non_empty(&req.payload_json, "dApp payload")?;
+    let expected_preview_id = dapp_sign_preview_id(&DappSignPreviewIdInput {
+        chain: &req.chain,
+        wallet_address: &wallet_address,
+        app_name: &app_name,
+        app_url: &app_url,
+        method: &method,
+        payload_json: &payload_json,
+    });
+    if req.preview_id != expected_preview_id {
+        return Err(EvmServiceError::InvalidInput(
+            "EVM dApp preview is stale or mismatched".to_string(),
+        ));
+    }
+    let signing_key = decrypt_keystore(&req.keystore_json, &req.password)?;
+    let signing_address = address_from_signing_key(&signing_key);
+    if !address_eq(&signing_address, &wallet_address) {
+        return Err(EvmServiceError::InvalidInput(
+            "EVM keystore does not match preview wallet address".to_string(),
+        ));
+    }
     match method.as_str() {
         "personal_sign" | "eth_sign" => {
-            let message = evm_message_from_payload(&req.payload_json)?;
+            let message = evm_message_from_payload(&payload_json)?;
             Ok(EvmDappSignSubmitResult {
                 signature: Some(sign_personal_message(&signing_key, message.as_bytes())?),
                 signed_transaction: None,
@@ -743,7 +813,7 @@ pub fn submit_dapp_signing(req: EvmDappSignSubmitRequest) -> EvmResult<EvmDappSi
             })
         }
         "eth_signTypedData" | "eth_signTypedData_v4" => {
-            let digest = typed_data_digest(&req.payload_json)?;
+            let digest = typed_data_digest(&payload_json)?;
             Ok(EvmDappSignSubmitResult {
                 signature: Some(sign_hash(&signing_key, &digest)?),
                 signed_transaction: None,
@@ -753,7 +823,7 @@ pub fn submit_dapp_signing(req: EvmDappSignSubmitRequest) -> EvmResult<EvmDappSi
         }
         "eth_sendTransaction" | "eth_signTransaction" => {
             let from = address_from_signing_key(&signing_key);
-            let tx = parse_dapp_transaction(&req.chain, &from, &req.payload_json)?;
+            let tx = parse_dapp_transaction(&req.chain, &from, &payload_json)?;
             let raw_tx = sign_evm_transaction(&EvmTxSigningInput {
                 signing_key: &signing_key,
                 chain_id: req.chain.chain_id,
@@ -887,6 +957,13 @@ fn require_non_empty(value: &str, field: &'static str) -> EvmResult<String> {
         )));
     }
     Ok(trimmed.to_string())
+}
+
+fn required_decimal_option(value: Option<&str>, field: &'static str) -> EvmResult<String> {
+    let value = value.ok_or_else(|| {
+        EvmServiceError::InvalidInput(format!("{field} is required from the approved preview"))
+    })?;
+    normalize_decimal(value, field)
 }
 
 fn validate_chain(chain: &EvmChainConfig) -> EvmResult<()> {
@@ -1351,7 +1428,7 @@ fn estimate_gas(
             "data": data,
         }]),
     )
-    .and_then(|value| hex_quantity_to_decimal(value.as_str().unwrap_or("0x0")))
+    .and_then(rpc_hex_quantity_to_decimal)
     .map_err(|error| match error {
         EvmServiceError::InsufficientFunds => EvmServiceError::InsufficientFunds,
         _ => EvmServiceError::GasEstimateFailed,
@@ -1413,6 +1490,11 @@ fn eth_call(chain: &EvmChainConfig, to: &str, data: &str) -> EvmResult<String> {
     })
 }
 
+fn rpc_hex_quantity_to_decimal(value: serde_json::Value) -> EvmResult<String> {
+    let quantity = value.as_str().ok_or(EvmServiceError::RpcUnavailable)?;
+    hex_quantity_to_decimal(quantity)
+}
+
 fn selector_data(selector: [u8; 4]) -> String {
     format!("0x{}", hex::encode(selector))
 }
@@ -1466,6 +1548,28 @@ struct EvmTxSigningInput<'a> {
     max_priority_fee_per_gas_wei: Option<&'a str>,
 }
 
+struct PaymentPreviewIdInput<'a> {
+    chain: &'a EvmChainConfig,
+    wallet_address: &'a str,
+    recipient: &'a str,
+    token_contract: Option<&'a str>,
+    amount_wei_or_units: &'a str,
+    gas_limit: &'a str,
+    gas_price_wei: &'a str,
+    max_fee_per_gas_wei: Option<&'a str>,
+    max_priority_fee_per_gas_wei: Option<&'a str>,
+    nonce: &'a str,
+}
+
+struct DappSignPreviewIdInput<'a> {
+    chain: &'a EvmChainConfig,
+    wallet_address: &'a str,
+    app_name: &'a str,
+    app_url: &'a str,
+    method: &'a str,
+    payload_json: &'a str,
+}
+
 struct LegacyTxSigningInput<'a> {
     signing_key: &'a SigningKey,
     chain_id: u64,
@@ -1477,19 +1581,57 @@ struct LegacyTxSigningInput<'a> {
     data: &'a str,
 }
 
+fn payment_preview_id(input: &PaymentPreviewIdInput<'_>) -> String {
+    let material = serde_json::json!({
+        "scope": "fnzero-safe-evm-payment-preview-v1",
+        "chain_id": input.chain.chain_id,
+        "rpc_url": input.chain.rpc_url,
+        "wallet_address": input.wallet_address,
+        "recipient": input.recipient,
+        "token_contract": input.token_contract,
+        "amount_wei_or_units": input.amount_wei_or_units,
+        "gas_limit": input.gas_limit,
+        "gas_price_wei": input.gas_price_wei,
+        "max_fee_per_gas_wei": input.max_fee_per_gas_wei,
+        "max_priority_fee_per_gas_wei": input.max_priority_fee_per_gas_wei,
+        "nonce": input.nonce,
+    });
+    format!(
+        "evm-payment:{}",
+        hex::encode(keccak256(material.to_string().as_bytes()))
+    )
+}
+
+fn dapp_sign_preview_id(input: &DappSignPreviewIdInput<'_>) -> String {
+    let material = serde_json::json!({
+        "scope": "fnzero-safe-evm-dapp-preview-v1",
+        "chain_id": input.chain.chain_id,
+        "rpc_url": input.chain.rpc_url,
+        "wallet_address": input.wallet_address,
+        "app_name": input.app_name,
+        "app_url": input.app_url,
+        "method": input.method,
+        "payload_json": input.payload_json,
+    });
+    format!(
+        "evm-dapp:{}",
+        hex::encode(keccak256(material.to_string().as_bytes()))
+    )
+}
+
 fn load_nonce(chain: &EvmChainConfig, wallet_address: &str) -> EvmResult<String> {
     rpc_call(
         &chain.rpc_url,
         "eth_getTransactionCount",
         serde_json::json!([wallet_address, "pending"]),
     )
-    .and_then(|value| hex_quantity_to_decimal(value.as_str().unwrap_or("0x0")))
+    .and_then(rpc_hex_quantity_to_decimal)
     .map_err(|_| EvmServiceError::RpcUnavailable)
 }
 
 fn load_fee_quote(chain: &EvmChainConfig) -> EvmResult<EvmFeeQuote> {
     let gas_price_wei = rpc_call(&chain.rpc_url, "eth_gasPrice", serde_json::json!([]))
-        .and_then(|value| hex_quantity_to_decimal(value.as_str().unwrap_or("0x0")))
+        .and_then(rpc_hex_quantity_to_decimal)
         .map_err(|_| EvmServiceError::RpcUnavailable)?;
     let latest_block = rpc_call(
         &chain.rpc_url,
@@ -1516,7 +1658,7 @@ fn load_fee_quote(chain: &EvmChainConfig) -> EvmResult<EvmFeeQuote> {
         "eth_maxPriorityFeePerGas",
         serde_json::json!([]),
     )
-    .and_then(|value| hex_quantity_to_decimal(value.as_str().unwrap_or("0x0")))
+    .and_then(rpc_hex_quantity_to_decimal)
     .unwrap_or_else(|_| DEFAULT_PRIORITY_FEE_WEI.to_string());
     let doubled_base_fee = decimal_mul_u64(&base_fee_wei, 2)?;
     let mut max_fee_per_gas_wei = decimal_add(&doubled_base_fee, &priority_fee_wei)?;
@@ -2638,6 +2780,316 @@ mod tests {
         .unwrap();
         assert!(raw.starts_with("0x02"));
         assert!(raw.len() > 130);
+    }
+
+    #[test]
+    fn payment_submit_rejects_keystore_for_different_preview_wallet() {
+        let created = import_private_key(EvmImportPrivateKeyRequest {
+            name: "EVM".to_string(),
+            private_key_hex: DEV_PRIVATE_KEY.to_string(),
+            password: "strong-password".to_string(),
+        })
+        .unwrap();
+        let chain = chain(
+            11155111,
+            "Sepolia",
+            "ETH",
+            "http://127.0.0.1:8545",
+            None,
+            true,
+        );
+        let wallet_address = "0x000000000000000000000000000000000000dead";
+        let recipient = "0x000000000000000000000000000000000000beef";
+        let preview_id = payment_preview_id(&PaymentPreviewIdInput {
+            chain: &chain,
+            wallet_address,
+            recipient,
+            token_contract: None,
+            amount_wei_or_units: "1",
+            gas_limit: "21000",
+            gas_price_wei: "1000000000",
+            max_fee_per_gas_wei: None,
+            max_priority_fee_per_gas_wei: None,
+            nonce: "0",
+        });
+
+        let error = submit_payment(EvmPaymentSubmitRequest {
+            preview_id,
+            approved: true,
+            chain,
+            wallet_address: wallet_address.to_string(),
+            keystore_json: created.keystore_json,
+            password: "strong-password".to_string(),
+            recipient: recipient.to_string(),
+            amount_wei_or_units: "1".to_string(),
+            token_contract: None,
+            gas_limit: Some("21000".to_string()),
+            gas_price_wei: Some("1000000000".to_string()),
+            max_fee_per_gas_wei: None,
+            max_priority_fee_per_gas_wei: None,
+            nonce: Some("0".to_string()),
+        })
+        .unwrap_err();
+
+        assert!(matches!(error, EvmServiceError::InvalidInput(_)));
+        assert!(!error.to_string().contains("strong-password"));
+        assert!(!error.to_string().contains(DEV_PRIVATE_KEY));
+    }
+
+    #[test]
+    fn payment_submit_rejects_mismatched_preview_id_before_sending() {
+        let created = import_private_key(EvmImportPrivateKeyRequest {
+            name: "EVM".to_string(),
+            private_key_hex: DEV_PRIVATE_KEY.to_string(),
+            password: "strong-password".to_string(),
+        })
+        .unwrap();
+        let chain = chain(
+            11155111,
+            "Sepolia",
+            "ETH",
+            "http://127.0.0.1:8545",
+            None,
+            true,
+        );
+
+        let error = submit_payment(EvmPaymentSubmitRequest {
+            preview_id: "evm-payment:stale".to_string(),
+            approved: true,
+            chain,
+            wallet_address: created.wallet.address,
+            keystore_json: created.keystore_json,
+            password: "strong-password".to_string(),
+            recipient: "0x000000000000000000000000000000000000beef".to_string(),
+            amount_wei_or_units: "1".to_string(),
+            token_contract: None,
+            gas_limit: Some("21000".to_string()),
+            gas_price_wei: Some("1000000000".to_string()),
+            max_fee_per_gas_wei: None,
+            max_priority_fee_per_gas_wei: None,
+            nonce: Some("0".to_string()),
+        })
+        .unwrap_err();
+
+        assert!(matches!(error, EvmServiceError::InvalidInput(_)));
+        assert!(error.to_string().contains("stale or mismatched"));
+    }
+
+    #[test]
+    fn payment_submit_rejects_mismatched_preview_id_before_decrypting() {
+        let created = import_private_key(EvmImportPrivateKeyRequest {
+            name: "EVM".to_string(),
+            private_key_hex: DEV_PRIVATE_KEY.to_string(),
+            password: "strong-password".to_string(),
+        })
+        .unwrap();
+        let chain = chain(
+            11155111,
+            "Sepolia",
+            "ETH",
+            "http://127.0.0.1:8545",
+            None,
+            true,
+        );
+
+        let error = submit_payment(EvmPaymentSubmitRequest {
+            preview_id: "evm-payment:stale".to_string(),
+            approved: true,
+            chain,
+            wallet_address: created.wallet.address,
+            keystore_json: created.keystore_json,
+            password: "wrong-password".to_string(),
+            recipient: "0x000000000000000000000000000000000000beef".to_string(),
+            amount_wei_or_units: "1".to_string(),
+            token_contract: None,
+            gas_limit: Some("21000".to_string()),
+            gas_price_wei: Some("1000000000".to_string()),
+            max_fee_per_gas_wei: None,
+            max_priority_fee_per_gas_wei: None,
+            nonce: Some("0".to_string()),
+        })
+        .unwrap_err();
+
+        assert!(matches!(error, EvmServiceError::InvalidInput(_)));
+        assert!(error.to_string().contains("stale or mismatched"));
+        assert!(!matches!(error, EvmServiceError::WrongPassword));
+    }
+
+    #[test]
+    fn payment_preview_id_uses_normalized_token_contract() {
+        let chain = chain(
+            11155111,
+            "Sepolia",
+            "ETH",
+            "http://127.0.0.1:8545",
+            None,
+            true,
+        );
+        let token = normalize_address(
+            "0xABCDEFabcdefABCDEFabcdefABCDEFabcdefabcd",
+            "token contract",
+        )
+        .unwrap();
+        let preview_id = payment_preview_id(&PaymentPreviewIdInput {
+            chain: &chain,
+            wallet_address: "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+            recipient: "0x000000000000000000000000000000000000beef",
+            token_contract: Some(&token),
+            amount_wei_or_units: "1",
+            gas_limit: "65000",
+            gas_price_wei: "1000000000",
+            max_fee_per_gas_wei: None,
+            max_priority_fee_per_gas_wei: None,
+            nonce: "0",
+        });
+        let submit_preview_id = payment_preview_id(&PaymentPreviewIdInput {
+            chain: &chain,
+            wallet_address: "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+            recipient: "0x000000000000000000000000000000000000beef",
+            token_contract: Some(token.as_str()),
+            amount_wei_or_units: "1",
+            gas_limit: "65000",
+            gas_price_wei: "1000000000",
+            max_fee_per_gas_wei: None,
+            max_priority_fee_per_gas_wei: None,
+            nonce: "0",
+        });
+
+        assert_eq!(preview_id, submit_preview_id);
+    }
+
+    #[test]
+    fn rpc_hex_quantity_rejects_malformed_values() {
+        assert_eq!(
+            rpc_hex_quantity_to_decimal(serde_json::json!("0x2a")).unwrap(),
+            "42"
+        );
+        assert!(matches!(
+            rpc_hex_quantity_to_decimal(serde_json::json!(0)),
+            Err(EvmServiceError::RpcUnavailable)
+        ));
+        assert!(matches!(
+            rpc_hex_quantity_to_decimal(serde_json::json!("42")),
+            Err(EvmServiceError::InvalidInput(_))
+        ));
+    }
+
+    #[test]
+    fn dapp_submit_rejects_keystore_for_different_preview_wallet() {
+        let created = import_private_key(EvmImportPrivateKeyRequest {
+            name: "EVM".to_string(),
+            private_key_hex: DEV_PRIVATE_KEY.to_string(),
+            password: "strong-password".to_string(),
+        })
+        .unwrap();
+        let chain = chain(
+            11155111,
+            "Sepolia",
+            "ETH",
+            "http://127.0.0.1:8545",
+            None,
+            true,
+        );
+        let wallet_address = "0x000000000000000000000000000000000000dead";
+        let payload_json = serde_json::json!(["hello"]).to_string();
+        let preview_id = dapp_sign_preview_id(&DappSignPreviewIdInput {
+            chain: &chain,
+            wallet_address,
+            app_name: "Test dApp",
+            app_url: "https://example.com",
+            method: "personal_sign",
+            payload_json: &payload_json,
+        });
+
+        let error = submit_dapp_signing(EvmDappSignSubmitRequest {
+            preview_id,
+            approved: true,
+            chain,
+            wallet_address: wallet_address.to_string(),
+            app_name: "Test dApp".to_string(),
+            app_url: "https://example.com".to_string(),
+            keystore_json: created.keystore_json,
+            password: "strong-password".to_string(),
+            method: "personal_sign".to_string(),
+            payload_json,
+        })
+        .unwrap_err();
+
+        assert!(matches!(error, EvmServiceError::InvalidInput(_)));
+        assert!(!error.to_string().contains("strong-password"));
+        assert!(!error.to_string().contains(DEV_PRIVATE_KEY));
+    }
+
+    #[test]
+    fn dapp_submit_rejects_mismatched_preview_id_before_signing() {
+        let created = import_private_key(EvmImportPrivateKeyRequest {
+            name: "EVM".to_string(),
+            private_key_hex: DEV_PRIVATE_KEY.to_string(),
+            password: "strong-password".to_string(),
+        })
+        .unwrap();
+        let chain = chain(
+            11155111,
+            "Sepolia",
+            "ETH",
+            "http://127.0.0.1:8545",
+            None,
+            true,
+        );
+
+        let error = submit_dapp_signing(EvmDappSignSubmitRequest {
+            preview_id: "evm-dapp:stale".to_string(),
+            approved: true,
+            chain,
+            wallet_address: created.wallet.address,
+            app_name: "Test dApp".to_string(),
+            app_url: "https://example.com".to_string(),
+            keystore_json: created.keystore_json,
+            password: "strong-password".to_string(),
+            method: "personal_sign".to_string(),
+            payload_json: serde_json::json!(["hello"]).to_string(),
+        })
+        .unwrap_err();
+
+        assert!(matches!(error, EvmServiceError::InvalidInput(_)));
+        assert!(error.to_string().contains("stale or mismatched"));
+        assert!(!error.to_string().contains("strong-password"));
+    }
+
+    #[test]
+    fn dapp_submit_rejects_mismatched_preview_id_before_decrypting() {
+        let created = import_private_key(EvmImportPrivateKeyRequest {
+            name: "EVM".to_string(),
+            private_key_hex: DEV_PRIVATE_KEY.to_string(),
+            password: "strong-password".to_string(),
+        })
+        .unwrap();
+        let chain = chain(
+            11155111,
+            "Sepolia",
+            "ETH",
+            "http://127.0.0.1:8545",
+            None,
+            true,
+        );
+
+        let error = submit_dapp_signing(EvmDappSignSubmitRequest {
+            preview_id: "evm-dapp:stale".to_string(),
+            approved: true,
+            chain,
+            wallet_address: created.wallet.address,
+            app_name: "Test dApp".to_string(),
+            app_url: "https://example.com".to_string(),
+            keystore_json: created.keystore_json,
+            password: "wrong-password".to_string(),
+            method: "personal_sign".to_string(),
+            payload_json: serde_json::json!(["hello"]).to_string(),
+        })
+        .unwrap_err();
+
+        assert!(matches!(error, EvmServiceError::InvalidInput(_)));
+        assert!(error.to_string().contains("stale or mismatched"));
+        assert!(!matches!(error, EvmServiceError::WrongPassword));
     }
 
     #[test]

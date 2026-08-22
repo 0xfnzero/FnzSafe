@@ -19,6 +19,14 @@ class _AssetsScreenState extends ConsumerState<AssetsScreen> {
   EvmAssetSnapshot? _evmSnapshot;
   Object? _error;
   bool _loading = false;
+  Set<int> _customEvmChainIds = const {};
+  final _evmAddressPattern = RegExp(r'^0x[0-9a-fA-F]{40}$');
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCustomEvmChainIds();
+  }
 
   @override
   void dispose() {
@@ -33,6 +41,15 @@ class _AssetsScreenState extends ConsumerState<AssetsScreen> {
     final chains = ref.watch(evmChainsProvider);
     final evmChain = ref.watch(activeEvmChainProvider);
     final isEvm = wallet?.family == WalletFamily.evm;
+    final customChainIds = chains.maybeWhen(
+      data: (items) => items
+          .where((chain) => _customEvmChainIds.contains(chain.chainId))
+          .map((chain) => chain.chainId)
+          .toSet(),
+      orElse: () => _customEvmChainIds,
+    );
+    final canDeleteActiveChain =
+        evmChain != null && customChainIds.contains(evmChain.chainId);
 
     return Scaffold(
       appBar: AppBar(
@@ -110,7 +127,7 @@ class _AssetsScreenState extends ConsumerState<AssetsScreen> {
                 OutlinedButton.icon(
                   icon: const Icon(Icons.delete_outline),
                   label: const Text('Delete custom chain'),
-                  onPressed: evmChain == null
+                  onPressed: !canDeleteActiveChain
                       ? null
                       : () => _deleteCustomChain(evmChain.chainId),
                 ),
@@ -161,6 +178,15 @@ class _AssetsScreenState extends ConsumerState<AssetsScreen> {
                     subtitle: Text(
                         '${token.name}\n${token.contractAddress}\n${token.decimals} decimals'),
                     isThreeLine: true,
+                    trailing: IconButton(
+                      tooltip: 'Remove token',
+                      icon: const Icon(Icons.delete_outline),
+                      onPressed: () => _deleteCustomToken(
+                        _evmSnapshot!.walletAddress,
+                        _evmSnapshot!.chain,
+                        token.contractAddress,
+                      ),
+                    ),
                   ),
                 ),
             const SizedBox(height: 20),
@@ -326,6 +352,15 @@ class _AssetsScreenState extends ConsumerState<AssetsScreen> {
       ),
     );
     if (contract == null || contract.isEmpty) return;
+    if (!_evmAddressPattern.hasMatch(contract)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('ERC-20 contract must be a 20-byte 0x EVM address'),
+        ),
+      );
+      return;
+    }
     await ref.read(mobileWalletStoreProvider).saveCustomEvmToken(
           chainId: chain.chainId,
           walletAddress: wallet.publicKey,
@@ -419,7 +454,9 @@ class _AssetsScreenState extends ConsumerState<AssetsScreen> {
                       chainId <= 0 ||
                       name.isEmpty ||
                       symbol.isEmpty ||
-                      !rpc.startsWith(RegExp(r'https?://'))) {
+                      !rpc.startsWith(RegExp(r'https?://')) ||
+                      (explorer.isNotEmpty &&
+                          !explorer.startsWith(RegExp(r'https?://')))) {
                     return;
                   }
                   Navigator.of(context).pop(EvmChainConfig(
@@ -439,6 +476,7 @@ class _AssetsScreenState extends ConsumerState<AssetsScreen> {
       );
       if (chain == null) return;
       await ref.read(mobileWalletStoreProvider).saveCustomEvmChain(chain);
+      await _loadCustomEvmChainIds();
       ref.invalidate(evmChainsProvider);
       ref.read(activeEvmChainProvider.notifier).state = chain;
       if (mounted) setState(() => _evmSnapshot = null);
@@ -453,8 +491,32 @@ class _AssetsScreenState extends ConsumerState<AssetsScreen> {
 
   Future<void> _deleteCustomChain(int chainId) async {
     await ref.read(mobileWalletStoreProvider).deleteCustomEvmChain(chainId);
+    await _loadCustomEvmChainIds();
     ref.invalidate(evmChainsProvider);
     ref.read(activeEvmChainProvider.notifier).state = null;
     if (mounted) setState(() => _evmSnapshot = null);
+  }
+
+  Future<void> _loadCustomEvmChainIds() async {
+    final chains =
+        await ref.read(mobileWalletStoreProvider).loadCustomEvmChains();
+    if (!mounted) return;
+    setState(() {
+      _customEvmChainIds = {for (final chain in chains) chain.chainId};
+    });
+  }
+
+  Future<void> _deleteCustomToken(
+    String walletAddress,
+    EvmChainConfig chain,
+    String contractAddress,
+  ) async {
+    await ref.read(mobileWalletStoreProvider).deleteCustomEvmToken(
+          chainId: chain.chainId,
+          walletAddress: walletAddress,
+          contractAddress: contractAddress,
+        );
+    final wallet = ref.read(activeWalletProvider);
+    if (mounted && wallet != null) await _refreshEvm(wallet, chain);
   }
 }

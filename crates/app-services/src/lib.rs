@@ -9,6 +9,7 @@ use bip39::{Language, Mnemonic};
 use fnzero_safe::{KeyManager, Keypair, Pubkey, Signer};
 use fnzero_safe_evm_services as evm;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use solana_account_decoder_client_types::UiAccountData;
 use solana_client::rpc_client::RpcClient;
 use solana_commitment_config::CommitmentConfig;
@@ -23,6 +24,7 @@ use solana_sdk::{
     },
     transaction::{Transaction, VersionedTransaction},
 };
+use std::fmt::Write as _;
 use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
@@ -420,6 +422,8 @@ pub struct PaymentPreviewRequest {
     pub recipient: String,
     pub mint: Option<String>,
     pub amount: String,
+    pub operation: PaymentOperation,
+    pub amount_base_units: u64,
     pub memo: Option<String>,
 }
 
@@ -493,6 +497,7 @@ pub struct EvmPaymentSubmitRequest {
     pub preview_id: String,
     pub approved: bool,
     pub chain: EvmChainConfig,
+    pub wallet_address: String,
     pub keystore_json: String,
     pub password: String,
     pub recipient: String,
@@ -557,6 +562,7 @@ pub struct DappSignPreviewRequest {
     pub app_url: String,
     pub method: String,
     pub payload_base64: String,
+    pub transaction_format: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -568,6 +574,8 @@ pub struct DappSignSubmitRequest {
     pub wallet_public_key: String,
     pub keystore_json: String,
     pub password: String,
+    pub app_name: String,
+    pub app_url: String,
     pub method: String,
     pub payload_base64: String,
     pub transaction_format: Option<String>,
@@ -610,6 +618,9 @@ pub struct EvmDappSignSubmitRequest {
     pub preview_id: String,
     pub approved: bool,
     pub chain: EvmChainConfig,
+    pub wallet_address: String,
+    pub app_name: String,
+    pub app_url: String,
     pub keystore_json: String,
     pub password: String,
     pub method: String,
@@ -814,6 +825,67 @@ fn require_pubkey(value: &str, field: &'static str) -> AppServiceResult<Pubkey> 
             format!("{field} must be a valid Solana public key"),
         )
     })
+}
+
+struct SolanaPaymentPreviewIdInput<'a> {
+    network: AppNetwork,
+    wallet_public_key: &'a str,
+    operation: PaymentOperation,
+    recipient: Option<&'a str>,
+    mint: Option<&'a str>,
+    amount_base_units: u64,
+}
+
+struct SolanaDappPreviewIdInput<'a> {
+    network: AppNetwork,
+    wallet_public_key: &'a str,
+    app_name: &'a str,
+    app_url: &'a str,
+    method: &'a str,
+    payload_base64: &'a str,
+    transaction_format: Option<&'a str>,
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    let digest = Sha256::digest(data);
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(&mut hex, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    hex
+}
+
+fn solana_payment_preview_id(input: &SolanaPaymentPreviewIdInput<'_>) -> String {
+    let material = serde_json::json!({
+        "scope": "fnzero-safe-solana-payment-preview-v1",
+        "network": input.network,
+        "wallet_public_key": input.wallet_public_key,
+        "operation": input.operation,
+        "recipient": input.recipient,
+        "mint": input.mint,
+        "amount_base_units": input.amount_base_units,
+    });
+    format!(
+        "solana-payment:{}",
+        sha256_hex(material.to_string().as_bytes())
+    )
+}
+
+fn solana_dapp_preview_id(input: &SolanaDappPreviewIdInput<'_>) -> String {
+    let material = serde_json::json!({
+        "scope": "fnzero-safe-solana-dapp-preview-v1",
+        "network": input.network,
+        "wallet_public_key": input.wallet_public_key,
+        "app_name": input.app_name,
+        "app_url": input.app_url,
+        "method": input.method,
+        "payload_base64": input.payload_base64,
+        "transaction_format": input.transaction_format,
+    });
+    format!(
+        "solana-dapp:{}",
+        sha256_hex(material.to_string().as_bytes())
+    )
 }
 
 fn now_ms() -> u64 {
@@ -1973,20 +2045,56 @@ pub fn evm_load_asset_snapshot(req: EvmAssetQueryRequest) -> AppServiceResult<Ev
 }
 
 pub fn preview_payment(req: PaymentPreviewRequest) -> AppServiceResult<SigningPreview> {
-    require_non_empty(&req.wallet_public_key, "wallet public key")?;
-    require_non_empty(&req.recipient, "recipient")?;
+    let wallet_public_key = require_pubkey(&req.wallet_public_key, "wallet public key")?;
     require_non_empty(&req.amount, "amount")?;
+    let recipient = match req.operation {
+        PaymentOperation::SolTransfer | PaymentOperation::SplTokenTransfer => {
+            Some(require_pubkey(&req.recipient, "recipient")?.to_string())
+        }
+        PaymentOperation::WsolWrap
+        | PaymentOperation::WsolUnwrap
+        | PaymentOperation::WsolCloseAta => None,
+    };
+    let mint = match req.operation {
+        PaymentOperation::SplTokenTransfer => {
+            Some(require_pubkey(req.mint.as_deref().unwrap_or_default(), "token mint")?.to_string())
+        }
+        _ => None,
+    };
+    if matches!(
+        req.operation,
+        PaymentOperation::SolTransfer
+            | PaymentOperation::SplTokenTransfer
+            | PaymentOperation::WsolWrap
+    ) {
+        require_positive_amount(req.amount_base_units, "payment amount")?;
+    }
+    let wallet_public_key = wallet_public_key.to_string();
+    let preview_id = solana_payment_preview_id(&SolanaPaymentPreviewIdInput {
+        network: req.network,
+        wallet_public_key: &wallet_public_key,
+        operation: req.operation,
+        recipient: recipient.as_deref(),
+        mint: mint.as_deref(),
+        amount_base_units: req.amount_base_units,
+    });
 
     Ok(SigningPreview {
-        id: Uuid::new_v4().to_string(),
-        title: if req.mint.is_some() {
-            "SPL Token Payment".to_string()
-        } else {
-            "SOL Payment".to_string()
-        },
+        id: preview_id,
+        title: match req.operation {
+            PaymentOperation::SolTransfer => "SOL Payment",
+            PaymentOperation::SplTokenTransfer => "SPL Token Payment",
+            PaymentOperation::WsolWrap => "Wrap SOL",
+            PaymentOperation::WsolUnwrap => "Unwrap WSOL",
+            PaymentOperation::WsolCloseAta => "Close WSOL ATA",
+        }
+        .to_string(),
         network: req.network,
-        wallet_public_key: req.wallet_public_key,
-        summary: format!("Send {} to {}", req.amount, req.recipient),
+        wallet_public_key,
+        summary: match recipient.as_deref() {
+            Some(recipient) => format!("Send {} to {}", req.amount, recipient),
+            None => req.amount,
+        },
         warnings: vec!["Review the recipient and network before signing.".to_string()],
         requires_user_confirmation: true,
     })
@@ -2002,6 +2110,34 @@ pub fn submit_payment(req: PaymentSubmitRequest) -> AppServiceResult<Transaction
     }
 
     let expected_wallet_pubkey = require_pubkey(&req.wallet_public_key, "wallet public key")?;
+    let recipient_for_preview = match req.operation {
+        PaymentOperation::SolTransfer | PaymentOperation::SplTokenTransfer => Some(
+            require_pubkey(req.recipient.as_deref().unwrap_or_default(), "recipient")?.to_string(),
+        ),
+        PaymentOperation::WsolWrap
+        | PaymentOperation::WsolUnwrap
+        | PaymentOperation::WsolCloseAta => None,
+    };
+    let mint_for_preview = match req.operation {
+        PaymentOperation::SplTokenTransfer => {
+            Some(require_pubkey(req.mint.as_deref().unwrap_or_default(), "token mint")?.to_string())
+        }
+        _ => None,
+    };
+    let expected_preview_id = solana_payment_preview_id(&SolanaPaymentPreviewIdInput {
+        network: req.network,
+        wallet_public_key: &expected_wallet_pubkey.to_string(),
+        operation: req.operation,
+        recipient: recipient_for_preview.as_deref(),
+        mint: mint_for_preview.as_deref(),
+        amount_base_units: req.amount_base_units,
+    });
+    if req.preview_id != expected_preview_id {
+        return Err(AppServiceError::mobile(
+            MobileErrorCode::InvalidInput,
+            "Solana payment preview is stale or mismatched",
+        ));
+    }
     require_non_empty(&req.keystore_json, "keystore json")?;
     require_non_empty(&req.password, "wallet password")?;
 
@@ -2077,6 +2213,7 @@ pub fn evm_payment_submit(
         preview_id: req.preview_id,
         approved: req.approved,
         chain: req.chain.into(),
+        wallet_address: req.wallet_address,
         keystore_json: req.keystore_json,
         password: req.password,
         recipient: req.recipient,
@@ -2125,17 +2262,28 @@ pub fn preview_pump_trade(req: PumpPreviewRequest) -> AppServiceResult<SigningPr
 }
 
 pub fn preview_dapp_signing(req: DappSignPreviewRequest) -> AppServiceResult<SigningPreview> {
-    require_non_empty(&req.wallet_public_key, "wallet public key")?;
-    require_non_empty(&req.app_name, "dApp name")?;
-    require_non_empty(&req.method, "dApp method")?;
-    require_non_empty(&req.payload_base64, "signing payload")?;
+    let wallet_public_key = require_pubkey(&req.wallet_public_key, "wallet public key")?;
+    let app_name = require_non_empty(&req.app_name, "dApp name")?;
+    let app_url = require_non_empty(&req.app_url, "dApp URL")?;
+    let method = require_non_empty(&req.method, "dApp method")?;
+    let payload_base64 = require_non_empty(&req.payload_base64, "signing payload")?;
+    let wallet_public_key = wallet_public_key.to_string();
+    let preview_id = solana_dapp_preview_id(&SolanaDappPreviewIdInput {
+        network: req.network,
+        wallet_public_key: &wallet_public_key,
+        app_name: &app_name,
+        app_url: &app_url,
+        method: &method,
+        payload_base64: &payload_base64,
+        transaction_format: req.transaction_format.as_deref(),
+    });
 
     Ok(SigningPreview {
-        id: Uuid::new_v4().to_string(),
-        title: format!("{} Request", req.app_name),
+        id: preview_id,
+        title: format!("{app_name} Request"),
         network: req.network,
-        wallet_public_key: req.wallet_public_key,
-        summary: format!("{} requested {}", req.app_url, req.method),
+        wallet_public_key,
+        summary: format!("{app_url} requested {method}"),
         warnings: vec!["Only approve dApp requests from sites you trust.".to_string()],
         requires_user_confirmation: true,
     })
@@ -2151,8 +2299,25 @@ pub fn submit_dapp_signing(req: DappSignSubmitRequest) -> AppServiceResult<DappS
     }
 
     let expected_wallet_pubkey = require_pubkey(&req.wallet_public_key, "wallet public key")?;
+    let app_name = require_non_empty(&req.app_name, "dApp name")?;
+    let app_url = require_non_empty(&req.app_url, "dApp URL")?;
     let method = require_non_empty(&req.method, "dApp method")?;
     let payload_base64 = require_non_empty(&req.payload_base64, "signing payload")?;
+    let expected_preview_id = solana_dapp_preview_id(&SolanaDappPreviewIdInput {
+        network: req.network,
+        wallet_public_key: &expected_wallet_pubkey.to_string(),
+        app_name: &app_name,
+        app_url: &app_url,
+        method: &method,
+        payload_base64: &payload_base64,
+        transaction_format: req.transaction_format.as_deref(),
+    });
+    if req.preview_id != expected_preview_id {
+        return Err(AppServiceError::mobile(
+            MobileErrorCode::InvalidInput,
+            "Solana dApp signing preview is stale or mismatched",
+        ));
+    }
 
     let keypair = keypair_from_selected_mobile_wallet(
         &req.wallet_public_key,
@@ -2297,6 +2462,9 @@ pub fn evm_dapp_sign_submit(
         preview_id: req.preview_id,
         approved: req.approved,
         chain: req.chain.into(),
+        wallet_address: req.wallet_address,
+        app_name: req.app_name,
+        app_url: req.app_url,
         keystore_json: req.keystore_json,
         password: req.password,
         method: req.method,
@@ -2738,6 +2906,42 @@ pub fn unsupported_mobile_program_workflow(capability: &'static str) -> AppServi
 mod tests {
     use super::*;
 
+    fn solana_payment_preview_for(
+        wallet_public_key: &str,
+        recipient: &str,
+        amount_base_units: u64,
+    ) -> SigningPreview {
+        preview_payment(PaymentPreviewRequest {
+            network: AppNetwork::Devnet,
+            wallet_public_key: wallet_public_key.to_string(),
+            recipient: recipient.to_string(),
+            mint: None,
+            amount: format!("{amount_base_units} lamports"),
+            operation: PaymentOperation::SolTransfer,
+            amount_base_units,
+            memo: None,
+        })
+        .unwrap()
+    }
+
+    fn solana_dapp_preview_for(
+        wallet_public_key: &str,
+        method: &str,
+        payload_base64: &str,
+        transaction_format: Option<&str>,
+    ) -> SigningPreview {
+        preview_dapp_signing(DappSignPreviewRequest {
+            network: AppNetwork::Devnet,
+            wallet_public_key: wallet_public_key.to_string(),
+            app_name: "Example dApp".to_string(),
+            app_url: "https://example.invalid".to_string(),
+            method: method.to_string(),
+            payload_base64: payload_base64.to_string(),
+            transaction_format: transaction_format.map(ToString::to_string),
+        })
+        .unwrap()
+    }
+
     #[test]
     fn mobile_surface_excludes_program_workflows() {
         let capabilities = mobile_capabilities();
@@ -2829,12 +3033,16 @@ mod tests {
 
     #[test]
     fn payment_preview_requires_confirmation() {
+        let wallet = Pubkey::new_unique().to_string();
+        let recipient = Pubkey::new_unique().to_string();
         let preview = preview_payment(PaymentPreviewRequest {
             network: AppNetwork::Devnet,
-            wallet_public_key: "Wallet1111111111111111111111111111111111".to_string(),
-            recipient: "Recipient111111111111111111111111111111".to_string(),
+            wallet_public_key: wallet,
+            recipient,
             mint: None,
             amount: "0.1 SOL".to_string(),
+            operation: PaymentOperation::SolTransfer,
+            amount_base_units: 100_000_000,
             memo: None,
         })
         .unwrap();
@@ -2870,9 +3078,11 @@ mod tests {
             password: "correct-password".to_string(),
         })
         .unwrap();
+        let recipient = Pubkey::new_unique().to_string();
+        let preview = solana_payment_preview_for(&created.wallet.public_key, &recipient, 1);
 
         let error = submit_payment(PaymentSubmitRequest {
-            preview_id: "preview-1".to_string(),
+            preview_id: preview.id,
             approved: true,
             network: AppNetwork::Devnet,
             rpc_url: None,
@@ -2880,7 +3090,7 @@ mod tests {
             keystore_json: created.keystore_json,
             password: "wrong-password".to_string(),
             operation: PaymentOperation::SolTransfer,
-            recipient: Some("11111111111111111111111111111111".to_string()),
+            recipient: Some(recipient),
             mint: None,
             amount_base_units: 1,
         })
@@ -2897,9 +3107,18 @@ mod tests {
             password: "strong-password".to_string(),
         })
         .unwrap();
+        let recipient = Pubkey::new_unique().to_string();
+        let preview_id = solana_payment_preview_id(&SolanaPaymentPreviewIdInput {
+            network: AppNetwork::Devnet,
+            wallet_public_key: &created.wallet.public_key,
+            operation: PaymentOperation::SolTransfer,
+            recipient: Some(&recipient),
+            mint: None,
+            amount_base_units: 0,
+        });
 
         let error = submit_payment(PaymentSubmitRequest {
-            preview_id: "preview-1".to_string(),
+            preview_id,
             approved: true,
             network: AppNetwork::Devnet,
             rpc_url: None,
@@ -2907,7 +3126,7 @@ mod tests {
             keystore_json: created.keystore_json,
             password: "strong-password".to_string(),
             operation: PaymentOperation::SolTransfer,
-            recipient: Some("11111111111111111111111111111111".to_string()),
+            recipient: Some(recipient),
             mint: None,
             amount_base_units: 0,
         })
@@ -2917,19 +3136,60 @@ mod tests {
     }
 
     #[test]
+    fn payment_submit_rejects_stale_preview_id() {
+        let created = create_wallet(CreateWalletRequest {
+            name: "Mobile Wallet".to_string(),
+            password: "strong-password".to_string(),
+        })
+        .unwrap();
+        let recipient = Pubkey::new_unique().to_string();
+        let preview = solana_payment_preview_for(&created.wallet.public_key, &recipient, 1);
+
+        let error = submit_payment(PaymentSubmitRequest {
+            preview_id: preview.id,
+            approved: true,
+            network: AppNetwork::Devnet,
+            rpc_url: None,
+            wallet_public_key: created.wallet.public_key,
+            keystore_json: created.keystore_json,
+            password: "strong-password".to_string(),
+            operation: PaymentOperation::SolTransfer,
+            recipient: Some(recipient),
+            mint: None,
+            amount_base_units: 2,
+        })
+        .unwrap_err();
+
+        assert_eq!(error.to_mobile_error().code, MobileErrorCode::InvalidInput);
+        assert!(error
+            .to_mobile_error()
+            .message
+            .contains("stale or mismatched"));
+    }
+
+    #[test]
     fn wsol_close_ata_validates_selected_wallet_before_rpc() {
         let created = create_wallet(CreateWalletRequest {
             name: "Mobile Wallet".to_string(),
             password: "strong-password".to_string(),
         })
         .unwrap();
+        let selected_wallet = "11111111111111111111111111111111".to_string();
+        let preview_id = solana_payment_preview_id(&SolanaPaymentPreviewIdInput {
+            network: AppNetwork::Devnet,
+            wallet_public_key: &selected_wallet,
+            operation: PaymentOperation::WsolCloseAta,
+            recipient: None,
+            mint: None,
+            amount_base_units: 0,
+        });
 
         let error = submit_payment(PaymentSubmitRequest {
-            preview_id: "preview-1".to_string(),
+            preview_id,
             approved: true,
             network: AppNetwork::Devnet,
             rpc_url: None,
-            wallet_public_key: "11111111111111111111111111111111".to_string(),
+            wallet_public_key: selected_wallet,
             keystore_json: created.keystore_json,
             password: "strong-password".to_string(),
             operation: PaymentOperation::WsolCloseAta,
@@ -2952,6 +3212,8 @@ mod tests {
             wallet_public_key: "11111111111111111111111111111111".to_string(),
             keystore_json: String::new(),
             password: String::new(),
+            app_name: "Example dApp".to_string(),
+            app_url: "https://example.invalid".to_string(),
             method: "signMessage".to_string(),
             payload_base64: "aGVsbG8=".to_string(),
             transaction_format: None,
@@ -2968,15 +3230,19 @@ mod tests {
             password: "strong-password".to_string(),
         })
         .unwrap();
+        let preview =
+            solana_dapp_preview_for(&created.wallet.public_key, "signMessage", "aGVsbG8=", None);
 
         let result = submit_dapp_signing(DappSignSubmitRequest {
-            preview_id: "preview-1".to_string(),
+            preview_id: preview.id,
             approved: true,
             network: AppNetwork::Devnet,
             rpc_url: None,
             wallet_public_key: created.wallet.public_key,
             keystore_json: created.keystore_json,
             password: "strong-password".to_string(),
+            app_name: "Example dApp".to_string(),
+            app_url: "https://example.invalid".to_string(),
             method: "signMessage".to_string(),
             payload_base64: "aGVsbG8=".to_string(),
             transaction_format: None,
@@ -2988,6 +3254,39 @@ mod tests {
         assert!(result.signature_base64.is_some());
         assert_eq!(result.signed_payload_base64.as_deref(), Some("aGVsbG8="));
         assert!(result.transaction.is_none());
+    }
+
+    #[test]
+    fn dapp_sign_rejects_stale_preview_id() {
+        let created = create_wallet(CreateWalletRequest {
+            name: "Mobile Wallet".to_string(),
+            password: "strong-password".to_string(),
+        })
+        .unwrap();
+        let preview =
+            solana_dapp_preview_for(&created.wallet.public_key, "signMessage", "aGVsbG8=", None);
+
+        let error = submit_dapp_signing(DappSignSubmitRequest {
+            preview_id: preview.id,
+            approved: true,
+            network: AppNetwork::Devnet,
+            rpc_url: None,
+            wallet_public_key: created.wallet.public_key,
+            keystore_json: created.keystore_json,
+            password: "strong-password".to_string(),
+            app_name: "Example dApp".to_string(),
+            app_url: "https://example.invalid".to_string(),
+            method: "signMessage".to_string(),
+            payload_base64: "dGFtcGVyZWQ=".to_string(),
+            transaction_format: None,
+        })
+        .unwrap_err();
+
+        assert_eq!(error.to_mobile_error().code, MobileErrorCode::InvalidInput);
+        assert!(error
+            .to_mobile_error()
+            .message
+            .contains("stale or mismatched"));
     }
 
     #[test]
@@ -3016,15 +3315,23 @@ mod tests {
             Transaction::new_unsigned(Message::new(&[instruction], Some(&signer.pubkey())));
         transaction.message.recent_blockhash = Hash::new_unique();
         let transaction_base64 = BASE64.encode(bincode::serialize(&transaction).unwrap());
+        let preview = solana_dapp_preview_for(
+            &created.wallet.public_key,
+            "signTransaction",
+            &transaction_base64,
+            Some("legacy"),
+        );
 
         let result = submit_dapp_signing(DappSignSubmitRequest {
-            preview_id: "preview-1".to_string(),
+            preview_id: preview.id,
             approved: true,
             network: AppNetwork::Devnet,
             rpc_url: None,
             wallet_public_key: created.wallet.public_key,
             keystore_json: created.keystore_json,
             password: "strong-password".to_string(),
+            app_name: "Example dApp".to_string(),
+            app_url: "https://example.invalid".to_string(),
             method: "signTransaction".to_string(),
             payload_base64: transaction_base64,
             transaction_format: Some("legacy".to_string()),
@@ -3077,15 +3384,23 @@ mod tests {
                 .unwrap()
                 .as_bytes(),
         );
+        let preview = solana_dapp_preview_for(
+            &created.wallet.public_key,
+            "signAllTransactions",
+            &batch_base64,
+            Some("legacy"),
+        );
 
         let result = submit_dapp_signing(DappSignSubmitRequest {
-            preview_id: "preview-1".to_string(),
+            preview_id: preview.id,
             approved: true,
             network: AppNetwork::Devnet,
             rpc_url: None,
             wallet_public_key: created.wallet.public_key,
             keystore_json: created.keystore_json,
             password: "strong-password".to_string(),
+            app_name: "Example dApp".to_string(),
+            app_url: "https://example.invalid".to_string(),
             method: "signAllTransactions".to_string(),
             payload_base64: batch_base64,
             transaction_format: Some("legacy".to_string()),

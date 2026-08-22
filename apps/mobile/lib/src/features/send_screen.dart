@@ -214,6 +214,9 @@ class _SendScreenState extends ConsumerState<SendScreen> {
         tokenContract: tokenContract.isEmpty ? null : tokenContract,
       );
       ref.read(paymentSigningDraftProvider.notifier).state = null;
+      ref.read(dappSigningDraftProvider.notifier).state = null;
+      ref.read(evmDappSigningDraftProvider.notifier).state = null;
+      ref.read(squadsSigningDraftProvider.notifier).state = null;
       if (mounted) context.go('/confirm');
     } catch (error) {
       if (mounted) {
@@ -231,13 +234,22 @@ class _SendScreenState extends ConsumerState<SendScreen> {
       final recipient = _recipientController.text.trim();
       final mint = _mintController.text.trim();
       final amountBaseUnits = _amountBaseUnits();
+      final previewRecipient = switch (_operation) {
+        PaymentOperation.solTransfer ||
+        PaymentOperation.splTokenTransfer =>
+          recipient,
+        PaymentOperation.wsolWrap ||
+        PaymentOperation.wsolUnwrap ||
+        PaymentOperation.wsolCloseAta =>
+          wallet.publicKey,
+      };
       final preview = await ref.read(mobileBridgeProvider).previewPayment(
             network: network,
             walletPublicKey: wallet.publicKey,
-            recipient: _operation == PaymentOperation.wsolWrap
-                ? wallet.publicKey
-                : recipient,
+            recipient: previewRecipient,
             amount: _amountLabel(amountBaseUnits),
+            operation: _operation,
+            amountBaseUnits: amountBaseUnits,
             mint: mint.isEmpty ? null : mint,
             memo: _memoController.text.trim().isEmpty
                 ? null
@@ -247,13 +259,15 @@ class _SendScreenState extends ConsumerState<SendScreen> {
       ref.read(paymentSigningDraftProvider.notifier).state =
           PaymentSigningDraft(
         preview: preview,
-        recipient: _operation == PaymentOperation.wsolWrap
-            ? wallet.publicKey
-            : recipient,
+        recipient: previewRecipient,
         amountBaseUnits: amountBaseUnits,
         operation: _operation,
         mint: mint.isEmpty ? null : mint,
       );
+      ref.read(evmPaymentSigningDraftProvider.notifier).state = null;
+      ref.read(dappSigningDraftProvider.notifier).state = null;
+      ref.read(evmDappSigningDraftProvider.notifier).state = null;
+      ref.read(squadsSigningDraftProvider.notifier).state = null;
       if (mounted) context.go('/confirm');
     } catch (error) {
       if (mounted) {
@@ -275,7 +289,7 @@ class _SendScreenState extends ConsumerState<SendScreen> {
       throw const MobileBridgeException('invalid_input', 'Amount is required');
     }
     if (_operation == PaymentOperation.splTokenTransfer) {
-      return int.parse(text);
+      return _positiveBaseUnits(text);
     }
     return _decimalToBaseUnits(text, 9);
   }
@@ -292,11 +306,16 @@ class _SendScreenState extends ConsumerState<SendScreen> {
 
   int _decimalToBaseUnits(String value, int decimals) {
     final parts = value.split('.');
-    if (parts.length > 2 || parts.first.isEmpty) {
+    if (parts.length > 2 ||
+        parts.first.isEmpty ||
+        !RegExp(r'^[0-9]+$').hasMatch(parts.first)) {
       throw const MobileBridgeException('invalid_input', 'Invalid amount');
     }
     final whole = BigInt.parse(parts.first);
     final fraction = parts.length == 1 ? '' : parts[1];
+    if (fraction.isNotEmpty && !RegExp(r'^[0-9]+$').hasMatch(fraction)) {
+      throw const MobileBridgeException('invalid_input', 'Invalid amount');
+    }
     if (fraction.length > decimals) {
       throw MobileBridgeException(
           'invalid_input', 'Amount supports up to $decimals decimals');
@@ -307,6 +326,25 @@ class _SendScreenState extends ConsumerState<SendScreen> {
         BigInt.parse(paddedFraction.isEmpty ? '0' : paddedFraction);
     if (units > BigInt.from(0x7fffffffffffffff)) {
       throw const MobileBridgeException('invalid_input', 'Amount is too large');
+    }
+    if (units <= BigInt.zero) {
+      throw const MobileBridgeException(
+          'invalid_input', 'Amount must be greater than zero');
+    }
+    return units.toInt();
+  }
+
+  int _positiveBaseUnits(String value) {
+    if (!RegExp(r'^[0-9]+$').hasMatch(value)) {
+      throw const MobileBridgeException('invalid_input', 'Invalid amount');
+    }
+    final units = BigInt.parse(value);
+    if (units > BigInt.from(0x7fffffffffffffff)) {
+      throw const MobileBridgeException('invalid_input', 'Amount is too large');
+    }
+    if (units <= BigInt.zero) {
+      throw const MobileBridgeException(
+          'invalid_input', 'Amount must be greater than zero');
     }
     return units.toInt();
   }

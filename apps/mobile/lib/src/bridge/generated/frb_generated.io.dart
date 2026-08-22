@@ -46,104 +46,133 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   CreateWalletRequest dco_decode_box_autoadd_create_wallet_request(dynamic raw);
 
   @protected
-  DappSignPreviewRequest dco_decode_box_autoadd_dapp_sign_preview_request(dynamic raw);
+  DappSignPreviewRequest dco_decode_box_autoadd_dapp_sign_preview_request(
+      dynamic raw);
 
   @protected
-  DappSignSubmitRequest dco_decode_box_autoadd_dapp_sign_submit_request(dynamic raw);
+  DappSignSubmitRequest dco_decode_box_autoadd_dapp_sign_submit_request(
+      dynamic raw);
 
   @protected
-  EvmAssetQueryRequest dco_decode_box_autoadd_evm_asset_query_request(dynamic raw);
+  EvmAssetQueryRequest dco_decode_box_autoadd_evm_asset_query_request(
+      dynamic raw);
 
   @protected
-  EvmCreateWalletRequest dco_decode_box_autoadd_evm_create_wallet_request(dynamic raw);
+  EvmCreateWalletRequest dco_decode_box_autoadd_evm_create_wallet_request(
+      dynamic raw);
 
   @protected
-  EvmDappSignPreviewRequest dco_decode_box_autoadd_evm_dapp_sign_preview_request(dynamic raw);
+  EvmDappSignPreviewRequest
+      dco_decode_box_autoadd_evm_dapp_sign_preview_request(dynamic raw);
 
   @protected
-  EvmDappSignSubmitRequest dco_decode_box_autoadd_evm_dapp_sign_submit_request(dynamic raw);
+  EvmDappSignSubmitRequest dco_decode_box_autoadd_evm_dapp_sign_submit_request(
+      dynamic raw);
 
   @protected
-  EvmExportPrivateKeyRequest dco_decode_box_autoadd_evm_export_private_key_request(dynamic raw);
+  EvmExportPrivateKeyRequest
+      dco_decode_box_autoadd_evm_export_private_key_request(dynamic raw);
 
   @protected
-  EvmImportKeystoreRequest dco_decode_box_autoadd_evm_import_keystore_request(dynamic raw);
+  EvmImportKeystoreRequest dco_decode_box_autoadd_evm_import_keystore_request(
+      dynamic raw);
 
   @protected
-  EvmImportMnemonicRequest dco_decode_box_autoadd_evm_import_mnemonic_request(dynamic raw);
+  EvmImportMnemonicRequest dco_decode_box_autoadd_evm_import_mnemonic_request(
+      dynamic raw);
 
   @protected
-  EvmImportPrivateKeyRequest dco_decode_box_autoadd_evm_import_private_key_request(dynamic raw);
+  EvmImportPrivateKeyRequest
+      dco_decode_box_autoadd_evm_import_private_key_request(dynamic raw);
 
   @protected
-  EvmPaymentPreviewRequest dco_decode_box_autoadd_evm_payment_preview_request(dynamic raw);
+  EvmPaymentPreviewRequest dco_decode_box_autoadd_evm_payment_preview_request(
+      dynamic raw);
 
   @protected
-  EvmPaymentSubmitRequest dco_decode_box_autoadd_evm_payment_submit_request(dynamic raw);
+  EvmPaymentSubmitRequest dco_decode_box_autoadd_evm_payment_submit_request(
+      dynamic raw);
 
   @protected
-  EvmTransactionStatusRequest dco_decode_box_autoadd_evm_transaction_status_request(dynamic raw);
+  EvmTransactionStatusRequest
+      dco_decode_box_autoadd_evm_transaction_status_request(dynamic raw);
 
   @protected
-  EvmTransactionSubmitResult dco_decode_box_autoadd_evm_transaction_submit_result(dynamic raw);
+  EvmTransactionSubmitResult
+      dco_decode_box_autoadd_evm_transaction_submit_result(dynamic raw);
 
   @protected
-  EvmUnlockWalletRequest dco_decode_box_autoadd_evm_unlock_wallet_request(dynamic raw);
+  EvmUnlockWalletRequest dco_decode_box_autoadd_evm_unlock_wallet_request(
+      dynamic raw);
 
   @protected
-  ExportPrivateKeyRequest dco_decode_box_autoadd_export_private_key_request(dynamic raw);
+  ExportPrivateKeyRequest dco_decode_box_autoadd_export_private_key_request(
+      dynamic raw);
 
   @protected
   PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw);
 
   @protected
-  ImportKeystoreRequest dco_decode_box_autoadd_import_keystore_request(dynamic raw);
+  ImportKeystoreRequest dco_decode_box_autoadd_import_keystore_request(
+      dynamic raw);
 
   @protected
-  ImportMnemonicRequest dco_decode_box_autoadd_import_mnemonic_request(dynamic raw);
+  ImportMnemonicRequest dco_decode_box_autoadd_import_mnemonic_request(
+      dynamic raw);
 
   @protected
-  ImportPrivateKeyRequest dco_decode_box_autoadd_import_private_key_request(dynamic raw);
+  ImportPrivateKeyRequest dco_decode_box_autoadd_import_private_key_request(
+      dynamic raw);
 
   @protected
-  PaymentPreviewRequest dco_decode_box_autoadd_payment_preview_request(dynamic raw);
+  PaymentPreviewRequest dco_decode_box_autoadd_payment_preview_request(
+      dynamic raw);
 
   @protected
-  PaymentSubmitRequest dco_decode_box_autoadd_payment_submit_request(dynamic raw);
+  PaymentSubmitRequest dco_decode_box_autoadd_payment_submit_request(
+      dynamic raw);
 
   @protected
   PumpPreviewRequest dco_decode_box_autoadd_pump_preview_request(dynamic raw);
 
   @protected
-  SquadsCreateSubmitRequest dco_decode_box_autoadd_squads_create_submit_request(dynamic raw);
+  SquadsCreateSubmitRequest dco_decode_box_autoadd_squads_create_submit_request(
+      dynamic raw);
 
   @protected
-  SquadsExecuteSubmitRequest dco_decode_box_autoadd_squads_execute_submit_request(dynamic raw);
+  SquadsExecuteSubmitRequest
+      dco_decode_box_autoadd_squads_execute_submit_request(dynamic raw);
 
   @protected
   SquadsInfoRequest dco_decode_box_autoadd_squads_info_request(dynamic raw);
 
   @protected
-  SquadsPreviewRequest dco_decode_box_autoadd_squads_preview_request(dynamic raw);
+  SquadsPreviewRequest dco_decode_box_autoadd_squads_preview_request(
+      dynamic raw);
 
   @protected
-  SquadsProposalSummary dco_decode_box_autoadd_squads_proposal_summary(dynamic raw);
+  SquadsProposalSummary dco_decode_box_autoadd_squads_proposal_summary(
+      dynamic raw);
 
   @protected
-  SquadsProposalsRequest dco_decode_box_autoadd_squads_proposals_request(dynamic raw);
+  SquadsProposalsRequest dco_decode_box_autoadd_squads_proposals_request(
+      dynamic raw);
 
   @protected
   SquadsTransferProposalSubmitRequest
-      dco_decode_box_autoadd_squads_transfer_proposal_submit_request(dynamic raw);
+      dco_decode_box_autoadd_squads_transfer_proposal_submit_request(
+          dynamic raw);
 
   @protected
-  SquadsVoteSubmitRequest dco_decode_box_autoadd_squads_vote_submit_request(dynamic raw);
+  SquadsVoteSubmitRequest dco_decode_box_autoadd_squads_vote_submit_request(
+      dynamic raw);
 
   @protected
   TotpVerifyRequest dco_decode_box_autoadd_totp_verify_request(dynamic raw);
 
   @protected
-  TransactionSubmitResult dco_decode_box_autoadd_transaction_submit_result(dynamic raw);
+  TransactionSubmitResult dco_decode_box_autoadd_transaction_submit_result(
+      dynamic raw);
 
   @protected
   int dco_decode_box_autoadd_u_32(dynamic raw);
@@ -185,7 +214,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   EvmDappSignPreview dco_decode_evm_dapp_sign_preview(dynamic raw);
 
   @protected
-  EvmDappSignPreviewRequest dco_decode_evm_dapp_sign_preview_request(dynamic raw);
+  EvmDappSignPreviewRequest dco_decode_evm_dapp_sign_preview_request(
+      dynamic raw);
 
   @protected
   EvmDappSignSubmitRequest dco_decode_evm_dapp_sign_submit_request(dynamic raw);
@@ -194,10 +224,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   EvmDappSignSubmitResult dco_decode_evm_dapp_sign_submit_result(dynamic raw);
 
   @protected
-  EvmExportPrivateKeyRequest dco_decode_evm_export_private_key_request(dynamic raw);
+  EvmExportPrivateKeyRequest dco_decode_evm_export_private_key_request(
+      dynamic raw);
 
   @protected
-  EvmExportPrivateKeyResponse dco_decode_evm_export_private_key_response(dynamic raw);
+  EvmExportPrivateKeyResponse dco_decode_evm_export_private_key_response(
+      dynamic raw);
 
   @protected
   EvmImportKeystoreRequest dco_decode_evm_import_keystore_request(dynamic raw);
@@ -206,7 +238,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   EvmImportMnemonicRequest dco_decode_evm_import_mnemonic_request(dynamic raw);
 
   @protected
-  EvmImportPrivateKeyRequest dco_decode_evm_import_private_key_request(dynamic raw);
+  EvmImportPrivateKeyRequest dco_decode_evm_import_private_key_request(
+      dynamic raw);
 
   @protected
   EvmPaymentPreview dco_decode_evm_payment_preview(dynamic raw);
@@ -224,16 +257,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   EvmTokenQuery dco_decode_evm_token_query(dynamic raw);
 
   @protected
-  EvmTransactionHistoryEntry dco_decode_evm_transaction_history_entry(dynamic raw);
+  EvmTransactionHistoryEntry dco_decode_evm_transaction_history_entry(
+      dynamic raw);
 
   @protected
   EvmTransactionStatus dco_decode_evm_transaction_status(dynamic raw);
 
   @protected
-  EvmTransactionStatusRequest dco_decode_evm_transaction_status_request(dynamic raw);
+  EvmTransactionStatusRequest dco_decode_evm_transaction_status_request(
+      dynamic raw);
 
   @protected
-  EvmTransactionSubmitResult dco_decode_evm_transaction_submit_result(dynamic raw);
+  EvmTransactionSubmitResult dco_decode_evm_transaction_submit_result(
+      dynamic raw);
 
   @protected
   EvmUnlockWalletRequest dco_decode_evm_unlock_wallet_request(dynamic raw);
@@ -281,7 +317,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<EvmTokenQuery> dco_decode_list_evm_token_query(dynamic raw);
 
   @protected
-  List<EvmTransactionHistoryEntry> dco_decode_list_evm_transaction_history_entry(dynamic raw);
+  List<EvmTransactionHistoryEntry>
+      dco_decode_list_evm_transaction_history_entry(dynamic raw);
 
   @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
@@ -290,10 +327,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<SquadsMemberSummary> dco_decode_list_squads_member_summary(dynamic raw);
 
   @protected
-  List<SquadsProposalSummary> dco_decode_list_squads_proposal_summary(dynamic raw);
+  List<SquadsProposalSummary> dco_decode_list_squads_proposal_summary(
+      dynamic raw);
 
   @protected
-  List<TransactionHistoryEntry> dco_decode_list_transaction_history_entry(dynamic raw);
+  List<TransactionHistoryEntry> dco_decode_list_transaction_history_entry(
+      dynamic raw);
 
   @protected
   MobileBridgeHealth dco_decode_mobile_bridge_health(dynamic raw);
@@ -311,16 +350,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String? dco_decode_opt_String(dynamic raw);
 
   @protected
-  EvmTransactionSubmitResult? dco_decode_opt_box_autoadd_evm_transaction_submit_result(dynamic raw);
+  EvmTransactionSubmitResult?
+      dco_decode_opt_box_autoadd_evm_transaction_submit_result(dynamic raw);
 
   @protected
   PlatformInt64? dco_decode_opt_box_autoadd_i_64(dynamic raw);
 
   @protected
-  SquadsProposalSummary? dco_decode_opt_box_autoadd_squads_proposal_summary(dynamic raw);
+  SquadsProposalSummary? dco_decode_opt_box_autoadd_squads_proposal_summary(
+      dynamic raw);
 
   @protected
-  TransactionSubmitResult? dco_decode_opt_box_autoadd_transaction_submit_result(dynamic raw);
+  TransactionSubmitResult? dco_decode_opt_box_autoadd_transaction_submit_result(
+      dynamic raw);
 
   @protected
   int? dco_decode_opt_box_autoadd_u_32(dynamic raw);
@@ -350,13 +392,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   SigningPreview dco_decode_signing_preview(dynamic raw);
 
   @protected
-  SquadsCreateSubmitRequest dco_decode_squads_create_submit_request(dynamic raw);
+  SquadsCreateSubmitRequest dco_decode_squads_create_submit_request(
+      dynamic raw);
 
   @protected
   SquadsCreateSubmitResult dco_decode_squads_create_submit_result(dynamic raw);
 
   @protected
-  SquadsExecuteSubmitRequest dco_decode_squads_execute_submit_request(dynamic raw);
+  SquadsExecuteSubmitRequest dco_decode_squads_execute_submit_request(
+      dynamic raw);
 
   @protected
   SquadsInfoRequest dco_decode_squads_info_request(dynamic raw);
@@ -371,7 +415,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   SquadsPreviewRequest dco_decode_squads_preview_request(dynamic raw);
 
   @protected
-  SquadsProposalCreateSubmitResult dco_decode_squads_proposal_create_submit_result(dynamic raw);
+  SquadsProposalCreateSubmitResult
+      dco_decode_squads_proposal_create_submit_result(dynamic raw);
 
   @protected
   SquadsProposalSummary dco_decode_squads_proposal_summary(dynamic raw);
@@ -386,8 +431,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   SquadsTransferKind dco_decode_squads_transfer_kind(dynamic raw);
 
   @protected
-  SquadsTransferProposalSubmitRequest dco_decode_squads_transfer_proposal_submit_request(
-      dynamic raw);
+  SquadsTransferProposalSubmitRequest
+      dco_decode_squads_transfer_proposal_submit_request(dynamic raw);
 
   @protected
   SquadsVoteSubmitRequest dco_decode_squads_vote_submit_request(dynamic raw);
@@ -438,7 +483,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   AppNetwork sse_decode_app_network(SseDeserializer deserializer);
 
   @protected
-  AssetQueryRequest sse_decode_asset_query_request(SseDeserializer deserializer);
+  AssetQueryRequest sse_decode_asset_query_request(
+      SseDeserializer deserializer);
 
   @protected
   AssetSnapshot sse_decode_asset_snapshot(SseDeserializer deserializer);
@@ -453,10 +499,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool sse_decode_bool(SseDeserializer deserializer);
 
   @protected
-  AssetQueryRequest sse_decode_box_autoadd_asset_query_request(SseDeserializer deserializer);
+  AssetQueryRequest sse_decode_box_autoadd_asset_query_request(
+      SseDeserializer deserializer);
 
   @protected
-  CreateWalletRequest sse_decode_box_autoadd_create_wallet_request(SseDeserializer deserializer);
+  CreateWalletRequest sse_decode_box_autoadd_create_wallet_request(
+      SseDeserializer deserializer);
 
   @protected
   DappSignPreviewRequest sse_decode_box_autoadd_dapp_sign_preview_request(
@@ -467,23 +515,26 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SseDeserializer deserializer);
 
   @protected
-  EvmAssetQueryRequest sse_decode_box_autoadd_evm_asset_query_request(SseDeserializer deserializer);
+  EvmAssetQueryRequest sse_decode_box_autoadd_evm_asset_query_request(
+      SseDeserializer deserializer);
 
   @protected
   EvmCreateWalletRequest sse_decode_box_autoadd_evm_create_wallet_request(
       SseDeserializer deserializer);
 
   @protected
-  EvmDappSignPreviewRequest sse_decode_box_autoadd_evm_dapp_sign_preview_request(
-      SseDeserializer deserializer);
+  EvmDappSignPreviewRequest
+      sse_decode_box_autoadd_evm_dapp_sign_preview_request(
+          SseDeserializer deserializer);
 
   @protected
   EvmDappSignSubmitRequest sse_decode_box_autoadd_evm_dapp_sign_submit_request(
       SseDeserializer deserializer);
 
   @protected
-  EvmExportPrivateKeyRequest sse_decode_box_autoadd_evm_export_private_key_request(
-      SseDeserializer deserializer);
+  EvmExportPrivateKeyRequest
+      sse_decode_box_autoadd_evm_export_private_key_request(
+          SseDeserializer deserializer);
 
   @protected
   EvmImportKeystoreRequest sse_decode_box_autoadd_evm_import_keystore_request(
@@ -494,8 +545,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SseDeserializer deserializer);
 
   @protected
-  EvmImportPrivateKeyRequest sse_decode_box_autoadd_evm_import_private_key_request(
-      SseDeserializer deserializer);
+  EvmImportPrivateKeyRequest
+      sse_decode_box_autoadd_evm_import_private_key_request(
+          SseDeserializer deserializer);
 
   @protected
   EvmPaymentPreviewRequest sse_decode_box_autoadd_evm_payment_preview_request(
@@ -506,12 +558,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SseDeserializer deserializer);
 
   @protected
-  EvmTransactionStatusRequest sse_decode_box_autoadd_evm_transaction_status_request(
-      SseDeserializer deserializer);
+  EvmTransactionStatusRequest
+      sse_decode_box_autoadd_evm_transaction_status_request(
+          SseDeserializer deserializer);
 
   @protected
-  EvmTransactionSubmitResult sse_decode_box_autoadd_evm_transaction_submit_result(
-      SseDeserializer deserializer);
+  EvmTransactionSubmitResult
+      sse_decode_box_autoadd_evm_transaction_submit_result(
+          SseDeserializer deserializer);
 
   @protected
   EvmUnlockWalletRequest sse_decode_box_autoadd_evm_unlock_wallet_request(
@@ -541,24 +595,29 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SseDeserializer deserializer);
 
   @protected
-  PaymentSubmitRequest sse_decode_box_autoadd_payment_submit_request(SseDeserializer deserializer);
+  PaymentSubmitRequest sse_decode_box_autoadd_payment_submit_request(
+      SseDeserializer deserializer);
 
   @protected
-  PumpPreviewRequest sse_decode_box_autoadd_pump_preview_request(SseDeserializer deserializer);
+  PumpPreviewRequest sse_decode_box_autoadd_pump_preview_request(
+      SseDeserializer deserializer);
 
   @protected
   SquadsCreateSubmitRequest sse_decode_box_autoadd_squads_create_submit_request(
       SseDeserializer deserializer);
 
   @protected
-  SquadsExecuteSubmitRequest sse_decode_box_autoadd_squads_execute_submit_request(
+  SquadsExecuteSubmitRequest
+      sse_decode_box_autoadd_squads_execute_submit_request(
+          SseDeserializer deserializer);
+
+  @protected
+  SquadsInfoRequest sse_decode_box_autoadd_squads_info_request(
       SseDeserializer deserializer);
 
   @protected
-  SquadsInfoRequest sse_decode_box_autoadd_squads_info_request(SseDeserializer deserializer);
-
-  @protected
-  SquadsPreviewRequest sse_decode_box_autoadd_squads_preview_request(SseDeserializer deserializer);
+  SquadsPreviewRequest sse_decode_box_autoadd_squads_preview_request(
+      SseDeserializer deserializer);
 
   @protected
   SquadsProposalSummary sse_decode_box_autoadd_squads_proposal_summary(
@@ -570,14 +629,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   SquadsTransferProposalSubmitRequest
-      sse_decode_box_autoadd_squads_transfer_proposal_submit_request(SseDeserializer deserializer);
+      sse_decode_box_autoadd_squads_transfer_proposal_submit_request(
+          SseDeserializer deserializer);
 
   @protected
   SquadsVoteSubmitRequest sse_decode_box_autoadd_squads_vote_submit_request(
       SseDeserializer deserializer);
 
   @protected
-  TotpVerifyRequest sse_decode_box_autoadd_totp_verify_request(SseDeserializer deserializer);
+  TotpVerifyRequest sse_decode_box_autoadd_totp_verify_request(
+      SseDeserializer deserializer);
 
   @protected
   TransactionSubmitResult sse_decode_box_autoadd_transaction_submit_result(
@@ -593,22 +654,28 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   int sse_decode_box_autoadd_u_8(SseDeserializer deserializer);
 
   @protected
-  UnlockWalletRequest sse_decode_box_autoadd_unlock_wallet_request(SseDeserializer deserializer);
+  UnlockWalletRequest sse_decode_box_autoadd_unlock_wallet_request(
+      SseDeserializer deserializer);
 
   @protected
-  CreateWalletRequest sse_decode_create_wallet_request(SseDeserializer deserializer);
+  CreateWalletRequest sse_decode_create_wallet_request(
+      SseDeserializer deserializer);
 
   @protected
-  DappSignPreviewRequest sse_decode_dapp_sign_preview_request(SseDeserializer deserializer);
+  DappSignPreviewRequest sse_decode_dapp_sign_preview_request(
+      SseDeserializer deserializer);
 
   @protected
-  DappSignSubmitRequest sse_decode_dapp_sign_submit_request(SseDeserializer deserializer);
+  DappSignSubmitRequest sse_decode_dapp_sign_submit_request(
+      SseDeserializer deserializer);
 
   @protected
-  DappSignSubmitResult sse_decode_dapp_sign_submit_result(SseDeserializer deserializer);
+  DappSignSubmitResult sse_decode_dapp_sign_submit_result(
+      SseDeserializer deserializer);
 
   @protected
-  EvmAssetQueryRequest sse_decode_evm_asset_query_request(SseDeserializer deserializer);
+  EvmAssetQueryRequest sse_decode_evm_asset_query_request(
+      SseDeserializer deserializer);
 
   @protected
   EvmAssetSnapshot sse_decode_evm_asset_snapshot(SseDeserializer deserializer);
@@ -617,19 +684,24 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   EvmChainConfig sse_decode_evm_chain_config(SseDeserializer deserializer);
 
   @protected
-  EvmCreateWalletRequest sse_decode_evm_create_wallet_request(SseDeserializer deserializer);
+  EvmCreateWalletRequest sse_decode_evm_create_wallet_request(
+      SseDeserializer deserializer);
 
   @protected
-  EvmDappSignPreview sse_decode_evm_dapp_sign_preview(SseDeserializer deserializer);
+  EvmDappSignPreview sse_decode_evm_dapp_sign_preview(
+      SseDeserializer deserializer);
 
   @protected
-  EvmDappSignPreviewRequest sse_decode_evm_dapp_sign_preview_request(SseDeserializer deserializer);
+  EvmDappSignPreviewRequest sse_decode_evm_dapp_sign_preview_request(
+      SseDeserializer deserializer);
 
   @protected
-  EvmDappSignSubmitRequest sse_decode_evm_dapp_sign_submit_request(SseDeserializer deserializer);
+  EvmDappSignSubmitRequest sse_decode_evm_dapp_sign_submit_request(
+      SseDeserializer deserializer);
 
   @protected
-  EvmDappSignSubmitResult sse_decode_evm_dapp_sign_submit_result(SseDeserializer deserializer);
+  EvmDappSignSubmitResult sse_decode_evm_dapp_sign_submit_result(
+      SseDeserializer deserializer);
 
   @protected
   EvmExportPrivateKeyRequest sse_decode_evm_export_private_key_request(
@@ -640,23 +712,28 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SseDeserializer deserializer);
 
   @protected
-  EvmImportKeystoreRequest sse_decode_evm_import_keystore_request(SseDeserializer deserializer);
+  EvmImportKeystoreRequest sse_decode_evm_import_keystore_request(
+      SseDeserializer deserializer);
 
   @protected
-  EvmImportMnemonicRequest sse_decode_evm_import_mnemonic_request(SseDeserializer deserializer);
+  EvmImportMnemonicRequest sse_decode_evm_import_mnemonic_request(
+      SseDeserializer deserializer);
 
   @protected
   EvmImportPrivateKeyRequest sse_decode_evm_import_private_key_request(
       SseDeserializer deserializer);
 
   @protected
-  EvmPaymentPreview sse_decode_evm_payment_preview(SseDeserializer deserializer);
+  EvmPaymentPreview sse_decode_evm_payment_preview(
+      SseDeserializer deserializer);
 
   @protected
-  EvmPaymentPreviewRequest sse_decode_evm_payment_preview_request(SseDeserializer deserializer);
+  EvmPaymentPreviewRequest sse_decode_evm_payment_preview_request(
+      SseDeserializer deserializer);
 
   @protected
-  EvmPaymentSubmitRequest sse_decode_evm_payment_submit_request(SseDeserializer deserializer);
+  EvmPaymentSubmitRequest sse_decode_evm_payment_submit_request(
+      SseDeserializer deserializer);
 
   @protected
   EvmTokenAsset sse_decode_evm_token_asset(SseDeserializer deserializer);
@@ -665,32 +742,39 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   EvmTokenQuery sse_decode_evm_token_query(SseDeserializer deserializer);
 
   @protected
-  EvmTransactionHistoryEntry sse_decode_evm_transaction_history_entry(SseDeserializer deserializer);
+  EvmTransactionHistoryEntry sse_decode_evm_transaction_history_entry(
+      SseDeserializer deserializer);
 
   @protected
-  EvmTransactionStatus sse_decode_evm_transaction_status(SseDeserializer deserializer);
+  EvmTransactionStatus sse_decode_evm_transaction_status(
+      SseDeserializer deserializer);
 
   @protected
   EvmTransactionStatusRequest sse_decode_evm_transaction_status_request(
       SseDeserializer deserializer);
 
   @protected
-  EvmTransactionSubmitResult sse_decode_evm_transaction_submit_result(SseDeserializer deserializer);
+  EvmTransactionSubmitResult sse_decode_evm_transaction_submit_result(
+      SseDeserializer deserializer);
 
   @protected
-  EvmUnlockWalletRequest sse_decode_evm_unlock_wallet_request(SseDeserializer deserializer);
+  EvmUnlockWalletRequest sse_decode_evm_unlock_wallet_request(
+      SseDeserializer deserializer);
 
   @protected
-  EvmWalletKeystore sse_decode_evm_wallet_keystore(SseDeserializer deserializer);
+  EvmWalletKeystore sse_decode_evm_wallet_keystore(
+      SseDeserializer deserializer);
 
   @protected
   EvmWalletSummary sse_decode_evm_wallet_summary(SseDeserializer deserializer);
 
   @protected
-  ExportPrivateKeyRequest sse_decode_export_private_key_request(SseDeserializer deserializer);
+  ExportPrivateKeyRequest sse_decode_export_private_key_request(
+      SseDeserializer deserializer);
 
   @protected
-  ExportPrivateKeyResponse sse_decode_export_private_key_response(SseDeserializer deserializer);
+  ExportPrivateKeyResponse sse_decode_export_private_key_response(
+      SseDeserializer deserializer);
 
   @protected
   int sse_decode_i_32(SseDeserializer deserializer);
@@ -699,51 +783,63 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64 sse_decode_i_64(SseDeserializer deserializer);
 
   @protected
-  ImportKeystoreRequest sse_decode_import_keystore_request(SseDeserializer deserializer);
+  ImportKeystoreRequest sse_decode_import_keystore_request(
+      SseDeserializer deserializer);
 
   @protected
-  ImportMnemonicRequest sse_decode_import_mnemonic_request(SseDeserializer deserializer);
+  ImportMnemonicRequest sse_decode_import_mnemonic_request(
+      SseDeserializer deserializer);
 
   @protected
-  ImportPrivateKeyRequest sse_decode_import_private_key_request(SseDeserializer deserializer);
+  ImportPrivateKeyRequest sse_decode_import_private_key_request(
+      SseDeserializer deserializer);
 
   @protected
   List<String> sse_decode_list_String(SseDeserializer deserializer);
 
   @protected
-  List<AssetSummary> sse_decode_list_asset_summary(SseDeserializer deserializer);
-
-  @protected
-  List<EvmChainConfig> sse_decode_list_evm_chain_config(SseDeserializer deserializer);
-
-  @protected
-  List<EvmTokenAsset> sse_decode_list_evm_token_asset(SseDeserializer deserializer);
-
-  @protected
-  List<EvmTokenQuery> sse_decode_list_evm_token_query(SseDeserializer deserializer);
-
-  @protected
-  List<EvmTransactionHistoryEntry> sse_decode_list_evm_transaction_history_entry(
+  List<AssetSummary> sse_decode_list_asset_summary(
       SseDeserializer deserializer);
+
+  @protected
+  List<EvmChainConfig> sse_decode_list_evm_chain_config(
+      SseDeserializer deserializer);
+
+  @protected
+  List<EvmTokenAsset> sse_decode_list_evm_token_asset(
+      SseDeserializer deserializer);
+
+  @protected
+  List<EvmTokenQuery> sse_decode_list_evm_token_query(
+      SseDeserializer deserializer);
+
+  @protected
+  List<EvmTransactionHistoryEntry>
+      sse_decode_list_evm_transaction_history_entry(
+          SseDeserializer deserializer);
 
   @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
 
   @protected
-  List<SquadsMemberSummary> sse_decode_list_squads_member_summary(SseDeserializer deserializer);
+  List<SquadsMemberSummary> sse_decode_list_squads_member_summary(
+      SseDeserializer deserializer);
 
   @protected
-  List<SquadsProposalSummary> sse_decode_list_squads_proposal_summary(SseDeserializer deserializer);
+  List<SquadsProposalSummary> sse_decode_list_squads_proposal_summary(
+      SseDeserializer deserializer);
 
   @protected
   List<TransactionHistoryEntry> sse_decode_list_transaction_history_entry(
       SseDeserializer deserializer);
 
   @protected
-  MobileBridgeHealth sse_decode_mobile_bridge_health(SseDeserializer deserializer);
+  MobileBridgeHealth sse_decode_mobile_bridge_health(
+      SseDeserializer deserializer);
 
   @protected
-  MobileCapabilitySummary sse_decode_mobile_capability_summary(SseDeserializer deserializer);
+  MobileCapabilitySummary sse_decode_mobile_capability_summary(
+      SseDeserializer deserializer);
 
   @protected
   MobileError sse_decode_mobile_error(SseDeserializer deserializer);
@@ -755,8 +851,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String? sse_decode_opt_String(SseDeserializer deserializer);
 
   @protected
-  EvmTransactionSubmitResult? sse_decode_opt_box_autoadd_evm_transaction_submit_result(
-      SseDeserializer deserializer);
+  EvmTransactionSubmitResult?
+      sse_decode_opt_box_autoadd_evm_transaction_submit_result(
+          SseDeserializer deserializer);
 
   @protected
   PlatformInt64? sse_decode_opt_box_autoadd_i_64(SseDeserializer deserializer);
@@ -782,13 +879,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PaymentOperation sse_decode_payment_operation(SseDeserializer deserializer);
 
   @protected
-  PaymentPreviewRequest sse_decode_payment_preview_request(SseDeserializer deserializer);
+  PaymentPreviewRequest sse_decode_payment_preview_request(
+      SseDeserializer deserializer);
 
   @protected
-  PaymentSubmitRequest sse_decode_payment_submit_request(SseDeserializer deserializer);
+  PaymentSubmitRequest sse_decode_payment_submit_request(
+      SseDeserializer deserializer);
 
   @protected
-  PumpPreviewRequest sse_decode_pump_preview_request(SseDeserializer deserializer);
+  PumpPreviewRequest sse_decode_pump_preview_request(
+      SseDeserializer deserializer);
 
   @protected
   SigningDecision sse_decode_signing_decision(SseDeserializer deserializer);
@@ -797,60 +897,77 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   SigningPreview sse_decode_signing_preview(SseDeserializer deserializer);
 
   @protected
-  SquadsCreateSubmitRequest sse_decode_squads_create_submit_request(SseDeserializer deserializer);
-
-  @protected
-  SquadsCreateSubmitResult sse_decode_squads_create_submit_result(SseDeserializer deserializer);
-
-  @protected
-  SquadsExecuteSubmitRequest sse_decode_squads_execute_submit_request(SseDeserializer deserializer);
-
-  @protected
-  SquadsInfoRequest sse_decode_squads_info_request(SseDeserializer deserializer);
-
-  @protected
-  SquadsInfoResponse sse_decode_squads_info_response(SseDeserializer deserializer);
-
-  @protected
-  SquadsMemberSummary sse_decode_squads_member_summary(SseDeserializer deserializer);
-
-  @protected
-  SquadsPreviewRequest sse_decode_squads_preview_request(SseDeserializer deserializer);
-
-  @protected
-  SquadsProposalCreateSubmitResult sse_decode_squads_proposal_create_submit_result(
+  SquadsCreateSubmitRequest sse_decode_squads_create_submit_request(
       SseDeserializer deserializer);
 
   @protected
-  SquadsProposalSummary sse_decode_squads_proposal_summary(SseDeserializer deserializer);
-
-  @protected
-  SquadsProposalsRequest sse_decode_squads_proposals_request(SseDeserializer deserializer);
-
-  @protected
-  SquadsProposalsResponse sse_decode_squads_proposals_response(SseDeserializer deserializer);
-
-  @protected
-  SquadsTransferKind sse_decode_squads_transfer_kind(SseDeserializer deserializer);
-
-  @protected
-  SquadsTransferProposalSubmitRequest sse_decode_squads_transfer_proposal_submit_request(
+  SquadsCreateSubmitResult sse_decode_squads_create_submit_result(
       SseDeserializer deserializer);
 
   @protected
-  SquadsVoteSubmitRequest sse_decode_squads_vote_submit_request(SseDeserializer deserializer);
+  SquadsExecuteSubmitRequest sse_decode_squads_execute_submit_request(
+      SseDeserializer deserializer);
+
+  @protected
+  SquadsInfoRequest sse_decode_squads_info_request(
+      SseDeserializer deserializer);
+
+  @protected
+  SquadsInfoResponse sse_decode_squads_info_response(
+      SseDeserializer deserializer);
+
+  @protected
+  SquadsMemberSummary sse_decode_squads_member_summary(
+      SseDeserializer deserializer);
+
+  @protected
+  SquadsPreviewRequest sse_decode_squads_preview_request(
+      SseDeserializer deserializer);
+
+  @protected
+  SquadsProposalCreateSubmitResult
+      sse_decode_squads_proposal_create_submit_result(
+          SseDeserializer deserializer);
+
+  @protected
+  SquadsProposalSummary sse_decode_squads_proposal_summary(
+      SseDeserializer deserializer);
+
+  @protected
+  SquadsProposalsRequest sse_decode_squads_proposals_request(
+      SseDeserializer deserializer);
+
+  @protected
+  SquadsProposalsResponse sse_decode_squads_proposals_response(
+      SseDeserializer deserializer);
+
+  @protected
+  SquadsTransferKind sse_decode_squads_transfer_kind(
+      SseDeserializer deserializer);
+
+  @protected
+  SquadsTransferProposalSubmitRequest
+      sse_decode_squads_transfer_proposal_submit_request(
+          SseDeserializer deserializer);
+
+  @protected
+  SquadsVoteSubmitRequest sse_decode_squads_vote_submit_request(
+      SseDeserializer deserializer);
 
   @protected
   TotpSetup sse_decode_totp_setup(SseDeserializer deserializer);
 
   @protected
-  TotpVerifyRequest sse_decode_totp_verify_request(SseDeserializer deserializer);
+  TotpVerifyRequest sse_decode_totp_verify_request(
+      SseDeserializer deserializer);
 
   @protected
-  TransactionHistoryEntry sse_decode_transaction_history_entry(SseDeserializer deserializer);
+  TransactionHistoryEntry sse_decode_transaction_history_entry(
+      SseDeserializer deserializer);
 
   @protected
-  TransactionSubmitResult sse_decode_transaction_submit_result(SseDeserializer deserializer);
+  TransactionSubmitResult sse_decode_transaction_submit_result(
+      SseDeserializer deserializer);
 
   @protected
   int sse_decode_u_16(SseDeserializer deserializer);
@@ -868,10 +985,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_decode_unit(SseDeserializer deserializer);
 
   @protected
-  UnlockWalletRequest sse_decode_unlock_wallet_request(SseDeserializer deserializer);
+  UnlockWalletRequest sse_decode_unlock_wallet_request(
+      SseDeserializer deserializer);
 
   @protected
-  UnlockWalletResponse sse_decode_unlock_wallet_response(SseDeserializer deserializer);
+  UnlockWalletResponse sse_decode_unlock_wallet_response(
+      SseDeserializer deserializer);
 
   @protected
   WalletKeystore sse_decode_wallet_keystore(SseDeserializer deserializer);
@@ -886,7 +1005,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_app_network(AppNetwork self, SseSerializer serializer);
 
   @protected
-  void sse_encode_asset_query_request(AssetQueryRequest self, SseSerializer serializer);
+  void sse_encode_asset_query_request(
+      AssetQueryRequest self, SseSerializer serializer);
 
   @protected
   void sse_encode_asset_snapshot(AssetSnapshot self, SseSerializer serializer);
@@ -895,13 +1015,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_asset_summary(AssetSummary self, SseSerializer serializer);
 
   @protected
-  void sse_encode_biometric_policy(BiometricPolicy self, SseSerializer serializer);
+  void sse_encode_biometric_policy(
+      BiometricPolicy self, SseSerializer serializer);
 
   @protected
   void sse_encode_bool(bool self, SseSerializer serializer);
 
   @protected
-  void sse_encode_box_autoadd_asset_query_request(AssetQueryRequest self, SseSerializer serializer);
+  void sse_encode_box_autoadd_asset_query_request(
+      AssetQueryRequest self, SseSerializer serializer);
 
   @protected
   void sse_encode_box_autoadd_create_wallet_request(
@@ -972,7 +1094,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       ExportPrivateKeyRequest self, SseSerializer serializer);
 
   @protected
-  void sse_encode_box_autoadd_i_64(PlatformInt64 self, SseSerializer serializer);
+  void sse_encode_box_autoadd_i_64(
+      PlatformInt64 self, SseSerializer serializer);
 
   @protected
   void sse_encode_box_autoadd_import_keystore_request(
@@ -1007,7 +1130,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SquadsExecuteSubmitRequest self, SseSerializer serializer);
 
   @protected
-  void sse_encode_box_autoadd_squads_info_request(SquadsInfoRequest self, SseSerializer serializer);
+  void sse_encode_box_autoadd_squads_info_request(
+      SquadsInfoRequest self, SseSerializer serializer);
 
   @protected
   void sse_encode_box_autoadd_squads_preview_request(
@@ -1030,7 +1154,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SquadsVoteSubmitRequest self, SseSerializer serializer);
 
   @protected
-  void sse_encode_box_autoadd_totp_verify_request(TotpVerifyRequest self, SseSerializer serializer);
+  void sse_encode_box_autoadd_totp_verify_request(
+      TotpVerifyRequest self, SseSerializer serializer);
 
   @protected
   void sse_encode_box_autoadd_transaction_submit_result(
@@ -1050,31 +1175,40 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       UnlockWalletRequest self, SseSerializer serializer);
 
   @protected
-  void sse_encode_create_wallet_request(CreateWalletRequest self, SseSerializer serializer);
+  void sse_encode_create_wallet_request(
+      CreateWalletRequest self, SseSerializer serializer);
 
   @protected
-  void sse_encode_dapp_sign_preview_request(DappSignPreviewRequest self, SseSerializer serializer);
+  void sse_encode_dapp_sign_preview_request(
+      DappSignPreviewRequest self, SseSerializer serializer);
 
   @protected
-  void sse_encode_dapp_sign_submit_request(DappSignSubmitRequest self, SseSerializer serializer);
+  void sse_encode_dapp_sign_submit_request(
+      DappSignSubmitRequest self, SseSerializer serializer);
 
   @protected
-  void sse_encode_dapp_sign_submit_result(DappSignSubmitResult self, SseSerializer serializer);
+  void sse_encode_dapp_sign_submit_result(
+      DappSignSubmitResult self, SseSerializer serializer);
 
   @protected
-  void sse_encode_evm_asset_query_request(EvmAssetQueryRequest self, SseSerializer serializer);
+  void sse_encode_evm_asset_query_request(
+      EvmAssetQueryRequest self, SseSerializer serializer);
 
   @protected
-  void sse_encode_evm_asset_snapshot(EvmAssetSnapshot self, SseSerializer serializer);
+  void sse_encode_evm_asset_snapshot(
+      EvmAssetSnapshot self, SseSerializer serializer);
 
   @protected
-  void sse_encode_evm_chain_config(EvmChainConfig self, SseSerializer serializer);
+  void sse_encode_evm_chain_config(
+      EvmChainConfig self, SseSerializer serializer);
 
   @protected
-  void sse_encode_evm_create_wallet_request(EvmCreateWalletRequest self, SseSerializer serializer);
+  void sse_encode_evm_create_wallet_request(
+      EvmCreateWalletRequest self, SseSerializer serializer);
 
   @protected
-  void sse_encode_evm_dapp_sign_preview(EvmDappSignPreview self, SseSerializer serializer);
+  void sse_encode_evm_dapp_sign_preview(
+      EvmDappSignPreview self, SseSerializer serializer);
 
   @protected
   void sse_encode_evm_dapp_sign_preview_request(
@@ -1109,7 +1243,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       EvmImportPrivateKeyRequest self, SseSerializer serializer);
 
   @protected
-  void sse_encode_evm_payment_preview(EvmPaymentPreview self, SseSerializer serializer);
+  void sse_encode_evm_payment_preview(
+      EvmPaymentPreview self, SseSerializer serializer);
 
   @protected
   void sse_encode_evm_payment_preview_request(
@@ -1130,7 +1265,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       EvmTransactionHistoryEntry self, SseSerializer serializer);
 
   @protected
-  void sse_encode_evm_transaction_status(EvmTransactionStatus self, SseSerializer serializer);
+  void sse_encode_evm_transaction_status(
+      EvmTransactionStatus self, SseSerializer serializer);
 
   @protected
   void sse_encode_evm_transaction_status_request(
@@ -1141,13 +1277,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       EvmTransactionSubmitResult self, SseSerializer serializer);
 
   @protected
-  void sse_encode_evm_unlock_wallet_request(EvmUnlockWalletRequest self, SseSerializer serializer);
+  void sse_encode_evm_unlock_wallet_request(
+      EvmUnlockWalletRequest self, SseSerializer serializer);
 
   @protected
-  void sse_encode_evm_wallet_keystore(EvmWalletKeystore self, SseSerializer serializer);
+  void sse_encode_evm_wallet_keystore(
+      EvmWalletKeystore self, SseSerializer serializer);
 
   @protected
-  void sse_encode_evm_wallet_summary(EvmWalletSummary self, SseSerializer serializer);
+  void sse_encode_evm_wallet_summary(
+      EvmWalletSummary self, SseSerializer serializer);
 
   @protected
   void sse_encode_export_private_key_request(
@@ -1164,10 +1303,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer);
 
   @protected
-  void sse_encode_import_keystore_request(ImportKeystoreRequest self, SseSerializer serializer);
+  void sse_encode_import_keystore_request(
+      ImportKeystoreRequest self, SseSerializer serializer);
 
   @protected
-  void sse_encode_import_mnemonic_request(ImportMnemonicRequest self, SseSerializer serializer);
+  void sse_encode_import_mnemonic_request(
+      ImportMnemonicRequest self, SseSerializer serializer);
 
   @protected
   void sse_encode_import_private_key_request(
@@ -1177,23 +1318,28 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_list_String(List<String> self, SseSerializer serializer);
 
   @protected
-  void sse_encode_list_asset_summary(List<AssetSummary> self, SseSerializer serializer);
+  void sse_encode_list_asset_summary(
+      List<AssetSummary> self, SseSerializer serializer);
 
   @protected
-  void sse_encode_list_evm_chain_config(List<EvmChainConfig> self, SseSerializer serializer);
+  void sse_encode_list_evm_chain_config(
+      List<EvmChainConfig> self, SseSerializer serializer);
 
   @protected
-  void sse_encode_list_evm_token_asset(List<EvmTokenAsset> self, SseSerializer serializer);
+  void sse_encode_list_evm_token_asset(
+      List<EvmTokenAsset> self, SseSerializer serializer);
 
   @protected
-  void sse_encode_list_evm_token_query(List<EvmTokenQuery> self, SseSerializer serializer);
+  void sse_encode_list_evm_token_query(
+      List<EvmTokenQuery> self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_evm_transaction_history_entry(
       List<EvmTransactionHistoryEntry> self, SseSerializer serializer);
 
   @protected
-  void sse_encode_list_prim_u_8_strict(Uint8List self, SseSerializer serializer);
+  void sse_encode_list_prim_u_8_strict(
+      Uint8List self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_squads_member_summary(
@@ -1208,16 +1354,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       List<TransactionHistoryEntry> self, SseSerializer serializer);
 
   @protected
-  void sse_encode_mobile_bridge_health(MobileBridgeHealth self, SseSerializer serializer);
+  void sse_encode_mobile_bridge_health(
+      MobileBridgeHealth self, SseSerializer serializer);
 
   @protected
-  void sse_encode_mobile_capability_summary(MobileCapabilitySummary self, SseSerializer serializer);
+  void sse_encode_mobile_capability_summary(
+      MobileCapabilitySummary self, SseSerializer serializer);
 
   @protected
   void sse_encode_mobile_error(MobileError self, SseSerializer serializer);
 
   @protected
-  void sse_encode_mobile_error_code(MobileErrorCode self, SseSerializer serializer);
+  void sse_encode_mobile_error_code(
+      MobileErrorCode self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
@@ -1227,7 +1376,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       EvmTransactionSubmitResult? self, SseSerializer serializer);
 
   @protected
-  void sse_encode_opt_box_autoadd_i_64(PlatformInt64? self, SseSerializer serializer);
+  void sse_encode_opt_box_autoadd_i_64(
+      PlatformInt64? self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_box_autoadd_squads_proposal_summary(
@@ -1247,22 +1397,28 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_opt_box_autoadd_u_8(int? self, SseSerializer serializer);
 
   @protected
-  void sse_encode_payment_operation(PaymentOperation self, SseSerializer serializer);
+  void sse_encode_payment_operation(
+      PaymentOperation self, SseSerializer serializer);
 
   @protected
-  void sse_encode_payment_preview_request(PaymentPreviewRequest self, SseSerializer serializer);
+  void sse_encode_payment_preview_request(
+      PaymentPreviewRequest self, SseSerializer serializer);
 
   @protected
-  void sse_encode_payment_submit_request(PaymentSubmitRequest self, SseSerializer serializer);
+  void sse_encode_payment_submit_request(
+      PaymentSubmitRequest self, SseSerializer serializer);
 
   @protected
-  void sse_encode_pump_preview_request(PumpPreviewRequest self, SseSerializer serializer);
+  void sse_encode_pump_preview_request(
+      PumpPreviewRequest self, SseSerializer serializer);
 
   @protected
-  void sse_encode_signing_decision(SigningDecision self, SseSerializer serializer);
+  void sse_encode_signing_decision(
+      SigningDecision self, SseSerializer serializer);
 
   @protected
-  void sse_encode_signing_preview(SigningPreview self, SseSerializer serializer);
+  void sse_encode_signing_preview(
+      SigningPreview self, SseSerializer serializer);
 
   @protected
   void sse_encode_squads_create_submit_request(
@@ -1277,32 +1433,40 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SquadsExecuteSubmitRequest self, SseSerializer serializer);
 
   @protected
-  void sse_encode_squads_info_request(SquadsInfoRequest self, SseSerializer serializer);
+  void sse_encode_squads_info_request(
+      SquadsInfoRequest self, SseSerializer serializer);
 
   @protected
-  void sse_encode_squads_info_response(SquadsInfoResponse self, SseSerializer serializer);
+  void sse_encode_squads_info_response(
+      SquadsInfoResponse self, SseSerializer serializer);
 
   @protected
-  void sse_encode_squads_member_summary(SquadsMemberSummary self, SseSerializer serializer);
+  void sse_encode_squads_member_summary(
+      SquadsMemberSummary self, SseSerializer serializer);
 
   @protected
-  void sse_encode_squads_preview_request(SquadsPreviewRequest self, SseSerializer serializer);
+  void sse_encode_squads_preview_request(
+      SquadsPreviewRequest self, SseSerializer serializer);
 
   @protected
   void sse_encode_squads_proposal_create_submit_result(
       SquadsProposalCreateSubmitResult self, SseSerializer serializer);
 
   @protected
-  void sse_encode_squads_proposal_summary(SquadsProposalSummary self, SseSerializer serializer);
+  void sse_encode_squads_proposal_summary(
+      SquadsProposalSummary self, SseSerializer serializer);
 
   @protected
-  void sse_encode_squads_proposals_request(SquadsProposalsRequest self, SseSerializer serializer);
+  void sse_encode_squads_proposals_request(
+      SquadsProposalsRequest self, SseSerializer serializer);
 
   @protected
-  void sse_encode_squads_proposals_response(SquadsProposalsResponse self, SseSerializer serializer);
+  void sse_encode_squads_proposals_response(
+      SquadsProposalsResponse self, SseSerializer serializer);
 
   @protected
-  void sse_encode_squads_transfer_kind(SquadsTransferKind self, SseSerializer serializer);
+  void sse_encode_squads_transfer_kind(
+      SquadsTransferKind self, SseSerializer serializer);
 
   @protected
   void sse_encode_squads_transfer_proposal_submit_request(
@@ -1316,13 +1480,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_totp_setup(TotpSetup self, SseSerializer serializer);
 
   @protected
-  void sse_encode_totp_verify_request(TotpVerifyRequest self, SseSerializer serializer);
+  void sse_encode_totp_verify_request(
+      TotpVerifyRequest self, SseSerializer serializer);
 
   @protected
-  void sse_encode_transaction_history_entry(TransactionHistoryEntry self, SseSerializer serializer);
+  void sse_encode_transaction_history_entry(
+      TransactionHistoryEntry self, SseSerializer serializer);
 
   @protected
-  void sse_encode_transaction_submit_result(TransactionSubmitResult self, SseSerializer serializer);
+  void sse_encode_transaction_submit_result(
+      TransactionSubmitResult self, SseSerializer serializer);
 
   @protected
   void sse_encode_u_16(int self, SseSerializer serializer);
@@ -1340,13 +1507,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_unit(void self, SseSerializer serializer);
 
   @protected
-  void sse_encode_unlock_wallet_request(UnlockWalletRequest self, SseSerializer serializer);
+  void sse_encode_unlock_wallet_request(
+      UnlockWalletRequest self, SseSerializer serializer);
 
   @protected
-  void sse_encode_unlock_wallet_response(UnlockWalletResponse self, SseSerializer serializer);
+  void sse_encode_unlock_wallet_response(
+      UnlockWalletResponse self, SseSerializer serializer);
 
   @protected
-  void sse_encode_wallet_keystore(WalletKeystore self, SseSerializer serializer);
+  void sse_encode_wallet_keystore(
+      WalletKeystore self, SseSerializer serializer);
 
   @protected
   void sse_encode_wallet_summary(WalletSummary self, SseSerializer serializer);
@@ -1359,8 +1529,10 @@ class RustLibWire implements BaseWire {
       RustLibWire(lib.ffiDynamicLibrary);
 
   /// Holds the symbol lookup function.
-  final ffi.Pointer<T> Function<T extends ffi.NativeType>(String symbolName) _lookup;
+  final ffi.Pointer<T> Function<T extends ffi.NativeType>(String symbolName)
+      _lookup;
 
   /// The symbols are looked up in [dynamicLibrary].
-  RustLibWire(ffi.DynamicLibrary dynamicLibrary) : _lookup = dynamicLibrary.lookup;
+  RustLibWire(ffi.DynamicLibrary dynamicLibrary)
+      : _lookup = dynamicLibrary.lookup;
 }

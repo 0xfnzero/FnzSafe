@@ -1590,6 +1590,7 @@ impl SseDecode for crate::api::DappSignPreviewRequest {
         let mut var_appUrl = <String>::sse_decode(deserializer);
         let mut var_method = <String>::sse_decode(deserializer);
         let mut var_payloadBase64 = <String>::sse_decode(deserializer);
+        let mut var_transactionFormat = <Option<String>>::sse_decode(deserializer);
         return crate::api::DappSignPreviewRequest {
             network: var_network,
             wallet_public_key: var_walletPublicKey,
@@ -1597,6 +1598,7 @@ impl SseDecode for crate::api::DappSignPreviewRequest {
             app_url: var_appUrl,
             method: var_method,
             payload_base64: var_payloadBase64,
+            transaction_format: var_transactionFormat,
         };
     }
 }
@@ -1611,6 +1613,8 @@ impl SseDecode for crate::api::DappSignSubmitRequest {
         let mut var_walletPublicKey = <String>::sse_decode(deserializer);
         let mut var_keystoreJson = <String>::sse_decode(deserializer);
         let mut var_password = <String>::sse_decode(deserializer);
+        let mut var_appName = <String>::sse_decode(deserializer);
+        let mut var_appUrl = <String>::sse_decode(deserializer);
         let mut var_method = <String>::sse_decode(deserializer);
         let mut var_payloadBase64 = <String>::sse_decode(deserializer);
         let mut var_transactionFormat = <Option<String>>::sse_decode(deserializer);
@@ -1622,6 +1626,8 @@ impl SseDecode for crate::api::DappSignSubmitRequest {
             wallet_public_key: var_walletPublicKey,
             keystore_json: var_keystoreJson,
             password: var_password,
+            app_name: var_appName,
+            app_url: var_appUrl,
             method: var_method,
             payload_base64: var_payloadBase64,
             transaction_format: var_transactionFormat,
@@ -1771,6 +1777,9 @@ impl SseDecode for crate::api::EvmDappSignSubmitRequest {
         let mut var_previewId = <String>::sse_decode(deserializer);
         let mut var_approved = <bool>::sse_decode(deserializer);
         let mut var_chain = <crate::api::EvmChainConfig>::sse_decode(deserializer);
+        let mut var_walletAddress = <String>::sse_decode(deserializer);
+        let mut var_appName = <String>::sse_decode(deserializer);
+        let mut var_appUrl = <String>::sse_decode(deserializer);
         let mut var_keystoreJson = <String>::sse_decode(deserializer);
         let mut var_password = <String>::sse_decode(deserializer);
         let mut var_method = <String>::sse_decode(deserializer);
@@ -1779,6 +1788,9 @@ impl SseDecode for crate::api::EvmDappSignSubmitRequest {
             preview_id: var_previewId,
             approved: var_approved,
             chain: var_chain,
+            wallet_address: var_walletAddress,
+            app_name: var_appName,
+            app_url: var_appUrl,
             keystore_json: var_keystoreJson,
             password: var_password,
             method: var_method,
@@ -1936,6 +1948,7 @@ impl SseDecode for crate::api::EvmPaymentSubmitRequest {
         let mut var_previewId = <String>::sse_decode(deserializer);
         let mut var_approved = <bool>::sse_decode(deserializer);
         let mut var_chain = <crate::api::EvmChainConfig>::sse_decode(deserializer);
+        let mut var_walletAddress = <String>::sse_decode(deserializer);
         let mut var_keystoreJson = <String>::sse_decode(deserializer);
         let mut var_password = <String>::sse_decode(deserializer);
         let mut var_recipient = <String>::sse_decode(deserializer);
@@ -1950,6 +1963,7 @@ impl SseDecode for crate::api::EvmPaymentSubmitRequest {
             preview_id: var_previewId,
             approved: var_approved,
             chain: var_chain,
+            wallet_address: var_walletAddress,
             keystore_json: var_keystoreJson,
             password: var_password,
             recipient: var_recipient,
@@ -2483,6 +2497,8 @@ impl SseDecode for crate::api::PaymentPreviewRequest {
         let mut var_recipient = <String>::sse_decode(deserializer);
         let mut var_mint = <Option<String>>::sse_decode(deserializer);
         let mut var_amount = <String>::sse_decode(deserializer);
+        let mut var_operation = <crate::api::PaymentOperation>::sse_decode(deserializer);
+        let mut var_amountBaseUnits = <u64>::sse_decode(deserializer);
         let mut var_memo = <Option<String>>::sse_decode(deserializer);
         return crate::api::PaymentPreviewRequest {
             network: var_network,
@@ -2490,6 +2506,8 @@ impl SseDecode for crate::api::PaymentPreviewRequest {
             recipient: var_recipient,
             mint: var_mint,
             amount: var_amount,
+            operation: var_operation,
+            amount_base_units: var_amountBaseUnits,
             memo: var_memo,
         };
     }
@@ -3246,6 +3264,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::DappSignPreviewRequest {
             self.app_url.into_into_dart().into_dart(),
             self.method.into_into_dart().into_dart(),
             self.payload_base64.into_into_dart().into_dart(),
+            self.transaction_format.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -3272,6 +3291,8 @@ impl flutter_rust_bridge::IntoDart for crate::api::DappSignSubmitRequest {
             self.wallet_public_key.into_into_dart().into_dart(),
             self.keystore_json.into_into_dart().into_dart(),
             self.password.into_into_dart().into_dart(),
+            self.app_name.into_into_dart().into_dart(),
+            self.app_url.into_into_dart().into_dart(),
             self.method.into_into_dart().into_dart(),
             self.payload_base64.into_into_dart().into_dart(),
             self.transaction_format.into_into_dart().into_dart(),
@@ -3461,6 +3482,9 @@ impl flutter_rust_bridge::IntoDart for crate::api::EvmDappSignSubmitRequest {
             self.preview_id.into_into_dart().into_dart(),
             self.approved.into_into_dart().into_dart(),
             self.chain.into_into_dart().into_dart(),
+            self.wallet_address.into_into_dart().into_dart(),
+            self.app_name.into_into_dart().into_dart(),
+            self.app_url.into_into_dart().into_dart(),
             self.keystore_json.into_into_dart().into_dart(),
             self.password.into_into_dart().into_dart(),
             self.method.into_into_dart().into_dart(),
@@ -3677,6 +3701,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::EvmPaymentSubmitRequest {
             self.preview_id.into_into_dart().into_dart(),
             self.approved.into_into_dart().into_dart(),
             self.chain.into_into_dart().into_dart(),
+            self.wallet_address.into_into_dart().into_dart(),
             self.keystore_json.into_into_dart().into_dart(),
             self.password.into_into_dart().into_dart(),
             self.recipient.into_into_dart().into_dart(),
@@ -4114,6 +4139,8 @@ impl flutter_rust_bridge::IntoDart for crate::api::PaymentPreviewRequest {
             self.recipient.into_into_dart().into_dart(),
             self.mint.into_into_dart().into_dart(),
             self.amount.into_into_dart().into_dart(),
+            self.operation.into_into_dart().into_dart(),
+            self.amount_base_units.into_into_dart().into_dart(),
             self.memo.into_into_dart().into_dart(),
         ]
         .into_dart()
@@ -4831,6 +4858,7 @@ impl SseEncode for crate::api::DappSignPreviewRequest {
         <String>::sse_encode(self.app_url, serializer);
         <String>::sse_encode(self.method, serializer);
         <String>::sse_encode(self.payload_base64, serializer);
+        <Option<String>>::sse_encode(self.transaction_format, serializer);
     }
 }
 
@@ -4844,6 +4872,8 @@ impl SseEncode for crate::api::DappSignSubmitRequest {
         <String>::sse_encode(self.wallet_public_key, serializer);
         <String>::sse_encode(self.keystore_json, serializer);
         <String>::sse_encode(self.password, serializer);
+        <String>::sse_encode(self.app_name, serializer);
+        <String>::sse_encode(self.app_url, serializer);
         <String>::sse_encode(self.method, serializer);
         <String>::sse_encode(self.payload_base64, serializer);
         <Option<String>>::sse_encode(self.transaction_format, serializer);
@@ -4940,6 +4970,9 @@ impl SseEncode for crate::api::EvmDappSignSubmitRequest {
         <String>::sse_encode(self.preview_id, serializer);
         <bool>::sse_encode(self.approved, serializer);
         <crate::api::EvmChainConfig>::sse_encode(self.chain, serializer);
+        <String>::sse_encode(self.wallet_address, serializer);
+        <String>::sse_encode(self.app_name, serializer);
+        <String>::sse_encode(self.app_url, serializer);
         <String>::sse_encode(self.keystore_json, serializer);
         <String>::sse_encode(self.password, serializer);
         <String>::sse_encode(self.method, serializer);
@@ -5040,6 +5073,7 @@ impl SseEncode for crate::api::EvmPaymentSubmitRequest {
         <String>::sse_encode(self.preview_id, serializer);
         <bool>::sse_encode(self.approved, serializer);
         <crate::api::EvmChainConfig>::sse_encode(self.chain, serializer);
+        <String>::sse_encode(self.wallet_address, serializer);
         <String>::sse_encode(self.keystore_json, serializer);
         <String>::sse_encode(self.password, serializer);
         <String>::sse_encode(self.recipient, serializer);
@@ -5455,6 +5489,8 @@ impl SseEncode for crate::api::PaymentPreviewRequest {
         <String>::sse_encode(self.recipient, serializer);
         <Option<String>>::sse_encode(self.mint, serializer);
         <String>::sse_encode(self.amount, serializer);
+        <crate::api::PaymentOperation>::sse_encode(self.operation, serializer);
+        <u64>::sse_encode(self.amount_base_units, serializer);
         <Option<String>>::sse_encode(self.memo, serializer);
     }
 }

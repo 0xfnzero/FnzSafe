@@ -161,6 +161,8 @@ class MobileBridge {
     required String walletPublicKey,
     required String recipient,
     required String amount,
+    required PaymentOperation operation,
+    required int amountBaseUnits,
     String? mint,
     String? memo,
   }) {
@@ -169,6 +171,8 @@ class MobileBridge {
       walletPublicKey: walletPublicKey,
       recipient: recipient,
       amount: amount,
+      operation: operation,
+      amountBaseUnits: amountBaseUnits,
       mint: mint,
       memo: memo,
     );
@@ -268,6 +272,7 @@ class MobileBridge {
     String appUrl = 'https://example.invalid',
     String method = 'signTransaction',
     String payloadBase64 = 'AA==',
+    String? transactionFormat,
   }) {
     return _backend.previewDappSign(
       network: network,
@@ -276,6 +281,7 @@ class MobileBridge {
       appUrl: appUrl,
       method: method,
       payloadBase64: payloadBase64,
+      transactionFormat: transactionFormat,
     );
   }
 
@@ -284,6 +290,8 @@ class MobileBridge {
     required bool approved,
     required String keystoreJson,
     required String password,
+    required String appName,
+    required String appUrl,
     required String method,
     required String payloadBase64,
     String? transactionFormat,
@@ -293,6 +301,8 @@ class MobileBridge {
       approved: approved,
       keystoreJson: keystoreJson,
       password: password,
+      appName: appName,
+      appUrl: appUrl,
       method: method,
       payloadBase64: payloadBase64,
       transactionFormat: transactionFormat,
@@ -792,11 +802,13 @@ class DevelopmentMobileBridgeBackend implements MobileBridgeBackend {
     required String walletPublicKey,
     required String recipient,
     required String amount,
+    required PaymentOperation operation,
+    required int amountBaseUnits,
     String? mint,
     String? memo,
   }) async {
     return SigningPreview(
-      id: 'payment-${DateTime.now().millisecondsSinceEpoch}',
+      id: 'solana-payment-dev-${network.name}-${walletPublicKey.hashCode}-${operation.name}-$amountBaseUnits',
       title: mint == null || mint.isEmpty ? 'SOL Payment' : 'SPL Token Payment',
       network: network,
       walletPublicKey: walletPublicKey,
@@ -949,9 +961,10 @@ class DevelopmentMobileBridgeBackend implements MobileBridgeBackend {
     required String appUrl,
     required String method,
     required String payloadBase64,
+    String? transactionFormat,
   }) async {
     return SigningPreview(
-      id: 'dapp-${DateTime.now().millisecondsSinceEpoch}',
+      id: 'solana-dapp-dev-${network.name}-${walletPublicKey.hashCode}-${appName.hashCode}-${appUrl.hashCode}-${method.hashCode}-${payloadBase64.hashCode}-${transactionFormat.hashCode}',
       title: '$appName Request',
       network: network,
       walletPublicKey: walletPublicKey,
@@ -966,6 +979,8 @@ class DevelopmentMobileBridgeBackend implements MobileBridgeBackend {
     required bool approved,
     required String keystoreJson,
     required String password,
+    required String appName,
+    required String appUrl,
     required String method,
     required String payloadBase64,
     String? transactionFormat,

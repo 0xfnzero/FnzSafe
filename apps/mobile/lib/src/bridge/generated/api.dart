@@ -17,64 +17,78 @@ Future<MobileCapabilitySummary> getMobileCapabilities() =>
 Future<WalletKeystore> walletCreate({required CreateWalletRequest req}) =>
     RustLib.instance.api.crateApiWalletCreate(req: req);
 
-Future<WalletKeystore> walletImportKeystore({required ImportKeystoreRequest req}) =>
+Future<WalletKeystore> walletImportKeystore(
+        {required ImportKeystoreRequest req}) =>
     RustLib.instance.api.crateApiWalletImportKeystore(req: req);
 
-Future<WalletKeystore> walletImportPrivateKey({required ImportPrivateKeyRequest req}) =>
+Future<WalletKeystore> walletImportPrivateKey(
+        {required ImportPrivateKeyRequest req}) =>
     RustLib.instance.api.crateApiWalletImportPrivateKey(req: req);
 
-Future<WalletKeystore> walletImportMnemonic({required ImportMnemonicRequest req}) =>
+Future<WalletKeystore> walletImportMnemonic(
+        {required ImportMnemonicRequest req}) =>
     RustLib.instance.api.crateApiWalletImportMnemonic(req: req);
 
 Future<UnlockWalletResponse> walletUnlock({required UnlockWalletRequest req}) =>
     RustLib.instance.api.crateApiWalletUnlock(req: req);
 
-Future<ExportPrivateKeyResponse> walletExportPrivateKey({required ExportPrivateKeyRequest req}) =>
+Future<ExportPrivateKeyResponse> walletExportPrivateKey(
+        {required ExportPrivateKeyRequest req}) =>
     RustLib.instance.api.crateApiWalletExportPrivateKey(req: req);
 
-Future<List<EvmChainConfig>> evmChainsBuiltin() => RustLib.instance.api.crateApiEvmChainsBuiltin();
+Future<List<EvmChainConfig>> evmChainsBuiltin() =>
+    RustLib.instance.api.crateApiEvmChainsBuiltin();
 
-Future<EvmWalletKeystore> evmWalletCreateBridge({required EvmCreateWalletRequest req}) =>
+Future<EvmWalletKeystore> evmWalletCreateBridge(
+        {required EvmCreateWalletRequest req}) =>
     RustLib.instance.api.crateApiEvmWalletCreateBridge(req: req);
 
 Future<EvmWalletKeystore> evmWalletImportPrivateKeyBridge(
         {required EvmImportPrivateKeyRequest req}) =>
     RustLib.instance.api.crateApiEvmWalletImportPrivateKeyBridge(req: req);
 
-Future<EvmWalletKeystore> evmWalletImportMnemonicBridge({required EvmImportMnemonicRequest req}) =>
+Future<EvmWalletKeystore> evmWalletImportMnemonicBridge(
+        {required EvmImportMnemonicRequest req}) =>
     RustLib.instance.api.crateApiEvmWalletImportMnemonicBridge(req: req);
 
-Future<EvmWalletKeystore> evmWalletImportKeystoreBridge({required EvmImportKeystoreRequest req}) =>
+Future<EvmWalletKeystore> evmWalletImportKeystoreBridge(
+        {required EvmImportKeystoreRequest req}) =>
     RustLib.instance.api.crateApiEvmWalletImportKeystoreBridge(req: req);
 
-Future<EvmWalletSummary> evmWalletUnlockBridge({required EvmUnlockWalletRequest req}) =>
+Future<EvmWalletSummary> evmWalletUnlockBridge(
+        {required EvmUnlockWalletRequest req}) =>
     RustLib.instance.api.crateApiEvmWalletUnlockBridge(req: req);
 
 Future<EvmExportPrivateKeyResponse> evmWalletExportPrivateKeyBridge(
         {required EvmExportPrivateKeyRequest req}) =>
     RustLib.instance.api.crateApiEvmWalletExportPrivateKeyBridge(req: req);
 
-Future<SigningDecision> walletDeletePreview({required String walletPublicKey}) =>
-    RustLib.instance.api.crateApiWalletDeletePreview(walletPublicKey: walletPublicKey);
+Future<SigningDecision> walletDeletePreview(
+        {required String walletPublicKey}) =>
+    RustLib.instance.api
+        .crateApiWalletDeletePreview(walletPublicKey: walletPublicKey);
 
 Future<AssetSnapshot> assetsEmptySnapshot(
         {required AppNetwork network, required String walletPublicKey}) =>
-    RustLib.instance.api
-        .crateApiAssetsEmptySnapshot(network: network, walletPublicKey: walletPublicKey);
+    RustLib.instance.api.crateApiAssetsEmptySnapshot(
+        network: network, walletPublicKey: walletPublicKey);
 
 Future<AssetSnapshot> assetsSnapshot({required AssetQueryRequest req}) =>
     RustLib.instance.api.crateApiAssetsSnapshot(req: req);
 
-Future<EvmAssetSnapshot> evmAssetsSnapshot({required EvmAssetQueryRequest req}) =>
+Future<EvmAssetSnapshot> evmAssetsSnapshot(
+        {required EvmAssetQueryRequest req}) =>
     RustLib.instance.api.crateApiEvmAssetsSnapshot(req: req);
 
 Future<SigningPreview> paymentPreview({required PaymentPreviewRequest req}) =>
     RustLib.instance.api.crateApiPaymentPreview(req: req);
 
-Future<TransactionSubmitResult> paymentConfirm({required PaymentSubmitRequest req}) =>
+Future<TransactionSubmitResult> paymentConfirm(
+        {required PaymentSubmitRequest req}) =>
     RustLib.instance.api.crateApiPaymentConfirm(req: req);
 
-Future<EvmPaymentPreview> evmPaymentPreviewBridge({required EvmPaymentPreviewRequest req}) =>
+Future<EvmPaymentPreview> evmPaymentPreviewBridge(
+        {required EvmPaymentPreviewRequest req}) =>
     RustLib.instance.api.crateApiEvmPaymentPreviewBridge(req: req);
 
 Future<EvmTransactionSubmitResult> evmPaymentConfirmBridge(
@@ -100,13 +114,16 @@ Future<SigningPreview> pumpPreview({required PumpPreviewRequest req}) =>
 Future<SigningPreview> dappSignPreview({required DappSignPreviewRequest req}) =>
     RustLib.instance.api.crateApiDappSignPreview(req: req);
 
-Future<DappSignSubmitResult> dappSignConfirm({required DappSignSubmitRequest req}) =>
+Future<DappSignSubmitResult> dappSignConfirm(
+        {required DappSignSubmitRequest req}) =>
     RustLib.instance.api.crateApiDappSignConfirm(req: req);
 
-Future<EvmDappSignPreview> evmDappSignPreviewBridge({required EvmDappSignPreviewRequest req}) =>
+Future<EvmDappSignPreview> evmDappSignPreviewBridge(
+        {required EvmDappSignPreviewRequest req}) =>
     RustLib.instance.api.crateApiEvmDappSignPreviewBridge(req: req);
 
-Future<EvmDappSignSubmitResult> evmDappSignConfirmBridge({required EvmDappSignSubmitRequest req}) =>
+Future<EvmDappSignSubmitResult> evmDappSignConfirmBridge(
+        {required EvmDappSignSubmitRequest req}) =>
     RustLib.instance.api.crateApiEvmDappSignConfirmBridge(req: req);
 
 Future<SigningPreview> squadsPreview({required SquadsPreviewRequest req}) =>
@@ -115,30 +132,38 @@ Future<SigningPreview> squadsPreview({required SquadsPreviewRequest req}) =>
 Future<SquadsInfoResponse> squadsInfoQuery({required SquadsInfoRequest req}) =>
     RustLib.instance.api.crateApiSquadsInfoQuery(req: req);
 
-Future<SquadsProposalsResponse> squadsProposalsQuery({required SquadsProposalsRequest req}) =>
+Future<SquadsProposalsResponse> squadsProposalsQuery(
+        {required SquadsProposalsRequest req}) =>
     RustLib.instance.api.crateApiSquadsProposalsQuery(req: req);
 
-Future<SquadsCreateSubmitResult> squadsCreateConfirm({required SquadsCreateSubmitRequest req}) =>
+Future<SquadsCreateSubmitResult> squadsCreateConfirm(
+        {required SquadsCreateSubmitRequest req}) =>
     RustLib.instance.api.crateApiSquadsCreateConfirm(req: req);
 
 Future<SquadsProposalCreateSubmitResult> squadsTransferProposalConfirm(
         {required SquadsTransferProposalSubmitRequest req}) =>
     RustLib.instance.api.crateApiSquadsTransferProposalConfirm(req: req);
 
-Future<TransactionSubmitResult> squadsApproveConfirm({required SquadsVoteSubmitRequest req}) =>
+Future<TransactionSubmitResult> squadsApproveConfirm(
+        {required SquadsVoteSubmitRequest req}) =>
     RustLib.instance.api.crateApiSquadsApproveConfirm(req: req);
 
-Future<TransactionSubmitResult> squadsRejectConfirm({required SquadsVoteSubmitRequest req}) =>
+Future<TransactionSubmitResult> squadsRejectConfirm(
+        {required SquadsVoteSubmitRequest req}) =>
     RustLib.instance.api.crateApiSquadsRejectConfirm(req: req);
 
-Future<TransactionSubmitResult> squadsExecuteConfirm({required SquadsExecuteSubmitRequest req}) =>
+Future<TransactionSubmitResult> squadsExecuteConfirm(
+        {required SquadsExecuteSubmitRequest req}) =>
     RustLib.instance.api.crateApiSquadsExecuteConfirm(req: req);
 
-Future<void> mobileProgramDeploy() => RustLib.instance.api.crateApiMobileProgramDeploy();
+Future<void> mobileProgramDeploy() =>
+    RustLib.instance.api.crateApiMobileProgramDeploy();
 
-Future<void> mobileProgramUpgrade() => RustLib.instance.api.crateApiMobileProgramUpgrade();
+Future<void> mobileProgramUpgrade() =>
+    RustLib.instance.api.crateApiMobileProgramUpgrade();
 
-Future<void> mobileProgramInvoke() => RustLib.instance.api.crateApiMobileProgramInvoke();
+Future<void> mobileProgramInvoke() =>
+    RustLib.instance.api.crateApiMobileProgramInvoke();
 
 enum AppNetwork {
   mainnet,
@@ -159,7 +184,8 @@ class AssetQueryRequest {
   });
 
   @override
-  int get hashCode => network.hashCode ^ walletPublicKey.hashCode ^ rpcUrl.hashCode;
+  int get hashCode =>
+      network.hashCode ^ walletPublicKey.hashCode ^ rpcUrl.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -269,7 +295,8 @@ class BiometricPolicy {
   });
 
   @override
-  int get hashCode => supported.hashCode ^ configured.hashCode ^ reason.hashCode;
+  int get hashCode =>
+      supported.hashCode ^ configured.hashCode ^ reason.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -309,6 +336,7 @@ class DappSignPreviewRequest {
   final String appUrl;
   final String method;
   final String payloadBase64;
+  final String? transactionFormat;
 
   const DappSignPreviewRequest({
     required this.network,
@@ -317,6 +345,7 @@ class DappSignPreviewRequest {
     required this.appUrl,
     required this.method,
     required this.payloadBase64,
+    this.transactionFormat,
   });
 
   @override
@@ -326,7 +355,8 @@ class DappSignPreviewRequest {
       appName.hashCode ^
       appUrl.hashCode ^
       method.hashCode ^
-      payloadBase64.hashCode;
+      payloadBase64.hashCode ^
+      transactionFormat.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -338,7 +368,8 @@ class DappSignPreviewRequest {
           appName == other.appName &&
           appUrl == other.appUrl &&
           method == other.method &&
-          payloadBase64 == other.payloadBase64;
+          payloadBase64 == other.payloadBase64 &&
+          transactionFormat == other.transactionFormat;
 }
 
 class DappSignSubmitRequest {
@@ -349,6 +380,8 @@ class DappSignSubmitRequest {
   final String walletPublicKey;
   final String keystoreJson;
   final String password;
+  final String appName;
+  final String appUrl;
   final String method;
   final String payloadBase64;
   final String? transactionFormat;
@@ -361,6 +394,8 @@ class DappSignSubmitRequest {
     required this.walletPublicKey,
     required this.keystoreJson,
     required this.password,
+    required this.appName,
+    required this.appUrl,
     required this.method,
     required this.payloadBase64,
     this.transactionFormat,
@@ -375,6 +410,8 @@ class DappSignSubmitRequest {
       walletPublicKey.hashCode ^
       keystoreJson.hashCode ^
       password.hashCode ^
+      appName.hashCode ^
+      appUrl.hashCode ^
       method.hashCode ^
       payloadBase64.hashCode ^
       transactionFormat.hashCode;
@@ -391,6 +428,8 @@ class DappSignSubmitRequest {
           walletPublicKey == other.walletPublicKey &&
           keystoreJson == other.keystoreJson &&
           password == other.password &&
+          appName == other.appName &&
+          appUrl == other.appUrl &&
           method == other.method &&
           payloadBase64 == other.payloadBase64 &&
           transactionFormat == other.transactionFormat;
@@ -656,6 +695,9 @@ class EvmDappSignSubmitRequest {
   final String previewId;
   final bool approved;
   final EvmChainConfig chain;
+  final String walletAddress;
+  final String appName;
+  final String appUrl;
   final String keystoreJson;
   final String password;
   final String method;
@@ -665,6 +707,9 @@ class EvmDappSignSubmitRequest {
     required this.previewId,
     required this.approved,
     required this.chain,
+    required this.walletAddress,
+    required this.appName,
+    required this.appUrl,
     required this.keystoreJson,
     required this.password,
     required this.method,
@@ -676,6 +721,9 @@ class EvmDappSignSubmitRequest {
       previewId.hashCode ^
       approved.hashCode ^
       chain.hashCode ^
+      walletAddress.hashCode ^
+      appName.hashCode ^
+      appUrl.hashCode ^
       keystoreJson.hashCode ^
       password.hashCode ^
       method.hashCode ^
@@ -689,6 +737,9 @@ class EvmDappSignSubmitRequest {
           previewId == other.previewId &&
           approved == other.approved &&
           chain == other.chain &&
+          walletAddress == other.walletAddress &&
+          appName == other.appName &&
+          appUrl == other.appUrl &&
           keystoreJson == other.keystoreJson &&
           password == other.password &&
           method == other.method &&
@@ -710,7 +761,10 @@ class EvmDappSignSubmitResult {
 
   @override
   int get hashCode =>
-      signature.hashCode ^ signedTransaction.hashCode ^ transaction.hashCode ^ status.hashCode;
+      signature.hashCode ^
+      signedTransaction.hashCode ^
+      transaction.hashCode ^
+      status.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -804,7 +858,10 @@ class EvmImportMnemonicRequest {
 
   @override
   int get hashCode =>
-      name.hashCode ^ mnemonic.hashCode ^ derivationPath.hashCode ^ password.hashCode;
+      name.hashCode ^
+      mnemonic.hashCode ^
+      derivationPath.hashCode ^
+      password.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -829,7 +886,8 @@ class EvmImportPrivateKeyRequest {
   });
 
   @override
-  int get hashCode => name.hashCode ^ privateKeyHex.hashCode ^ password.hashCode;
+  int get hashCode =>
+      name.hashCode ^ privateKeyHex.hashCode ^ password.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -959,6 +1017,7 @@ class EvmPaymentSubmitRequest {
   final String previewId;
   final bool approved;
   final EvmChainConfig chain;
+  final String walletAddress;
   final String keystoreJson;
   final String password;
   final String recipient;
@@ -974,6 +1033,7 @@ class EvmPaymentSubmitRequest {
     required this.previewId,
     required this.approved,
     required this.chain,
+    required this.walletAddress,
     required this.keystoreJson,
     required this.password,
     required this.recipient,
@@ -991,6 +1051,7 @@ class EvmPaymentSubmitRequest {
       previewId.hashCode ^
       approved.hashCode ^
       chain.hashCode ^
+      walletAddress.hashCode ^
       keystoreJson.hashCode ^
       password.hashCode ^
       recipient.hashCode ^
@@ -1010,6 +1071,7 @@ class EvmPaymentSubmitRequest {
           previewId == other.previewId &&
           approved == other.approved &&
           chain == other.chain &&
+          walletAddress == other.walletAddress &&
           keystoreJson == other.keystoreJson &&
           password == other.password &&
           recipient == other.recipient &&
@@ -1250,7 +1312,8 @@ class EvmWalletSummary {
   });
 
   @override
-  int get hashCode => id.hashCode ^ name.hashCode ^ address.hashCode ^ derivationPath.hashCode;
+  int get hashCode =>
+      id.hashCode ^ name.hashCode ^ address.hashCode ^ derivationPath.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -1344,7 +1407,10 @@ class ImportMnemonicRequest {
 
   @override
   int get hashCode =>
-      name.hashCode ^ mnemonic.hashCode ^ derivationPath.hashCode ^ password.hashCode;
+      name.hashCode ^
+      mnemonic.hashCode ^
+      derivationPath.hashCode ^
+      password.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -1369,7 +1435,8 @@ class ImportPrivateKeyRequest {
   });
 
   @override
-  int get hashCode => name.hashCode ^ privateKeyBase58.hashCode ^ password.hashCode;
+  int get hashCode =>
+      name.hashCode ^ privateKeyBase58.hashCode ^ password.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -1480,6 +1547,8 @@ class PaymentPreviewRequest {
   final String recipient;
   final String? mint;
   final String amount;
+  final PaymentOperation operation;
+  final BigInt amountBaseUnits;
   final String? memo;
 
   const PaymentPreviewRequest({
@@ -1488,6 +1557,8 @@ class PaymentPreviewRequest {
     required this.recipient,
     this.mint,
     required this.amount,
+    required this.operation,
+    required this.amountBaseUnits,
     this.memo,
   });
 
@@ -1498,6 +1569,8 @@ class PaymentPreviewRequest {
       recipient.hashCode ^
       mint.hashCode ^
       amount.hashCode ^
+      operation.hashCode ^
+      amountBaseUnits.hashCode ^
       memo.hashCode;
 
   @override
@@ -1510,6 +1583,8 @@ class PaymentPreviewRequest {
           recipient == other.recipient &&
           mint == other.mint &&
           amount == other.amount &&
+          operation == other.operation &&
+          amountBaseUnits == other.amountBaseUnits &&
           memo == other.memo;
 }
 
@@ -1841,7 +1916,11 @@ class SquadsInfoRequest {
   });
 
   @override
-  int get hashCode => network.hashCode ^ rpcUrl.hashCode ^ multisig.hashCode ^ proposal.hashCode;
+  int get hashCode =>
+      network.hashCode ^
+      rpcUrl.hashCode ^
+      multisig.hashCode ^
+      proposal.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -2065,7 +2144,8 @@ class SquadsProposalsRequest {
   });
 
   @override
-  int get hashCode => network.hashCode ^ rpcUrl.hashCode ^ multisig.hashCode ^ limit.hashCode;
+  int get hashCode =>
+      network.hashCode ^ rpcUrl.hashCode ^ multisig.hashCode ^ limit.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -2296,7 +2376,8 @@ class TransactionHistoryEntry {
   });
 
   @override
-  int get hashCode => signature.hashCode ^ slot.hashCode ^ blockTime.hashCode ^ status.hashCode;
+  int get hashCode =>
+      signature.hashCode ^ slot.hashCode ^ blockTime.hashCode ^ status.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -2378,7 +2459,9 @@ class UnlockWalletResponse {
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is UnlockWalletResponse && runtimeType == other.runtimeType && wallet == other.wallet;
+      other is UnlockWalletResponse &&
+          runtimeType == other.runtimeType &&
+          wallet == other.wallet;
 }
 
 class WalletKeystore {

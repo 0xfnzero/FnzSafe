@@ -14,7 +14,8 @@ void main() {
     expect(isMobileCapabilityEnabled('evm_payments'), isTrue);
   });
 
-  test('development bridge exposes EIP-1559 EVM payment preview fields', () async {
+  test('development bridge exposes EIP-1559 EVM payment preview fields',
+      () async {
     final bridge = MobileBridge();
     final chain = (await bridge.evmChains()).first;
     final preview = await bridge.previewEvmPayment(
@@ -29,7 +30,8 @@ void main() {
     expect(preview.maxPriorityFeePerGasWei, isNotEmpty);
   });
 
-  test('development bridge can return an EVM dApp signed transaction', () async {
+  test('development bridge can return an EVM dApp signed transaction',
+      () async {
     final chain = (await MobileBridge().evmChains()).first;
     const result = EvmDappSignSubmitResult(
       status: 'signed',

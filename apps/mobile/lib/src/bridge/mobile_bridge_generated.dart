@@ -303,6 +303,8 @@ class GeneratedMobileBridgeBackend implements MobileBridgeBackend {
     required String walletPublicKey,
     required String recipient,
     required String amount,
+    required PaymentOperation operation,
+    required int amountBaseUnits,
     String? mint,
     String? memo,
   }) {
@@ -315,6 +317,8 @@ class GeneratedMobileBridgeBackend implements MobileBridgeBackend {
           recipient: recipient,
           mint: mint,
           amount: amount,
+          operation: _paymentOperationToGenerated(operation),
+          amountBaseUnits: BigInt.from(amountBaseUnits),
           memo: memo,
         ),
       );
@@ -398,6 +402,7 @@ class GeneratedMobileBridgeBackend implements MobileBridgeBackend {
           previewId: preview.previewId,
           approved: approved,
           chain: _evmChainToGenerated(preview.chain),
+          walletAddress: preview.walletAddress,
           keystoreJson: keystoreJson,
           password: password,
           recipient: preview.recipient,
@@ -494,6 +499,7 @@ class GeneratedMobileBridgeBackend implements MobileBridgeBackend {
     required String appUrl,
     required String method,
     required String payloadBase64,
+    String? transactionFormat,
   }) {
     return _guard(() async {
       await _ensureInitialized();
@@ -505,6 +511,7 @@ class GeneratedMobileBridgeBackend implements MobileBridgeBackend {
           appUrl: appUrl,
           method: method,
           payloadBase64: payloadBase64,
+          transactionFormat: transactionFormat,
         ),
       );
       return _signingPreview(preview);
@@ -517,6 +524,8 @@ class GeneratedMobileBridgeBackend implements MobileBridgeBackend {
     required bool approved,
     required String keystoreJson,
     required String password,
+    required String appName,
+    required String appUrl,
     required String method,
     required String payloadBase64,
     String? transactionFormat,
@@ -531,6 +540,8 @@ class GeneratedMobileBridgeBackend implements MobileBridgeBackend {
           walletPublicKey: preview.walletPublicKey,
           keystoreJson: keystoreJson,
           password: password,
+          appName: appName,
+          appUrl: appUrl,
           method: method,
           payloadBase64: payloadBase64,
           transactionFormat: transactionFormat,
@@ -596,6 +607,9 @@ class GeneratedMobileBridgeBackend implements MobileBridgeBackend {
           previewId: preview.previewId,
           approved: approved,
           chain: _evmChainToGenerated(preview.chain),
+          walletAddress: preview.walletAddress,
+          appName: preview.appName,
+          appUrl: preview.appUrl,
           keystoreJson: keystoreJson,
           password: password,
           method: method,

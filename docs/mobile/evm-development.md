@@ -24,6 +24,12 @@ Every signing or submit path must follow the same two-step shape:
    confirmation, sign, or submit.
 3. Reject returns a structured `UserRejected` error and never signs silently.
 
+Confirm/submit DTOs must echo the preview wallet address, and Rust must verify
+that the decrypted keystore address matches it before signing. Solana and EVM
+payment/dApp preview ids are content-bound hashes; submit must reject stale or
+mismatched chain/network, wallet, recipient, amount, gas, method, origin,
+transaction format, or payload fields.
+
 Flutter screens call the `MobileBridge` facade. They should not construct raw
 EVM transactions or ABI calldata directly.
 
@@ -40,6 +46,8 @@ Custom EVM chains are stored on-device as non-sensitive metadata:
 
 If a custom chain has the same chain id as a built-in chain, the custom entry
 overrides the built-in RPC/explorer settings for that device.
+Storage loaders must validate these records and ignore malformed entries rather
+than failing app startup or accepting a dApp-provided bad RPC configuration.
 
 ## Custom ERC-20 Tokens
 
@@ -49,6 +57,8 @@ refresh passes those contracts to Rust, and Rust queries `balanceOf`,
 
 Token metadata is treated as untrusted remote data. UI should display it, but
 signing confirmations must prioritize contract address and chain id.
+Clients should reject invalid token contracts before saving them, and storage
+loaders should ignore entries that are not 20-byte `0x` EVM addresses.
 
 ## Transaction History
 
@@ -69,3 +79,5 @@ Passwords, private keys, mnemonics, and TOTP secrets must not be logged, stored
 in persistent Dart state, or included in user-facing error text. Keystore JSON is
 stored in the app private directory; wallet metadata, active wallet id, custom
 chains, and custom token contracts may be stored in secure storage.
+Storage loaders for wallet metadata, custom chains, and custom tokens should
+ignore malformed records so corrupted local metadata does not block app startup.

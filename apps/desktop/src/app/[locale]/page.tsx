@@ -1469,6 +1469,87 @@ interface DesktopEvmTransactionStatus {
   effective_gas_price_wei?: string | null;
 }
 
+const DESKTOP_EVM_CUSTOM_CHAINS_STORAGE_KEY = "fnzero.desktop.evm.custom_chains.v1";
+const DESKTOP_EVM_TOKENS_STORAGE_PREFIX = "fnzero.desktop.evm.tokens.v1";
+
+function isDesktopEvmAddress(value: string): boolean {
+  return /^0x[0-9a-fA-F]{40}$/.test(value.trim());
+}
+
+function normalizeDesktopEvmChain(value: unknown): DesktopEvmChainConfig | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const chainId = Number(record.chain_id);
+  const name = String(record.name || "").trim();
+  const nativeSymbol = String(record.native_symbol || "").trim();
+  const rpcUrl = String(record.rpc_url || "").trim();
+  const explorerUrl = String(record.explorer_url || "").trim();
+  if (
+    !Number.isSafeInteger(chainId) ||
+    chainId <= 0 ||
+    !name ||
+    !nativeSymbol ||
+    !/^https?:\/\//.test(rpcUrl) ||
+    (explorerUrl && !/^https?:\/\//.test(explorerUrl))
+  ) {
+    return null;
+  }
+  return {
+    chain_id: chainId,
+    name,
+    native_symbol: nativeSymbol,
+    rpc_url: rpcUrl,
+    explorer_url: explorerUrl || null,
+    testnet: Boolean(record.testnet),
+  };
+}
+
+function loadStoredDesktopEvmChains(): DesktopEvmChainConfig[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(DESKTOP_EVM_CUSTOM_CHAINS_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(normalizeDesktopEvmChain).filter((item): item is DesktopEvmChainConfig => Boolean(item));
+  } catch {
+    return [];
+  }
+}
+
+function saveStoredDesktopEvmChains(chains: DesktopEvmChainConfig[]) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(DESKTOP_EVM_CUSTOM_CHAINS_STORAGE_KEY, JSON.stringify(chains));
+}
+
+function desktopEvmTokenStorageKey(chainId: number, walletAddress: string): string {
+  return `${DESKTOP_EVM_TOKENS_STORAGE_PREFIX}.${chainId}.${walletAddress.toLowerCase()}`;
+}
+
+function loadStoredDesktopEvmTokens(chainId: number, walletAddress: string): string[] {
+  if (typeof window === "undefined" || !walletAddress) return [];
+  try {
+    const raw = window.localStorage.getItem(desktopEvmTokenStorageKey(chainId, walletAddress));
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item) => (typeof item === "string" ? item.trim() : ""))
+      .filter((item): item is string => isDesktopEvmAddress(item));
+  } catch {
+    return [];
+  }
+}
+
+function saveStoredDesktopEvmTokens(chainId: number, walletAddress: string, tokens: string[]) {
+  if (typeof window === "undefined" || !walletAddress) return;
+  const normalized = Array.from(new Map(
+    tokens
+      .map((token) => token.trim())
+      .filter(isDesktopEvmAddress)
+      .map((token) => [token.toLowerCase(), token]),
+  ).values());
+  window.localStorage.setItem(desktopEvmTokenStorageKey(chainId, walletAddress), JSON.stringify(normalized));
+}
+
 interface NonceAccountRecord {
   id: string;
   wallet_id?: string;
@@ -2248,6 +2329,7 @@ export default function Home() {
   const walletAssetsInFlightRef = useRef<Map<string, Promise<WalletAssetsState | null>>>(new Map());
   const walletTransactionsInFlightRef = useRef<Map<string, Promise<void>>>(new Map());
   const [evmChains, setEvmChains] = useState<DesktopEvmChainConfig[]>([]);
+  const [evmCustomChainIds, setEvmCustomChainIds] = useState<number[]>([]);
   const [evmChainId, setEvmChainId] = useState("");
   const [evmWallet, setEvmWallet] = useState<DesktopEvmWalletSummary | null>(null);
   const [evmKeystoreJson, setEvmKeystoreJson] = useState("");
@@ -2292,6 +2374,8 @@ export default function Home() {
     normalizeWalletAuth((authMethod[formId] ?? "keystore") as WalletAuthTab);
   const activeEvmChain =
     evmChains.find((chain) => String(chain.chain_id) === evmChainId) || evmChains[0];
+  const activeEvmChainIsCustom =
+    Boolean(activeEvmChain && evmCustomChainIds.includes(activeEvmChain.chain_id));
 
   const loadEvmChains = useCallback(async () => {
     const response = await apiFetch("evm/chains", {});
@@ -2299,13 +2383,38 @@ export default function Home() {
     if (!response.ok || !Array.isArray(data)) {
       throw new Error(data?.error || "Failed to load EVM chains");
     }
-    setEvmChains(data as DesktopEvmChainConfig[]);
-    setEvmChainId((previous) => previous || String((data[0] as DesktopEvmChainConfig | undefined)?.chain_id || ""));
+    const merged = new Map<number, DesktopEvmChainConfig>();
+    for (const chain of data as DesktopEvmChainConfig[]) {
+      merged.set(chain.chain_id, chain);
+    }
+    const customChains = loadStoredDesktopEvmChains();
+    for (const chain of customChains) {
+      merged.set(chain.chain_id, chain);
+    }
+    const chains = Array.from(merged.values()).sort((a, b) => {
+      if (a.testnet !== b.testnet) return a.testnet ? 1 : -1;
+      return a.chain_id - b.chain_id;
+    });
+    setEvmChains(chains);
+    setEvmCustomChainIds(customChains.map((chain) => chain.chain_id));
+    setEvmChainId((previous) =>
+      previous && chains.some((chain) => String(chain.chain_id) === previous)
+        ? previous
+        : String(chains[0]?.chain_id || ""),
+    );
   }, []);
 
   useEffect(() => {
     void loadEvmChains().catch((error) => setEvmError(errorMessage(error, "Failed to load EVM chains")));
   }, [loadEvmChains]);
+
+  useEffect(() => {
+    if (!activeEvmChain || !evmWallet) {
+      setEvmTokenContracts([]);
+      return;
+    }
+    setEvmTokenContracts(loadStoredDesktopEvmTokens(activeEvmChain.chain_id, evmWallet.address));
+  }, [activeEvmChain, evmWallet]);
 
   const withEvmBusy = useCallback(async (run: () => Promise<void>) => {
     setEvmBusy(true);
@@ -2335,6 +2444,7 @@ export default function Home() {
     setEvmKeystoreJson(created.keystore_json);
     setEvmPreview(null);
     setEvmSubmitResult(null);
+    setEvmPassword("");
     toast.success("EVM wallet created");
   });
 
@@ -2356,6 +2466,7 @@ export default function Home() {
     const imported = data as DesktopEvmWalletKeystore;
     setEvmWallet(imported.wallet);
     setEvmKeystoreJson(imported.keystore_json);
+    setEvmPassword("");
     setEvmPrivateKey("");
     setEvmPreview(null);
     setEvmSubmitResult(null);
@@ -2373,31 +2484,79 @@ export default function Home() {
       setEvmError("RPC URL must start with http:// or https://");
       return;
     }
+    const explorerUrl = evmNewChain.explorerUrl.trim();
+    if (explorerUrl && !/^https?:\/\//.test(explorerUrl)) {
+      setEvmError("Explorer URL must start with http:// or https://");
+      return;
+    }
     const nextChain: DesktopEvmChainConfig = {
       chain_id: chainId,
       name: evmNewChain.name.trim(),
       native_symbol: evmNewChain.nativeSymbol.trim(),
       rpc_url: rpcUrl,
-      explorer_url: evmNewChain.explorerUrl.trim() || null,
+      explorer_url: explorerUrl || null,
       testnet: evmNewChain.testnet,
     };
+    const storedChains = new Map(loadStoredDesktopEvmChains().map((chain) => [chain.chain_id, chain]));
+    storedChains.set(nextChain.chain_id, nextChain);
+    const nextStoredChains = Array.from(storedChains.values()).sort((a, b) => a.chain_id - b.chain_id);
+    saveStoredDesktopEvmChains(nextStoredChains);
+    setEvmCustomChainIds(nextStoredChains.map((chain) => chain.chain_id));
     setEvmChains((previous) => {
       const merged = new Map(previous.map((chain) => [chain.chain_id, chain]));
       merged.set(nextChain.chain_id, nextChain);
-      return Array.from(merged.values()).sort((a, b) => a.chain_id - b.chain_id);
+      return Array.from(merged.values()).sort((a, b) => {
+        if (a.testnet !== b.testnet) return a.testnet ? 1 : -1;
+        return a.chain_id - b.chain_id;
+      });
     });
     setEvmChainId(String(nextChain.chain_id));
     setEvmNewChain({ chainId: "", name: "", nativeSymbol: "", rpcUrl: "", explorerUrl: "", testnet: true });
     setEvmAssets(null);
   };
 
+  const removeDesktopEvmChain = () => {
+    if (!activeEvmChain || !activeEvmChainIsCustom) return;
+    const customChains = loadStoredDesktopEvmChains().filter((chain) => chain.chain_id !== activeEvmChain.chain_id);
+    saveStoredDesktopEvmChains(customChains);
+    setEvmCustomChainIds(customChains.map((chain) => chain.chain_id));
+    void loadEvmChains().then(() => {
+      setEvmAssets(null);
+      setEvmPreview(null);
+      setEvmSubmitResult(null);
+      setEvmTransactionStatus(null);
+    });
+  };
+
   const addDesktopEvmToken = () => {
     const contract = evmNewTokenContract.trim();
     if (!contract) return;
-    setEvmTokenContracts((previous) =>
-      Array.from(new Map([...previous, contract].map((item) => [item.toLowerCase(), item])).values()),
-    );
+    if (!activeEvmChain || !evmWallet) {
+      setEvmError("Select an EVM chain and wallet before adding a token");
+      return;
+    }
+    const next = Array.from(new Map([...evmTokenContracts, contract].map((item) => [item.toLowerCase(), item])).values());
+    if (!isDesktopEvmAddress(contract)) {
+      setEvmError("ERC-20 contract must be a 20-byte 0x EVM address");
+      return;
+    }
+    setEvmTokenContracts(next);
+    saveStoredDesktopEvmTokens(activeEvmChain.chain_id, evmWallet.address, next);
     setEvmNewTokenContract("");
+  };
+
+  const removeDesktopEvmToken = (contract: string) => {
+    if (!activeEvmChain || !evmWallet) return;
+    const next = evmTokenContracts.filter((item) => item.toLowerCase() !== contract.toLowerCase());
+    setEvmTokenContracts(next);
+    saveStoredDesktopEvmTokens(activeEvmChain.chain_id, evmWallet.address, next);
+    setEvmAssets((previous) => previous
+      ? {
+          ...previous,
+          tokens: previous.tokens.filter((item) => item.contract_address.toLowerCase() !== contract.toLowerCase()),
+        }
+      : previous,
+    );
   };
 
   const refreshEvmAssets = () => withEvmBusy(async () => {
@@ -2438,15 +2597,24 @@ export default function Home() {
 
   const submitEvmPayment = (approved: boolean) => withEvmBusy(async () => {
     if (!evmPreview) throw new Error("Create a payment preview first");
+    if (!approved) {
+      setEvmPreview(null);
+      setEvmSubmitResult(null);
+      setEvmTransactionStatus(null);
+      setEvmPassword("");
+      toast.success("EVM transaction rejected");
+      return;
+    }
     const response = await apiFetch("evm/payment/submit", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         preview_id: evmPreview.preview_id,
-        approved,
+        approved: true,
         chain: evmPreview.chain,
-        keystore_json: approved ? evmKeystoreJson : "",
-        password: approved ? evmPassword : "",
+        wallet_address: evmPreview.wallet_address,
+        keystore_json: evmKeystoreJson,
+        password: evmPassword,
         recipient: evmPreview.recipient,
         amount_wei_or_units: evmPreview.amount_wei_or_units,
         token_contract: evmPreview.token_contract,
@@ -2458,18 +2626,19 @@ export default function Home() {
       }),
     });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error || (approved ? "Failed to submit EVM payment" : "User rejected"));
+    if (!response.ok) throw new Error(data.error || "Failed to submit EVM payment");
     setEvmSubmitResult(data as DesktopEvmTransactionSubmitResult);
-    toast.success(approved ? "EVM transaction submitted" : "EVM transaction rejected");
+    setEvmPassword("");
+    toast.success("EVM transaction submitted");
   });
 
   const refreshEvmTransactionStatus = () => withEvmBusy(async () => {
-    if (!activeEvmChain || !evmSubmitResult) throw new Error("Submit a transaction first");
+    if (!evmSubmitResult) throw new Error("Submit a transaction first");
     const response = await apiFetch("evm/transaction/status", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        chain: activeEvmChain,
+        chain: evmSubmitResult.chain,
         transaction_hash: evmSubmitResult.transaction_hash,
       }),
     });
@@ -13750,9 +13919,27 @@ export default function Home() {
             <input value={evmNewChain.name} onChange={(event) => setEvmNewChain((prev) => ({ ...prev, name: event.target.value }))} placeholder="Name" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
             <input value={evmNewChain.nativeSymbol} onChange={(event) => setEvmNewChain((prev) => ({ ...prev, nativeSymbol: event.target.value }))} placeholder="Symbol" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
             <input value={evmNewChain.rpcUrl} onChange={(event) => setEvmNewChain((prev) => ({ ...prev, rpcUrl: event.target.value }))} placeholder="RPC URL" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none lg:col-span-2" />
+            <input value={evmNewChain.explorerUrl} onChange={(event) => setEvmNewChain((prev) => ({ ...prev, explorerUrl: event.target.value }))} placeholder="Explorer URL optional" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none lg:col-span-2" />
+            <label className="flex h-10 items-center gap-2 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-gray-200">
+              <input
+                type="checkbox"
+                checked={evmNewChain.testnet}
+                onChange={(event) => setEvmNewChain((prev) => ({ ...prev, testnet: event.target.checked }))}
+              />
+              Testnet
+            </label>
             <button type="button" onClick={addDesktopEvmChain} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-500 px-3 text-sm font-semibold text-black hover:bg-emerald-400">
               <Plus className="h-4 w-4" />
               Add
+            </button>
+            <button
+              type="button"
+              onClick={removeDesktopEvmChain}
+              disabled={!activeEvmChainIsCustom}
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-100 hover:bg-white/10 disabled:opacity-50"
+            >
+              <Trash2 className="h-4 w-4" />
+              Delete custom
             </button>
           </div>
         </section>
@@ -13794,6 +13981,23 @@ export default function Home() {
                 Add token
               </button>
             </div>
+            {evmTokenContracts.length > 0 && (
+              <div className="space-y-2">
+                {evmTokenContracts.map((contract) => (
+                  <div key={contract} className="flex items-center gap-2 rounded-lg border border-white/10 bg-black/20 p-2 text-xs text-gray-400">
+                    <span className="min-w-0 flex-1 break-all">{contract}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeDesktopEvmToken(contract)}
+                      className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/10 text-gray-300 hover:bg-white/10 hover:text-white"
+                      aria-label="Remove token"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-sm text-gray-300">
               <p>{activeEvmChain?.native_symbol || "Native"} balance: {evmAssets?.native_balance_wei ?? "-"} wei</p>
               <p className="mt-1 text-xs text-gray-500">History: {evmAssets?.history_status ?? "not loaded"} {evmAssets?.history_message ? `- ${evmAssets.history_message}` : ""}</p>

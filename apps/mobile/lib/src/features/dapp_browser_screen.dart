@@ -239,9 +239,21 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
     if (!entry) return;
     pending.delete(id);
     if (ok) {
+      const previousConnected = connected;
+      const previousPublicKey = publicKeyValue;
+      const previousChainId = ethereumChainId;
       if (payload && payload.connected !== undefined) connected = !!payload.connected;
       if (payload && payload.publicKey !== undefined) publicKeyValue = payload.publicKey;
       if (payload && payload.chainId !== undefined) ethereumChainId = payload.chainId;
+      if (previousChainId !== ethereumChainId) emit('chainChanged', ethereumChainId);
+      if (previousPublicKey !== publicKeyValue) emit('accountsChanged', publicKeyValue ? [publicKeyValue] : []);
+      if (previousConnected !== connected) {
+        if (connected) {
+          emit('connect', { chainId: ethereumChainId });
+        } else {
+          emit('disconnect', { code: 4900, message: 'Disconnected' });
+        }
+      }
       entry.resolve(normalizeSuccess(entry, payload || {}));
     } else {
       const error = new Error(payload && payload.message ? payload.message : 'FnzeroSafe request rejected');
@@ -261,7 +273,11 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
     }
     if (nextConnected !== undefined && connected !== !!nextConnected) {
       connected = !!nextConnected;
-      emit('connect', { chainId: ethereumChainId });
+      if (connected) {
+        emit('connect', { chainId: ethereumChainId });
+      } else {
+        emit('disconnect', { code: 4900, message: 'Disconnected' });
+      }
     }
   };
   if (${isEvm ? 'true' : 'false'}) {
@@ -337,23 +353,31 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
       final signingPayloadBase64 =
           _signingPayloadBase64(method, payload, message);
       final transactionFormat = _transactionFormat(method);
+      final appName = Uri.tryParse(_urlController.text)?.host ?? 'dApp';
+      final appUrl = _urlController.text;
       final preview = await ref.read(mobileBridgeProvider).previewDappSign(
             network: ref.read(activeNetworkProvider),
             walletPublicKey: wallet.publicKey,
-            appName: Uri.tryParse(_urlController.text)?.host ?? 'dApp',
-            appUrl: _urlController.text,
+            appName: appName,
+            appUrl: appUrl,
             method: method,
             payloadBase64: signingPayloadBase64,
+            transactionFormat: transactionFormat,
           );
       ref.read(signingPreviewProvider.notifier).state = preview;
       ref.read(paymentSigningDraftProvider.notifier).state = null;
+      ref.read(evmPaymentSigningDraftProvider.notifier).state = null;
       ref.read(dappSigningDraftProvider.notifier).state = DappSigningDraft(
         preview: preview,
+        appName: appName,
+        appUrl: appUrl,
         method: method,
         payloadBase64: signingPayloadBase64,
         requestId: requestId,
         transactionFormat: transactionFormat,
       );
+      ref.read(evmDappSigningDraftProvider.notifier).state = null;
+      ref.read(squadsSigningDraftProvider.notifier).state = null;
       if (mounted) await context.push('/confirm');
     } catch (error) {
       if (!mounted) return;
@@ -389,6 +413,32 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
           'accounts': [wallet.publicKey],
           'connected': true,
           'publicKey': wallet.publicKey,
+        },
+      );
+      return;
+    }
+    if (method == 'connect') {
+      await _deliverProviderResponse(
+        requestId,
+        true,
+        {
+          'accounts': [wallet.publicKey],
+          'connected': true,
+          'publicKey': wallet.publicKey,
+          'chainId': _hexChainId(chain.chainId),
+        },
+      );
+      return;
+    }
+    if (method == 'disconnect') {
+      await _deliverProviderResponse(
+        requestId,
+        true,
+        {
+          'accounts': const [],
+          'connected': false,
+          'publicKey': null,
+          'chainId': _hexChainId(chain.chainId),
         },
       );
       return;
@@ -474,7 +524,10 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
       payloadJson: jsonEncode(payload),
       requestId: requestId,
     );
+    ref.read(paymentSigningDraftProvider.notifier).state = null;
+    ref.read(evmPaymentSigningDraftProvider.notifier).state = null;
     ref.read(dappSigningDraftProvider.notifier).state = null;
+    ref.read(squadsSigningDraftProvider.notifier).state = null;
     if (mounted) await context.push('/confirm');
   }
 

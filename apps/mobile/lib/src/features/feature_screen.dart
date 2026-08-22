@@ -86,6 +86,10 @@ class FeatureScreen extends ConsumerWidget {
       if (result is SigningPreview) {
         ref.read(signingPreviewProvider.notifier).state = result;
         ref.read(paymentSigningDraftProvider.notifier).state = null;
+        ref.read(evmPaymentSigningDraftProvider.notifier).state = null;
+        ref.read(dappSigningDraftProvider.notifier).state = null;
+        ref.read(evmDappSigningDraftProvider.notifier).state = null;
+        ref.read(squadsSigningDraftProvider.notifier).state = null;
         if (context.mounted) context.go('/confirm');
         return;
       }

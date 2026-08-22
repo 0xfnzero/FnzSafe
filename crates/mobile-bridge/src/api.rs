@@ -275,6 +275,8 @@ pub struct PaymentPreviewRequest {
     pub recipient: String,
     pub mint: Option<String>,
     pub amount: String,
+    pub operation: PaymentOperation,
+    pub amount_base_units: u64,
     pub memo: Option<String>,
 }
 
@@ -347,6 +349,7 @@ pub struct EvmPaymentSubmitRequest {
     pub preview_id: String,
     pub approved: bool,
     pub chain: EvmChainConfig,
+    pub wallet_address: String,
     pub keystore_json: String,
     pub password: String,
     pub recipient: String,
@@ -411,6 +414,7 @@ pub struct DappSignPreviewRequest {
     pub app_url: String,
     pub method: String,
     pub payload_base64: String,
+    pub transaction_format: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -422,6 +426,8 @@ pub struct DappSignSubmitRequest {
     pub wallet_public_key: String,
     pub keystore_json: String,
     pub password: String,
+    pub app_name: String,
+    pub app_url: String,
     pub method: String,
     pub payload_base64: String,
     pub transaction_format: Option<String>,
@@ -464,6 +470,9 @@ pub struct EvmDappSignSubmitRequest {
     pub preview_id: String,
     pub approved: bool,
     pub chain: EvmChainConfig,
+    pub wallet_address: String,
+    pub app_name: String,
+    pub app_url: String,
     pub keystore_json: String,
     pub password: String,
     pub method: String,
@@ -1042,6 +1051,8 @@ impl From<PaymentPreviewRequest> for svc::PaymentPreviewRequest {
             recipient: value.recipient,
             mint: value.mint,
             amount: value.amount,
+            operation: value.operation.into(),
+            amount_base_units: value.amount_base_units,
             memo: value.memo,
         }
     }
@@ -1088,6 +1099,7 @@ impl From<EvmPaymentSubmitRequest> for svc::EvmPaymentSubmitRequest {
             preview_id: value.preview_id,
             approved: value.approved,
             chain: value.chain.into(),
+            wallet_address: value.wallet_address,
             keystore_json: value.keystore_json,
             password: value.password,
             recipient: value.recipient,
@@ -1214,6 +1226,7 @@ impl From<DappSignPreviewRequest> for svc::DappSignPreviewRequest {
             app_url: value.app_url,
             method: value.method,
             payload_base64: value.payload_base64,
+            transaction_format: value.transaction_format,
         }
     }
 }
@@ -1228,6 +1241,8 @@ impl From<DappSignSubmitRequest> for svc::DappSignSubmitRequest {
             wallet_public_key: value.wallet_public_key,
             keystore_json: value.keystore_json,
             password: value.password,
+            app_name: value.app_name,
+            app_url: value.app_url,
             method: value.method,
             payload_base64: value.payload_base64,
             transaction_format: value.transaction_format,
@@ -1269,6 +1284,9 @@ impl From<EvmDappSignSubmitRequest> for svc::EvmDappSignSubmitRequest {
             preview_id: value.preview_id,
             approved: value.approved,
             chain: value.chain.into(),
+            wallet_address: value.wallet_address,
+            app_name: value.app_name,
+            app_url: value.app_url,
             keystore_json: value.keystore_json,
             password: value.password,
             method: value.method,
