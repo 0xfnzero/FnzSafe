@@ -39,7 +39,7 @@ const DAPP_REQUEST_TTL_MS: u64 = 3 * 60 * 1000;
 const DAPP_WALLET_NAME: &str = "FnzSafe";
 const DESKTOP_API_BIN_NAME: &str = "fnzero-safe-desktop-api";
 #[cfg(target_os = "macos")]
-const BIOMETRIC_WALLET_PASSWORD_SERVICE: &str = "dev.fnzero-safe.wallet.password.v5";
+const BIOMETRIC_WALLET_PASSWORD_SERVICE: &str = "dev.fnzero-safe.wallet.password.v6";
 
 #[derive(Clone)]
 struct AllowedDapp {
@@ -204,7 +204,6 @@ struct BiometricWalletStatus {
 #[derive(Clone)]
 struct BiometricWalletAccounts {
     primary: String,
-    fallbacks: Vec<String>,
 }
 
 fn biometric_wallet_accounts(
@@ -221,7 +220,6 @@ fn biometric_wallet_accounts(
     }
     Ok(BiometricWalletAccounts {
         primary: format!("solana:{public_key}"),
-        fallbacks: vec![format!("{wallet_id}:{public_key}"), public_key.to_string()],
     })
 }
 
@@ -311,37 +309,13 @@ fn biometric_touch_id_authenticate() -> Result<(), String> {
 mod biometric_wallet_keychain {
     use super::{biometric_error_message, BIOMETRIC_WALLET_PASSWORD_SERVICE};
     use security_framework::{
-        access_control::{ProtectionMode, SecAccessControl},
         item::{ItemClass, ItemSearchOptions},
         passwords::{
-            delete_generic_password, generic_password, set_generic_password_options,
-            PasswordOptions,
+            delete_generic_password, generic_password, set_generic_password, PasswordOptions,
         },
     };
 
     const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
-    const FALLBACK_SERVICES: &[&str] = &[
-        "dev.fnzero-safe.wallet.password.v4",
-        "dev.fnzero-safe.wallet.password.v3",
-        "dev.sol-safekey.fnzero-wallet.password.v1",
-        "dev.sol-safekey.fnzero-wallet.password.v2",
-        "dev.sol-safekey.fnzero-wallet.password.v3",
-    ];
-
-    fn fallback_services() -> impl Iterator<Item = &'static str> {
-        FALLBACK_SERVICES.iter().copied()
-    }
-
-    fn candidate_services() -> impl Iterator<Item = &'static str> {
-        std::iter::once(BIOMETRIC_WALLET_PASSWORD_SERVICE).chain(FALLBACK_SERVICES.iter().copied())
-    }
-
-    fn account_candidates<'a>(
-        primary_account: &'a str,
-        fallback_accounts: &'a [String],
-    ) -> impl Iterator<Item = &'a str> {
-        std::iter::once(primary_account).chain(fallback_accounts.iter().map(String::as_str))
-    }
 
     fn exists(service: &str, account: &str) -> Result<bool, String> {
         let mut query = ItemSearchOptions::new();
@@ -357,108 +331,40 @@ mod biometric_wallet_keychain {
         }
     }
 
-    pub fn configured(primary_account: &str, fallback_accounts: &[String]) -> Result<bool, String> {
-        for service in candidate_services() {
-            for account in account_candidates(primary_account, fallback_accounts) {
-                if exists(service, account)? {
-                    return Ok(true);
-                }
-            }
-        }
-        Ok(false)
+    pub fn configured(primary_account: &str) -> Result<bool, String> {
+        exists(BIOMETRIC_WALLET_PASSWORD_SERVICE, primary_account)
     }
 
-    fn store_primary(primary_account: &str, password: &str) -> Result<(), String> {
+    pub fn store(primary_account: &str, password: &str) -> Result<(), String> {
         let _ = delete_generic_password(BIOMETRIC_WALLET_PASSWORD_SERVICE, primary_account);
-        let access_control = SecAccessControl::create_with_protection(
-            Some(ProtectionMode::AccessibleWhenUnlockedThisDeviceOnly),
-            0,
-        )
-        .map_err(biometric_error_message)?;
-        let mut options = PasswordOptions::new_generic_password(
+        set_generic_password(
             BIOMETRIC_WALLET_PASSWORD_SERVICE,
             primary_account,
-        );
-        options.set_access_control(access_control);
-        set_generic_password_options(password.as_bytes(), options).map_err(biometric_error_message)
-    }
-
-    pub fn store(
-        primary_account: &str,
-        fallback_accounts: &[String],
-        password: &str,
-    ) -> Result<(), String> {
-        store_primary(primary_account, password)?;
-        delete_fallback_best_effort(primary_account, fallback_accounts);
-        if !configured(primary_account, &[])? {
+            password.as_bytes(),
+        )
+        .map_err(biometric_error_message)?;
+        if !configured(primary_account)? {
             return Err("Touch ID 凭据保存后无法在 Keychain 中确认".to_string());
         }
         Ok(())
     }
 
-    fn delete_fallback_best_effort(primary_account: &str, fallback_accounts: &[String]) {
-        for account in fallback_accounts {
-            let _ = delete_generic_password(BIOMETRIC_WALLET_PASSWORD_SERVICE, account);
-        }
-        for service in fallback_services() {
-            let _ = delete_generic_password(service, primary_account);
-            for account in fallback_accounts {
-                let _ = delete_generic_password(service, account);
-            }
-        }
+    pub fn load(primary_account: &str) -> Result<String, String> {
+        let options = PasswordOptions::new_generic_password(
+            BIOMETRIC_WALLET_PASSWORD_SERVICE,
+            primary_account,
+        );
+        let password = generic_password(options).map_err(biometric_error_message)?;
+        String::from_utf8(password)
+            .map_err(|_| "Keychain 凭据不是有效的 UTF-8 钱包密码".to_string())
     }
 
-    pub fn load(primary_account: &str, fallback_accounts: &[String]) -> Result<String, String> {
-        let mut last_error = None;
-        for service in candidate_services() {
-            for account in account_candidates(primary_account, fallback_accounts) {
-                let options = PasswordOptions::new_generic_password(service, account);
-                match generic_password(options) {
-                    Ok(password) => {
-                        let password = String::from_utf8(password)
-                            .map_err(|_| "Keychain 凭据不是有效的 UTF-8 钱包密码".to_string())?;
-                        if service != BIOMETRIC_WALLET_PASSWORD_SERVICE
-                            || account != primary_account
-                        {
-                            let _ = store(primary_account, fallback_accounts, &password);
-                        }
-                        return Ok(password);
-                    }
-                    Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => {}
-                    Err(error) if error.code() == -25293 => {
-                        let _ = delete_generic_password(service, account);
-                        last_error = Some(error);
-                    }
-                    Err(error) => {
-                        last_error = Some(error);
-                        break;
-                    }
-                }
-            }
-            if last_error.is_some()
-                && service == BIOMETRIC_WALLET_PASSWORD_SERVICE
-                && exists(BIOMETRIC_WALLET_PASSWORD_SERVICE, primary_account).unwrap_or(false)
-            {
-                break;
-            }
+    pub fn delete(primary_account: &str) -> Result<(), String> {
+        match delete_generic_password(BIOMETRIC_WALLET_PASSWORD_SERVICE, primary_account) {
+            Ok(()) => Ok(()),
+            Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(()),
+            Err(error) => Err(biometric_error_message(error)),
         }
-        match last_error {
-            Some(error) => Err(biometric_error_message(error)),
-            None => Err("还没有为这个钱包启用 Touch ID".to_string()),
-        }
-    }
-
-    pub fn delete(primary_account: &str, fallback_accounts: &[String]) -> Result<(), String> {
-        for service in candidate_services() {
-            for account in account_candidates(primary_account, fallback_accounts) {
-                match delete_generic_password(service, account) {
-                    Ok(()) => {}
-                    Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => {}
-                    Err(error) => return Err(biometric_error_message(error)),
-                }
-            }
-        }
-        Ok(())
     }
 }
 
@@ -468,8 +374,7 @@ fn biometric_wallet_status(req: BiometricWalletRequest) -> Result<BiometricWalle
     #[cfg(target_os = "macos")]
     {
         let supported = biometric_touch_id_available();
-        let configured =
-            biometric_wallet_keychain::configured(&accounts.primary, &accounts.fallbacks)?;
+        let configured = biometric_wallet_keychain::configured(&accounts.primary)?;
         Ok(BiometricWalletStatus {
             supported: supported.is_ok(),
             configured: configured && supported.is_ok(),
@@ -495,7 +400,7 @@ fn biometric_wallet_store_password(req: BiometricWalletStoreRequest) -> Result<(
     }
     #[cfg(target_os = "macos")]
     {
-        biometric_wallet_keychain::store(&accounts.primary, &accounts.fallbacks, &req.password)
+        biometric_wallet_keychain::store(&accounts.primary, &req.password)
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -510,7 +415,7 @@ fn biometric_wallet_get_password(req: BiometricWalletRequest) -> Result<String, 
     #[cfg(target_os = "macos")]
     {
         biometric_touch_id_authenticate()?;
-        biometric_wallet_keychain::load(&accounts.primary, &accounts.fallbacks)
+        biometric_wallet_keychain::load(&accounts.primary)
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -524,7 +429,7 @@ fn biometric_wallet_delete_password(req: BiometricWalletRequest) -> Result<(), S
     let accounts = biometric_wallet_accounts(&req.wallet_id, &req.public_key)?;
     #[cfg(target_os = "macos")]
     {
-        biometric_wallet_keychain::delete(&accounts.primary, &accounts.fallbacks)
+        biometric_wallet_keychain::delete(&accounts.primary)
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -2931,10 +2836,6 @@ mod tests {
             biometric_wallet_accounts("0123456789abcdef0123456789abcdef", public_key).unwrap();
 
         assert_eq!(accounts.primary, format!("solana:{public_key}"));
-        assert!(accounts
-            .fallbacks
-            .contains(&format!("0123456789abcdef0123456789abcdef:{public_key}")));
-        assert!(accounts.fallbacks.contains(&public_key.to_string()));
     }
 
     #[test]
