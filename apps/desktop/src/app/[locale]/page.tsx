@@ -2431,6 +2431,7 @@ export default function Home() {
     explorerUrl: "",
     testnet: true,
   });
+  const [evmCustomChainEditorOpen, setEvmCustomChainEditorOpen] = useState(false);
   const nonceAccountsInFlightRef = useRef<Map<string, Promise<void>>>(new Map());
   const pendingTokenBalanceAdjustmentRef = useRef<PendingTokenBalanceAdjustment | undefined>(undefined);
   const lastAssetRefreshRef = useRef<Map<string, number>>(new Map());
@@ -2608,6 +2609,7 @@ export default function Home() {
     });
     selectEvmChain(String(nextChain.chain_id));
     setEvmNewChain({ chainId: "", name: "", nativeSymbol: "", rpcUrl: "", explorerUrl: "", testnet: true });
+    setEvmCustomChainEditorOpen(false);
     setEvmAssets(null);
   };
 
@@ -11824,7 +11826,10 @@ export default function Home() {
                 <p className="mx-auto mt-2 max-w-md text-sm text-gray-400">{t("features.wallet-list.otherChainsNoWalletHint")}</p>
                 <button
                   type="button"
-                  onClick={() => handleSelectForm("evm-workbench")}
+                  onClick={() => {
+                    setEvmCustomChainEditorOpen(false);
+                    handleSelectForm("evm-workbench");
+                  }}
                   className="mt-6 inline-flex items-center justify-center gap-2 rounded-xl bg-white px-4 py-3 text-sm font-semibold text-black hover:bg-gray-200"
                 >
                   <Wallet className="h-4 w-4" />
@@ -14327,34 +14332,6 @@ export default function Home() {
               <p className="mt-1 break-all text-xs text-gray-500">{activeEvmChain?.explorer_url || "No explorer configured"}</p>
             </div>
           </div>
-          <div className="grid gap-2 lg:grid-cols-6">
-            <input value={evmNewChain.chainId} onChange={(event) => setEvmNewChain((prev) => ({ ...prev, chainId: event.target.value }))} placeholder="Chain ID" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
-            <input value={evmNewChain.name} onChange={(event) => setEvmNewChain((prev) => ({ ...prev, name: event.target.value }))} placeholder="Name" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
-            <input value={evmNewChain.nativeSymbol} onChange={(event) => setEvmNewChain((prev) => ({ ...prev, nativeSymbol: event.target.value }))} placeholder="Symbol" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
-            <input value={evmNewChain.rpcUrl} onChange={(event) => setEvmNewChain((prev) => ({ ...prev, rpcUrl: event.target.value }))} placeholder="RPC URL" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none lg:col-span-2" />
-            <input value={evmNewChain.explorerUrl} onChange={(event) => setEvmNewChain((prev) => ({ ...prev, explorerUrl: event.target.value }))} placeholder="Explorer URL optional" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none lg:col-span-2" />
-            <label className="flex h-10 items-center gap-2 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-gray-200">
-              <input
-                type="checkbox"
-                checked={evmNewChain.testnet}
-                onChange={(event) => setEvmNewChain((prev) => ({ ...prev, testnet: event.target.checked }))}
-              />
-              Testnet
-            </label>
-            <button type="button" onClick={addDesktopEvmChain} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-500 px-3 text-sm font-semibold text-black hover:bg-emerald-400">
-              <Plus className="h-4 w-4" />
-              Add
-            </button>
-            <button
-              type="button"
-              onClick={removeDesktopEvmChain}
-              disabled={!activeEvmChainIsCustom}
-              className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-100 hover:bg-white/10 disabled:opacity-50"
-            >
-              <Trash2 className="h-4 w-4" />
-              Delete custom
-            </button>
-          </div>
         </section>
 
         <section className="grid gap-4 lg:grid-cols-2">
@@ -14376,6 +14353,48 @@ export default function Home() {
               <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-sm">
                 <p className="font-medium text-white">{evmWallet.name}</p>
                 <p className="mt-1 break-all text-gray-400">{evmWallet.address}</p>
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-3 rounded-lg border border-white/10 bg-white/[0.03] p-4">
+            <button
+              type="button"
+              onClick={() => setEvmCustomChainEditorOpen((open) => !open)}
+              className="flex w-full items-center justify-between gap-3 text-left text-lg font-semibold text-white"
+              aria-expanded={evmCustomChainEditorOpen}
+            >
+              <span>Custom chain</span>
+              {evmCustomChainEditorOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+            </button>
+            {evmCustomChainEditorOpen && (
+              <div className="grid gap-2 lg:grid-cols-2">
+                <input value={evmNewChain.chainId} onChange={(event) => setEvmNewChain((prev) => ({ ...prev, chainId: event.target.value }))} placeholder="Chain ID" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
+                <input value={evmNewChain.name} onChange={(event) => setEvmNewChain((prev) => ({ ...prev, name: event.target.value }))} placeholder="Name" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
+                <input value={evmNewChain.nativeSymbol} onChange={(event) => setEvmNewChain((prev) => ({ ...prev, nativeSymbol: event.target.value }))} placeholder="Symbol" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
+                <input value={evmNewChain.rpcUrl} onChange={(event) => setEvmNewChain((prev) => ({ ...prev, rpcUrl: event.target.value }))} placeholder="RPC URL" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
+                <input value={evmNewChain.explorerUrl} onChange={(event) => setEvmNewChain((prev) => ({ ...prev, explorerUrl: event.target.value }))} placeholder="Explorer URL optional" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
+                <label className="flex h-10 items-center gap-2 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-gray-200">
+                  <input
+                    type="checkbox"
+                    checked={evmNewChain.testnet}
+                    onChange={(event) => setEvmNewChain((prev) => ({ ...prev, testnet: event.target.checked }))}
+                  />
+                  Testnet
+                </label>
+                <button type="button" onClick={addDesktopEvmChain} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-500 px-3 text-sm font-semibold text-black hover:bg-emerald-400">
+                  <Plus className="h-4 w-4" />
+                  Add
+                </button>
+                <button
+                  type="button"
+                  onClick={removeDesktopEvmChain}
+                  disabled={!activeEvmChainIsCustom}
+                  className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-100 hover:bg-white/10 disabled:opacity-50"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Delete custom
+                </button>
               </div>
             )}
           </div>
