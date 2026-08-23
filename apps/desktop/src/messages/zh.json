@@ -405,6 +405,10 @@
     "nonce-workbench": {
       "title": "Nonce 账户"
     },
+    "evm-workbench": {
+      "title": "EVM 钱包",
+      "subtitle": "EVM 链、EOA 钱包、ERC-20 资产、转账和交易回执。"
+    },
     "walletContext": {
       "noWallet": "未选择钱包",
       "importHint": "创建或导入钱包后使用",
@@ -424,6 +428,16 @@
       "title": "设置",
       "networkTitle": "Solana RPC",
       "networkHint": "后续新操作默认使用这里选择的 RPC；多签和合约记录仍保留各自创建时的网络。",
+      "evmChainTitle": "EVM 链",
+      "evmChainHint": "EVM 钱包和转账默认使用这里选择的链。",
+      "evmChainSelect": "当前 EVM 链",
+      "evmChainRefresh": "刷新链列表",
+      "evmChainMainnet": "主网",
+      "evmChainTestnet": "测试网",
+      "evmChainCustom": "自定义",
+      "evmChainNone": "未选择链",
+      "evmChainNoRpc": "未配置 RPC",
+      "evmOpenWallet": "打开 EVM 钱包",
       "rpcBuiltin": "内置",
       "rpcCustom": "自定义",
       "rpcActive": "当前",

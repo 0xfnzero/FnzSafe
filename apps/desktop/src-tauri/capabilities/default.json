@@ -14,6 +14,7 @@
     "allow-set-active-dapp-tab",
     "allow-close-dapp-tab",
     "allow-resolve-dapp-sign-request",
+    "allow-resolve-dapp-connect-request",
     "allow-biometric-wallet-status",
     "allow-biometric-wallet-store-password",
     "allow-biometric-wallet-get-password",

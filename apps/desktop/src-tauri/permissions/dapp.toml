@@ -32,3 +32,8 @@ commands.allow = ["dapp_poll_sign_request"]
 identifier = "allow-resolve-dapp-sign-request"
 description = "Allow the main FnzSafe window to approve or reject a pending DApp signing request."
 commands.allow = ["resolve_dapp_sign_request"]
+
+[[permission]]
+identifier = "allow-resolve-dapp-connect-request"
+description = "Allow the main FnzSafe window to approve or reject a pending DApp wallet connection request."
+commands.allow = ["resolve_dapp_connect_request"]

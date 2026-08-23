@@ -12,6 +12,7 @@
     "backend": "cargo run --release -p fnzero-safe-desktop-api",
     "prebuild": "node scripts/assert-no-next-dev.cjs && node scripts/check-sensitive-inputs.cjs",
     "build": "next build",
+    "build:desktop-api": "cargo build --release -p fnzero-safe-desktop-api",
     "start": "next start",
     "test:dependency-compat": "node scripts/test-dependency-compat.cjs",
     "test:devnet-airdrop": "node scripts/test-devnet-airdrop.cjs",

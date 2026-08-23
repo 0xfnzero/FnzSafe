@@ -405,6 +405,10 @@
     "nonce-workbench": {
       "title": "Nonce Accounts"
     },
+    "evm-workbench": {
+      "title": "EVM Wallet",
+      "subtitle": "EVM chains, EOA wallets, ERC-20 assets, transfers, and transaction receipts."
+    },
     "walletContext": {
       "noWallet": "No wallet selected",
       "importHint": "Create or import a wallet to use",
@@ -424,6 +428,16 @@
       "title": "Settings",
       "networkTitle": "Solana RPC",
       "networkHint": "New actions use the selected RPC by default; multisig and contract records keep the network they were created on.",
+      "evmChainTitle": "EVM Chain",
+      "evmChainHint": "EVM wallet and transfer actions use the selected chain by default.",
+      "evmChainSelect": "Current EVM chain",
+      "evmChainRefresh": "Refresh chains",
+      "evmChainMainnet": "mainnet",
+      "evmChainTestnet": "testnet",
+      "evmChainCustom": "Custom",
+      "evmChainNone": "No chain selected",
+      "evmChainNoRpc": "No RPC configured",
+      "evmOpenWallet": "Open EVM Wallet",
       "securityTitle": "Security Features",
       "securityHint": "2FA and triple-factor wallet tools are managed here.",
       "walletTitle": "Wallet Accounts",

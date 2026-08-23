@@ -180,6 +180,41 @@ function errorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function waitForBiometricPromptReadiness(): Promise<void> {
+  if (typeof window === "undefined" || typeof document === "undefined") return;
+  if (document.visibilityState === "visible" && document.hasFocus()) {
+    await wait(250);
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      if (document.visibilityState !== "visible" || !document.hasFocus()) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      window.removeEventListener("focus", done);
+      document.removeEventListener("visibilitychange", done);
+      resolve();
+    };
+    const timeout = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener("focus", done);
+      document.removeEventListener("visibilitychange", done);
+      resolve();
+    }, 1800);
+    window.addEventListener("focus", done);
+    document.addEventListener("visibilitychange", done);
+    done();
+  });
+  await wait(300);
+}
+
 function decodeBase64Bytes(value?: string): Uint8Array | null {
   if (!value || typeof window === "undefined") return null;
   try {
@@ -1039,12 +1074,24 @@ interface DappSignRequestEvent {
   transaction_format: "legacy" | "versioned" | "v0" | "auto" | string;
   message_base64?: string;
   callback_url?: string;
+  known_programs?: Array<{ program_id: string; label: string }>;
+  created_at_ms: number;
+}
+
+interface DappConnectRequestEvent {
+  request_id: string;
+  app_id: string;
+  app_name: string;
+  app_url: string;
+  network: string;
+  callback_url: string;
   created_at_ms: number;
 }
 
 interface DappSignResult {
   approved: boolean;
   error?: string;
+  public_key?: string;
   signature?: string;
   raw_transaction?: string;
   recent_blockhash?: string;
@@ -1471,6 +1518,7 @@ interface DesktopEvmTransactionStatus {
 }
 
 const DESKTOP_EVM_CUSTOM_CHAINS_STORAGE_KEY = "fnzero.desktop.evm.custom_chains.v1";
+const DESKTOP_EVM_SELECTED_CHAIN_STORAGE_KEY = "fnzero.desktop.evm.selected_chain.v1";
 const DESKTOP_EVM_TOKENS_STORAGE_PREFIX = "fnzero.desktop.evm.tokens.v1";
 
 function isDesktopEvmAddress(value: string): boolean {
@@ -1520,6 +1568,21 @@ function loadStoredDesktopEvmChains(): DesktopEvmChainConfig[] {
 function saveStoredDesktopEvmChains(chains: DesktopEvmChainConfig[]) {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(DESKTOP_EVM_CUSTOM_CHAINS_STORAGE_KEY, JSON.stringify(chains));
+}
+
+function loadStoredDesktopEvmChainId(): string {
+  if (typeof window === "undefined") return "";
+  return window.localStorage.getItem(DESKTOP_EVM_SELECTED_CHAIN_STORAGE_KEY) || "";
+}
+
+function saveStoredDesktopEvmChainId(chainId: string) {
+  if (typeof window === "undefined") return;
+  const normalized = chainId.trim();
+  if (normalized) {
+    window.localStorage.setItem(DESKTOP_EVM_SELECTED_CHAIN_STORAGE_KEY, normalized);
+  } else {
+    window.localStorage.removeItem(DESKTOP_EVM_SELECTED_CHAIN_STORAGE_KEY);
+  }
 }
 
 function desktopEvmTokenStorageKey(chainId: number, walletAddress: string): string {
@@ -2226,6 +2289,8 @@ export default function Home() {
   const [privateKeyQrRevealed, setPrivateKeyQrRevealed] = useState(false);
   const [dappTabs, setDappTabs] = useState<DappBrowserTab[]>([DAPP_HOME_TAB]);
   const [activeDappTabId, setActiveDappTabId] = useState(DAPP_HOME_TAB_ID);
+  const [dappConnectRequest, setDappConnectRequest] = useState<DappConnectRequestEvent | null>(null);
+  const [dappConnectWalletId, setDappConnectWalletId] = useState("");
   const [dappSignRequest, setDappSignRequest] = useState<DappSignRequestEvent | null>(null);
   const [dappPassword, setDappPassword] = useState("");
   const [dappSaveBiometric, setDappSaveBiometric] = useState(false);
@@ -2378,6 +2443,19 @@ export default function Home() {
   const activeEvmChainIsCustom =
     Boolean(activeEvmChain && evmCustomChainIds.includes(activeEvmChain.chain_id));
 
+  const resetEvmChainScopedState = useCallback(() => {
+    setEvmAssets(null);
+    setEvmPreview(null);
+    setEvmSubmitResult(null);
+    setEvmTransactionStatus(null);
+  }, []);
+
+  const selectEvmChain = useCallback((chainId: string) => {
+    setEvmChainId(chainId);
+    saveStoredDesktopEvmChainId(chainId);
+    resetEvmChainScopedState();
+  }, [resetEvmChainScopedState]);
+
   const loadEvmChains = useCallback(async () => {
     const response = await apiFetch("evm/chains", {});
     const data = await response.json();
@@ -2398,11 +2476,16 @@ export default function Home() {
     });
     setEvmChains(chains);
     setEvmCustomChainIds(customChains.map((chain) => chain.chain_id));
-    setEvmChainId((previous) =>
-      previous && chains.some((chain) => String(chain.chain_id) === previous)
-        ? previous
-        : String(chains[0]?.chain_id || ""),
-    );
+    const storedChainId = loadStoredDesktopEvmChainId();
+    setEvmChainId((previous) => {
+      const candidate = previous || storedChainId;
+      const nextChainId =
+        candidate && chains.some((chain) => String(chain.chain_id) === candidate)
+          ? candidate
+          : String(chains[0]?.chain_id || "");
+      saveStoredDesktopEvmChainId(nextChainId);
+      return nextChainId;
+    });
   }, []);
 
   useEffect(() => {
@@ -2511,7 +2594,7 @@ export default function Home() {
         return a.chain_id - b.chain_id;
       });
     });
-    setEvmChainId(String(nextChain.chain_id));
+    selectEvmChain(String(nextChain.chain_id));
     setEvmNewChain({ chainId: "", name: "", nativeSymbol: "", rpcUrl: "", explorerUrl: "", testnet: true });
     setEvmAssets(null);
   };
@@ -2833,6 +2916,7 @@ export default function Home() {
         ? cachedStatus
         : await refreshBiometricWalletStatus(wallet);
     if (!status.supported || !status.configured) return null;
+    await waitForBiometricPromptReadiness();
     setBiometricBusyWalletId(wallet.id);
     try {
       return await invoke<string>("biometric_wallet_get_password", {
@@ -2904,7 +2988,8 @@ export default function Home() {
   useEffect(() => {
     if (!isTauriWebview()) return;
     let unlisten: UnlistenFn | undefined;
-	    void listen<DappSignRequestEvent>("dapp://sign-request", (event) => {
+    let unlistenConnect: UnlistenFn | undefined;
+    const showConnectRequest = (request: DappConnectRequestEvent) => {
       void invoke("dapp_set_active_tab", {
         tabId: null,
         x: 0,
@@ -2912,34 +2997,67 @@ export default function Home() {
         width: 0,
         height: 0,
       }).catch(() => {});
-	      setDappSignRequest(event.payload);
-	      setDappPassword("");
-		      setDappSaveBiometric(false);
-		      setDappTransactionPreview(null);
-		      setDappTransactionPreviewError(null);
-		      setDappTransactionPreviewLoading(event.payload.method !== "signMessage");
-		      setDappPreviewDetailsOpen(false);
-		      toast.message(
-	        event.payload.method === "signMessage"
+      setDappConnectRequest(request);
+      setDappConnectWalletId(effectiveWalletId);
+      toast.message(tf("features.dapp-store.connectRequestToast", "DApp 请求连接钱包"));
+    };
+    const showSignRequest = (request: DappSignRequestEvent) => {
+      void invoke("dapp_set_active_tab", {
+        tabId: null,
+        x: 0,
+        y: 0,
+        width: 0,
+        height: 0,
+      }).catch(() => {});
+      setDappSignRequest(request);
+      setDappPassword("");
+      setDappSaveBiometric(false);
+      setDappTransactionPreview(null);
+      setDappTransactionPreviewError(null);
+      setDappTransactionPreviewLoading(request.method !== "signMessage");
+      setDappPreviewDetailsOpen(false);
+      toast.message(
+        request.method === "signMessage"
           ? tf("features.dapp-store.messageRequestToast", "DApp 发起了消息签名请求")
           : tf("features.dapp-store.transactionRequestToast", "DApp 发起了交易签名请求"),
       );
+    };
+    void listen<DappConnectRequestEvent>("dapp://connect-request", (event) => {
+      showConnectRequest(event.payload);
+    }).then((cleanup) => {
+      unlistenConnect = cleanup;
+    }).catch(() => {
+      // The web build has no Tauri event bridge.
+    });
+    void listen<DappSignRequestEvent>("dapp://sign-request", (event) => {
+      showSignRequest(event.payload);
     }).then((cleanup) => {
       unlisten = cleanup;
     }).catch(() => {
       // The web build has no Tauri event bridge.
     });
+    void invoke<DappConnectRequestEvent | null>("dapp_pending_connect_request")
+      .then((request) => {
+        if (request) showConnectRequest(request);
+      })
+      .catch(() => {});
+    void invoke<DappSignRequestEvent | null>("dapp_pending_sign_request")
+      .then((request) => {
+        if (request) showSignRequest(request);
+      })
+      .catch(() => {});
     return () => {
       unlisten?.();
+      unlistenConnect?.();
     };
-	  }, [tf]);
+  }, [effectiveWalletId, tf]);
 
-	  useEffect(() => {
-	    if (!dappSignRequest || dappSignRequest.method === "signMessage") {
-	      setDappTransactionPreview(null);
-	      setDappTransactionPreviewError(null);
-	      setDappTransactionPreviewLoading(false);
-	      return;
+  useEffect(() => {
+    if (!dappSignRequest || dappSignRequest.method === "signMessage") {
+      setDappTransactionPreview(null);
+      setDappTransactionPreviewError(null);
+      setDappTransactionPreviewLoading(false);
+      return;
 	    }
 	    let cancelled = false;
 	    setDappTransactionPreview(null);
@@ -2954,6 +3072,7 @@ export default function Home() {
 	            required_signer: dappSignRequest.wallet_public_key,
 	            transaction_base64: dappSignRequest.transaction_base64,
 	            transaction_format: dappSignRequest.transaction_format || "auto",
+	            known_programs: dappSignRequest.known_programs ?? [],
 	          }),
 	        });
 	        const data = await response.json();
@@ -6027,6 +6146,56 @@ export default function Home() {
     });
   };
 
+  const resolveDappConnectRequest = async (request: DappConnectRequestEvent, result: DappSignResult) => {
+    await invoke("resolve_dapp_connect_request", {
+      requestId: request.request_id,
+      result,
+    });
+  };
+
+  const rejectDappConnectRequest = async () => {
+    const request = dappConnectRequest;
+    if (!request) return;
+    setDappSignBusy(true);
+    try {
+      await resolveDappConnectRequest(request, {
+        approved: false,
+        error: "USER_REJECTED",
+      });
+      setDappConnectRequest(null);
+      setDappConnectWalletId("");
+    } catch (error) {
+      toast.error(errorMessage(error, "拒绝 DApp 连接失败"));
+    } finally {
+      setDappSignBusy(false);
+    }
+  };
+
+  const approveDappConnectRequest = async () => {
+    const request = dappConnectRequest;
+    if (!request) return;
+    const wallet = wallets.find((item) => item.id === (dappConnectWalletId || effectiveWalletId)) || wallets[0];
+    if (!wallet) {
+      toast.error(tf("features.dapp-store.noWallet", "Select a wallet first."));
+      return;
+    }
+    setDappSignBusy(true);
+    try {
+      setCurrentWallet(wallet.id);
+      await resolveDappConnectRequest(request, {
+        approved: true,
+        public_key: wallet.public_key,
+      });
+      toast.success(tf("features.dapp-store.connectSuccess", "DApp 已连接钱包"));
+      setDappConnectRequest(null);
+      setDappConnectWalletId("");
+    } catch (error) {
+      toast.error(errorMessage(error, "DApp 连接失败"));
+    } finally {
+      setDappSignBusy(false);
+    }
+  };
+
   const rejectDappSignRequest = async () => {
     const request = dappSignRequest;
     if (!request) return;
@@ -6036,14 +6205,14 @@ export default function Home() {
         approved: false,
         error: "用户拒绝了 DApp 交易签名请求",
       });
-	      setDappSignRequest(null);
-	      setDappPassword("");
-	      setDappSaveBiometric(false);
-		      setDappTransactionPreview(null);
-		      setDappTransactionPreviewError(null);
-		      setDappTransactionPreviewLoading(false);
-		      setDappPreviewDetailsOpen(false);
-		    } catch (error) {
+      setDappSignRequest(null);
+      setDappPassword("");
+      setDappSaveBiometric(false);
+      setDappTransactionPreview(null);
+      setDappTransactionPreviewError(null);
+      setDappTransactionPreviewLoading(false);
+      setDappPreviewDetailsOpen(false);
+    } catch (error) {
       toast.error(errorMessage(error, "拒绝 DApp 请求失败"));
     } finally {
       setDappSignBusy(false);
@@ -6063,42 +6232,42 @@ export default function Home() {
       toast.error(t("formUi.placeholderKeystorePassword"));
       return;
     }
-	    const isMessageSignature = request.method === "signMessage";
-	    if (!isMessageSignature) {
-	      if (dappTransactionPreviewLoading) {
-	        toast.error(tf("features.dapp-store.previewLoading", "交易预览仍在加载，请稍后再确认"));
-	        return;
-	      }
-	      if (dappTransactionPreviewError || !dappTransactionPreview) {
-	        toast.error(dappTransactionPreviewError || tf("features.dapp-store.previewRequired", "需要先完成交易预览"));
-	        return;
-	      }
-	      if (!dappTransactionPreview.required_signer_present) {
-	        toast.error(tf("features.dapp-store.signerMissing", "交易没有要求当前钱包签名，已拒绝"));
-	        return;
-	      }
-	    }
-	    const shouldSubmit = request.method === "sendTransaction" || request.method === "signAndSendTransaction";
+    const isMessageSignature = request.method === "signMessage";
+    if (!isMessageSignature) {
+      if (dappTransactionPreviewLoading) {
+        toast.error(tf("features.dapp-store.previewLoading", "交易预览仍在加载，请稍后再确认"));
+        return;
+      }
+      if (dappTransactionPreviewError || !dappTransactionPreview) {
+        toast.error(dappTransactionPreviewError || tf("features.dapp-store.previewRequired", "需要先完成交易预览"));
+        return;
+      }
+      if (!dappTransactionPreview.required_signer_present) {
+        toast.error(tf("features.dapp-store.signerMissing", "交易没有要求当前钱包签名，已拒绝"));
+        return;
+      }
+    }
+    const shouldSubmit = request.method === "sendTransaction" || request.method === "signAndSendTransaction";
     setDappSignBusy(true);
     try {
       const response = await apiFetch(
         isMessageSignature ? "external-sign/message" : shouldSubmit ? "external-sign/submit" : "external-sign/sign",
         {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          wallet_id: wallet.id,
-          password: walletPassword,
-          required_signer: request.wallet_public_key,
-          ...(isMessageSignature
-            ? { message_base64: request.message_base64 || "" }
-            : {
-                transaction_base64: request.transaction_base64,
-                transaction_format: request.transaction_format || "auto",
-              }),
-          network: request.network || effectiveRpcRequest,
-          request_id: request.request_id,
-        }),
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            wallet_id: wallet.id,
+            password: walletPassword,
+            required_signer: request.wallet_public_key,
+            ...(isMessageSignature
+              ? { message_base64: request.message_base64 || "" }
+              : {
+                  transaction_base64: request.transaction_base64,
+                  transaction_format: request.transaction_format || "auto",
+                }),
+            network: request.network || effectiveRpcRequest,
+            request_id: request.request_id,
+          }),
         },
       );
       const data = await response.json();
@@ -6122,14 +6291,14 @@ export default function Home() {
           ? tf("features.dapp-store.submitSuccess", "DApp 交易已提交")
           : tf("features.dapp-store.signSuccess", "DApp 交易已签名"),
       );
-	      setDappSignRequest(null);
-	      setDappPassword("");
-	      setDappSaveBiometric(false);
-		      setDappTransactionPreview(null);
-		      setDappTransactionPreviewError(null);
-		      setDappTransactionPreviewLoading(false);
-		      setDappPreviewDetailsOpen(false);
-		      if (!isMessageSignature) refreshWalletAfterMutation(wallet);
+      setDappSignRequest(null);
+      setDappPassword("");
+      setDappSaveBiometric(false);
+      setDappTransactionPreview(null);
+      setDappTransactionPreviewError(null);
+      setDappTransactionPreviewLoading(false);
+      setDappPreviewDetailsOpen(false);
+      if (!isMessageSignature) refreshWalletAfterMutation(wallet);
     } catch (error) {
       toast.error(
         errorMessage(
@@ -6159,36 +6328,60 @@ export default function Home() {
   };
   approveDappSignRequestRef.current = approveDappSignRequest;
 
-	  useEffect(() => {
-	    if (!dappSignRequest) {
-	      biometricDappAttemptRef.current = "";
-	      return;
-	    }
-      const wallet = wallets.find((item) => item.public_key === dappSignRequest.wallet_public_key);
-      if (!wallet || !canUseBiometricWallet(wallet)) {
+  useEffect(() => {
+    if (!dappSignRequest || walletsLoading) return;
+    if (wallets.some((item) => item.public_key === dappSignRequest.wallet_public_key)) return;
+    const request = dappSignRequest;
+    void (async () => {
+      try {
+        await resolveDappSignRequest(request, {
+          approved: false,
+          error: "FNZSAFE_WALLET_NOT_FOUND",
+        });
+      } catch {
+        // The request may have been cancelled by the user while wallets were loading.
+      }
+      toast.error(tf("features.dapp-store.walletMissing", "这个请求指定的钱包不在当前钱包列表中。"));
+      setDappSignRequest(null);
+      setDappPassword("");
+      setDappSaveBiometric(false);
+      setDappTransactionPreview(null);
+      setDappTransactionPreviewError(null);
+      setDappTransactionPreviewLoading(false);
+      setDappPreviewDetailsOpen(false);
+    })();
+  }, [dappSignRequest, tf, wallets, walletsLoading]);
+
+  useEffect(() => {
+    if (!dappSignRequest) {
+      biometricDappAttemptRef.current = "";
+      return;
+    }
+    const wallet = wallets.find((item) => item.public_key === dappSignRequest.wallet_public_key);
+    if (!wallet || !canUseBiometricWallet(wallet)) {
+      return;
+    }
+    if (dappSignBusy || biometricBusyWalletId === wallet.id) {
+      return;
+    }
+    if (dappSignRequest.method !== "signMessage") {
+      if (dappTransactionPreviewLoading || dappTransactionPreviewError || !dappTransactionPreview) {
         return;
       }
-      if (dappSignBusy || biometricBusyWalletId === wallet.id) {
+      if (!dappTransactionPreview.required_signer_present) {
         return;
       }
-      if (dappSignRequest.method !== "signMessage") {
-        if (dappTransactionPreviewLoading || dappTransactionPreviewError || !dappTransactionPreview) {
-          return;
-        }
-        if (!dappTransactionPreview.required_signer_present) {
-          return;
-        }
+    }
+    const attemptKey = `${dappSignRequest.request_id}:${wallet.id}`;
+    if (biometricDappAttemptRef.current === attemptKey) return;
+    biometricDappAttemptRef.current = attemptKey;
+    void (async () => {
+      const password = await getBiometricWalletPassword(wallet);
+      if (password) {
+        await approveDappSignRequestRef.current?.(password);
       }
-      const attemptKey = `${dappSignRequest.request_id}:${wallet.id}`;
-      if (biometricDappAttemptRef.current === attemptKey) return;
-      biometricDappAttemptRef.current = attemptKey;
-      void (async () => {
-        const password = await getBiometricWalletPassword(wallet);
-        if (password) {
-          await approveDappSignRequestRef.current?.(password);
-        }
-      })();
-	  }, [
+    })();
+  }, [
       biometricBusyWalletId,
       canUseBiometricWallet,
       dappSignBusy,
@@ -7878,7 +8071,9 @@ export default function Home() {
   const showExportBundlePrompt = passwordPrompt?.kind === "export-bundle";
   const passwordPromptIsBusy = loading || passwordConfirmationBusy;
   const passwordPromptWallet =
-    passwordPrompt && "formState" in passwordPrompt
+    passwordPrompt && "wallet" in passwordPrompt
+      ? passwordPrompt.wallet
+      : passwordPrompt && "formState" in passwordPrompt
       ? savedWalletFromForm(passwordPrompt.formState)
       : undefined;
   const showPasswordPromptBiometric =
@@ -13893,13 +14088,7 @@ export default function Home() {
               Chain
               <select
                 value={evmChainId}
-                onChange={(event) => {
-                  setEvmChainId(event.target.value);
-                  setEvmAssets(null);
-                  setEvmPreview(null);
-                  setEvmSubmitResult(null);
-                  setEvmTransactionStatus(null);
-                }}
+                onChange={(event) => selectEvmChain(event.target.value)}
                 className="h-10 w-full rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none"
               >
                 {evmChains.map((chain) => (
@@ -14468,6 +14657,62 @@ export default function Home() {
               <p className="text-xs text-gray-500">
                 {t("features.settings.rpcAddHint", { network: networkLabel(t, settingsNetwork) })}
               </p>
+            </section>
+
+            <section className="space-y-3 rounded-2xl border border-white/10 bg-white/5 p-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h3 className="text-sm font-semibold text-gray-200">{t("features.settings.evmChainTitle")}</h3>
+                  <p className="mt-1 text-xs text-gray-500">{t("features.settings.evmChainHint")}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void loadEvmChains()}
+                  disabled={evmBusy}
+                  className="inline-flex h-9 w-fit items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 text-xs text-gray-200 hover:bg-white/10 disabled:opacity-50"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${evmBusy ? "animate-spin" : ""}`} />
+                  {t("features.settings.evmChainRefresh")}
+                </button>
+              </div>
+              <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+                <label className="space-y-1 text-sm text-gray-300">
+                  {t("features.settings.evmChainSelect")}
+                  <select
+                    value={evmChainId}
+                    onChange={(event) => selectEvmChain(event.target.value)}
+                    disabled={evmChains.length === 0}
+                    className="h-10 w-full rounded-lg border border-white/10 bg-black/20 px-3 text-sm text-white outline-none focus:ring-2 focus:ring-white/20 disabled:opacity-50"
+                  >
+                    {evmChains.map((chain) => (
+                      <option key={chain.chain_id} value={chain.chain_id}>
+                        {chain.name} ({chain.chain_id}) {chain.testnet ? t("features.settings.evmChainTestnet") : t("features.settings.evmChainMainnet")}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => handleSelectForm("evm-workbench")}
+                  className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-white px-3 text-sm font-semibold text-black hover:bg-gray-200"
+                >
+                  <ArrowRightLeft className="h-4 w-4" />
+                  {t("features.settings.evmOpenWallet")}
+                </button>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-gray-400">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-full border border-emerald-300/20 bg-emerald-400/10 px-2 py-0.5 font-medium text-emerald-100">
+                    {activeEvmChain ? `${activeEvmChain.name} · ${activeEvmChain.native_symbol}` : t("features.settings.evmChainNone")}
+                  </span>
+                  {activeEvmChainIsCustom && (
+                    <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-gray-300">
+                      {t("features.settings.evmChainCustom")}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-2 break-all">{activeEvmChain?.rpc_url || t("features.settings.evmChainNoRpc")}</p>
+              </div>
             </section>
 
             <section className="rounded-2xl border border-white/10 bg-white/5 p-4">
@@ -20103,6 +20348,89 @@ export default function Home() {
                   className="flex-1 rounded-lg bg-red-500/20 px-4 py-2.5 text-sm font-semibold text-red-100 hover:bg-red-500/30"
                 >
                   {t("features.program-projects.removeHistoryRecord")}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {dappConnectRequest && (
+        <div className="fixed inset-0 z-[200] flex items-end bg-black/60 sm:items-center sm:justify-center">
+          <button
+            type="button"
+            aria-label={t("common.cancel")}
+            className="absolute inset-0 cursor-default"
+            onClick={() => void rejectDappConnectRequest()}
+          />
+          <div className="relative w-full border-t border-white/10 bg-zinc-950 px-4 py-5 shadow-2xl sm:mx-4 sm:max-w-xl sm:rounded-2xl sm:border">
+            <div className="space-y-4">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <h3 className="text-lg font-semibold">
+                    {tf("features.dapp-store.connectRequestTitle", "DApp 钱包连接确认")}
+                  </h3>
+                  <p className="mt-1 text-sm text-gray-400">
+                    {dappConnectRequest.app_name}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void rejectDappConnectRequest()}
+                  disabled={dappSignBusy}
+                  className="rounded-lg bg-white/10 p-2 text-gray-300 hover:bg-white/20 disabled:opacity-50"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="space-y-2 rounded-lg border border-white/10 bg-black/30 p-3">
+                {[
+                  [tf("features.dapp-store.requestAppUrl", "DApp 来源"), dappConnectRequest.app_url],
+                  [tf("features.dapp-store.requestNetwork", "网络"), dappConnectRequest.network],
+                ].map(([label, value]) => (
+                  <div key={label} className="grid gap-1 sm:grid-cols-[7rem_minmax(0,1fr)]">
+                    <span className="text-xs text-gray-500">{label}</span>
+                    <code className="select-text break-all text-xs text-gray-300">{value}</code>
+                  </div>
+                ))}
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  {tf("features.dapp-store.connectWallet", "连接钱包")}
+                </label>
+                <select
+                  value={dappConnectWalletId || effectiveWalletId}
+                  onChange={(event) => setDappConnectWalletId(event.target.value)}
+                  className="w-full rounded-lg border border-white/10 bg-black/40 px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-white/20"
+                  disabled={dappSignBusy || walletsLoading}
+                >
+                  {wallets.map((wallet) => (
+                    <option key={wallet.id} value={wallet.id}>
+                      {walletLabel(wallet)}
+                    </option>
+                  ))}
+                </select>
+                {wallets.length === 0 && (
+                  <p className="mt-2 text-xs text-amber-100">
+                    {tf("features.dapp-store.noWallet", "Select a wallet first.")}
+                  </p>
+                )}
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => void rejectDappConnectRequest()}
+                  disabled={dappSignBusy}
+                  className="rounded-lg bg-white/10 px-4 py-3 font-semibold text-gray-200 hover:bg-white/20 disabled:opacity-50"
+                >
+                  {t("common.cancel")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void approveDappConnectRequest()}
+                  disabled={dappSignBusy || walletsLoading || wallets.length === 0}
+                  className="rounded-lg bg-gradient-to-r from-blue-500 to-cyan-400 px-4 py-3 font-semibold text-white hover:from-blue-600 hover:to-cyan-500 disabled:opacity-50"
+                >
+                  {dappSignBusy ? t("common.processing") : tf("features.dapp-store.connectApprove", "连接钱包")}
                 </button>
               </div>
             </div>

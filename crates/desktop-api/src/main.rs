@@ -8465,6 +8465,15 @@ struct ExternalSignPreviewRequest {
     transaction_base64: String,
     #[serde(default, alias = "transactionFormat")]
     transaction_format: Option<String>,
+    #[serde(default, alias = "knownPrograms")]
+    known_programs: Vec<ExternalSignKnownProgram>,
+}
+
+#[derive(Clone, Deserialize)]
+struct ExternalSignKnownProgram {
+    #[serde(alias = "programId")]
+    program_id: String,
+    label: String,
 }
 
 #[derive(Serialize)]
@@ -8600,13 +8609,24 @@ fn decode_external_versioned_transaction(
     })
 }
 
-fn external_sign_program_label(program_id: &str) -> &'static str {
+fn external_sign_program_label<'a>(
+    program_id: &str,
+    known_programs: &'a [ExternalSignKnownProgram],
+) -> &'a str {
+    if let Some(program) = known_programs
+        .iter()
+        .find(|program| program.program_id.trim() == program_id && !program.label.trim().is_empty())
+    {
+        return program.label.trim();
+    }
     match program_id {
         "11111111111111111111111111111111" => "System Program",
         SPL_TOKEN_PROGRAM_ID => "SPL Token",
         SPL_TOKEN_2022_PROGRAM_ID => "SPL Token 2022",
         "ComputeBudget111111111111111111111111111111" => "Compute Budget",
         "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL" => "Associated Token Account",
+        "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr" => "Memo Program",
+        "Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo" => "Memo Program",
         UPGRADEABLE_LOADER_ID_STR => "Upgradeable Loader",
         _ => "Unknown Program",
     }
@@ -8617,14 +8637,12 @@ fn external_sign_instruction_preview(
     program_id: String,
     account_count: usize,
     data_bytes: usize,
+    known_programs: &[ExternalSignKnownProgram],
 ) -> ExternalSignInstructionPreview {
+    let label = external_sign_program_label(&program_id, known_programs);
     ExternalSignInstructionPreview {
         index,
-        program_id: format!(
-            "{} ({})",
-            program_id,
-            external_sign_program_label(&program_id)
-        ),
+        program_id: format!("{} ({})", program_id, label),
         account_count,
         data_bytes,
     }
@@ -8633,6 +8651,7 @@ fn external_sign_instruction_preview(
 fn preview_external_legacy_transaction(
     transaction: &Transaction,
     required_signer: Option<&Pubkey>,
+    known_programs: &[ExternalSignKnownProgram],
 ) -> ExternalSignTransactionPreviewResponse {
     let message = &transaction.message;
     let required_signatures = message.header.num_required_signatures as usize;
@@ -8670,6 +8689,7 @@ fn preview_external_legacy_transaction(
                 program_id,
                 instruction.accounts.len(),
                 instruction.data.len(),
+                known_programs,
             )
         })
         .collect::<Vec<_>>();
@@ -8686,7 +8706,7 @@ fn preview_external_legacy_transaction(
     }
     if programs
         .iter()
-        .any(|program| external_sign_program_label(program) == "Unknown Program")
+        .any(|program| external_sign_program_label(program, known_programs) == "Unknown Program")
     {
         warnings.push("交易包含未识别 program，请确认 DApp 来源和指令意图".to_string());
     }
@@ -8709,6 +8729,7 @@ fn preview_external_legacy_transaction(
 fn preview_external_versioned_transaction(
     transaction: &VersionedTransaction,
     required_signer: Option<&Pubkey>,
+    known_programs: &[ExternalSignKnownProgram],
 ) -> ExternalSignTransactionPreviewResponse {
     let message = &transaction.message;
     let required_signatures = message.header().num_required_signatures as usize;
@@ -8745,6 +8766,7 @@ fn preview_external_versioned_transaction(
                 program_id,
                 instruction.accounts.len(),
                 instruction.data.len(),
+                known_programs,
             )
         })
         .collect::<Vec<_>>();
@@ -8769,7 +8791,7 @@ fn preview_external_versioned_transaction(
     }
     if programs
         .iter()
-        .any(|program| external_sign_program_label(program) == "Unknown Program")
+        .any(|program| external_sign_program_label(program, known_programs) == "Unknown Program")
     {
         warnings.push("交易包含未识别 program，请确认 DApp 来源和指令意图".to_string());
     }
@@ -8811,15 +8833,18 @@ fn preview_external_transaction_request(
         "legacy" => Ok(preview_external_legacy_transaction(
             &decode_external_legacy_transaction(&req.transaction_base64)?,
             required_signer.as_ref(),
+            &req.known_programs,
         )),
         "versioned" | "v0" => Ok(preview_external_versioned_transaction(
             &decode_external_versioned_transaction(&req.transaction_base64)?,
             required_signer.as_ref(),
+            &req.known_programs,
         )),
         "auto" => match decode_external_versioned_transaction(&req.transaction_base64) {
             Ok(transaction) => Ok(preview_external_versioned_transaction(
                 &transaction,
                 required_signer.as_ref(),
+                &req.known_programs,
             )),
             Err(versioned_error) => {
                 let transaction = decode_external_legacy_transaction(&req.transaction_base64)
@@ -8832,6 +8857,7 @@ fn preview_external_transaction_request(
                 Ok(preview_external_legacy_transaction(
                     &transaction,
                     required_signer.as_ref(),
+                    &req.known_programs,
                 ))
             }
         },
@@ -9861,6 +9887,7 @@ mod generic_program_deployment_policy_tests {
             required_signer: payer.pubkey().to_string(),
             transaction_base64,
             transaction_format: Some("legacy".to_string()),
+            known_programs: Vec::new(),
         })
         .unwrap();
 
