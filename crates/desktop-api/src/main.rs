@@ -23,6 +23,7 @@ use base64::{
 use bip39::{Language, Mnemonic};
 use fnzero_safe::solana_utils::{lamports_to_sol, SolanaClient};
 use fnzero_safe::{KeyManager, KeystoreVersion};
+use fnzero_safe_app_services as app_services;
 use futures::{
     future::join_all,
     stream::{self, StreamExt},
@@ -3454,6 +3455,56 @@ async fn main() -> anyhow::Result<()> {
         // Health
         .route("/api/health", get(health))
         .route("/api/health/", get(health))
+        .route("/api/evm/chains", get(evm_chains))
+        .route("/api/evm/chains/", get(evm_chains))
+        .route("/api/evm/wallet/create", post(evm_wallet_create))
+        .route("/api/evm/wallet/create/", post(evm_wallet_create))
+        .route(
+            "/api/evm/wallet/import-private-key",
+            post(evm_wallet_import_private_key),
+        )
+        .route(
+            "/api/evm/wallet/import-private-key/",
+            post(evm_wallet_import_private_key),
+        )
+        .route(
+            "/api/evm/wallet/import-mnemonic",
+            post(evm_wallet_import_mnemonic),
+        )
+        .route(
+            "/api/evm/wallet/import-mnemonic/",
+            post(evm_wallet_import_mnemonic),
+        )
+        .route(
+            "/api/evm/wallet/import-keystore",
+            post(evm_wallet_import_keystore),
+        )
+        .route(
+            "/api/evm/wallet/import-keystore/",
+            post(evm_wallet_import_keystore),
+        )
+        .route("/api/evm/wallet/unlock", post(evm_wallet_unlock))
+        .route("/api/evm/wallet/unlock/", post(evm_wallet_unlock))
+        .route(
+            "/api/evm/wallet/export",
+            post(evm_wallet_export_private_key),
+        )
+        .route(
+            "/api/evm/wallet/export/",
+            post(evm_wallet_export_private_key),
+        )
+        .route("/api/evm/assets", post(evm_assets))
+        .route("/api/evm/assets/", post(evm_assets))
+        .route("/api/evm/payment/preview", post(evm_payment_preview))
+        .route("/api/evm/payment/preview/", post(evm_payment_preview))
+        .route("/api/evm/payment/submit", post(evm_payment_submit))
+        .route("/api/evm/payment/submit/", post(evm_payment_submit))
+        .route("/api/evm/transaction/status", post(evm_transaction_status))
+        .route("/api/evm/transaction/status/", post(evm_transaction_status))
+        .route("/api/evm/dapp/preview", post(evm_dapp_preview))
+        .route("/api/evm/dapp/preview/", post(evm_dapp_preview))
+        .route("/api/evm/dapp/submit", post(evm_dapp_submit))
+        .route("/api/evm/dapp/submit/", post(evm_dapp_submit))
         .route("/api/secure/session", get(secure_session))
         .route("/api/secure/session/", get(secure_session))
         // Core Functions (1-3)
@@ -3732,7 +3783,7 @@ async fn main() -> anyhow::Result<()> {
     let host: IpAddr = host.parse()?;
     if !host.is_loopback() {
         anyhow::bail!(
-            "FnzeroSafe API contains local-only wallet operations and must bind to a loopback address"
+            "FnzSafe API contains local-only wallet operations and must bind to a loopback address"
         );
     }
     let addr = SocketAddr::new(host, port);
@@ -3747,7 +3798,7 @@ async fn health() -> Json<serde_json::Value> {
         "status": "ok",
         "service": "fnzero-safe",
         "version": env!("CARGO_PKG_VERSION"),
-        "features": ["keys", "wallet", "faucet", "transfer", "wsol", "token", "nonce", "program", "squads-v4"]
+        "features": ["keys", "wallet", "faucet", "transfer", "wsol", "token", "nonce", "program", "squads-v4", "evm"]
     }))
 }
 
@@ -3762,6 +3813,113 @@ async fn secure_session() -> Result<Json<SecureSessionResponse>, ApiError> {
             .is_none()
             .then(|| local_api_token().to_string()),
     }))
+}
+
+async fn evm_chains() -> Json<Vec<app_services::EvmChainConfig>> {
+    Json(app_services::evm_builtin_chains())
+}
+
+async fn evm_wallet_create(
+    Json(req): Json<app_services::EvmCreateWalletRequest>,
+) -> Result<Json<app_services::EvmWalletKeystore>, ApiError> {
+    app_services::evm_wallet_create(req)
+        .map(Json)
+        .map_err(api_error_from_app_service)
+}
+
+async fn evm_wallet_import_private_key(
+    Json(req): Json<app_services::EvmImportPrivateKeyRequest>,
+) -> Result<Json<app_services::EvmWalletKeystore>, ApiError> {
+    app_services::evm_wallet_import_private_key(req)
+        .map(Json)
+        .map_err(api_error_from_app_service)
+}
+
+async fn evm_wallet_import_mnemonic(
+    Json(req): Json<app_services::EvmImportMnemonicRequest>,
+) -> Result<Json<app_services::EvmWalletKeystore>, ApiError> {
+    app_services::evm_wallet_import_mnemonic(req)
+        .map(Json)
+        .map_err(api_error_from_app_service)
+}
+
+async fn evm_wallet_import_keystore(
+    Json(req): Json<app_services::EvmImportKeystoreRequest>,
+) -> Result<Json<app_services::EvmWalletKeystore>, ApiError> {
+    app_services::evm_wallet_import_keystore(req)
+        .map(Json)
+        .map_err(api_error_from_app_service)
+}
+
+async fn evm_wallet_unlock(
+    Json(req): Json<app_services::EvmUnlockWalletRequest>,
+) -> Result<Json<app_services::EvmWalletSummary>, ApiError> {
+    app_services::evm_wallet_unlock(req)
+        .map(Json)
+        .map_err(api_error_from_app_service)
+}
+
+async fn evm_wallet_export_private_key(
+    Json(req): Json<app_services::EvmExportPrivateKeyRequest>,
+) -> Result<Json<app_services::EvmExportPrivateKeyResponse>, ApiError> {
+    app_services::evm_wallet_export_private_key(req)
+        .map(Json)
+        .map_err(api_error_from_app_service)
+}
+
+async fn evm_assets(
+    Json(req): Json<app_services::EvmAssetQueryRequest>,
+) -> Result<Json<app_services::EvmAssetSnapshot>, ApiError> {
+    app_services::evm_load_asset_snapshot(req)
+        .map(Json)
+        .map_err(api_error_from_app_service)
+}
+
+async fn evm_payment_preview(
+    Json(req): Json<app_services::EvmPaymentPreviewRequest>,
+) -> Result<Json<app_services::EvmPaymentPreview>, ApiError> {
+    app_services::evm_payment_preview(req)
+        .map(Json)
+        .map_err(api_error_from_app_service)
+}
+
+async fn evm_payment_submit(
+    Json(req): Json<app_services::EvmPaymentSubmitRequest>,
+) -> Result<Json<app_services::EvmTransactionSubmitResult>, ApiError> {
+    app_services::evm_payment_submit(req)
+        .map(Json)
+        .map_err(api_error_from_app_service)
+}
+
+async fn evm_transaction_status(
+    Json(req): Json<app_services::EvmTransactionStatusRequest>,
+) -> Result<Json<app_services::EvmTransactionStatus>, ApiError> {
+    app_services::evm_transaction_status(req)
+        .map(Json)
+        .map_err(api_error_from_app_service)
+}
+
+async fn evm_dapp_preview(
+    Json(req): Json<app_services::EvmDappSignPreviewRequest>,
+) -> Result<Json<app_services::EvmDappSignPreview>, ApiError> {
+    app_services::evm_dapp_sign_preview(req)
+        .map(Json)
+        .map_err(api_error_from_app_service)
+}
+
+async fn evm_dapp_submit(
+    Json(req): Json<app_services::EvmDappSignSubmitRequest>,
+) -> Result<Json<app_services::EvmDappSignSubmitResult>, ApiError> {
+    app_services::evm_dapp_sign_submit(req)
+        .map(Json)
+        .map_err(api_error_from_app_service)
+}
+
+fn api_error_from_app_service(error: app_services::AppServiceError) -> ApiError {
+    let mobile = error.to_mobile_error();
+    ApiError {
+        message: format!("{:?}: {}", mobile.code, mobile.message),
+    }
 }
 
 // ============= Helper Functions =============
@@ -8307,6 +8465,15 @@ struct ExternalSignPreviewRequest {
     transaction_base64: String,
     #[serde(default, alias = "transactionFormat")]
     transaction_format: Option<String>,
+    #[serde(default, alias = "knownPrograms")]
+    known_programs: Vec<ExternalSignKnownProgram>,
+}
+
+#[derive(Clone, Deserialize)]
+struct ExternalSignKnownProgram {
+    #[serde(alias = "programId")]
+    program_id: String,
+    label: String,
 }
 
 #[derive(Serialize)]
@@ -8442,13 +8609,24 @@ fn decode_external_versioned_transaction(
     })
 }
 
-fn external_sign_program_label(program_id: &str) -> &'static str {
+fn external_sign_program_label<'a>(
+    program_id: &str,
+    known_programs: &'a [ExternalSignKnownProgram],
+) -> &'a str {
+    if let Some(program) = known_programs
+        .iter()
+        .find(|program| program.program_id.trim() == program_id && !program.label.trim().is_empty())
+    {
+        return program.label.trim();
+    }
     match program_id {
         "11111111111111111111111111111111" => "System Program",
         SPL_TOKEN_PROGRAM_ID => "SPL Token",
         SPL_TOKEN_2022_PROGRAM_ID => "SPL Token 2022",
         "ComputeBudget111111111111111111111111111111" => "Compute Budget",
         "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL" => "Associated Token Account",
+        "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr" => "Memo Program",
+        "Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo" => "Memo Program",
         UPGRADEABLE_LOADER_ID_STR => "Upgradeable Loader",
         _ => "Unknown Program",
     }
@@ -8459,14 +8637,12 @@ fn external_sign_instruction_preview(
     program_id: String,
     account_count: usize,
     data_bytes: usize,
+    known_programs: &[ExternalSignKnownProgram],
 ) -> ExternalSignInstructionPreview {
+    let label = external_sign_program_label(&program_id, known_programs);
     ExternalSignInstructionPreview {
         index,
-        program_id: format!(
-            "{} ({})",
-            program_id,
-            external_sign_program_label(&program_id)
-        ),
+        program_id: format!("{} ({})", program_id, label),
         account_count,
         data_bytes,
     }
@@ -8475,6 +8651,7 @@ fn external_sign_instruction_preview(
 fn preview_external_legacy_transaction(
     transaction: &Transaction,
     required_signer: Option<&Pubkey>,
+    known_programs: &[ExternalSignKnownProgram],
 ) -> ExternalSignTransactionPreviewResponse {
     let message = &transaction.message;
     let required_signatures = message.header.num_required_signatures as usize;
@@ -8512,6 +8689,7 @@ fn preview_external_legacy_transaction(
                 program_id,
                 instruction.accounts.len(),
                 instruction.data.len(),
+                known_programs,
             )
         })
         .collect::<Vec<_>>();
@@ -8528,7 +8706,7 @@ fn preview_external_legacy_transaction(
     }
     if programs
         .iter()
-        .any(|program| external_sign_program_label(program) == "Unknown Program")
+        .any(|program| external_sign_program_label(program, known_programs) == "Unknown Program")
     {
         warnings.push("交易包含未识别 program，请确认 DApp 来源和指令意图".to_string());
     }
@@ -8551,6 +8729,7 @@ fn preview_external_legacy_transaction(
 fn preview_external_versioned_transaction(
     transaction: &VersionedTransaction,
     required_signer: Option<&Pubkey>,
+    known_programs: &[ExternalSignKnownProgram],
 ) -> ExternalSignTransactionPreviewResponse {
     let message = &transaction.message;
     let required_signatures = message.header().num_required_signatures as usize;
@@ -8587,6 +8766,7 @@ fn preview_external_versioned_transaction(
                 program_id,
                 instruction.accounts.len(),
                 instruction.data.len(),
+                known_programs,
             )
         })
         .collect::<Vec<_>>();
@@ -8611,7 +8791,7 @@ fn preview_external_versioned_transaction(
     }
     if programs
         .iter()
-        .any(|program| external_sign_program_label(program) == "Unknown Program")
+        .any(|program| external_sign_program_label(program, known_programs) == "Unknown Program")
     {
         warnings.push("交易包含未识别 program，请确认 DApp 来源和指令意图".to_string());
     }
@@ -8653,15 +8833,18 @@ fn preview_external_transaction_request(
         "legacy" => Ok(preview_external_legacy_transaction(
             &decode_external_legacy_transaction(&req.transaction_base64)?,
             required_signer.as_ref(),
+            &req.known_programs,
         )),
         "versioned" | "v0" => Ok(preview_external_versioned_transaction(
             &decode_external_versioned_transaction(&req.transaction_base64)?,
             required_signer.as_ref(),
+            &req.known_programs,
         )),
         "auto" => match decode_external_versioned_transaction(&req.transaction_base64) {
             Ok(transaction) => Ok(preview_external_versioned_transaction(
                 &transaction,
                 required_signer.as_ref(),
+                &req.known_programs,
             )),
             Err(versioned_error) => {
                 let transaction = decode_external_legacy_transaction(&req.transaction_base64)
@@ -8674,6 +8857,7 @@ fn preview_external_transaction_request(
                 Ok(preview_external_legacy_transaction(
                     &transaction,
                     required_signer.as_ref(),
+                    &req.known_programs,
                 ))
             }
         },
@@ -9005,7 +9189,7 @@ async fn external_sign_message(
         required_signer: required_signer.to_string(),
         signed_by: signed_by.to_string(),
         request_id: req.request_id,
-        signature: signature.to_string(),
+        signature: BASE64.encode(signature.as_ref()),
         message_base64: message_base64.to_string(),
     }))
 }
@@ -9703,6 +9887,7 @@ mod generic_program_deployment_policy_tests {
             required_signer: payer.pubkey().to_string(),
             transaction_base64,
             transaction_format: Some("legacy".to_string()),
+            known_programs: Vec::new(),
         })
         .unwrap();
 
@@ -9720,6 +9905,34 @@ mod generic_program_deployment_policy_tests {
             .writable_accounts
             .iter()
             .any(|account| account == &recipient.to_string()));
+    }
+
+    #[tokio::test]
+    async fn external_sign_message_returns_base64_signature() {
+        std::env::set_var(ALLOW_DIRECT_SECRET_INPUT_ENV, "true");
+        let signer = Keypair::new();
+        let message_base64 = BASE64.encode(b"fnzero wallet binding test");
+        let Json(response) = external_sign_message(Json(ExternalSignMessageRequest {
+            wallet: WalletAuthRequest {
+                wallet_id: None,
+                private_key: None,
+                secret_key: Some(signer.to_base58_string()),
+                keystore_json: None,
+                encrypted_key: None,
+                password: None,
+            },
+            required_signer: signer.pubkey().to_string(),
+            message_base64: message_base64.clone(),
+            request_id: Some("req-1".to_string()),
+            expires_at: None,
+        }))
+        .await
+        .unwrap();
+
+        let signature_bytes = BASE64.decode(&response.signature).unwrap();
+        let signature = Signature::try_from(signature_bytes.as_slice()).unwrap();
+        assert!(signature.verify(signer.pubkey().as_ref(), b"fnzero wallet binding test"));
+        assert_eq!(response.message_base64, message_base64);
     }
 
     #[test]
@@ -13070,7 +13283,7 @@ async fn setup_2fa(Json(req): Json<Setup2faRequest>) -> Result<Json<Setup2faResp
     let account = validate_optional_label(req.account, "账户名称")?
         .unwrap_or_else(|| "fnzero-safe".to_string());
     let issuer =
-        validate_optional_label(req.issuer, "发行者")?.unwrap_or_else(|| "FnzeroSafe".to_string());
+        validate_optional_label(req.issuer, "发行者")?.unwrap_or_else(|| "FnzSafe".to_string());
 
     let totp_secret = fnzero_safe::derive_totp_secret_from_hardware_and_password(
         &req.hardware_fingerprint,

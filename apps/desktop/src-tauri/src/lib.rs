@@ -8,13 +8,17 @@ use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
+use std::env;
+use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{
     Emitter, LogicalPosition, LogicalSize, Manager, Position, Rect, Size, WebviewBuilder,
     WebviewUrl,
 };
+use tauri_plugin_deep_link::DeepLinkExt;
 use zeroize::Zeroizing;
 
 /// Must match `DEFAULT_API_PORT` in `src/lib/api.ts`
@@ -30,10 +34,12 @@ const DAPP_SIGN_REQUEST_EVENT: &str = "dapp://sign-request";
 const DAPP_TAB_URL_EVENT: &str = "dapp://tab-url";
 const DAPP_TAB_TITLE_EVENT: &str = "dapp://tab-title";
 const DAPP_NEW_WINDOW_EVENT: &str = "dapp://new-window";
+const DAPP_CONNECT_REQUEST_EVENT: &str = "dapp://connect-request";
 const DAPP_REQUEST_TTL_MS: u64 = 3 * 60 * 1000;
-const DAPP_WALLET_NAME: &str = "FnzeroSafe";
+const DAPP_WALLET_NAME: &str = "FnzSafe";
+const DESKTOP_API_BIN_NAME: &str = "fnzero-safe-desktop-api";
 #[cfg(target_os = "macos")]
-const BIOMETRIC_WALLET_PASSWORD_SERVICE: &str = "dev.fnzero-safe.wallet.password.v3";
+const BIOMETRIC_WALLET_PASSWORD_SERVICE: &str = "dev.fnzero-safe.wallet.password.v5";
 
 #[derive(Clone)]
 struct AllowedDapp {
@@ -51,12 +57,20 @@ struct DappSession {
     opened_at_ms: u64,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize)]
+struct DappKnownProgram {
+    program_id: String,
+    label: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
 struct DappSignRequestEvent {
     request_id: String,
     app_id: String,
     app_name: String,
     app_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_purpose: Option<String>,
     method: String,
     wallet_public_key: String,
     network: String,
@@ -64,6 +78,21 @@ struct DappSignRequestEvent {
     transaction_format: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     message_base64: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    callback_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    known_programs: Vec<DappKnownProgram>,
+    created_at_ms: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct DappConnectRequestEvent {
+    request_id: String,
+    app_id: String,
+    app_name: String,
+    app_url: String,
+    network: String,
+    callback_url: String,
     created_at_ms: u64,
 }
 
@@ -74,11 +103,19 @@ struct DappPendingRequest {
     result: Option<DappSignResult>,
 }
 
+#[derive(Clone)]
+struct DappPendingConnectRequest {
+    event: DappConnectRequestEvent,
+    result: Option<DappSignResult>,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 struct DappSignResult {
     approved: bool,
     #[serde(default)]
     error: Option<String>,
+    #[serde(default)]
+    public_key: Option<String>,
     #[serde(default)]
     signature: Option<String>,
     #[serde(default)]
@@ -98,6 +135,12 @@ struct DappPollResponse {
 struct DappBridgeState {
     sessions: Mutex<HashMap<String, DappSession>>,
     requests: Mutex<HashMap<String, DappPendingRequest>>,
+    connect_requests: Mutex<HashMap<String, DappPendingConnectRequest>>,
+}
+
+#[derive(Default)]
+struct DesktopApiProcess {
+    child: Mutex<Option<Child>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -158,7 +201,16 @@ struct BiometricWalletStatus {
     reason: Option<String>,
 }
 
-fn biometric_wallet_account(wallet_id: &str, public_key: &str) -> Result<String, String> {
+#[derive(Clone)]
+struct BiometricWalletAccounts {
+    primary: String,
+    fallbacks: Vec<String>,
+}
+
+fn biometric_wallet_accounts(
+    wallet_id: &str,
+    public_key: &str,
+) -> Result<BiometricWalletAccounts, String> {
     let wallet_id = wallet_id.trim();
     let public_key = public_key.trim();
     if wallet_id.len() != 32 || !wallet_id.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -167,7 +219,10 @@ fn biometric_wallet_account(wallet_id: &str, public_key: &str) -> Result<String,
     if !is_likely_solana_pubkey(public_key) {
         return Err("invalid wallet public key".to_string());
     }
-    Ok(format!("{wallet_id}:{public_key}"))
+    Ok(BiometricWalletAccounts {
+        primary: format!("solana:{public_key}"),
+        fallbacks: vec![format!("{wallet_id}:{public_key}"), public_key.to_string()],
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -212,6 +267,47 @@ fn biometric_touch_id_available() -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
+fn biometric_touch_id_authenticate() -> Result<(), String> {
+    use block2::RcBlock;
+    use objc2::runtime::Bool;
+    use objc2_foundation::{NSError, NSString};
+    use objc2_local_authentication::{LAContext, LAPolicy};
+    use std::sync::mpsc;
+
+    let context = unsafe { LAContext::new() };
+    unsafe {
+        context
+            .canEvaluatePolicy_error(LAPolicy::DeviceOwnerAuthenticationWithBiometrics)
+            .map_err(|error| biometric_local_auth_error_message(error.code()))?;
+    }
+
+    let reason = NSString::from_str("使用 Touch ID 解锁 FnzSafe 钱包密码");
+    let (tx, rx) = mpsc::channel();
+    let reply = RcBlock::new(move |success: Bool, error: *mut NSError| {
+        let result = if success.as_bool() {
+            Ok(())
+        } else if error.is_null() {
+            Err(-1)
+        } else {
+            Err(unsafe { (&*error).code() })
+        };
+        let _ = tx.send(result);
+    });
+
+    unsafe {
+        context.evaluatePolicy_localizedReason_reply(
+            LAPolicy::DeviceOwnerAuthenticationWithBiometrics,
+            &reason,
+            &reply,
+        );
+    }
+
+    rx.recv()
+        .map_err(|_| "Touch ID 验证未完成".to_string())?
+        .map_err(biometric_local_auth_error_message)
+}
+
+#[cfg(target_os = "macos")]
 mod biometric_wallet_keychain {
     use super::{biometric_error_message, BIOMETRIC_WALLET_PASSWORD_SERVICE};
     use security_framework::{
@@ -219,22 +315,39 @@ mod biometric_wallet_keychain {
         item::{ItemClass, ItemSearchOptions},
         passwords::{
             delete_generic_password, generic_password, set_generic_password_options,
-            AccessControlOptions, PasswordOptions,
+            PasswordOptions,
         },
     };
 
     const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
-    const LEGACY_SERVICES: &[&str] = &[
+    const FALLBACK_SERVICES: &[&str] = &[
+        "dev.fnzero-safe.wallet.password.v4",
+        "dev.fnzero-safe.wallet.password.v3",
         "dev.sol-safekey.fnzero-wallet.password.v1",
         "dev.sol-safekey.fnzero-wallet.password.v2",
         "dev.sol-safekey.fnzero-wallet.password.v3",
     ];
 
-    pub fn configured(account: &str) -> Result<bool, String> {
+    fn fallback_services() -> impl Iterator<Item = &'static str> {
+        FALLBACK_SERVICES.iter().copied()
+    }
+
+    fn candidate_services() -> impl Iterator<Item = &'static str> {
+        std::iter::once(BIOMETRIC_WALLET_PASSWORD_SERVICE).chain(FALLBACK_SERVICES.iter().copied())
+    }
+
+    fn account_candidates<'a>(
+        primary_account: &'a str,
+        fallback_accounts: &'a [String],
+    ) -> impl Iterator<Item = &'a str> {
+        std::iter::once(primary_account).chain(fallback_accounts.iter().map(String::as_str))
+    }
+
+    fn exists(service: &str, account: &str) -> Result<bool, String> {
         let mut query = ItemSearchOptions::new();
         query
             .class(ItemClass::generic_password())
-            .service(BIOMETRIC_WALLET_PASSWORD_SERVICE)
+            .service(service)
             .account(account)
             .load_attributes(true);
         match query.search() {
@@ -244,53 +357,105 @@ mod biometric_wallet_keychain {
         }
     }
 
-    pub fn store(account: &str, password: &str) -> Result<(), String> {
-        let _ = delete_generic_password(BIOMETRIC_WALLET_PASSWORD_SERVICE, account);
-        let access_control = SecAccessControl::create_with_protection(
-            Some(ProtectionMode::AccessibleWhenUnlockedThisDeviceOnly),
-            AccessControlOptions::BIOMETRY_CURRENT_SET.bits(),
-        )
-        .map_err(biometric_error_message)?;
-        let mut options =
-            PasswordOptions::new_generic_password(BIOMETRIC_WALLET_PASSWORD_SERVICE, account);
-        options.set_access_control(access_control);
-        set_generic_password_options(password.as_bytes(), options)
-            .map_err(biometric_error_message)?;
-        delete_legacy(account)
+    pub fn configured(primary_account: &str, fallback_accounts: &[String]) -> Result<bool, String> {
+        for service in candidate_services() {
+            for account in account_candidates(primary_account, fallback_accounts) {
+                if exists(service, account)? {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
     }
 
-    fn delete_legacy(account: &str) -> Result<(), String> {
-        for service in LEGACY_SERVICES {
-            match delete_generic_password(service, account) {
-                Ok(()) => {}
-                Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => {}
-                Err(error) => return Err(biometric_error_message(error)),
-            }
+    fn store_primary(primary_account: &str, password: &str) -> Result<(), String> {
+        let _ = delete_generic_password(BIOMETRIC_WALLET_PASSWORD_SERVICE, primary_account);
+        let access_control = SecAccessControl::create_with_protection(
+            Some(ProtectionMode::AccessibleWhenUnlockedThisDeviceOnly),
+            0,
+        )
+        .map_err(biometric_error_message)?;
+        let mut options = PasswordOptions::new_generic_password(
+            BIOMETRIC_WALLET_PASSWORD_SERVICE,
+            primary_account,
+        );
+        options.set_access_control(access_control);
+        set_generic_password_options(password.as_bytes(), options).map_err(biometric_error_message)
+    }
+
+    pub fn store(
+        primary_account: &str,
+        fallback_accounts: &[String],
+        password: &str,
+    ) -> Result<(), String> {
+        store_primary(primary_account, password)?;
+        delete_fallback_best_effort(primary_account, fallback_accounts);
+        if !configured(primary_account, &[])? {
+            return Err("Touch ID 凭据保存后无法在 Keychain 中确认".to_string());
         }
         Ok(())
     }
 
-    pub fn load(account: &str) -> Result<String, String> {
-        let options =
-            PasswordOptions::new_generic_password(BIOMETRIC_WALLET_PASSWORD_SERVICE, account);
-        match generic_password(options) {
-            Ok(password) => String::from_utf8(password)
-                .map_err(|_| "Keychain 凭据不是有效的 UTF-8 钱包密码".to_string()),
-            Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => {
-                Err("还没有为这个钱包启用 Touch ID".to_string())
+    fn delete_fallback_best_effort(primary_account: &str, fallback_accounts: &[String]) {
+        for account in fallback_accounts {
+            let _ = delete_generic_password(BIOMETRIC_WALLET_PASSWORD_SERVICE, account);
+        }
+        for service in fallback_services() {
+            let _ = delete_generic_password(service, primary_account);
+            for account in fallback_accounts {
+                let _ = delete_generic_password(service, account);
             }
-            Err(error) => Err(biometric_error_message(error)),
         }
     }
 
-    pub fn delete(account: &str) -> Result<(), String> {
-        for service in std::iter::once(BIOMETRIC_WALLET_PASSWORD_SERVICE)
-            .chain(LEGACY_SERVICES.iter().copied())
-        {
-            match delete_generic_password(service, account) {
-                Ok(()) => {}
-                Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => {}
-                Err(error) => return Err(biometric_error_message(error)),
+    pub fn load(primary_account: &str, fallback_accounts: &[String]) -> Result<String, String> {
+        let mut last_error = None;
+        for service in candidate_services() {
+            for account in account_candidates(primary_account, fallback_accounts) {
+                let options = PasswordOptions::new_generic_password(service, account);
+                match generic_password(options) {
+                    Ok(password) => {
+                        let password = String::from_utf8(password)
+                            .map_err(|_| "Keychain 凭据不是有效的 UTF-8 钱包密码".to_string())?;
+                        if service != BIOMETRIC_WALLET_PASSWORD_SERVICE
+                            || account != primary_account
+                        {
+                            let _ = store(primary_account, fallback_accounts, &password);
+                        }
+                        return Ok(password);
+                    }
+                    Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => {}
+                    Err(error) if error.code() == -25293 => {
+                        let _ = delete_generic_password(service, account);
+                        last_error = Some(error);
+                    }
+                    Err(error) => {
+                        last_error = Some(error);
+                        break;
+                    }
+                }
+            }
+            if last_error.is_some()
+                && service == BIOMETRIC_WALLET_PASSWORD_SERVICE
+                && exists(BIOMETRIC_WALLET_PASSWORD_SERVICE, primary_account).unwrap_or(false)
+            {
+                break;
+            }
+        }
+        match last_error {
+            Some(error) => Err(biometric_error_message(error)),
+            None => Err("还没有为这个钱包启用 Touch ID".to_string()),
+        }
+    }
+
+    pub fn delete(primary_account: &str, fallback_accounts: &[String]) -> Result<(), String> {
+        for service in candidate_services() {
+            for account in account_candidates(primary_account, fallback_accounts) {
+                match delete_generic_password(service, account) {
+                    Ok(()) => {}
+                    Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => {}
+                    Err(error) => return Err(biometric_error_message(error)),
+                }
             }
         }
         Ok(())
@@ -299,11 +464,12 @@ mod biometric_wallet_keychain {
 
 #[tauri::command]
 fn biometric_wallet_status(req: BiometricWalletRequest) -> Result<BiometricWalletStatus, String> {
-    let account = biometric_wallet_account(&req.wallet_id, &req.public_key)?;
+    let accounts = biometric_wallet_accounts(&req.wallet_id, &req.public_key)?;
     #[cfg(target_os = "macos")]
     {
         let supported = biometric_touch_id_available();
-        let configured = biometric_wallet_keychain::configured(&account)?;
+        let configured =
+            biometric_wallet_keychain::configured(&accounts.primary, &accounts.fallbacks)?;
         Ok(BiometricWalletStatus {
             supported: supported.is_ok(),
             configured: configured && supported.is_ok(),
@@ -312,7 +478,7 @@ fn biometric_wallet_status(req: BiometricWalletRequest) -> Result<BiometricWalle
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = account;
+        let _ = accounts;
         Ok(BiometricWalletStatus {
             supported: false,
             configured: false,
@@ -323,45 +489,46 @@ fn biometric_wallet_status(req: BiometricWalletRequest) -> Result<BiometricWalle
 
 #[tauri::command]
 fn biometric_wallet_store_password(req: BiometricWalletStoreRequest) -> Result<(), String> {
-    let account = biometric_wallet_account(&req.wallet_id, &req.public_key)?;
+    let accounts = biometric_wallet_accounts(&req.wallet_id, &req.public_key)?;
     if req.password.is_empty() {
         return Err("wallet password is required".to_string());
     }
     #[cfg(target_os = "macos")]
     {
-        biometric_wallet_keychain::store(&account, &req.password)
+        biometric_wallet_keychain::store(&accounts.primary, &accounts.fallbacks, &req.password)
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = account;
+        let _ = accounts;
         Err("Touch ID 只支持 macOS 桌面客户端".to_string())
     }
 }
 
 #[tauri::command]
 fn biometric_wallet_get_password(req: BiometricWalletRequest) -> Result<String, String> {
-    let account = biometric_wallet_account(&req.wallet_id, &req.public_key)?;
+    let accounts = biometric_wallet_accounts(&req.wallet_id, &req.public_key)?;
     #[cfg(target_os = "macos")]
     {
-        biometric_wallet_keychain::load(&account)
+        biometric_touch_id_authenticate()?;
+        biometric_wallet_keychain::load(&accounts.primary, &accounts.fallbacks)
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = account;
+        let _ = accounts;
         Err("Touch ID 只支持 macOS 桌面客户端".to_string())
     }
 }
 
 #[tauri::command]
 fn biometric_wallet_delete_password(req: BiometricWalletRequest) -> Result<(), String> {
-    let account = biometric_wallet_account(&req.wallet_id, &req.public_key)?;
+    let accounts = biometric_wallet_accounts(&req.wallet_id, &req.public_key)?;
     #[cfg(target_os = "macos")]
     {
-        biometric_wallet_keychain::delete(&account)
+        biometric_wallet_keychain::delete(&accounts.primary, &accounts.fallbacks)
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = account;
+        let _ = accounts;
         Ok(())
     }
 }
@@ -844,6 +1011,424 @@ fn dapp_request_id() -> String {
     format!("dapp-{}-{}", now_ms(), BASE64.encode(random)).replace(['+', '/', '='], "")
 }
 
+fn deep_link_query_param(url: &tauri::Url, name: &str) -> Option<String> {
+    url.query_pairs()
+        .find(|(key, _)| key == name)
+        .map(|(_, value)| value.into_owned())
+}
+
+fn validate_short_deep_link_text(
+    value: &str,
+    field: &str,
+    max_len: usize,
+) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.len() > max_len || trimmed.chars().any(|ch| ch.is_control()) {
+        return Err(format!("invalid {field}"));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn validate_dapp_network(network: &str) -> Result<String, String> {
+    let trimmed = network.trim();
+    if trimmed.is_empty() || trimmed.len() > 256 || trimmed.chars().any(|ch| ch.is_control()) {
+        return Err("invalid network".to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
+fn validate_deep_link_request_id(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || trimmed.len() > 128
+        || !trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_' | ':'))
+    {
+        return Err("invalid request_id".to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
+fn validate_known_program_label(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || trimmed.len() > 48
+        || !trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, ' ' | '.' | '-' | '_' | '/'))
+    {
+        return Err("invalid known_program label".to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
+fn parse_known_program(value: &str) -> Result<DappKnownProgram, String> {
+    let Some((program_id, label)) = value.split_once(':') else {
+        return Err("known_program must use program_id:label".to_string());
+    };
+    let program_id = validate_short_deep_link_text(program_id, "known_program program_id", 64)?;
+    if !is_likely_solana_pubkey(&program_id) {
+        return Err("known_program program_id is invalid".to_string());
+    }
+    let label = validate_known_program_label(label)?;
+    Ok(DappKnownProgram { program_id, label })
+}
+
+fn deep_link_known_programs(url: &tauri::Url) -> Result<Vec<DappKnownProgram>, String> {
+    let mut programs = Vec::new();
+    for (_, value) in url.query_pairs().filter(|(key, _)| key == "known_program") {
+        if programs.len() >= 16 {
+            return Err("too many known_program entries".to_string());
+        }
+        let program = parse_known_program(&value)?;
+        if !programs
+            .iter()
+            .any(|existing: &DappKnownProgram| existing.program_id == program.program_id)
+        {
+            programs.push(program);
+        }
+    }
+    Ok(programs)
+}
+
+fn validate_deep_link_app_url(value: &str) -> Result<tauri::Url, String> {
+    let url = parse_dapp_browser_url(value)?;
+    if url.scheme() != "https" && !matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1"))
+    {
+        return Err("deep link app_url must be https or localhost http".to_string());
+    }
+    Ok(url)
+}
+
+fn related_callback_host(app_host: &str, callback_host: &str) -> bool {
+    app_host == callback_host
+        || callback_host.ends_with(&format!(".{app_host}"))
+        || app_host.ends_with(&format!(".{callback_host}"))
+}
+
+fn validate_deep_link_callback_url(
+    callback_url: Option<String>,
+    app_url: &tauri::Url,
+) -> Result<Option<String>, String> {
+    let Some(callback_url) = callback_url else {
+        return Ok(None);
+    };
+    let trimmed = callback_url.trim();
+    let callback = trimmed
+        .parse::<tauri::Url>()
+        .map_err(|error| format!("invalid callback_url: {error}"))?;
+    let callback_is_local_http = callback.scheme() == "http"
+        && matches!(callback.host_str(), Some("localhost" | "127.0.0.1" | "::1"));
+    if callback.scheme() != "https" && !callback_is_local_http {
+        return Err("callback_url must be a valid https or localhost URL".to_string());
+    }
+    let app_host = app_url
+        .host_str()
+        .ok_or_else(|| "app_url host is required".to_string())?
+        .to_ascii_lowercase();
+    let callback_host = callback
+        .host_str()
+        .ok_or_else(|| "callback_url host is required".to_string())?
+        .to_ascii_lowercase();
+    if !related_callback_host(&app_host, &callback_host) {
+        return Err("callback_url must belong to the same site as app_url".to_string());
+    }
+    Ok(Some(trimmed.to_string()))
+}
+
+fn is_sign_deep_link(url: &tauri::Url) -> bool {
+    if url.scheme() != "fnzsafe" {
+        return false;
+    }
+    let host_is_sign = url.host_str().is_some_and(|host| host == "sign");
+    let path_is_sign = url.path().trim_matches('/') == "sign";
+    host_is_sign || path_is_sign
+}
+
+fn is_connect_deep_link(url: &tauri::Url) -> bool {
+    if url.scheme() != "fnzsafe" {
+        return false;
+    }
+    let host_is_connect = url.host_str().is_some_and(|host| host == "connect");
+    let path_is_connect = url.path().trim_matches('/') == "connect";
+    host_is_connect || path_is_connect
+}
+
+fn parse_connect_deep_link(url: &tauri::Url) -> Result<DappConnectRequestEvent, String> {
+    if !is_connect_deep_link(url) {
+        return Err("unsupported fnzsafe connect deep link".to_string());
+    }
+    let network = validate_dapp_network(
+        deep_link_query_param(url, "network")
+            .as_deref()
+            .unwrap_or("mainnet"),
+    )?;
+    let app_url = validate_deep_link_app_url(
+        deep_link_query_param(url, "app_url")
+            .as_deref()
+            .ok_or_else(|| "app_url is required".to_string())?,
+    )?;
+    let app_url_string = app_url.as_str().to_string();
+    let app_name = deep_link_query_param(url, "app_name")
+        .map(|value| validate_short_deep_link_text(&value, "app_name", 80))
+        .transpose()?
+        .unwrap_or_else(|| {
+            app_url
+                .host_str()
+                .map(|host| host.to_string())
+                .unwrap_or_else(|| "FnzSafe Web".to_string())
+        });
+    let request_id = deep_link_query_param(url, "request_id")
+        .map(|value| validate_deep_link_request_id(&value))
+        .transpose()?
+        .unwrap_or_else(dapp_request_id);
+    let callback_url = validate_deep_link_callback_url(
+        Some(
+            deep_link_query_param(url, "callback_url")
+                .ok_or_else(|| "callback_url is required".to_string())?,
+        ),
+        &app_url,
+    )?
+    .ok_or_else(|| "callback_url is required".to_string())?;
+
+    Ok(DappConnectRequestEvent {
+        request_id,
+        app_id: "fnzsafe-deep-link".to_string(),
+        app_name,
+        app_url: app_url_string,
+        network,
+        callback_url,
+        created_at_ms: now_ms(),
+    })
+}
+
+fn parse_sign_deep_link(url: &tauri::Url) -> Result<DappSignRequestEvent, String> {
+    if !is_sign_deep_link(url) {
+        return Err("unsupported fnzsafe deep link".to_string());
+    }
+
+    let method = validate_dapp_method(
+        deep_link_query_param(url, "method")
+            .as_deref()
+            .ok_or_else(|| "method is required".to_string())?,
+    )?;
+    let wallet_public_key = validate_short_deep_link_text(
+        deep_link_query_param(url, "wallet_public_key")
+            .as_deref()
+            .ok_or_else(|| "wallet_public_key is required".to_string())?,
+        "wallet_public_key",
+        64,
+    )?;
+    if !is_likely_solana_pubkey(&wallet_public_key) {
+        return Err("invalid wallet public key".to_string());
+    }
+    let network = validate_dapp_network(
+        deep_link_query_param(url, "network")
+            .as_deref()
+            .unwrap_or("mainnet"),
+    )?;
+    let app_url = validate_deep_link_app_url(
+        deep_link_query_param(url, "app_url")
+            .as_deref()
+            .ok_or_else(|| "app_url is required".to_string())?,
+    )?;
+    let app_url_string = app_url.as_str().to_string();
+    let app_name = deep_link_query_param(url, "app_name")
+        .map(|value| validate_short_deep_link_text(&value, "app_name", 80))
+        .transpose()?
+        .unwrap_or_else(|| {
+            app_url
+                .host_str()
+                .map(|host| host.to_string())
+                .unwrap_or_else(|| "FnzSafe Web".to_string())
+        });
+    let request_purpose = deep_link_query_param(url, "request_purpose")
+        .map(|value| validate_short_deep_link_text(&value, "request_purpose", 80))
+        .transpose()?;
+    let request_id = deep_link_query_param(url, "request_id")
+        .map(|value| validate_deep_link_request_id(&value))
+        .transpose()?
+        .unwrap_or_else(dapp_request_id);
+    let callback_url =
+        validate_deep_link_callback_url(deep_link_query_param(url, "callback_url"), &app_url)?;
+
+    let (transaction_base64, transaction_format, message_base64) = if method == "signMessage" {
+        let message_base64 = validate_dapp_message_base64(
+            deep_link_query_param(url, "message_base64")
+                .as_deref()
+                .ok_or_else(|| "message payload is required".to_string())?,
+        )?;
+        ("".to_string(), "message".to_string(), Some(message_base64))
+    } else {
+        let transaction_base64 = validate_dapp_transaction_base64(
+            deep_link_query_param(url, "transaction_base64")
+                .as_deref()
+                .ok_or_else(|| "transaction payload is required".to_string())?,
+        )?;
+        let transaction_format = validate_transaction_format(
+            deep_link_query_param(url, "transaction_format")
+                .as_deref()
+                .unwrap_or("auto"),
+        )?;
+        (transaction_base64, transaction_format, None)
+    };
+
+    Ok(DappSignRequestEvent {
+        request_id,
+        app_id: "fnzsafe-deep-link".to_string(),
+        app_name,
+        app_url: app_url_string,
+        request_purpose,
+        method,
+        wallet_public_key,
+        network,
+        transaction_base64,
+        transaction_format,
+        message_base64,
+        callback_url,
+        known_programs: deep_link_known_programs(url)?,
+        created_at_ms: now_ms(),
+    })
+}
+
+fn enqueue_dapp_sign_request(
+    app: &tauri::AppHandle,
+    state: &DappBridgeState,
+    webview_label: String,
+    event: DappSignRequestEvent,
+) -> Result<(), String> {
+    let mut requests = state
+        .requests
+        .lock()
+        .map_err(|_| "dapp request lock poisoned".to_string())?;
+    requests.retain(|_, pending| {
+        now_ms().saturating_sub(pending.event.created_at_ms) <= DAPP_REQUEST_TTL_MS
+            && pending.result.is_none()
+    });
+    if requests.contains_key(&event.request_id) {
+        return Err("dapp signing request id is already pending".to_string());
+    }
+    requests.insert(
+        event.request_id.clone(),
+        DappPendingRequest {
+            webview_label,
+            event: event.clone(),
+            result: None,
+        },
+    );
+    drop(requests);
+
+    app.emit_to("main", DAPP_SIGN_REQUEST_EVENT, event)
+        .map_err(|error| format!("failed to notify main window: {error}"))
+}
+
+fn enqueue_dapp_connect_request(
+    app: &tauri::AppHandle,
+    state: &DappBridgeState,
+    event: DappConnectRequestEvent,
+) -> Result<(), String> {
+    let mut requests = state
+        .connect_requests
+        .lock()
+        .map_err(|_| "dapp connect request lock poisoned".to_string())?;
+    requests.retain(|_, pending| {
+        now_ms().saturating_sub(pending.event.created_at_ms) <= DAPP_REQUEST_TTL_MS
+            && pending.result.is_none()
+    });
+    if requests.contains_key(&event.request_id) {
+        return Err("dapp connect request id is already pending".to_string());
+    }
+    requests.insert(
+        event.request_id.clone(),
+        DappPendingConnectRequest {
+            event: event.clone(),
+            result: None,
+        },
+    );
+    drop(requests);
+
+    app.emit_to("main", DAPP_CONNECT_REQUEST_EVENT, event)
+        .map_err(|error| format!("failed to notify main window: {error}"))
+}
+
+fn focus_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+fn append_dapp_result_to_callback_url(
+    callback_url: &str,
+    request_id: &str,
+    result: &DappSignResult,
+) -> Result<String, String> {
+    let mut url = callback_url
+        .parse::<tauri::Url>()
+        .map_err(|error| format!("invalid callback_url: {error}"))?;
+    {
+        let mut query = url.query_pairs_mut();
+        query.append_pair("request_id", request_id);
+        query.append_pair("approved", if result.approved { "true" } else { "false" });
+        if let Some(error) = result.error.as_deref() {
+            query.append_pair("error", error);
+        }
+        if let Some(public_key) = result.public_key.as_deref() {
+            query.append_pair("public_key", public_key);
+        }
+        if let Some(signature) = result.signature.as_deref() {
+            query.append_pair("signature", signature);
+        }
+        if let Some(raw_transaction) = result.raw_transaction.as_deref() {
+            query.append_pair("raw_transaction", raw_transaction);
+        }
+        if let Some(recent_blockhash) = result.recent_blockhash.as_deref() {
+            query.append_pair("recent_blockhash", recent_blockhash);
+        }
+    }
+    Ok(url.to_string())
+}
+
+fn handle_sign_deep_link(app: &tauri::AppHandle, url: &tauri::Url) -> Result<(), String> {
+    let event = parse_sign_deep_link(url)?;
+    focus_main_window(app);
+    let state = app.state::<DappBridgeState>();
+    enqueue_dapp_sign_request(app, state.inner(), "deep-link".to_string(), event)
+}
+
+fn handle_connect_deep_link(app: &tauri::AppHandle, url: &tauri::Url) -> Result<(), String> {
+    let event = parse_connect_deep_link(url)?;
+    focus_main_window(app);
+    let state = app.state::<DappBridgeState>();
+    enqueue_dapp_connect_request(app, state.inner(), event)
+}
+
+fn handle_fnzsafe_deep_link(app: &tauri::AppHandle, url: &tauri::Url) -> Result<(), String> {
+    if is_connect_deep_link(url) {
+        handle_connect_deep_link(app, url)
+    } else {
+        handle_sign_deep_link(app, url)
+    }
+}
+
+fn handle_current_fnzsafe_deep_links(app: &tauri::AppHandle) {
+    match app.deep_link().get_current() {
+        Ok(Some(urls)) => {
+            for url in urls {
+                if let Err(error) = handle_fnzsafe_deep_link(app, &url) {
+                    log::warn!("ignored startup fnzsafe deep link: {error}");
+                }
+            }
+        }
+        Ok(None) => {}
+        Err(error) => {
+            log::warn!("failed to read startup fnzsafe deep link: {error}");
+        }
+    }
+}
+
 fn dapp_provider_script(
     dapp: &AllowedDapp,
     wallet_public_key: &str,
@@ -875,7 +1460,7 @@ fn dapp_provider_script(
 	  function tauriInvoke(command, args) {{
 	    const invoke = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
 	    if (typeof invoke !== "function") {{
-	      throw new Error("FnzeroSafe bridge is unavailable");
+	      throw new Error("FnzSafe bridge is unavailable");
 	    }}
 	    return invoke(command, args || {{}});
 	  }}
@@ -982,10 +1567,10 @@ fn dapp_provider_script(
       const poll = await tauriInvoke("dapp_poll_sign_request", {{ requestId }});
       if (poll.status === "approved") return poll.result || {{}};
       if (poll.status === "rejected") throw new Error(poll.result?.error || "User rejected the request");
-      if (poll.status === "expired") throw new Error("FnzeroSafe signing request expired");
+      if (poll.status === "expired") throw new Error("FnzSafe signing request expired");
       await sleep(500);
     }}
-    throw new Error("FnzeroSafe signing request timed out");
+    throw new Error("FnzSafe signing request timed out");
   }}
   async function requestMessageSignature(message) {{
     let messageBytes;
@@ -1009,10 +1594,10 @@ fn dapp_provider_script(
       const poll = await tauriInvoke("dapp_poll_sign_request", {{ requestId }});
       if (poll.status === "approved") return poll.result || {{}};
       if (poll.status === "rejected") throw new Error(poll.result?.error || "User rejected the request");
-      if (poll.status === "expired") throw new Error("FnzeroSafe signing request expired");
+      if (poll.status === "expired") throw new Error("FnzSafe signing request expired");
       await sleep(500);
     }}
-    throw new Error("FnzeroSafe signing request timed out");
+    throw new Error("FnzSafe signing request timed out");
   }}
   function emit(event, value) {{
     const handlers = listeners.get(event);
@@ -1094,11 +1679,11 @@ fn dapp_provider_script(
       if (method === "signAllTransactions") return this.signAllTransactions(params?.transactions || params?.[0] || params);
       if (method === "signMessage") return this.signMessage(params?.message ?? params?.[0] ?? params);
       if (method === "signAndSendTransaction") return this.signAndSendTransaction(params?.transaction || params?.[0] || params);
-      throw new Error("Unsupported FnzeroSafe provider method: " + method);
+      throw new Error("Unsupported FnzSafe provider method: " + method);
     }},
     async signTransaction(transaction) {{
       const result = await requestSignature("signTransaction", transaction);
-      if (!result.raw_transaction) throw new Error("FnzeroSafe did not return a signed transaction");
+      if (!result.raw_transaction) throw new Error("FnzSafe did not return a signed transaction");
       return hydrateSignedTransaction(transaction, result.raw_transaction);
     }},
     async signAllTransactions(transactions) {{
@@ -1111,7 +1696,7 @@ fn dapp_provider_script(
     async signAndSendTransaction(input) {{
       const transaction = input?.transaction || input;
       const result = await requestSignature("signAndSendTransaction", transaction);
-      if (!result.signature) throw new Error("FnzeroSafe did not return a transaction signature");
+      if (!result.signature) throw new Error("FnzSafe did not return a transaction signature");
       return {{ signature: result.signature }};
     }},
     async sendTransaction(transaction, connection, options) {{
@@ -1121,12 +1706,12 @@ fn dapp_provider_script(
         return connection.sendRawTransaction(raw, options || {{}});
       }}
       const result = await requestSignature("sendTransaction", transaction);
-      if (!result.signature) throw new Error("FnzeroSafe did not return a transaction signature");
+      if (!result.signature) throw new Error("FnzSafe did not return a transaction signature");
       return result.signature;
     }},
     async signMessage(message) {{
       const result = await requestMessageSignature(message);
-      if (!result.signature) throw new Error("FnzeroSafe did not return a message signature");
+      if (!result.signature) throw new Error("FnzSafe did not return a message signature");
       return base58Decode(result.signature);
     }},
   }};
@@ -1175,16 +1760,16 @@ fn dapp_provider_script(
             while (Date.now() - started < 180000) {{
               const poll = await tauriInvoke("dapp_poll_sign_request", {{ requestId }});
               if (poll.status === "approved") {{
-                if (!poll.result?.raw_transaction) throw new Error("FnzeroSafe did not return a signed transaction");
+                if (!poll.result?.raw_transaction) throw new Error("FnzSafe did not return a signed transaction");
                 signed.push({{ signedTransaction: base64ToBytes(poll.result.raw_transaction) }});
                 resolved = true;
                 break;
               }}
               if (poll.status === "rejected") throw new Error(poll.result?.error || "User rejected the request");
-              if (poll.status === "expired") throw new Error("FnzeroSafe signing request expired");
+              if (poll.status === "expired") throw new Error("FnzSafe signing request expired");
               await sleep(500);
             }}
-            if (!resolved) throw new Error("FnzeroSafe signing request timed out");
+            if (!resolved) throw new Error("FnzSafe signing request timed out");
           }}
 	          return signed;
 	        }},
@@ -1206,16 +1791,16 @@ fn dapp_provider_script(
 	            while (Date.now() - started < 180000) {{
 	              const poll = await tauriInvoke("dapp_poll_sign_request", {{ requestId }});
 	              if (poll.status === "approved") {{
-	                if (!poll.result?.signature) throw new Error("FnzeroSafe did not return a transaction signature");
+	                if (!poll.result?.signature) throw new Error("FnzSafe did not return a transaction signature");
 	                signed.push({{ signature: base58Decode(poll.result.signature) }});
 	                resolved = true;
 	                break;
 	              }}
 	              if (poll.status === "rejected") throw new Error(poll.result?.error || "User rejected the request");
-	              if (poll.status === "expired") throw new Error("FnzeroSafe signing request expired");
+	              if (poll.status === "expired") throw new Error("FnzSafe signing request expired");
 	              await sleep(500);
 	            }}
-	            if (!resolved) throw new Error("FnzeroSafe signing request timed out");
+	            if (!resolved) throw new Error("FnzSafe signing request timed out");
 	          }}
 	          return signed;
 	        }},
@@ -1227,7 +1812,7 @@ fn dapp_provider_script(
           for (const input of inputs) {{
             const message = input?.message || input;
             const result = await requestMessageSignature(message);
-            if (!result.signature) throw new Error("FnzeroSafe did not return a message signature");
+            if (!result.signature) throw new Error("FnzSafe did not return a message signature");
             const messageBytes = message instanceof Uint8Array
               ? message
               : message instanceof ArrayBuffer
@@ -1242,7 +1827,7 @@ fn dapp_provider_script(
       }},
     }},
   }};
-  function isFnzeroSafeEntry(entry) {{
+  function isFnzSafeEntry(entry) {{
     const maybeWallet = entry?.wallet || entry?.adapter?.wallet || entry?.adapter || entry;
     return (
       maybeWallet === standardWallet ||
@@ -1254,15 +1839,15 @@ fn dapp_provider_script(
   function moveFnzeroFirst(list) {{
     try {{
       if (!Array.isArray(list)) return;
-      const index = list.findIndex(isFnzeroSafeEntry);
+      const index = list.findIndex(isFnzSafeEntry);
       if (index > 0) list.unshift(list.splice(index, 1)[0]);
     }} catch (_) {{}}
   }}
   const fnzeroWalletRegistrar = Object.assign(({{ register }}) => register(standardWallet), {{ __fnzeroWallet: true }});
-  function prioritizeFnzeroSafes(api) {{
+  function prioritizeFnzSafes(api) {{
     try {{
       const wallets = window.navigator.wallets || (window.navigator.wallets = []);
-      const existing = wallets.findIndex(isFnzeroSafeEntry);
+      const existing = wallets.findIndex(isFnzSafeEntry);
       if (existing >= 0) wallets.splice(existing, 1);
       wallets.unshift(fnzeroWalletRegistrar);
     }} catch (_) {{}}
@@ -1284,7 +1869,7 @@ fn dapp_provider_script(
     return String(element?.textContent || "").replace(/\s+/g, " ").trim();
   }}
   function textLooksLikeWalletOption(text) {{
-    return /FnzeroSafe|Solflare|Phantom|Backpack|OKX|Binance|Magic Eden|SquadsX|Coinbase|Glow|Slope|Torus|Ledger|Wallet/i.test(text);
+    return /FnzSafe|Solflare|Phantom|Backpack|OKX|Binance|Magic Eden|SquadsX|Coinbase|Glow|Slope|Torus|Ledger|Wallet/i.test(text);
   }}
   function elementLooksLikeWalletItem(element) {{
     if (!element || element.nodeType !== 1 || !visibleElement(element)) return false;
@@ -1318,7 +1903,7 @@ fn dapp_provider_script(
     fnzeroExpandAttemptedAt = now;
     allWallets.click();
   }}
-  function prioritizeFnzeroSafeDom() {{
+  function prioritizeFnzSafeDom() {{
     try {{
       const matches = Array.from(document.querySelectorAll("button, [role='button'], a, li, [data-testid], [class*='wallet'], [class*='Wallet']"))
         .map(walletOptionItem)
@@ -1335,19 +1920,19 @@ fn dapp_provider_script(
       }}
     }} catch (_) {{}}
   }}
-  function schedulePrioritizeFnzeroSafeDom() {{
+  function schedulePrioritizeFnzSafeDom() {{
     if (fnzeroDomPrioritizePending) return;
     fnzeroDomPrioritizePending = true;
     window.requestAnimationFrame(() => {{
       fnzeroDomPrioritizePending = false;
-      prioritizeFnzeroSafeDom();
+      prioritizeFnzSafeDom();
     }});
   }}
-  function installFnzeroSafeDomPrioritizer() {{
+  function installFnzSafeDomPrioritizer() {{
     try {{
-      prioritizeFnzeroSafeDom();
+      prioritizeFnzSafeDom();
       const observer = new MutationObserver(() => {{
-        schedulePrioritizeFnzeroSafeDom();
+        schedulePrioritizeFnzSafeDom();
       }});
       observer.observe(document.documentElement, {{ childList: true, subtree: true }});
     }} catch (_) {{}}
@@ -1356,7 +1941,7 @@ fn dapp_provider_script(
     const callback = (api) => {{
       if (!api || typeof api.register !== "function") return;
       api.register(wallet);
-      prioritizeFnzeroSafes(api);
+      prioritizeFnzSafes(api);
       window.setTimeout(announceConnected, 0);
       window.setTimeout(announceConnected, 250);
     }};
@@ -1374,7 +1959,7 @@ fn dapp_provider_script(
     }} catch (_) {{}}
     try {{
       const wallets = window.navigator.wallets || (window.navigator.wallets = []);
-      const existing = wallets.findIndex(isFnzeroSafeEntry);
+      const existing = wallets.findIndex(isFnzSafeEntry);
       if (existing >= 0) wallets.splice(existing, 1);
       wallets.unshift(fnzeroWalletRegistrar);
     }} catch (_) {{}}
@@ -1386,9 +1971,9 @@ fn dapp_provider_script(
   Object.defineProperty(window, "solflare", {{ value: provider, configurable: true }});
   Object.defineProperty(window, "fnzeroWallet", {{ value: provider, configurable: true }});
   registerStandardWallet(standardWallet);
-  installFnzeroSafeDomPrioritizer();
-  [0, 250, 750, 1500, 3000].forEach((delay) => window.setTimeout(prioritizeFnzeroSafes, delay));
-  [0, 250, 750, 1500, 3000].forEach((delay) => window.setTimeout(prioritizeFnzeroSafeDom, delay));
+  installFnzSafeDomPrioritizer();
+  [0, 250, 750, 1500, 3000].forEach((delay) => window.setTimeout(prioritizeFnzSafes, delay));
+  [0, 250, 750, 1500, 3000].forEach((delay) => window.setTimeout(prioritizeFnzSafeDom, delay));
   [0, 250, 750, 1500, 3000].forEach((delay) => window.setTimeout(announceConnected, delay));
 }})();
 "#
@@ -1442,10 +2027,7 @@ fn dapp_open_tab(
         }
         (None, _) => None,
     };
-    let network = network.trim().to_string();
-    if network.is_empty() || network.len() > 256 || network.chars().any(|ch| ch.is_control()) {
-        return Err("invalid network".to_string());
-    }
+    let network = validate_dapp_network(&network)?;
 
     if let Some(existing) = app.get_webview(&label) {
         let _ = existing.close();
@@ -1704,35 +2286,19 @@ fn dapp_submit_sign_request(
         app_id: session.app_id,
         app_name: session.app_name,
         app_url: session.url,
+        request_purpose: None,
         method,
         wallet_public_key: session.wallet_public_key,
         network: session.network,
         transaction_base64,
         transaction_format,
         message_base64,
+        callback_url: None,
+        known_programs: Vec::new(),
         created_at_ms: now_ms(),
     };
 
-    let mut requests = state
-        .requests
-        .lock()
-        .map_err(|_| "dapp request lock poisoned".to_string())?;
-    requests.retain(|_, pending| {
-        now_ms().saturating_sub(pending.event.created_at_ms) <= DAPP_REQUEST_TTL_MS
-            && pending.result.is_none()
-    });
-    requests.insert(
-        request_id.clone(),
-        DappPendingRequest {
-            webview_label,
-            event: event.clone(),
-            result: None,
-        },
-    );
-    drop(requests);
-
-    app.emit_to("main", DAPP_SIGN_REQUEST_EVENT, event)
-        .map_err(|error| format!("failed to notify main window: {error}"))?;
+    enqueue_dapp_sign_request(&app, state.inner(), webview_label, event)?;
     Ok(request_id)
 }
 
@@ -1785,12 +2351,49 @@ fn dapp_poll_sign_request(
 }
 
 #[tauri::command]
+fn dapp_pending_sign_request(
+    state: tauri::State<'_, DappBridgeState>,
+) -> Result<Option<DappSignRequestEvent>, String> {
+    let mut requests = state
+        .requests
+        .lock()
+        .map_err(|_| "dapp request lock poisoned".to_string())?;
+    requests.retain(|_, pending| {
+        now_ms().saturating_sub(pending.event.created_at_ms) <= DAPP_REQUEST_TTL_MS
+            && pending.result.is_none()
+    });
+    Ok(requests
+        .values()
+        .map(|pending| pending.event.clone())
+        .min_by_key(|event| event.created_at_ms))
+}
+
+#[tauri::command]
+fn dapp_pending_connect_request(
+    state: tauri::State<'_, DappBridgeState>,
+) -> Result<Option<DappConnectRequestEvent>, String> {
+    let mut requests = state
+        .connect_requests
+        .lock()
+        .map_err(|_| "dapp connect request lock poisoned".to_string())?;
+    requests.retain(|_, pending| {
+        now_ms().saturating_sub(pending.event.created_at_ms) <= DAPP_REQUEST_TTL_MS
+            && pending.result.is_none()
+    });
+    Ok(requests
+        .values()
+        .map(|pending| pending.event.clone())
+        .min_by_key(|event| event.created_at_ms))
+}
+
+#[tauri::command]
 fn resolve_dapp_sign_request(
     state: tauri::State<'_, DappBridgeState>,
     request_id: String,
     result: DappSignResult,
 ) -> Result<(), String> {
     let request_id = request_id.trim();
+    let mut callback_target = None;
     let mut requests = state
         .requests
         .lock()
@@ -1802,7 +2405,46 @@ fn resolve_dapp_sign_request(
         requests.remove(request_id);
         return Err("dapp signing request expired".to_string());
     }
+    if let Some(callback_url) = pending.event.callback_url.as_deref() {
+        callback_target = Some(append_dapp_result_to_callback_url(
+            callback_url,
+            request_id,
+            &result,
+        )?);
+    }
     pending.result = Some(result);
+    drop(requests);
+
+    if let Some(callback_target) = callback_target {
+        spawn_system_browser(&callback_target)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn resolve_dapp_connect_request(
+    state: tauri::State<'_, DappBridgeState>,
+    request_id: String,
+    result: DappSignResult,
+) -> Result<(), String> {
+    let request_id = request_id.trim();
+    let mut requests = state
+        .connect_requests
+        .lock()
+        .map_err(|_| "dapp connect request lock poisoned".to_string())?;
+    let pending = requests
+        .get_mut(request_id)
+        .ok_or_else(|| "dapp connect request is no longer pending".to_string())?;
+    if now_ms().saturating_sub(pending.event.created_at_ms) > DAPP_REQUEST_TTL_MS {
+        requests.remove(request_id);
+        return Err("dapp connect request expired".to_string());
+    }
+    let callback_target =
+        append_dapp_result_to_callback_url(&pending.event.callback_url, request_id, &result)?;
+    pending.result = Some(result);
+    drop(requests);
+
+    spawn_system_browser(&callback_target)?;
     Ok(())
 }
 
@@ -1910,10 +2552,243 @@ fn open_download_file_location(path: String) -> Result<(), String> {
     reveal_file_in_system_file_manager(&canonical_path)
 }
 
+fn desktop_api_binary_name() -> String {
+    if cfg!(windows) {
+        format!("{DESKTOP_API_BIN_NAME}.exe")
+    } else {
+        DESKTOP_API_BIN_NAME.to_string()
+    }
+}
+
+fn api_port_is_open() -> bool {
+    let addr = SocketAddr::from(([127, 0, 0, 1], FNZERO_SAFE_API_PORT));
+    TcpStream::connect_timeout(&addr, Duration::from_millis(180)).is_ok()
+}
+
+fn repository_root_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(exe) = env::current_exe() {
+        candidates.extend(exe.ancestors().map(Path::to_path_buf));
+    }
+    candidates.extend(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .map(Path::to_path_buf),
+    );
+
+    candidates
+        .into_iter()
+        .filter(|path| path.join("Cargo.toml").is_file() && path.join("apps/desktop").is_dir())
+        .fold(Vec::<PathBuf>::new(), |mut unique, path| {
+            if !unique.iter().any(|item| item == &path) {
+                unique.push(path);
+            }
+            unique
+        })
+}
+
+fn stable_app_support_dir(app: &tauri::App) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(home) = env::var("HOME") {
+            let home = home.trim();
+            if !home.is_empty() {
+                return PathBuf::from(home)
+                    .join("Library")
+                    .join("Application Support")
+                    .join("FnzSafe");
+            }
+        }
+    }
+
+    app.path()
+        .app_data_dir()
+        .unwrap_or_else(|_| env::temp_dir().join("FnzSafe"))
+}
+
+fn set_private_file_permissions(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+}
+
+fn migrate_wallet_database_if_needed(target: &Path, sources: &[PathBuf]) {
+    if target.exists() {
+        return;
+    }
+    let Some(source) = sources.iter().find(|source| {
+        source != &target
+            && std::fs::metadata(source)
+                .map(|metadata| metadata.is_file() && metadata.len() > 0)
+                .unwrap_or(false)
+    }) else {
+        return;
+    };
+    if let Some(parent) = target.parent() {
+        if let Err(error) = std::fs::create_dir_all(parent) {
+            log::warn!("failed to create wallet data directory: {error}");
+            return;
+        }
+    }
+    match std::fs::copy(source, target) {
+        Ok(_) => {
+            set_private_file_permissions(target);
+            log::info!(
+                "migrated wallet database from {} to {}",
+                source.display(),
+                target.display()
+            );
+        }
+        Err(error) => {
+            log::warn!(
+                "failed to migrate wallet database from {} to {}: {error}",
+                source.display(),
+                target.display()
+            );
+        }
+    }
+}
+
+fn preferred_wallet_database_path(app: &tauri::App) -> PathBuf {
+    if let Ok(path) = env::var("FNZERO_SAFE_DB_PATH") {
+        let path = path.trim();
+        if !path.is_empty() {
+            return PathBuf::from(path);
+        }
+    }
+    if let Ok(path) = env::var("SOL_SAFEKEY_DB_PATH") {
+        let path = path.trim();
+        if !path.is_empty() {
+            return PathBuf::from(path);
+        }
+    }
+
+    let app_support = stable_app_support_dir(app);
+    let target = app_support.join("fnzero-safe.sqlite3");
+    let mut migration_sources = vec![app_support.join("sol-safekey.sqlite3")];
+    for root in repository_root_candidates() {
+        migration_sources.push(root.join("apps/desktop/data/fnzero-safe.sqlite3"));
+        migration_sources.push(root.join("apps/desktop/data/sol-safekey.sqlite3"));
+        migration_sources.push(root.join("crates/desktop-api/data/fnzero-safe.sqlite3"));
+        migration_sources.push(root.join("crates/desktop-api/data/sol-safekey.sqlite3"));
+        migration_sources.push(root.join("data/fnzero-safe.sqlite3"));
+        migration_sources.push(root.join("data/sol-safekey.sqlite3"));
+    }
+
+    migrate_wallet_database_if_needed(&target, &migration_sources);
+    target
+}
+
+fn desktop_api_binary_candidates(app: &tauri::App) -> Vec<PathBuf> {
+    let binary_name = desktop_api_binary_name();
+    let mut candidates = Vec::new();
+
+    if let Ok(path) = env::var("FNZERO_SAFE_DESKTOP_API_BIN") {
+        let path = path.trim();
+        if !path.is_empty() {
+            candidates.push(PathBuf::from(path));
+        }
+    }
+
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        candidates.push(resource_dir.join(&binary_name));
+        candidates.push(resource_dir.join("bin").join(&binary_name));
+    }
+
+    if let Ok(exe) = env::current_exe() {
+        for ancestor in exe.ancestors() {
+            candidates.push(ancestor.join(&binary_name));
+            candidates.push(ancestor.join("build-cache/release").join(&binary_name));
+            candidates.push(ancestor.join("target/release").join(&binary_name));
+        }
+    }
+
+    for root in repository_root_candidates() {
+        candidates.push(root.join("build-cache/release").join(&binary_name));
+        candidates.push(root.join("target/release").join(&binary_name));
+    }
+
+    candidates.into_iter().filter(|path| path.is_file()).fold(
+        Vec::<PathBuf>::new(),
+        |mut unique, path| {
+            if !unique.iter().any(|item| item == &path) {
+                unique.push(path);
+            }
+            unique
+        },
+    )
+}
+
+fn start_desktop_api_if_needed(
+    app: &tauri::App,
+    process: &DesktopApiProcess,
+) -> Result<(), String> {
+    if api_port_is_open() {
+        return Ok(());
+    }
+
+    let binary = desktop_api_binary_candidates(app)
+        .into_iter()
+        .next()
+        .ok_or_else(|| {
+            format!(
+                "未找到本地后端程序 {DESKTOP_API_BIN_NAME}，请先运行 npm run desktop:build 或 npm run desktop:dev"
+            )
+        })?;
+    let database_path = preferred_wallet_database_path(app);
+    if let Some(parent) = database_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("创建钱包数据目录失败: {error}"))?;
+    }
+
+    let mut command = Command::new(&binary);
+    command
+        .env("FNZERO_SAFE_DB_PATH", &database_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if let Some(parent) = binary.parent() {
+        command.current_dir(parent);
+    }
+
+    let child = command
+        .spawn()
+        .map_err(|error| format!("启动本地后端失败: {error}"))?;
+    {
+        let mut guard = process
+            .child
+            .lock()
+            .map_err(|_| "本地后端进程状态锁已损坏".to_string())?;
+        *guard = Some(child);
+    }
+
+    for _ in 0..40 {
+        if api_port_is_open() {
+            log::info!(
+                "started local desktop API at 127.0.0.1:{} with database {}",
+                FNZERO_SAFE_API_PORT,
+                database_path.display()
+            );
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    Err(format!(
+        "本地后端已启动但端口 {} 尚未就绪",
+        FNZERO_SAFE_API_PORT
+    ))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_single_instance::Builder::new().build())
         .manage(DappBridgeState::default())
+        .manage(DesktopApiProcess::default())
         .invoke_handler(tauri::generate_handler![
             proxy_api_request,
             open_external_url,
@@ -1923,7 +2798,10 @@ pub fn run() {
             dapp_close_tab,
             dapp_submit_sign_request,
             dapp_poll_sign_request,
+            dapp_pending_sign_request,
+            dapp_pending_connect_request,
             resolve_dapp_sign_request,
+            resolve_dapp_connect_request,
             biometric_wallet_status,
             biometric_wallet_store_password,
             biometric_wallet_get_password,
@@ -1939,6 +2817,26 @@ pub fn run() {
                         .level(log::LevelFilter::Info)
                         .build(),
                 )?;
+            }
+            if let Err(error) =
+                start_desktop_api_if_needed(app, app.state::<DesktopApiProcess>().inner())
+            {
+                log::warn!("failed to start local desktop API: {error}");
+            }
+            app.deep_link().on_open_url({
+                let app = app.handle().clone();
+                move |event| {
+                    for url in event.urls() {
+                        if let Err(error) = handle_fnzsafe_deep_link(&app, &url) {
+                            log::warn!("ignored fnzsafe deep link: {error}");
+                        }
+                    }
+                }
+            });
+            handle_current_fnzsafe_deep_links(app.handle());
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
+            if let Err(error) = app.deep_link().register_all() {
+                log::warn!("failed to register fnzsafe deep link scheme: {error}");
             }
             Ok(())
         })
@@ -2027,6 +2925,19 @@ mod tests {
     }
 
     #[test]
+    fn biometric_wallet_account_is_stable_for_public_key() {
+        let public_key = "11111111111111111111111111111111";
+        let accounts =
+            biometric_wallet_accounts("0123456789abcdef0123456789abcdef", public_key).unwrap();
+
+        assert_eq!(accounts.primary, format!("solana:{public_key}"));
+        assert!(accounts
+            .fallbacks
+            .contains(&format!("0123456789abcdef0123456789abcdef:{public_key}")));
+        assert!(accounts.fallbacks.contains(&public_key.to_string()));
+    }
+
+    #[test]
     fn connected_dapp_navigation_stays_on_selected_domain() {
         let pumpfun = allowed_dapp("pumpfun").unwrap();
         let same_domain = "https://pump.fun/coin/example".parse().unwrap();
@@ -2065,5 +2976,107 @@ mod tests {
         assert!(!is_allowed_connected_dapp_navigation_url(
             &pumpfun, &data_page
         ));
+    }
+
+    #[test]
+    fn sign_deep_link_parses_host_action() {
+        let url = "fnzsafe://sign?method=signMessage&wallet_public_key=11111111111111111111111111111111&network=devnet&message_base64=aGVsbG8=&app_name=Example%20DApp&app_url=https%3A%2F%2Fexample.com%2F&request_purpose=login&callback_url=https%3A%2F%2Fexample.com%2Fwallet%2Fcallback"
+            .parse::<tauri::Url>()
+            .unwrap();
+
+        let request = parse_sign_deep_link(&url).unwrap();
+        assert_eq!(request.app_id, "fnzsafe-deep-link");
+        assert_eq!(request.app_name, "Example DApp");
+        assert_eq!(request.request_purpose.as_deref(), Some("login"));
+        assert_eq!(request.method, "signMessage");
+        assert_eq!(request.network, "devnet");
+        assert_eq!(request.message_base64.as_deref(), Some("aGVsbG8="));
+        assert_eq!(
+            request.callback_url.as_deref(),
+            Some("https://example.com/wallet/callback")
+        );
+    }
+
+    #[test]
+    fn sign_deep_link_allows_localhost_callback_for_local_development() {
+        let url = "fnzsafe://sign?method=signMessage&wallet_public_key=11111111111111111111111111111111&network=devnet&message_base64=aGVsbG8=&app_name=Local%20DApp&app_url=http%3A%2F%2Flocalhost%3A5174%2F&callback_url=http%3A%2F%2Flocalhost%3A5174%2Fwallet%2Fcallback"
+            .parse::<tauri::Url>()
+            .unwrap();
+
+        let request = parse_sign_deep_link(&url).unwrap();
+        assert_eq!(
+            request.callback_url.as_deref(),
+            Some("http://localhost:5174/wallet/callback")
+        );
+    }
+
+    #[test]
+    fn connect_deep_link_parses_localhost_callback() {
+        let url = "fnzsafe://connect?network=devnet&app_name=Example%20DApp&app_url=http%3A%2F%2Flocalhost%3A5174%2F&callback_url=http%3A%2F%2Flocalhost%3A5174%2Fwallet%2Fcallback&request_id=req-1"
+            .parse::<tauri::Url>()
+            .unwrap();
+
+        let request = parse_connect_deep_link(&url).unwrap();
+        assert_eq!(request.request_id, "req-1");
+        assert_eq!(request.app_name, "Example DApp");
+        assert_eq!(request.network, "devnet");
+        assert_eq!(
+            request.callback_url,
+            "http://localhost:5174/wallet/callback"
+        );
+    }
+
+    #[test]
+    fn sign_deep_link_parses_path_action_and_transaction() {
+        let url = "fnzsafe:///sign?method=signTransaction&wallet_public_key=11111111111111111111111111111111&transaction_base64=AQID&transaction_format=v0&app_url=https%3A%2F%2Fdapp.example%2F"
+            .parse::<tauri::Url>()
+            .unwrap();
+
+        let request = parse_sign_deep_link(&url).unwrap();
+        assert_eq!(request.app_name, "dapp.example");
+        assert_eq!(request.method, "signTransaction");
+        assert_eq!(request.network, "mainnet");
+        assert_eq!(request.transaction_base64, "AQID");
+        assert_eq!(request.transaction_format, "v0");
+        assert!(request.message_base64.is_none());
+    }
+
+    #[test]
+    fn sign_deep_link_rejects_cross_site_callback() {
+        let url = "fnzsafe://sign?method=signMessage&wallet_public_key=11111111111111111111111111111111&message_base64=aGVsbG8=&app_url=https%3A%2F%2Fexample.com%2F&callback_url=https%3A%2F%2Fevil.example%2Fcallback"
+            .parse::<tauri::Url>()
+            .unwrap();
+
+        let error = parse_sign_deep_link(&url).unwrap_err();
+        assert_eq!(
+            error,
+            "callback_url must belong to the same site as app_url"
+        );
+    }
+
+    #[test]
+    fn callback_url_appends_dapp_result() {
+        let result = DappSignResult {
+            approved: true,
+            error: None,
+            public_key: Some("11111111111111111111111111111111".to_string()),
+            signature: Some("sig123".to_string()),
+            raw_transaction: None,
+            recent_blockhash: Some("hash123".to_string()),
+        };
+
+        let callback = append_dapp_result_to_callback_url(
+            "https://fnzero.dev/callback?source=wallet",
+            "req-1",
+            &result,
+        )
+        .unwrap();
+        assert!(callback.starts_with("https://fnzero.dev/callback?"));
+        assert!(callback.contains("source=wallet"));
+        assert!(callback.contains("request_id=req-1"));
+        assert!(callback.contains("approved=true"));
+        assert!(callback.contains("public_key=11111111111111111111111111111111"));
+        assert!(callback.contains("signature=sig123"));
+        assert!(callback.contains("recent_blockhash=hash123"));
     }
 }

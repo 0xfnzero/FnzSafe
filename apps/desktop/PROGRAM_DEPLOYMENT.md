@@ -1,8 +1,8 @@
-# Solana Program Deployment with FnzeroSafe
+# Solana Program Deployment with FnzSafe
 
-This guide covers the first deployment of an arbitrary Solana SBF program through the FnzeroSafe UI. It is for new upgradeable-loader Program IDs, not upgrades to an existing program.
+This guide covers the first deployment of an arbitrary Solana SBF program through the FnzSafe UI. It is for new upgradeable-loader Program IDs, not upgrades to an existing program.
 
-FnzeroSafe is a general-purpose wallet and program operations tool. It does not audit a contract, approve a release, or make an untrusted binary safe. Complete the program's security review, reproducible build, local-validator tests, and release approval before using this workflow.
+FnzSafe is a general-purpose wallet and program operations tool. It does not audit a contract, approve a release, or make an untrusted binary safe. Complete the program's security review, reproducible build, local-validator tests, and release approval before using this workflow.
 
 Every deployment spends SOL and may submit many transactions. Use the local desktop application or a UI and API bound only to loopback. Never expose the local API through a public proxy, tunnel, or port forward.
 
@@ -26,7 +26,7 @@ The Program keypair determines the Program ID and signs creation of the new Prog
 - Keep it outside the repository, downloads folder, shared drives, cloud sync, shell history, logs, tickets, and chat.
 - Do not print the JSON with `cat`, paste it into a terminal, or include it in screenshots or screen sharing.
 - Store an encrypted, access-controlled backup before deployment. Verify the backup without displaying its contents.
-- Upload it only to the trusted local FnzeroSafe UI for the deployment request. Clear the form and close unneeded browser windows afterward.
+- Upload it only to the trusted local FnzSafe UI for the deployment request. Clear the form and close unneeded browser windows afterward.
 - Stop if the Program ID derived by the UI differs from the approved Program ID.
 
 The Program keypair and Upgrade Authority are different roles. The Program keypair fixes the program address. After deployment, upgrades are controlled by the ProgramData Upgrade Authority, which is the selected deployment wallet in this workflow. Protect both credentials independently.
@@ -55,7 +55,7 @@ Select the intended RPC profile before loading deployment material. Confirm all 
 - An independent read-only check against the target RPC returns the same genesis hash.
 - The payer wallet is funded on that exact cluster.
 
-An RPC profile label such as `devnet` is not proof of cluster identity. FnzeroSafe reads the RPC's actual genesis hash before unlocking the wallet or spending SOL and rejects a mismatch. For a custom RPC, confirm that it serves the intended cluster and that its genesis hash is supported by the deployment form.
+An RPC profile label such as `devnet` is not proof of cluster identity. FnzSafe reads the RPC's actual genesis hash before unlocking the wallet or spending SOL and rejects a mismatch. For a custom RPC, confirm that it serves the intended cluster and that its genesis hash is supported by the deployment form.
 
 Do not work around a mismatch by changing the network label or expected hash. Stop and identify whether the RPC profile or release target is wrong.
 
@@ -73,7 +73,7 @@ Record the approved value with the release evidence before signing.
 
 ## First deployment through the UI
 
-1. Start FnzeroSafe locally and open the UI. Confirm the local API health endpoint before loading any key material.
+1. Start FnzSafe locally and open the UI. Confirm the local API health endpoint before loading any key material.
 2. Select the target RPC profile, then open **Program Workspace** and **Deploy Program**.
 3. Select the saved deployment wallet. Verify that its public key is the intended payer and Upgrade Authority.
 4. Upload the approved `.so`. Compare the displayed filename, byte length, and SHA-256 with the release record.
@@ -91,7 +91,7 @@ The backend verifies the SBF binary before signing, checks the Program ID derive
 
 A first deployment may require create-buffer, multiple write, and deploy transactions. A timeout or lost response does not prove that a transaction failed. Never blindly retry.
 
-Use the persisted deployment record shown by FnzeroSafe to determine the next action. Recovery must retain the exact same intent:
+Use the persisted deployment record shown by FnzSafe to determine the next action. Recovery must retain the exact same intent:
 
 - cluster genesis hash and Program ID;
 - `.so` bytes, SHA-256, and byte length;
@@ -116,7 +116,7 @@ Do not consider deployment complete merely because a transaction signature exist
 
 Download the deployment receipt immediately. Independently compute its SHA-256, archive it with the source revision, build metadata, artifact digest, Program ID approval, and operator review, and verify the Program on-chain through a separate read-only method.
 
-A receipt records what FnzeroSafe observed and submitted. It is not a contract audit, source-to-binary proof, or external attestation. Any required reviewer signatures or deployment attestations must be created separately after checking the finalized readback.
+A receipt records what FnzSafe observed and submitted. It is not a contract audit, source-to-binary proof, or external attestation. Any required reviewer signatures or deployment attestations must be created separately after checking the finalized readback.
 
 ## Stop conditions
 

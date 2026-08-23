@@ -19,6 +19,16 @@ class AppScope extends ConsumerWidget {
       });
     });
 
+    ref.listen(evmChainsProvider, (previous, next) {
+      next.whenData((chains) {
+        final active = ref.read(activeEvmChainProvider);
+        if (active == null && chains.isNotEmpty) {
+          ref.read(activeEvmChainProvider.notifier).state = chains
+              .firstWhere((chain) => chain.testnet, orElse: () => chains.first);
+        }
+      });
+    });
+
     return SafeArea(child: child);
   }
 }

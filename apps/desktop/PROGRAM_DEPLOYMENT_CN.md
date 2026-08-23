@@ -1,8 +1,8 @@
-# 使用 FnzeroSafe 部署 Solana Program
+# 使用 FnzSafe 部署 Solana Program
 
-本文说明如何通过 FnzeroSafe UI 首次部署任意 Solana SBF Program。该流程适用于新的 upgradeable-loader Program ID，不用于升级已经存在的 Program。
+本文说明如何通过 FnzSafe UI 首次部署任意 Solana SBF Program。该流程适用于新的 upgradeable-loader Program ID，不用于升级已经存在的 Program。
 
-FnzeroSafe 是通用钱包和 Program 运维工具。它不会自动完成合约审计、批准发布，也不会把不可信的二进制变得安全。进入本流程前，必须完成合约安全与业务逻辑审查、可复现构建、本地验证器测试和发布审批。
+FnzSafe 是通用钱包和 Program 运维工具。它不会自动完成合约审计、批准发布，也不会把不可信的二进制变得安全。进入本流程前，必须完成合约安全与业务逻辑审查、可复现构建、本地验证器测试和发布审批。
 
 部署会消耗 SOL，并且可能发送多笔交易。应使用本地桌面应用，或仅绑定 loopback 的 UI 与 API。不要通过公网代理、隧道或端口转发暴露本地 API。
 
@@ -26,7 +26,7 @@ Program keypair 决定 Program ID，并为新 Program 账户的创建签名。�
 - 存放在代码仓库、下载目录、共享盘、云同步、shell 历史、日志、工单和聊天之外；
 - 不要用 `cat` 打印、粘贴到终端，也不要放入截图或屏幕共享；
 - 部署前创建加密且受访问控制的备份，并在不显示文件内容的前提下验证备份；
-- 只上传到可信的本地 FnzeroSafe UI；请求结束后清空表单并关闭不需要的浏览器窗口；
+- 只上传到可信的本地 FnzSafe UI；请求结束后清空表单并关闭不需要的浏览器窗口；
 - 如果 UI 派生出的 Program ID 与批准值不同，立即停止。
 
 Program keypair 与 Upgrade Authority 是不同角色。Program keypair 固定 Program 地址；部署后，升级由 ProgramData Upgrade Authority 控制，本流程中就是所选部署钱包。两份凭据都需要独立保护。
@@ -55,7 +55,7 @@ Linux 可以使用 `sha256sum`。把独立批准的 64 位小写 SHA-256 填入�
 - 通过独立的只读检查，从目标 RPC 得到相同 genesis hash；
 - 付款钱包在该精确集群上有足够余额。
 
-`devnet` 等 RPC 配置标签不能证明集群身份。FnzeroSafe 会在解锁钱包或花费 SOL 前读取 RPC 的真实 genesis hash，不匹配时拒绝部署。使用自定义 RPC 时，必须确认它服务于预期集群，并且部署表单支持该 genesis hash。
+`devnet` 等 RPC 配置标签不能证明集群身份。FnzSafe 会在解锁钱包或花费 SOL 前读取 RPC 的真实 genesis hash，不匹配时拒绝部署。使用自定义 RPC 时，必须确认它服务于预期集群，并且部署表单支持该 genesis hash。
 
 不要通过修改网络标签或 expected hash 绕过不匹配。应停止操作，查明 RPC 配置和发布目标中哪一项错误。
 
@@ -73,7 +73,7 @@ Linux 可以使用 `sha256sum`。把独立批准的 64 位小写 SHA-256 填入�
 
 ## 通过 UI 首次部署
 
-1. 在本机启动 FnzeroSafe 并打开 UI。载入任何密钥材料前，确认本地 API health endpoint 正常。
+1. 在本机启动 FnzSafe 并打开 UI。载入任何密钥材料前，确认本地 API health endpoint 正常。
 2. 选择目标 RPC，然后进入“Program 工作区”并打开“部署 Program”。
 3. 选择已保存的部署钱包，确认其公钥正是预期付款钱包和 Upgrade Authority。
 4. 上传已批准的 `.so`，逐项比较 UI 显示的文件名、字节长度、SHA-256 与发布记录。
@@ -91,7 +91,7 @@ Linux 可以使用 `sha256sum`。把独立批准的 64 位小写 SHA-256 填入�
 
 首次部署可能包含 create-buffer、多笔 write 和 deploy 交易。超时或响应丢失不能证明交易失败，绝不能盲目重试。
 
-应根据 FnzeroSafe 显示的持久化部署记录决定下一步。恢复必须保持完全相同的部署意图：
+应根据 FnzSafe 显示的持久化部署记录决定下一步。恢复必须保持完全相同的部署意图：
 
 - 集群 genesis hash 和 Program ID；
 - `.so` 字节、SHA-256 和字节长度；
@@ -116,7 +116,7 @@ Linux 可以使用 `sha256sum`。把独立批准的 64 位小写 SHA-256 填入�
 
 立即下载 deployment receipt，独立计算 receipt 的 SHA-256，并与源码版本、构建 metadata、制品摘要、Program ID 批准记录和操作者复核证据一起归档。还应通过另一种只读方式独立核对链上 Program。
 
-Receipt 只记录 FnzeroSafe 观察和提交的内容，不是合约审计、源码到二进制证明或外部证明。任何要求的复核者签名或部署 attestation，都必须在核对 finalized 回读后另行生成。
+Receipt 只记录 FnzSafe 观察和提交的内容，不是合约审计、源码到二进制证明或外部证明。任何要求的复核者签名或部署 attestation，都必须在核对 finalized 回读后另行生成。
 
 ## 必须停止的情况
 

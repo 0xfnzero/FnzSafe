@@ -1,5 +1,7 @@
 enum AppNetwork { mainnet, devnet, testnet }
 
+enum WalletFamily { solana, evm }
+
 extension AppNetworkLabel on AppNetwork {
   String get label => switch (this) {
         AppNetwork.mainnet => 'Mainnet',
@@ -8,11 +10,53 @@ extension AppNetworkLabel on AppNetwork {
       };
 }
 
+class EvmChainConfig {
+  const EvmChainConfig({
+    required this.chainId,
+    required this.name,
+    required this.nativeSymbol,
+    required this.rpcUrl,
+    required this.testnet,
+    this.explorerUrl,
+  });
+
+  factory EvmChainConfig.fromJson(Map<String, Object?> json) {
+    return EvmChainConfig(
+      chainId: json['chainId'] as int,
+      name: json['name'] as String,
+      nativeSymbol: json['nativeSymbol'] as String,
+      rpcUrl: json['rpcUrl'] as String,
+      explorerUrl: json['explorerUrl'] as String?,
+      testnet: json['testnet'] as bool? ?? false,
+    );
+  }
+
+  final int chainId;
+  final String name;
+  final String nativeSymbol;
+  final String rpcUrl;
+  final String? explorerUrl;
+  final bool testnet;
+
+  String get label => '$name ($chainId)';
+
+  Map<String, Object?> toJson() => {
+        'chainId': chainId,
+        'name': name,
+        'nativeSymbol': nativeSymbol,
+        'rpcUrl': rpcUrl,
+        if (explorerUrl != null) 'explorerUrl': explorerUrl,
+        'testnet': testnet,
+      };
+}
+
 class WalletSummary {
   const WalletSummary({
     required this.id,
     required this.name,
     required this.publicKey,
+    this.family = WalletFamily.solana,
+    this.derivationPath,
   });
 
   factory WalletSummary.fromJson(Map<String, Object?> json) {
@@ -20,17 +64,26 @@ class WalletSummary {
       id: json['id'] as String,
       name: json['name'] as String,
       publicKey: json['publicKey'] as String,
+      family: switch (json['family']) {
+        'evm' => WalletFamily.evm,
+        _ => WalletFamily.solana,
+      },
+      derivationPath: json['derivationPath'] as String?,
     );
   }
 
   final String id;
   final String name;
   final String publicKey;
+  final WalletFamily family;
+  final String? derivationPath;
 
   Map<String, Object?> toJson() => {
         'id': id,
         'name': name,
         'publicKey': publicKey,
+        'family': family.name,
+        if (derivationPath != null) 'derivationPath': derivationPath,
       };
 }
 
@@ -60,6 +113,56 @@ class AssetSnapshot {
   final List<TokenAsset> tokens;
   final List<TransactionHistoryEntry> recentTransactions;
   final int? refreshedAtMs;
+}
+
+class EvmAssetSnapshot {
+  const EvmAssetSnapshot({
+    required this.chain,
+    required this.walletAddress,
+    required this.nativeBalanceWei,
+    required this.tokens,
+    required this.recentTransactions,
+    required this.historyStatus,
+    this.historyMessage,
+    this.refreshedAtMs,
+  });
+
+  final EvmChainConfig chain;
+  final String walletAddress;
+  final String nativeBalanceWei;
+  final List<EvmTokenAsset> tokens;
+  final List<EvmTransactionHistoryEntry> recentTransactions;
+  final String historyStatus;
+  final String? historyMessage;
+  final int? refreshedAtMs;
+}
+
+class EvmTokenAsset {
+  const EvmTokenAsset({
+    required this.contractAddress,
+    required this.symbol,
+    required this.name,
+    required this.balance,
+    required this.decimals,
+  });
+
+  final String contractAddress;
+  final String symbol;
+  final String name;
+  final String balance;
+  final int decimals;
+}
+
+class EvmTransactionHistoryEntry {
+  const EvmTransactionHistoryEntry({
+    required this.hash,
+    required this.status,
+    this.blockNumber,
+  });
+
+  final String hash;
+  final int? blockNumber;
+  final String status;
 }
 
 class TokenAsset {
@@ -108,6 +211,16 @@ class ExportPrivateKeyResponse {
   final String privateKeyBase58;
 }
 
+class EvmExportPrivateKeyResponse {
+  const EvmExportPrivateKeyResponse({
+    required this.address,
+    required this.privateKeyHex,
+  });
+
+  final String address;
+  final String privateKeyHex;
+}
+
 class SigningPreview {
   const SigningPreview({
     required this.id,
@@ -144,9 +257,61 @@ class PaymentSigningDraft {
   final String? mint;
 }
 
+class EvmPaymentSigningDraft {
+  const EvmPaymentSigningDraft({
+    required this.preview,
+    required this.recipient,
+    required this.amountWeiOrUnits,
+    this.tokenContract,
+  });
+
+  final EvmPaymentPreview preview;
+  final String recipient;
+  final String amountWeiOrUnits;
+  final String? tokenContract;
+}
+
+class EvmPaymentPreview {
+  const EvmPaymentPreview({
+    required this.previewId,
+    required this.chain,
+    required this.walletAddress,
+    required this.recipient,
+    required this.amountWeiOrUnits,
+    required this.gasLimit,
+    required this.gasPriceWei,
+    this.maxFeePerGasWei,
+    this.maxPriorityFeePerGasWei,
+    required this.feeModel,
+    required this.nonce,
+    required this.estimatedFeeWei,
+    required this.summary,
+    required this.warnings,
+    this.tokenContract,
+  });
+
+  final String previewId;
+  final EvmChainConfig chain;
+  final String walletAddress;
+  final String recipient;
+  final String? tokenContract;
+  final String amountWeiOrUnits;
+  final String gasLimit;
+  final String gasPriceWei;
+  final String? maxFeePerGasWei;
+  final String? maxPriorityFeePerGasWei;
+  final String feeModel;
+  final String nonce;
+  final String estimatedFeeWei;
+  final String summary;
+  final List<String> warnings;
+}
+
 class DappSigningDraft {
   const DappSigningDraft({
     required this.preview,
+    required this.appName,
+    required this.appUrl,
     required this.method,
     required this.payloadBase64,
     this.requestId,
@@ -154,10 +319,48 @@ class DappSigningDraft {
   });
 
   final SigningPreview preview;
+  final String appName;
+  final String appUrl;
   final String method;
   final String payloadBase64;
   final String? requestId;
   final String? transactionFormat;
+}
+
+class EvmDappSigningDraft {
+  const EvmDappSigningDraft({
+    required this.preview,
+    required this.method,
+    required this.payloadJson,
+    this.requestId,
+  });
+
+  final EvmDappSignPreview preview;
+  final String method;
+  final String payloadJson;
+  final String? requestId;
+}
+
+class EvmDappSignPreview {
+  const EvmDappSignPreview({
+    required this.previewId,
+    required this.chain,
+    required this.walletAddress,
+    required this.appName,
+    required this.appUrl,
+    required this.method,
+    required this.summary,
+    required this.warnings,
+  });
+
+  final String previewId;
+  final EvmChainConfig chain;
+  final String walletAddress;
+  final String appName;
+  final String appUrl;
+  final String method;
+  final String summary;
+  final List<String> warnings;
 }
 
 class DappSignResponse {
@@ -167,6 +370,7 @@ class DappSignResponse {
     this.signature,
     this.signatureBase64,
     this.signedPayloadBase64,
+    this.signedTransaction,
     this.signedPayloadsBase64 = const [],
     this.transactionSignature,
     this.error,
@@ -177,6 +381,7 @@ class DappSignResponse {
   final String? signature;
   final String? signatureBase64;
   final String? signedPayloadBase64;
+  final String? signedTransaction;
   final List<String> signedPayloadsBase64;
   final String? transactionSignature;
   final String? error;
@@ -251,6 +456,40 @@ class TransactionSubmitResult {
   final String status;
 }
 
+class EvmTransactionSubmitResult {
+  const EvmTransactionSubmitResult({
+    required this.transactionHash,
+    required this.chain,
+    required this.submittedAt,
+    required this.status,
+    this.blockNumber,
+  });
+
+  final String transactionHash;
+  final EvmChainConfig chain;
+  final String submittedAt;
+  final String status;
+  final int? blockNumber;
+}
+
+class EvmTransactionStatus {
+  const EvmTransactionStatus({
+    required this.transactionHash,
+    required this.chain,
+    required this.status,
+    this.blockNumber,
+    this.gasUsed,
+    this.effectiveGasPriceWei,
+  });
+
+  final String transactionHash;
+  final EvmChainConfig chain;
+  final int? blockNumber;
+  final String status;
+  final String? gasUsed;
+  final String? effectiveGasPriceWei;
+}
+
 class DappSignSubmitResult {
   const DappSignSubmitResult({
     required this.status,
@@ -267,6 +506,20 @@ class DappSignSubmitResult {
   final String? signedPayloadBase64;
   final List<String> signedPayloadsBase64;
   final TransactionSubmitResult? transaction;
+}
+
+class EvmDappSignSubmitResult {
+  const EvmDappSignSubmitResult({
+    required this.status,
+    this.signature,
+    this.signedTransaction,
+    this.transaction,
+  });
+
+  final String status;
+  final String? signature;
+  final String? signedTransaction;
+  final EvmTransactionSubmitResult? transaction;
 }
 
 class SquadsMemberSummary {

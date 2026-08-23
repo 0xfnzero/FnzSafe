@@ -1,4 +1,4 @@
-//! # FnzeroSafe
+//! # FnzSafe
 //!
 //! A Solana key management library with authenticated password keystores.
 //!
@@ -831,7 +831,7 @@ fn verify_current_totp_code(totp_secret: &str, current_code: &str) -> Result<(),
     let config = TOTPConfig {
         secret: totp_secret.to_string(),
         account: "wallet".to_string(),
-        issuer: "FnzeroSafe".to_string(),
+        issuer: "FnzSafe".to_string(),
         algorithm: "SHA1".to_string(),
         digits: 6,
         step: 30,

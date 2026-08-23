@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/core",
+  "crates/evm-services",
   "crates/app-services",
   "crates/desktop-api",
   "crates/mobile-bridge",
@@ -15,4 +16,5 @@ repository = "https://github.com/0xfnzero/FnzeroSafe"
 
 [workspace.dependencies]
 fnzero-safe-core = { path = "crates/core", version = "0.1.8" }
+fnzero-safe-evm-services = { path = "crates/evm-services", version = "0.1.0" }
 fnzero-safe-app-services = { path = "crates/app-services", version = "0.1.0" }

@@ -19,7 +19,7 @@ ANDROID_ENV := $(if $(ANDROID_JAVA_HOME),JAVA_HOME="$(ANDROID_JAVA_HOME)" PATH="
 .PHONY: help dev package package-android package-ios package-macos package-windows prepare-release-dir
 
 help:
-	@echo "FnzeroSafe commands"
+	@echo "FnzSafe commands"
 	@echo "  make dev              Start the desktop dev app; old local dev processes are stopped first"
 	@echo "  make package          Build Android, iOS, macOS, and Windows packages into ./release"
 	@echo "  make package-android  Build Android APK/AAB into ./release/android"
@@ -94,7 +94,7 @@ package-macos:
 	done < <(find \
 		"$(DESKTOP_DIR)/src-tauri/target/release/bundle" \
 		"$(ROOT_DIR)/build-cache/release/bundle" \
-		-maxdepth 5 \( -name "*.dmg" -o -name "*.app" \) ! -name "rw.*" -print 2>/dev/null); \
+		-maxdepth 5 \( -name "FnzSafe_*.dmg" -o -name "FnzSafe.app" \) ! -name "rw.*" -print 2>/dev/null); \
 	if [[ "$$copied" != "1" ]]; then \
 		echo "No macOS desktop package artifacts were found." >&2; \
 		exit 1; \

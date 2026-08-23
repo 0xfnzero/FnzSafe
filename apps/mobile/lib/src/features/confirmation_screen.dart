@@ -25,9 +25,11 @@ class _ConfirmationScreenState extends ConsumerState<ConfirmationScreen> {
   @override
   Widget build(BuildContext context) {
     final preview = ref.watch(signingPreviewProvider);
-    final paymentDraft = ref.watch(paymentSigningDraftProvider);
-    final dappDraft = ref.watch(dappSigningDraftProvider);
-    final squadsDraft = ref.watch(squadsSigningDraftProvider);
+    final rawPaymentDraft = ref.watch(paymentSigningDraftProvider);
+    final rawEvmPaymentDraft = ref.watch(evmPaymentSigningDraftProvider);
+    final rawDappDraft = ref.watch(dappSigningDraftProvider);
+    final rawEvmDappDraft = ref.watch(evmDappSigningDraftProvider);
+    final rawSquadsDraft = ref.watch(squadsSigningDraftProvider);
 
     if (preview == null) {
       return Scaffold(
@@ -35,6 +37,19 @@ class _ConfirmationScreenState extends ConsumerState<ConfirmationScreen> {
         body: const Center(child: Text('No signing request')),
       );
     }
+
+    final paymentDraft =
+        rawPaymentDraft?.preview.id == preview.id ? rawPaymentDraft : null;
+    final evmPaymentDraft = rawEvmPaymentDraft?.preview.previewId == preview.id
+        ? rawEvmPaymentDraft
+        : null;
+    final dappDraft =
+        rawDappDraft?.preview.id == preview.id ? rawDappDraft : null;
+    final evmDappDraft = rawEvmDappDraft?.preview.previewId == preview.id
+        ? rawEvmDappDraft
+        : null;
+    final squadsDraft =
+        rawSquadsDraft?.preview.id == preview.id ? rawSquadsDraft : null;
 
     return Scaffold(
       appBar: AppBar(
@@ -61,8 +76,46 @@ class _ConfirmationScreenState extends ConsumerState<ConfirmationScreen> {
                 value: paymentDraft.amountBaseUnits.toString()),
             _Detail(label: 'Operation', value: paymentDraft.operation.name),
           ],
+          if (evmPaymentDraft != null) ...[
+            _Detail(label: 'Chain', value: evmPaymentDraft.preview.chain.label),
+            _Detail(
+                label: 'Chain ID',
+                value: evmPaymentDraft.preview.chain.chainId.toString()),
+            _Detail(label: 'Recipient', value: evmPaymentDraft.recipient),
+            if (evmPaymentDraft.tokenContract != null)
+              _Detail(label: 'Token', value: evmPaymentDraft.tokenContract!),
+            _Detail(label: 'Amount', value: evmPaymentDraft.amountWeiOrUnits),
+            _Detail(
+                label: 'Gas limit', value: evmPaymentDraft.preview.gasLimit),
+            _Detail(
+                label: 'Fee model', value: evmPaymentDraft.preview.feeModel),
+            _Detail(
+                label: 'Gas price',
+                value: '${evmPaymentDraft.preview.gasPriceWei} wei'),
+            if (evmPaymentDraft.preview.maxFeePerGasWei != null)
+              _Detail(
+                  label: 'Max fee',
+                  value: '${evmPaymentDraft.preview.maxFeePerGasWei} wei'),
+            if (evmPaymentDraft.preview.maxPriorityFeePerGasWei != null)
+              _Detail(
+                  label: 'Priority fee',
+                  value:
+                      '${evmPaymentDraft.preview.maxPriorityFeePerGasWei} wei'),
+            _Detail(label: 'Nonce', value: evmPaymentDraft.preview.nonce),
+            _Detail(
+                label: 'Estimated fee',
+                value: '${evmPaymentDraft.preview.estimatedFeeWei} wei'),
+          ],
           if (dappDraft != null) ...[
+            _Detail(label: 'dApp', value: dappDraft.appName),
+            _Detail(label: 'Origin', value: dappDraft.appUrl),
             _Detail(label: 'dApp method', value: dappDraft.method),
+          ],
+          if (evmDappDraft != null) ...[
+            _Detail(label: 'EVM dApp', value: evmDappDraft.preview.appName),
+            _Detail(label: 'Origin', value: evmDappDraft.preview.appUrl),
+            _Detail(label: 'Method', value: evmDappDraft.method),
+            _Detail(label: 'Chain', value: evmDappDraft.preview.chain.label),
           ],
           if (squadsDraft != null) ...[
             _Detail(label: 'Squads action', value: squadsDraft.kind.name),
@@ -123,9 +176,19 @@ class _ConfirmationScreenState extends ConsumerState<ConfirmationScreen> {
     return draft != null && draft.preview.id == preview.id;
   }
 
+  bool _isEvmPayment(SigningPreview preview) {
+    final draft = ref.read(evmPaymentSigningDraftProvider);
+    return draft != null && draft.preview.previewId == preview.id;
+  }
+
   bool _isDapp(SigningPreview preview) {
     final draft = ref.read(dappSigningDraftProvider);
     return draft != null && draft.preview.id == preview.id;
+  }
+
+  bool _isEvmDapp(SigningPreview preview) {
+    final draft = ref.read(evmDappSigningDraftProvider);
+    return draft != null && draft.preview.previewId == preview.id;
   }
 
   bool _isSquads(SigningPreview preview) {
@@ -134,11 +197,27 @@ class _ConfirmationScreenState extends ConsumerState<ConfirmationScreen> {
   }
 
   bool _requiresWalletPassword(SigningPreview preview) {
-    return _isPayment(preview) || _isDapp(preview) || _isSquads(preview);
+    return _isPayment(preview) ||
+        _isEvmPayment(preview) ||
+        _isDapp(preview) ||
+        _isEvmDapp(preview) ||
+        _isSquads(preview);
+  }
+
+  bool _walletMatchesPreview(WalletSummary wallet, SigningPreview preview) {
+    if (wallet.family == WalletFamily.evm) {
+      return wallet.publicKey.toLowerCase() ==
+          preview.walletPublicKey.toLowerCase();
+    }
+    return wallet.publicKey == preview.walletPublicKey;
   }
 
   Future<void> _approve(SigningPreview preview) async {
-    if (!_isPayment(preview) && !_isDapp(preview) && !_isSquads(preview)) {
+    if (!_isPayment(preview) &&
+        !_isEvmPayment(preview) &&
+        !_isDapp(preview) &&
+        !_isEvmDapp(preview) &&
+        !_isSquads(preview)) {
       _complete('Signature request approved for native flow');
       return;
     }
@@ -149,6 +228,10 @@ class _ConfirmationScreenState extends ConsumerState<ConfirmationScreen> {
       if (wallet == null) {
         throw const MobileBridgeException(
             'invalid_input', 'Select a wallet before signing');
+      }
+      if (!_walletMatchesPreview(wallet, preview)) {
+        throw const MobileBridgeException(
+            'invalid_input', 'Selected wallet no longer matches this preview');
       }
       final keystoreJson =
           await ref.read(mobileWalletStoreProvider).readKeystoreJson(wallet.id);
@@ -173,9 +256,58 @@ class _ConfirmationScreenState extends ConsumerState<ConfirmationScreen> {
         return;
       }
 
+      if (_isEvmPayment(preview)) {
+        final draft = ref.read(evmPaymentSigningDraftProvider);
+        if (draft == null) {
+          throw const MobileBridgeException(
+              'invalid_input', 'EVM payment draft is missing');
+        }
+        final result = await ref.read(mobileBridgeProvider).confirmEvmPayment(
+              preview: draft.preview,
+              approved: true,
+              keystoreJson: keystoreJson,
+              password: _passwordController.text,
+            );
+        _complete('Submitted: ${result.transactionHash}');
+        return;
+      }
+
       if (_isSquads(preview)) {
         final message = await _approveSquads(preview, keystoreJson);
         _complete(message);
+        return;
+      }
+
+      if (_isEvmDapp(preview)) {
+        final draft = ref.read(evmDappSigningDraftProvider);
+        if (draft == null) {
+          throw const MobileBridgeException(
+              'invalid_input', 'EVM dApp signing draft is missing');
+        }
+        final result = await ref.read(mobileBridgeProvider).confirmEvmDappSign(
+              preview: draft.preview,
+              approved: true,
+              keystoreJson: keystoreJson,
+              password: _passwordController.text,
+              method: draft.method,
+              payloadJson: draft.payloadJson,
+            );
+        if (draft.requestId != null) {
+          ref.read(dappSignResponseProvider.notifier).state = DappSignResponse(
+            requestId: draft.requestId!,
+            approved: true,
+            signature: result.signature,
+            signedTransaction: result.signedTransaction,
+            transactionSignature: result.transaction?.transactionHash,
+          );
+          _completeToPrevious(result.signature == null
+              ? 'EVM dApp request ${result.status}'
+              : 'Signed: ${result.signature}');
+          return;
+        }
+        _complete(result.signature == null
+            ? 'EVM dApp request ${result.status}'
+            : 'Signed: ${result.signature}');
         return;
       }
 
@@ -189,6 +321,8 @@ class _ConfirmationScreenState extends ConsumerState<ConfirmationScreen> {
             approved: true,
             keystoreJson: keystoreJson,
             password: _passwordController.text,
+            appName: draft.appName,
+            appUrl: draft.appUrl,
             method: draft.method,
             payloadBase64: draft.payloadBase64,
             transactionFormat: draft.transactionFormat,
@@ -227,38 +361,82 @@ class _ConfirmationScreenState extends ConsumerState<ConfirmationScreen> {
     var shouldReturnToPrevious = false;
     if (_isPayment(preview)) {
       try {
+        final draft = ref.read(paymentSigningDraftProvider);
         await ref.read(mobileBridgeProvider).confirmPayment(
               preview: preview,
               approved: false,
               keystoreJson: '',
               password: '',
-              recipient: ref.read(paymentSigningDraftProvider)?.recipient ?? '',
-              amountBaseUnits:
-                  ref.read(paymentSigningDraftProvider)?.amountBaseUnits ?? 0,
+              recipient: draft?.recipient ?? '',
+              amountBaseUnits: draft?.amountBaseUnits ?? 0,
+              operation: draft?.operation ?? PaymentOperation.solTransfer,
+              mint: draft?.mint,
             );
       } catch (_) {
         // Rejection is expected to surface as a structured UserRejected error.
       }
     }
-    if (_isDapp(preview)) {
+    if (_isEvmPayment(preview)) {
       try {
-        final draft = ref.read(dappSigningDraftProvider);
+        final draft = ref.read(evmPaymentSigningDraftProvider);
+        if (draft != null) {
+          await ref.read(mobileBridgeProvider).confirmEvmPayment(
+                preview: draft.preview,
+                approved: false,
+                keystoreJson: '',
+                password: '',
+              );
+        }
+      } catch (_) {
+        // Rejection is expected to surface as a structured UserRejected error.
+      }
+    }
+    if (_isDapp(preview)) {
+      final draft = ref.read(dappSigningDraftProvider);
+      if (draft?.requestId != null) {
+        ref.read(dappSignResponseProvider.notifier).state = DappSignResponse(
+          requestId: draft!.requestId!,
+          approved: false,
+          error: 'User rejected the dApp signing request',
+        );
+        shouldReturnToPrevious = true;
+      }
+      try {
         await ref.read(mobileBridgeProvider).confirmDappSign(
               preview: preview,
               approved: false,
               keystoreJson: '',
               password: '',
+              appName: draft?.appName ?? 'dApp',
+              appUrl: draft?.appUrl ?? 'https://example.invalid',
               method: draft?.method ?? 'signMessage',
               payloadBase64: draft?.payloadBase64 ?? 'AA==',
               transactionFormat: draft?.transactionFormat,
             );
-        if (draft?.requestId != null) {
-          ref.read(dappSignResponseProvider.notifier).state = DappSignResponse(
-            requestId: draft!.requestId!,
-            approved: false,
-            error: 'User rejected the dApp signing request',
-          );
-          shouldReturnToPrevious = true;
+      } catch (_) {
+        // Rejection is expected to surface as a structured UserRejected error.
+      }
+    }
+    if (_isEvmDapp(preview)) {
+      final draft = ref.read(evmDappSigningDraftProvider);
+      if (draft?.requestId != null) {
+        ref.read(dappSignResponseProvider.notifier).state = DappSignResponse(
+          requestId: draft!.requestId!,
+          approved: false,
+          error: 'User rejected the EVM dApp signing request',
+        );
+        shouldReturnToPrevious = true;
+      }
+      try {
+        if (draft != null) {
+          await ref.read(mobileBridgeProvider).confirmEvmDappSign(
+                preview: draft.preview,
+                approved: false,
+                keystoreJson: '',
+                password: '',
+                method: draft.method,
+                payloadJson: draft.payloadJson,
+              );
         }
       } catch (_) {
         // Rejection is expected to surface as a structured UserRejected error.
@@ -434,7 +612,9 @@ class _ConfirmationScreenState extends ConsumerState<ConfirmationScreen> {
   void _complete(String message) {
     ref.read(signingPreviewProvider.notifier).state = null;
     ref.read(paymentSigningDraftProvider.notifier).state = null;
+    ref.read(evmPaymentSigningDraftProvider.notifier).state = null;
     ref.read(dappSigningDraftProvider.notifier).state = null;
+    ref.read(evmDappSigningDraftProvider.notifier).state = null;
     ref.read(squadsSigningDraftProvider.notifier).state = null;
     if (!mounted) return;
     ScaffoldMessenger.of(context)
@@ -445,7 +625,9 @@ class _ConfirmationScreenState extends ConsumerState<ConfirmationScreen> {
   void _completeToPrevious(String message) {
     ref.read(signingPreviewProvider.notifier).state = null;
     ref.read(paymentSigningDraftProvider.notifier).state = null;
+    ref.read(evmPaymentSigningDraftProvider.notifier).state = null;
     ref.read(dappSigningDraftProvider.notifier).state = null;
+    ref.read(evmDappSigningDraftProvider.notifier).state = null;
     ref.read(squadsSigningDraftProvider.notifier).state = null;
     if (!mounted) return;
     ScaffoldMessenger.of(context)

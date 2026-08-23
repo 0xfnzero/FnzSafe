@@ -1,7 +1,7 @@
 [package]
 name = "fnzero-safe-desktop"
 version = "0.4.0"
-description = "FnzeroSafe — Tauri desktop shell"
+description = "FnzSafe — Tauri desktop shell"
 authors = ["you"]
 license = "MIT"
 repository = ""
@@ -15,7 +15,7 @@ name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "FnzeroSafe"
+name = "FnzSafe"
 path = "src/main.rs"
 
 [build-dependencies]
@@ -26,7 +26,9 @@ serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 tauri = { version = "=2.10.3", features = ["unstable"] }
+tauri-plugin-deep-link = "2.4.9"
 tauri-plugin-log = "2"
+tauri-plugin-single-instance = { version = "2.4.3", features = ["deep-link"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 aes-gcm = "0.10"
 aws-lc-rs = { version = "=1.17.3", default-features = false, features = ["non-fips", "prebuilt-nasm"] }

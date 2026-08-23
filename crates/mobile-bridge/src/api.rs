@@ -1,12 +1,16 @@
 use fnzero_safe_app_services as svc;
 use serde::{Deserialize, Serialize};
 use svc::{
-    biometric_policy_stub, create_wallet, empty_asset_snapshot, export_private_key,
-    import_keystore, import_mnemonic, import_private_key, load_asset_snapshot, mobile_capabilities,
-    preview_dapp_signing, preview_payment, preview_pump_trade, preview_squads_action, setup_totp,
-    squads_approve_submit, squads_create_submit, squads_execute_submit, squads_info,
-    squads_proposals, squads_reject_submit, squads_transfer_proposal_submit, submit_dapp_signing,
-    submit_payment, unlock_wallet, unsupported_mobile_program_workflow, verify_totp,
+    biometric_policy_stub, create_wallet, empty_asset_snapshot, evm_builtin_chains,
+    evm_dapp_sign_preview, evm_dapp_sign_submit, evm_load_asset_snapshot, evm_payment_preview,
+    evm_payment_submit, evm_transaction_status, evm_wallet_create, evm_wallet_export_private_key,
+    evm_wallet_import_keystore, evm_wallet_import_mnemonic, evm_wallet_import_private_key,
+    evm_wallet_unlock, export_private_key, import_keystore, import_mnemonic, import_private_key,
+    load_asset_snapshot, mobile_capabilities, preview_dapp_signing, preview_payment,
+    preview_pump_trade, preview_squads_action, setup_totp, squads_approve_submit,
+    squads_create_submit, squads_execute_submit, squads_info, squads_proposals,
+    squads_reject_submit, squads_transfer_proposal_submit, submit_dapp_signing, submit_payment,
+    unlock_wallet, unsupported_mobile_program_workflow, verify_totp,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,6 +29,11 @@ pub enum MobileErrorCode {
     UserRejected,
     BiometricCancelled,
     TotpInvalid,
+    UnsupportedChain,
+    GasEstimateFailed,
+    InvalidChainId,
+    InvalidTypedData,
+    HistoryUnavailable,
     Unsupported,
     NotImplemented,
 }
@@ -53,6 +62,76 @@ pub struct WalletSummary {
     pub id: String,
     pub name: String,
     pub public_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmChainConfig {
+    pub chain_id: u64,
+    pub name: String,
+    pub native_symbol: String,
+    pub rpc_url: String,
+    pub explorer_url: Option<String>,
+    pub testnet: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmWalletSummary {
+    pub id: String,
+    pub name: String,
+    pub address: String,
+    pub derivation_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmWalletKeystore {
+    pub wallet: EvmWalletSummary,
+    pub keystore_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmCreateWalletRequest {
+    pub name: String,
+    pub password: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmImportPrivateKeyRequest {
+    pub name: String,
+    pub private_key_hex: String,
+    pub password: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmImportMnemonicRequest {
+    pub name: String,
+    pub mnemonic: String,
+    pub derivation_path: Option<String>,
+    pub password: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmImportKeystoreRequest {
+    pub name: String,
+    pub keystore_json: String,
+    pub password: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmUnlockWalletRequest {
+    pub keystore_json: String,
+    pub password: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmExportPrivateKeyRequest {
+    pub keystore_json: String,
+    pub password: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmExportPrivateKeyResponse {
+    pub address: String,
+    pub private_key_hex: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -150,12 +229,54 @@ pub struct AssetQueryRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmTokenQuery {
+    pub contract_address: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmAssetQueryRequest {
+    pub chain: EvmChainConfig,
+    pub wallet_address: String,
+    pub tokens: Vec<EvmTokenQuery>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmTokenAsset {
+    pub contract_address: String,
+    pub symbol: String,
+    pub name: String,
+    pub balance: String,
+    pub decimals: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmTransactionHistoryEntry {
+    pub hash: String,
+    pub block_number: Option<u64>,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmAssetSnapshot {
+    pub chain: EvmChainConfig,
+    pub wallet_address: String,
+    pub native_balance_wei: String,
+    pub tokens: Vec<EvmTokenAsset>,
+    pub recent_transactions: Vec<EvmTransactionHistoryEntry>,
+    pub history_status: String,
+    pub history_message: Option<String>,
+    pub refreshed_at_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaymentPreviewRequest {
     pub network: AppNetwork,
     pub wallet_public_key: String,
     pub recipient: String,
     pub mint: Option<String>,
     pub amount: String,
+    pub operation: PaymentOperation,
+    pub amount_base_units: u64,
     pub memo: Option<String>,
 }
 
@@ -195,12 +316,84 @@ pub struct PaymentSubmitRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmPaymentPreviewRequest {
+    pub chain: EvmChainConfig,
+    pub wallet_address: String,
+    pub recipient: String,
+    pub amount_wei_or_units: String,
+    pub token_contract: Option<String>,
+    pub memo: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmPaymentPreview {
+    pub preview_id: String,
+    pub chain: EvmChainConfig,
+    pub wallet_address: String,
+    pub recipient: String,
+    pub token_contract: Option<String>,
+    pub amount_wei_or_units: String,
+    pub gas_limit: String,
+    pub gas_price_wei: String,
+    pub max_fee_per_gas_wei: Option<String>,
+    pub max_priority_fee_per_gas_wei: Option<String>,
+    pub fee_model: String,
+    pub nonce: String,
+    pub estimated_fee_wei: String,
+    pub summary: String,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmPaymentSubmitRequest {
+    pub preview_id: String,
+    pub approved: bool,
+    pub chain: EvmChainConfig,
+    pub wallet_address: String,
+    pub keystore_json: String,
+    pub password: String,
+    pub recipient: String,
+    pub amount_wei_or_units: String,
+    pub token_contract: Option<String>,
+    pub gas_limit: Option<String>,
+    pub gas_price_wei: Option<String>,
+    pub max_fee_per_gas_wei: Option<String>,
+    pub max_priority_fee_per_gas_wei: Option<String>,
+    pub nonce: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TransactionSubmitResult {
     pub signature: String,
     pub slot: Option<u64>,
     pub network: AppNetwork,
     pub submitted_at: String,
     pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmTransactionSubmitResult {
+    pub transaction_hash: String,
+    pub chain: EvmChainConfig,
+    pub submitted_at: String,
+    pub status: String,
+    pub block_number: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EvmTransactionStatusRequest {
+    pub chain: EvmChainConfig,
+    pub transaction_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EvmTransactionStatus {
+    pub transaction_hash: String,
+    pub chain: EvmChainConfig,
+    pub block_number: Option<u64>,
+    pub status: String,
+    pub gas_used: Option<String>,
+    pub effective_gas_price_wei: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -221,6 +414,7 @@ pub struct DappSignPreviewRequest {
     pub app_url: String,
     pub method: String,
     pub payload_base64: String,
+    pub transaction_format: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -232,6 +426,8 @@ pub struct DappSignSubmitRequest {
     pub wallet_public_key: String,
     pub keystore_json: String,
     pub password: String,
+    pub app_name: String,
+    pub app_url: String,
     pub method: String,
     pub payload_base64: String,
     pub transaction_format: Option<String>,
@@ -244,6 +440,50 @@ pub struct DappSignSubmitResult {
     pub signed_payload_base64: Option<String>,
     pub signed_payloads_base64: Vec<String>,
     pub transaction: Option<TransactionSubmitResult>,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmDappSignPreviewRequest {
+    pub chain: EvmChainConfig,
+    pub wallet_address: String,
+    pub app_name: String,
+    pub app_url: String,
+    pub method: String,
+    pub payload_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmDappSignPreview {
+    pub preview_id: String,
+    pub chain: EvmChainConfig,
+    pub wallet_address: String,
+    pub app_name: String,
+    pub app_url: String,
+    pub method: String,
+    pub summary: String,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmDappSignSubmitRequest {
+    pub preview_id: String,
+    pub approved: bool,
+    pub chain: EvmChainConfig,
+    pub wallet_address: String,
+    pub app_name: String,
+    pub app_url: String,
+    pub keystore_json: String,
+    pub password: String,
+    pub method: String,
+    pub payload_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmDappSignSubmitResult {
+    pub signature: Option<String>,
+    pub signed_transaction: Option<String>,
+    pub transaction: Option<EvmTransactionSubmitResult>,
     pub status: String,
 }
 
@@ -454,8 +694,126 @@ impl From<svc::MobileErrorCode> for MobileErrorCode {
             svc::MobileErrorCode::UserRejected => Self::UserRejected,
             svc::MobileErrorCode::BiometricCancelled => Self::BiometricCancelled,
             svc::MobileErrorCode::TotpInvalid => Self::TotpInvalid,
+            svc::MobileErrorCode::UnsupportedChain => Self::UnsupportedChain,
+            svc::MobileErrorCode::GasEstimateFailed => Self::GasEstimateFailed,
+            svc::MobileErrorCode::InvalidChainId => Self::InvalidChainId,
+            svc::MobileErrorCode::InvalidTypedData => Self::InvalidTypedData,
+            svc::MobileErrorCode::HistoryUnavailable => Self::HistoryUnavailable,
             svc::MobileErrorCode::Unsupported => Self::Unsupported,
             svc::MobileErrorCode::NotImplemented => Self::NotImplemented,
+        }
+    }
+}
+
+impl From<svc::EvmChainConfig> for EvmChainConfig {
+    fn from(value: svc::EvmChainConfig) -> Self {
+        Self {
+            chain_id: value.chain_id,
+            name: value.name,
+            native_symbol: value.native_symbol,
+            rpc_url: value.rpc_url,
+            explorer_url: value.explorer_url,
+            testnet: value.testnet,
+        }
+    }
+}
+
+impl From<EvmChainConfig> for svc::EvmChainConfig {
+    fn from(value: EvmChainConfig) -> Self {
+        Self {
+            chain_id: value.chain_id,
+            name: value.name,
+            native_symbol: value.native_symbol,
+            rpc_url: value.rpc_url,
+            explorer_url: value.explorer_url,
+            testnet: value.testnet,
+        }
+    }
+}
+
+impl From<svc::EvmWalletSummary> for EvmWalletSummary {
+    fn from(value: svc::EvmWalletSummary) -> Self {
+        Self {
+            id: value.id,
+            name: value.name,
+            address: value.address,
+            derivation_path: value.derivation_path,
+        }
+    }
+}
+
+impl From<svc::EvmWalletKeystore> for EvmWalletKeystore {
+    fn from(value: svc::EvmWalletKeystore) -> Self {
+        Self {
+            wallet: value.wallet.into(),
+            keystore_json: value.keystore_json,
+        }
+    }
+}
+
+impl From<EvmCreateWalletRequest> for svc::EvmCreateWalletRequest {
+    fn from(value: EvmCreateWalletRequest) -> Self {
+        Self {
+            name: value.name,
+            password: value.password,
+        }
+    }
+}
+
+impl From<EvmImportPrivateKeyRequest> for svc::EvmImportPrivateKeyRequest {
+    fn from(value: EvmImportPrivateKeyRequest) -> Self {
+        Self {
+            name: value.name,
+            private_key_hex: value.private_key_hex,
+            password: value.password,
+        }
+    }
+}
+
+impl From<EvmImportMnemonicRequest> for svc::EvmImportMnemonicRequest {
+    fn from(value: EvmImportMnemonicRequest) -> Self {
+        Self {
+            name: value.name,
+            mnemonic: value.mnemonic,
+            derivation_path: value.derivation_path,
+            password: value.password,
+        }
+    }
+}
+
+impl From<EvmImportKeystoreRequest> for svc::EvmImportKeystoreRequest {
+    fn from(value: EvmImportKeystoreRequest) -> Self {
+        Self {
+            name: value.name,
+            keystore_json: value.keystore_json,
+            password: value.password,
+        }
+    }
+}
+
+impl From<EvmUnlockWalletRequest> for svc::EvmUnlockWalletRequest {
+    fn from(value: EvmUnlockWalletRequest) -> Self {
+        Self {
+            keystore_json: value.keystore_json,
+            password: value.password,
+        }
+    }
+}
+
+impl From<EvmExportPrivateKeyRequest> for svc::EvmExportPrivateKeyRequest {
+    fn from(value: EvmExportPrivateKeyRequest) -> Self {
+        Self {
+            keystore_json: value.keystore_json,
+            password: value.password,
+        }
+    }
+}
+
+impl From<svc::EvmExportPrivateKeyResponse> for EvmExportPrivateKeyResponse {
+    fn from(value: svc::EvmExportPrivateKeyResponse) -> Self {
+        Self {
+            address: value.address,
+            private_key_hex: value.private_key_hex,
         }
     }
 }
@@ -626,6 +984,65 @@ impl From<AssetQueryRequest> for svc::AssetQueryRequest {
     }
 }
 
+impl From<EvmTokenQuery> for svc::EvmTokenQuery {
+    fn from(value: EvmTokenQuery) -> Self {
+        Self {
+            contract_address: value.contract_address,
+        }
+    }
+}
+
+impl From<EvmAssetQueryRequest> for svc::EvmAssetQueryRequest {
+    fn from(value: EvmAssetQueryRequest) -> Self {
+        Self {
+            chain: value.chain.into(),
+            wallet_address: value.wallet_address,
+            tokens: value.tokens.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<svc::EvmTokenAsset> for EvmTokenAsset {
+    fn from(value: svc::EvmTokenAsset) -> Self {
+        Self {
+            contract_address: value.contract_address,
+            symbol: value.symbol,
+            name: value.name,
+            balance: value.balance,
+            decimals: value.decimals,
+        }
+    }
+}
+
+impl From<svc::EvmTransactionHistoryEntry> for EvmTransactionHistoryEntry {
+    fn from(value: svc::EvmTransactionHistoryEntry) -> Self {
+        Self {
+            hash: value.hash,
+            block_number: value.block_number,
+            status: value.status,
+        }
+    }
+}
+
+impl From<svc::EvmAssetSnapshot> for EvmAssetSnapshot {
+    fn from(value: svc::EvmAssetSnapshot) -> Self {
+        Self {
+            chain: value.chain.into(),
+            wallet_address: value.wallet_address,
+            native_balance_wei: value.native_balance_wei,
+            tokens: value.tokens.into_iter().map(Into::into).collect(),
+            recent_transactions: value
+                .recent_transactions
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            history_status: value.history_status,
+            history_message: value.history_message,
+            refreshed_at_ms: value.refreshed_at_ms,
+        }
+    }
+}
+
 impl From<PaymentPreviewRequest> for svc::PaymentPreviewRequest {
     fn from(value: PaymentPreviewRequest) -> Self {
         Self {
@@ -634,7 +1051,99 @@ impl From<PaymentPreviewRequest> for svc::PaymentPreviewRequest {
             recipient: value.recipient,
             mint: value.mint,
             amount: value.amount,
+            operation: value.operation.into(),
+            amount_base_units: value.amount_base_units,
             memo: value.memo,
+        }
+    }
+}
+
+impl From<EvmPaymentPreviewRequest> for svc::EvmPaymentPreviewRequest {
+    fn from(value: EvmPaymentPreviewRequest) -> Self {
+        Self {
+            chain: value.chain.into(),
+            wallet_address: value.wallet_address,
+            recipient: value.recipient,
+            amount_wei_or_units: value.amount_wei_or_units,
+            token_contract: value.token_contract,
+            memo: value.memo,
+        }
+    }
+}
+
+impl From<svc::EvmPaymentPreview> for EvmPaymentPreview {
+    fn from(value: svc::EvmPaymentPreview) -> Self {
+        Self {
+            preview_id: value.preview_id,
+            chain: value.chain.into(),
+            wallet_address: value.wallet_address,
+            recipient: value.recipient,
+            token_contract: value.token_contract,
+            amount_wei_or_units: value.amount_wei_or_units,
+            gas_limit: value.gas_limit,
+            gas_price_wei: value.gas_price_wei,
+            max_fee_per_gas_wei: value.max_fee_per_gas_wei,
+            max_priority_fee_per_gas_wei: value.max_priority_fee_per_gas_wei,
+            fee_model: value.fee_model,
+            nonce: value.nonce,
+            estimated_fee_wei: value.estimated_fee_wei,
+            summary: value.summary,
+            warnings: value.warnings,
+        }
+    }
+}
+
+impl From<EvmPaymentSubmitRequest> for svc::EvmPaymentSubmitRequest {
+    fn from(value: EvmPaymentSubmitRequest) -> Self {
+        Self {
+            preview_id: value.preview_id,
+            approved: value.approved,
+            chain: value.chain.into(),
+            wallet_address: value.wallet_address,
+            keystore_json: value.keystore_json,
+            password: value.password,
+            recipient: value.recipient,
+            amount_wei_or_units: value.amount_wei_or_units,
+            token_contract: value.token_contract,
+            gas_limit: value.gas_limit,
+            gas_price_wei: value.gas_price_wei,
+            max_fee_per_gas_wei: value.max_fee_per_gas_wei,
+            max_priority_fee_per_gas_wei: value.max_priority_fee_per_gas_wei,
+            nonce: value.nonce,
+        }
+    }
+}
+
+impl From<svc::EvmTransactionSubmitResult> for EvmTransactionSubmitResult {
+    fn from(value: svc::EvmTransactionSubmitResult) -> Self {
+        Self {
+            transaction_hash: value.transaction_hash,
+            chain: value.chain.into(),
+            submitted_at: value.submitted_at,
+            status: value.status,
+            block_number: value.block_number,
+        }
+    }
+}
+
+impl From<EvmTransactionStatusRequest> for svc::EvmTransactionStatusRequest {
+    fn from(value: EvmTransactionStatusRequest) -> Self {
+        Self {
+            chain: value.chain.into(),
+            transaction_hash: value.transaction_hash,
+        }
+    }
+}
+
+impl From<svc::EvmTransactionStatus> for EvmTransactionStatus {
+    fn from(value: svc::EvmTransactionStatus) -> Self {
+        Self {
+            transaction_hash: value.transaction_hash,
+            chain: value.chain.into(),
+            block_number: value.block_number,
+            status: value.status,
+            gas_used: value.gas_used,
+            effective_gas_price_wei: value.effective_gas_price_wei,
         }
     }
 }
@@ -717,6 +1226,7 @@ impl From<DappSignPreviewRequest> for svc::DappSignPreviewRequest {
             app_url: value.app_url,
             method: value.method,
             payload_base64: value.payload_base64,
+            transaction_format: value.transaction_format,
         }
     }
 }
@@ -731,9 +1241,67 @@ impl From<DappSignSubmitRequest> for svc::DappSignSubmitRequest {
             wallet_public_key: value.wallet_public_key,
             keystore_json: value.keystore_json,
             password: value.password,
+            app_name: value.app_name,
+            app_url: value.app_url,
             method: value.method,
             payload_base64: value.payload_base64,
             transaction_format: value.transaction_format,
+        }
+    }
+}
+
+impl From<EvmDappSignPreviewRequest> for svc::EvmDappSignPreviewRequest {
+    fn from(value: EvmDappSignPreviewRequest) -> Self {
+        Self {
+            chain: value.chain.into(),
+            wallet_address: value.wallet_address,
+            app_name: value.app_name,
+            app_url: value.app_url,
+            method: value.method,
+            payload_json: value.payload_json,
+        }
+    }
+}
+
+impl From<svc::EvmDappSignPreview> for EvmDappSignPreview {
+    fn from(value: svc::EvmDappSignPreview) -> Self {
+        Self {
+            preview_id: value.preview_id,
+            chain: value.chain.into(),
+            wallet_address: value.wallet_address,
+            app_name: value.app_name,
+            app_url: value.app_url,
+            method: value.method,
+            summary: value.summary,
+            warnings: value.warnings,
+        }
+    }
+}
+
+impl From<EvmDappSignSubmitRequest> for svc::EvmDappSignSubmitRequest {
+    fn from(value: EvmDappSignSubmitRequest) -> Self {
+        Self {
+            preview_id: value.preview_id,
+            approved: value.approved,
+            chain: value.chain.into(),
+            wallet_address: value.wallet_address,
+            app_name: value.app_name,
+            app_url: value.app_url,
+            keystore_json: value.keystore_json,
+            password: value.password,
+            method: value.method,
+            payload_json: value.payload_json,
+        }
+    }
+}
+
+impl From<svc::EvmDappSignSubmitResult> for EvmDappSignSubmitResult {
+    fn from(value: svc::EvmDappSignSubmitResult) -> Self {
+        Self {
+            signature: value.signature,
+            signed_transaction: value.signed_transaction,
+            transaction: value.transaction.map(Into::into),
+            status: value.status,
         }
     }
 }
@@ -1041,6 +1609,58 @@ pub fn wallet_export_private_key(
         .map_err(bridge_error)
 }
 
+pub fn evm_chains_builtin() -> Vec<EvmChainConfig> {
+    evm_builtin_chains().into_iter().map(Into::into).collect()
+}
+
+pub fn evm_wallet_create_bridge(
+    req: EvmCreateWalletRequest,
+) -> Result<EvmWalletKeystore, MobileError> {
+    evm_wallet_create(req.into())
+        .map(Into::into)
+        .map_err(bridge_error)
+}
+
+pub fn evm_wallet_import_private_key_bridge(
+    req: EvmImportPrivateKeyRequest,
+) -> Result<EvmWalletKeystore, MobileError> {
+    evm_wallet_import_private_key(req.into())
+        .map(Into::into)
+        .map_err(bridge_error)
+}
+
+pub fn evm_wallet_import_mnemonic_bridge(
+    req: EvmImportMnemonicRequest,
+) -> Result<EvmWalletKeystore, MobileError> {
+    evm_wallet_import_mnemonic(req.into())
+        .map(Into::into)
+        .map_err(bridge_error)
+}
+
+pub fn evm_wallet_import_keystore_bridge(
+    req: EvmImportKeystoreRequest,
+) -> Result<EvmWalletKeystore, MobileError> {
+    evm_wallet_import_keystore(req.into())
+        .map(Into::into)
+        .map_err(bridge_error)
+}
+
+pub fn evm_wallet_unlock_bridge(
+    req: EvmUnlockWalletRequest,
+) -> Result<EvmWalletSummary, MobileError> {
+    evm_wallet_unlock(req.into())
+        .map(Into::into)
+        .map_err(bridge_error)
+}
+
+pub fn evm_wallet_export_private_key_bridge(
+    req: EvmExportPrivateKeyRequest,
+) -> Result<EvmExportPrivateKeyResponse, MobileError> {
+    evm_wallet_export_private_key(req.into())
+        .map(Into::into)
+        .map_err(bridge_error)
+}
+
 pub fn wallet_delete_preview(wallet_public_key: String) -> SigningDecision {
     SigningDecision {
         preview_id: wallet_public_key,
@@ -1059,6 +1679,12 @@ pub fn assets_snapshot(req: AssetQueryRequest) -> Result<AssetSnapshot, MobileEr
         .map_err(bridge_error)
 }
 
+pub fn evm_assets_snapshot(req: EvmAssetQueryRequest) -> Result<EvmAssetSnapshot, MobileError> {
+    evm_load_asset_snapshot(req.into())
+        .map(Into::into)
+        .map_err(bridge_error)
+}
+
 pub fn payment_preview(req: PaymentPreviewRequest) -> Result<SigningPreview, MobileError> {
     preview_payment(req.into())
         .map(Into::into)
@@ -1067,6 +1693,30 @@ pub fn payment_preview(req: PaymentPreviewRequest) -> Result<SigningPreview, Mob
 
 pub fn payment_confirm(req: PaymentSubmitRequest) -> Result<TransactionSubmitResult, MobileError> {
     submit_payment(req.into())
+        .map(Into::into)
+        .map_err(bridge_error)
+}
+
+pub fn evm_payment_preview_bridge(
+    req: EvmPaymentPreviewRequest,
+) -> Result<EvmPaymentPreview, MobileError> {
+    evm_payment_preview(req.into())
+        .map(Into::into)
+        .map_err(bridge_error)
+}
+
+pub fn evm_payment_confirm_bridge(
+    req: EvmPaymentSubmitRequest,
+) -> Result<EvmTransactionSubmitResult, MobileError> {
+    evm_payment_submit(req.into())
+        .map(Into::into)
+        .map_err(bridge_error)
+}
+
+pub fn evm_transaction_status_bridge(
+    req: EvmTransactionStatusRequest,
+) -> Result<EvmTransactionStatus, MobileError> {
+    evm_transaction_status(req.into())
         .map(Into::into)
         .map_err(bridge_error)
 }
@@ -1097,6 +1747,22 @@ pub fn dapp_sign_preview(req: DappSignPreviewRequest) -> Result<SigningPreview, 
 
 pub fn dapp_sign_confirm(req: DappSignSubmitRequest) -> Result<DappSignSubmitResult, MobileError> {
     submit_dapp_signing(req.into())
+        .map(Into::into)
+        .map_err(bridge_error)
+}
+
+pub fn evm_dapp_sign_preview_bridge(
+    req: EvmDappSignPreviewRequest,
+) -> Result<EvmDappSignPreview, MobileError> {
+    evm_dapp_sign_preview(req.into())
+        .map(Into::into)
+        .map_err(bridge_error)
+}
+
+pub fn evm_dapp_sign_confirm_bridge(
+    req: EvmDappSignSubmitRequest,
+) -> Result<EvmDappSignSubmitResult, MobileError> {
+    evm_dapp_sign_submit(req.into())
         .map(Into::into)
         .map_err(bridge_error)
 }

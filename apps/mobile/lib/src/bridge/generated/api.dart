@@ -7,7 +7,7 @@ import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `bridge_error`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
 
 Future<MobileBridgeHealth> health() => RustLib.instance.api.crateApiHealth();
 
@@ -17,37 +17,87 @@ Future<MobileCapabilitySummary> getMobileCapabilities() =>
 Future<WalletKeystore> walletCreate({required CreateWalletRequest req}) =>
     RustLib.instance.api.crateApiWalletCreate(req: req);
 
-Future<WalletKeystore> walletImportKeystore({required ImportKeystoreRequest req}) =>
+Future<WalletKeystore> walletImportKeystore(
+        {required ImportKeystoreRequest req}) =>
     RustLib.instance.api.crateApiWalletImportKeystore(req: req);
 
-Future<WalletKeystore> walletImportPrivateKey({required ImportPrivateKeyRequest req}) =>
+Future<WalletKeystore> walletImportPrivateKey(
+        {required ImportPrivateKeyRequest req}) =>
     RustLib.instance.api.crateApiWalletImportPrivateKey(req: req);
 
-Future<WalletKeystore> walletImportMnemonic({required ImportMnemonicRequest req}) =>
+Future<WalletKeystore> walletImportMnemonic(
+        {required ImportMnemonicRequest req}) =>
     RustLib.instance.api.crateApiWalletImportMnemonic(req: req);
 
 Future<UnlockWalletResponse> walletUnlock({required UnlockWalletRequest req}) =>
     RustLib.instance.api.crateApiWalletUnlock(req: req);
 
-Future<ExportPrivateKeyResponse> walletExportPrivateKey({required ExportPrivateKeyRequest req}) =>
+Future<ExportPrivateKeyResponse> walletExportPrivateKey(
+        {required ExportPrivateKeyRequest req}) =>
     RustLib.instance.api.crateApiWalletExportPrivateKey(req: req);
 
-Future<SigningDecision> walletDeletePreview({required String walletPublicKey}) =>
-    RustLib.instance.api.crateApiWalletDeletePreview(walletPublicKey: walletPublicKey);
+Future<List<EvmChainConfig>> evmChainsBuiltin() =>
+    RustLib.instance.api.crateApiEvmChainsBuiltin();
+
+Future<EvmWalletKeystore> evmWalletCreateBridge(
+        {required EvmCreateWalletRequest req}) =>
+    RustLib.instance.api.crateApiEvmWalletCreateBridge(req: req);
+
+Future<EvmWalletKeystore> evmWalletImportPrivateKeyBridge(
+        {required EvmImportPrivateKeyRequest req}) =>
+    RustLib.instance.api.crateApiEvmWalletImportPrivateKeyBridge(req: req);
+
+Future<EvmWalletKeystore> evmWalletImportMnemonicBridge(
+        {required EvmImportMnemonicRequest req}) =>
+    RustLib.instance.api.crateApiEvmWalletImportMnemonicBridge(req: req);
+
+Future<EvmWalletKeystore> evmWalletImportKeystoreBridge(
+        {required EvmImportKeystoreRequest req}) =>
+    RustLib.instance.api.crateApiEvmWalletImportKeystoreBridge(req: req);
+
+Future<EvmWalletSummary> evmWalletUnlockBridge(
+        {required EvmUnlockWalletRequest req}) =>
+    RustLib.instance.api.crateApiEvmWalletUnlockBridge(req: req);
+
+Future<EvmExportPrivateKeyResponse> evmWalletExportPrivateKeyBridge(
+        {required EvmExportPrivateKeyRequest req}) =>
+    RustLib.instance.api.crateApiEvmWalletExportPrivateKeyBridge(req: req);
+
+Future<SigningDecision> walletDeletePreview(
+        {required String walletPublicKey}) =>
+    RustLib.instance.api
+        .crateApiWalletDeletePreview(walletPublicKey: walletPublicKey);
 
 Future<AssetSnapshot> assetsEmptySnapshot(
         {required AppNetwork network, required String walletPublicKey}) =>
-    RustLib.instance.api
-        .crateApiAssetsEmptySnapshot(network: network, walletPublicKey: walletPublicKey);
+    RustLib.instance.api.crateApiAssetsEmptySnapshot(
+        network: network, walletPublicKey: walletPublicKey);
 
 Future<AssetSnapshot> assetsSnapshot({required AssetQueryRequest req}) =>
     RustLib.instance.api.crateApiAssetsSnapshot(req: req);
 
+Future<EvmAssetSnapshot> evmAssetsSnapshot(
+        {required EvmAssetQueryRequest req}) =>
+    RustLib.instance.api.crateApiEvmAssetsSnapshot(req: req);
+
 Future<SigningPreview> paymentPreview({required PaymentPreviewRequest req}) =>
     RustLib.instance.api.crateApiPaymentPreview(req: req);
 
-Future<TransactionSubmitResult> paymentConfirm({required PaymentSubmitRequest req}) =>
+Future<TransactionSubmitResult> paymentConfirm(
+        {required PaymentSubmitRequest req}) =>
     RustLib.instance.api.crateApiPaymentConfirm(req: req);
+
+Future<EvmPaymentPreview> evmPaymentPreviewBridge(
+        {required EvmPaymentPreviewRequest req}) =>
+    RustLib.instance.api.crateApiEvmPaymentPreviewBridge(req: req);
+
+Future<EvmTransactionSubmitResult> evmPaymentConfirmBridge(
+        {required EvmPaymentSubmitRequest req}) =>
+    RustLib.instance.api.crateApiEvmPaymentConfirmBridge(req: req);
+
+Future<EvmTransactionStatus> evmTransactionStatusBridge(
+        {required EvmTransactionStatusRequest req}) =>
+    RustLib.instance.api.crateApiEvmTransactionStatusBridge(req: req);
 
 Future<TotpSetup> securitySetupTotp({required String account}) =>
     RustLib.instance.api.crateApiSecuritySetupTotp(account: account);
@@ -64,8 +114,17 @@ Future<SigningPreview> pumpPreview({required PumpPreviewRequest req}) =>
 Future<SigningPreview> dappSignPreview({required DappSignPreviewRequest req}) =>
     RustLib.instance.api.crateApiDappSignPreview(req: req);
 
-Future<DappSignSubmitResult> dappSignConfirm({required DappSignSubmitRequest req}) =>
+Future<DappSignSubmitResult> dappSignConfirm(
+        {required DappSignSubmitRequest req}) =>
     RustLib.instance.api.crateApiDappSignConfirm(req: req);
+
+Future<EvmDappSignPreview> evmDappSignPreviewBridge(
+        {required EvmDappSignPreviewRequest req}) =>
+    RustLib.instance.api.crateApiEvmDappSignPreviewBridge(req: req);
+
+Future<EvmDappSignSubmitResult> evmDappSignConfirmBridge(
+        {required EvmDappSignSubmitRequest req}) =>
+    RustLib.instance.api.crateApiEvmDappSignConfirmBridge(req: req);
 
 Future<SigningPreview> squadsPreview({required SquadsPreviewRequest req}) =>
     RustLib.instance.api.crateApiSquadsPreview(req: req);
@@ -73,30 +132,38 @@ Future<SigningPreview> squadsPreview({required SquadsPreviewRequest req}) =>
 Future<SquadsInfoResponse> squadsInfoQuery({required SquadsInfoRequest req}) =>
     RustLib.instance.api.crateApiSquadsInfoQuery(req: req);
 
-Future<SquadsProposalsResponse> squadsProposalsQuery({required SquadsProposalsRequest req}) =>
+Future<SquadsProposalsResponse> squadsProposalsQuery(
+        {required SquadsProposalsRequest req}) =>
     RustLib.instance.api.crateApiSquadsProposalsQuery(req: req);
 
-Future<SquadsCreateSubmitResult> squadsCreateConfirm({required SquadsCreateSubmitRequest req}) =>
+Future<SquadsCreateSubmitResult> squadsCreateConfirm(
+        {required SquadsCreateSubmitRequest req}) =>
     RustLib.instance.api.crateApiSquadsCreateConfirm(req: req);
 
 Future<SquadsProposalCreateSubmitResult> squadsTransferProposalConfirm(
         {required SquadsTransferProposalSubmitRequest req}) =>
     RustLib.instance.api.crateApiSquadsTransferProposalConfirm(req: req);
 
-Future<TransactionSubmitResult> squadsApproveConfirm({required SquadsVoteSubmitRequest req}) =>
+Future<TransactionSubmitResult> squadsApproveConfirm(
+        {required SquadsVoteSubmitRequest req}) =>
     RustLib.instance.api.crateApiSquadsApproveConfirm(req: req);
 
-Future<TransactionSubmitResult> squadsRejectConfirm({required SquadsVoteSubmitRequest req}) =>
+Future<TransactionSubmitResult> squadsRejectConfirm(
+        {required SquadsVoteSubmitRequest req}) =>
     RustLib.instance.api.crateApiSquadsRejectConfirm(req: req);
 
-Future<TransactionSubmitResult> squadsExecuteConfirm({required SquadsExecuteSubmitRequest req}) =>
+Future<TransactionSubmitResult> squadsExecuteConfirm(
+        {required SquadsExecuteSubmitRequest req}) =>
     RustLib.instance.api.crateApiSquadsExecuteConfirm(req: req);
 
-Future<void> mobileProgramDeploy() => RustLib.instance.api.crateApiMobileProgramDeploy();
+Future<void> mobileProgramDeploy() =>
+    RustLib.instance.api.crateApiMobileProgramDeploy();
 
-Future<void> mobileProgramUpgrade() => RustLib.instance.api.crateApiMobileProgramUpgrade();
+Future<void> mobileProgramUpgrade() =>
+    RustLib.instance.api.crateApiMobileProgramUpgrade();
 
-Future<void> mobileProgramInvoke() => RustLib.instance.api.crateApiMobileProgramInvoke();
+Future<void> mobileProgramInvoke() =>
+    RustLib.instance.api.crateApiMobileProgramInvoke();
 
 enum AppNetwork {
   mainnet,
@@ -117,7 +184,8 @@ class AssetQueryRequest {
   });
 
   @override
-  int get hashCode => network.hashCode ^ walletPublicKey.hashCode ^ rpcUrl.hashCode;
+  int get hashCode =>
+      network.hashCode ^ walletPublicKey.hashCode ^ rpcUrl.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -227,7 +295,8 @@ class BiometricPolicy {
   });
 
   @override
-  int get hashCode => supported.hashCode ^ configured.hashCode ^ reason.hashCode;
+  int get hashCode =>
+      supported.hashCode ^ configured.hashCode ^ reason.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -267,6 +336,7 @@ class DappSignPreviewRequest {
   final String appUrl;
   final String method;
   final String payloadBase64;
+  final String? transactionFormat;
 
   const DappSignPreviewRequest({
     required this.network,
@@ -275,6 +345,7 @@ class DappSignPreviewRequest {
     required this.appUrl,
     required this.method,
     required this.payloadBase64,
+    this.transactionFormat,
   });
 
   @override
@@ -284,7 +355,8 @@ class DappSignPreviewRequest {
       appName.hashCode ^
       appUrl.hashCode ^
       method.hashCode ^
-      payloadBase64.hashCode;
+      payloadBase64.hashCode ^
+      transactionFormat.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -296,7 +368,8 @@ class DappSignPreviewRequest {
           appName == other.appName &&
           appUrl == other.appUrl &&
           method == other.method &&
-          payloadBase64 == other.payloadBase64;
+          payloadBase64 == other.payloadBase64 &&
+          transactionFormat == other.transactionFormat;
 }
 
 class DappSignSubmitRequest {
@@ -307,6 +380,8 @@ class DappSignSubmitRequest {
   final String walletPublicKey;
   final String keystoreJson;
   final String password;
+  final String appName;
+  final String appUrl;
   final String method;
   final String payloadBase64;
   final String? transactionFormat;
@@ -319,6 +394,8 @@ class DappSignSubmitRequest {
     required this.walletPublicKey,
     required this.keystoreJson,
     required this.password,
+    required this.appName,
+    required this.appUrl,
     required this.method,
     required this.payloadBase64,
     this.transactionFormat,
@@ -333,6 +410,8 @@ class DappSignSubmitRequest {
       walletPublicKey.hashCode ^
       keystoreJson.hashCode ^
       password.hashCode ^
+      appName.hashCode ^
+      appUrl.hashCode ^
       method.hashCode ^
       payloadBase64.hashCode ^
       transactionFormat.hashCode;
@@ -349,6 +428,8 @@ class DappSignSubmitRequest {
           walletPublicKey == other.walletPublicKey &&
           keystoreJson == other.keystoreJson &&
           password == other.password &&
+          appName == other.appName &&
+          appUrl == other.appUrl &&
           method == other.method &&
           payloadBase64 == other.payloadBase64 &&
           transactionFormat == other.transactionFormat;
@@ -391,6 +472,858 @@ class DappSignSubmitResult {
           signedPayloadsBase64 == other.signedPayloadsBase64 &&
           transaction == other.transaction &&
           status == other.status;
+}
+
+class EvmAssetQueryRequest {
+  final EvmChainConfig chain;
+  final String walletAddress;
+  final List<EvmTokenQuery> tokens;
+
+  const EvmAssetQueryRequest({
+    required this.chain,
+    required this.walletAddress,
+    required this.tokens,
+  });
+
+  @override
+  int get hashCode => chain.hashCode ^ walletAddress.hashCode ^ tokens.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is EvmAssetQueryRequest &&
+          runtimeType == other.runtimeType &&
+          chain == other.chain &&
+          walletAddress == other.walletAddress &&
+          tokens == other.tokens;
+}
+
+class EvmAssetSnapshot {
+  final EvmChainConfig chain;
+  final String walletAddress;
+  final String nativeBalanceWei;
+  final List<EvmTokenAsset> tokens;
+  final List<EvmTransactionHistoryEntry> recentTransactions;
+  final String historyStatus;
+  final String? historyMessage;
+  final BigInt refreshedAtMs;
+
+  const EvmAssetSnapshot({
+    required this.chain,
+    required this.walletAddress,
+    required this.nativeBalanceWei,
+    required this.tokens,
+    required this.recentTransactions,
+    required this.historyStatus,
+    this.historyMessage,
+    required this.refreshedAtMs,
+  });
+
+  @override
+  int get hashCode =>
+      chain.hashCode ^
+      walletAddress.hashCode ^
+      nativeBalanceWei.hashCode ^
+      tokens.hashCode ^
+      recentTransactions.hashCode ^
+      historyStatus.hashCode ^
+      historyMessage.hashCode ^
+      refreshedAtMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is EvmAssetSnapshot &&
+          runtimeType == other.runtimeType &&
+          chain == other.chain &&
+          walletAddress == other.walletAddress &&
+          nativeBalanceWei == other.nativeBalanceWei &&
+          tokens == other.tokens &&
+          recentTransactions == other.recentTransactions &&
+          historyStatus == other.historyStatus &&
+          historyMessage == other.historyMessage &&
+          refreshedAtMs == other.refreshedAtMs;
+}
+
+class EvmChainConfig {
+  final BigInt chainId;
+  final String name;
+  final String nativeSymbol;
+  final String rpcUrl;
+  final String? explorerUrl;
+  final bool testnet;
+
+  const EvmChainConfig({
+    required this.chainId,
+    required this.name,
+    required this.nativeSymbol,
+    required this.rpcUrl,
+    this.explorerUrl,
+    required this.testnet,
+  });
+
+  @override
+  int get hashCode =>
+      chainId.hashCode ^
+      name.hashCode ^
+      nativeSymbol.hashCode ^
+      rpcUrl.hashCode ^
+      explorerUrl.hashCode ^
+      testnet.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is EvmChainConfig &&
+          runtimeType == other.runtimeType &&
+          chainId == other.chainId &&
+          name == other.name &&
+          nativeSymbol == other.nativeSymbol &&
+          rpcUrl == other.rpcUrl &&
+          explorerUrl == other.explorerUrl &&
+          testnet == other.testnet;
+}
+
+class EvmCreateWalletRequest {
+  final String name;
+  final String password;
+
+  const EvmCreateWalletRequest({
+    required this.name,
+    required this.password,
+  });
+
+  @override
+  int get hashCode => name.hashCode ^ password.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is EvmCreateWalletRequest &&
+          runtimeType == other.runtimeType &&
+          name == other.name &&
+          password == other.password;
+}
+
+class EvmDappSignPreview {
+  final String previewId;
+  final EvmChainConfig chain;
+  final String walletAddress;
+  final String appName;
+  final String appUrl;
+  final String method;
+  final String summary;
+  final List<String> warnings;
+
+  const EvmDappSignPreview({
+    required this.previewId,
+    required this.chain,
+    required this.walletAddress,
+    required this.appName,
+    required this.appUrl,
+    required this.method,
+    required this.summary,
+    required this.warnings,
+  });
+
+  @override
+  int get hashCode =>
+      previewId.hashCode ^
+      chain.hashCode ^
+      walletAddress.hashCode ^
+      appName.hashCode ^
+      appUrl.hashCode ^
+      method.hashCode ^
+      summary.hashCode ^
+      warnings.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is EvmDappSignPreview &&
+          runtimeType == other.runtimeType &&
+          previewId == other.previewId &&
+          chain == other.chain &&
+          walletAddress == other.walletAddress &&
+          appName == other.appName &&
+          appUrl == other.appUrl &&
+          method == other.method &&
+          summary == other.summary &&
+          warnings == other.warnings;
+}
+
+class EvmDappSignPreviewRequest {
+  final EvmChainConfig chain;
+  final String walletAddress;
+  final String appName;
+  final String appUrl;
+  final String method;
+  final String payloadJson;
+
+  const EvmDappSignPreviewRequest({
+    required this.chain,
+    required this.walletAddress,
+    required this.appName,
+    required this.appUrl,
+    required this.method,
+    required this.payloadJson,
+  });
+
+  @override
+  int get hashCode =>
+      chain.hashCode ^
+      walletAddress.hashCode ^
+      appName.hashCode ^
+      appUrl.hashCode ^
+      method.hashCode ^
+      payloadJson.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is EvmDappSignPreviewRequest &&
+          runtimeType == other.runtimeType &&
+          chain == other.chain &&
+          walletAddress == other.walletAddress &&
+          appName == other.appName &&
+          appUrl == other.appUrl &&
+          method == other.method &&
+          payloadJson == other.payloadJson;
+}
+
+class EvmDappSignSubmitRequest {
+  final String previewId;
+  final bool approved;
+  final EvmChainConfig chain;
+  final String walletAddress;
+  final String appName;
+  final String appUrl;
+  final String keystoreJson;
+  final String password;
+  final String method;
+  final String payloadJson;
+
+  const EvmDappSignSubmitRequest({
+    required this.previewId,
+    required this.approved,
+    required this.chain,
+    required this.walletAddress,
+    required this.appName,
+    required this.appUrl,
+    required this.keystoreJson,
+    required this.password,
+    required this.method,
+    required this.payloadJson,
+  });
+
+  @override
+  int get hashCode =>
+      previewId.hashCode ^
+      approved.hashCode ^
+      chain.hashCode ^
+      walletAddress.hashCode ^
+      appName.hashCode ^
+      appUrl.hashCode ^
+      keystoreJson.hashCode ^
+      password.hashCode ^
+      method.hashCode ^
+      payloadJson.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is EvmDappSignSubmitRequest &&
+          runtimeType == other.runtimeType &&
+          previewId == other.previewId &&
+          approved == other.approved &&
+          chain == other.chain &&
+          walletAddress == other.walletAddress &&
+          appName == other.appName &&
+          appUrl == other.appUrl &&
+          keystoreJson == other.keystoreJson &&
+          password == other.password &&
+          method == other.method &&
+          payloadJson == other.payloadJson;
+}
+
+class EvmDappSignSubmitResult {
+  final String? signature;
+  final String? signedTransaction;
+  final EvmTransactionSubmitResult? transaction;
+  final String status;
+
+  const EvmDappSignSubmitResult({
+    this.signature,
+    this.signedTransaction,
+    this.transaction,
+    required this.status,
+  });
+
+  @override
+  int get hashCode =>
+      signature.hashCode ^
+      signedTransaction.hashCode ^
+      transaction.hashCode ^
+      status.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is EvmDappSignSubmitResult &&
+          runtimeType == other.runtimeType &&
+          signature == other.signature &&
+          signedTransaction == other.signedTransaction &&
+          transaction == other.transaction &&
+          status == other.status;
+}
+
+class EvmExportPrivateKeyRequest {
+  final String keystoreJson;
+  final String password;
+
+  const EvmExportPrivateKeyRequest({
+    required this.keystoreJson,
+    required this.password,
+  });
+
+  @override
+  int get hashCode => keystoreJson.hashCode ^ password.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is EvmExportPrivateKeyRequest &&
+          runtimeType == other.runtimeType &&
+          keystoreJson == other.keystoreJson &&
+          password == other.password;
+}
+
+class EvmExportPrivateKeyResponse {
+  final String address;
+  final String privateKeyHex;
+
+  const EvmExportPrivateKeyResponse({
+    required this.address,
+    required this.privateKeyHex,
+  });
+
+  @override
+  int get hashCode => address.hashCode ^ privateKeyHex.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is EvmExportPrivateKeyResponse &&
+          runtimeType == other.runtimeType &&
+          address == other.address &&
+          privateKeyHex == other.privateKeyHex;
+}
+
+class EvmImportKeystoreRequest {
+  final String name;
+  final String keystoreJson;
+  final String password;
+
+  const EvmImportKeystoreRequest({
+    required this.name,
+    required this.keystoreJson,
+    required this.password,
+  });
+
+  @override
+  int get hashCode => name.hashCode ^ keystoreJson.hashCode ^ password.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is EvmImportKeystoreRequest &&
+          runtimeType == other.runtimeType &&
+          name == other.name &&
+          keystoreJson == other.keystoreJson &&
+          password == other.password;
+}
+
+class EvmImportMnemonicRequest {
+  final String name;
+  final String mnemonic;
+  final String? derivationPath;
+  final String password;
+
+  const EvmImportMnemonicRequest({
+    required this.name,
+    required this.mnemonic,
+    this.derivationPath,
+    required this.password,
+  });
+
+  @override
+  int get hashCode =>
+      name.hashCode ^
+      mnemonic.hashCode ^
+      derivationPath.hashCode ^
+      password.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is EvmImportMnemonicRequest &&
+          runtimeType == other.runtimeType &&
+          name == other.name &&
+          mnemonic == other.mnemonic &&
+          derivationPath == other.derivationPath &&
+          password == other.password;
+}
+
+class EvmImportPrivateKeyRequest {
+  final String name;
+  final String privateKeyHex;
+  final String password;
+
+  const EvmImportPrivateKeyRequest({
+    required this.name,
+    required this.privateKeyHex,
+    required this.password,
+  });
+
+  @override
+  int get hashCode =>
+      name.hashCode ^ privateKeyHex.hashCode ^ password.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is EvmImportPrivateKeyRequest &&
+          runtimeType == other.runtimeType &&
+          name == other.name &&
+          privateKeyHex == other.privateKeyHex &&
+          password == other.password;
+}
+
+class EvmPaymentPreview {
+  final String previewId;
+  final EvmChainConfig chain;
+  final String walletAddress;
+  final String recipient;
+  final String? tokenContract;
+  final String amountWeiOrUnits;
+  final String gasLimit;
+  final String gasPriceWei;
+  final String? maxFeePerGasWei;
+  final String? maxPriorityFeePerGasWei;
+  final String feeModel;
+  final String nonce;
+  final String estimatedFeeWei;
+  final String summary;
+  final List<String> warnings;
+
+  const EvmPaymentPreview({
+    required this.previewId,
+    required this.chain,
+    required this.walletAddress,
+    required this.recipient,
+    this.tokenContract,
+    required this.amountWeiOrUnits,
+    required this.gasLimit,
+    required this.gasPriceWei,
+    this.maxFeePerGasWei,
+    this.maxPriorityFeePerGasWei,
+    required this.feeModel,
+    required this.nonce,
+    required this.estimatedFeeWei,
+    required this.summary,
+    required this.warnings,
+  });
+
+  @override
+  int get hashCode =>
+      previewId.hashCode ^
+      chain.hashCode ^
+      walletAddress.hashCode ^
+      recipient.hashCode ^
+      tokenContract.hashCode ^
+      amountWeiOrUnits.hashCode ^
+      gasLimit.hashCode ^
+      gasPriceWei.hashCode ^
+      maxFeePerGasWei.hashCode ^
+      maxPriorityFeePerGasWei.hashCode ^
+      feeModel.hashCode ^
+      nonce.hashCode ^
+      estimatedFeeWei.hashCode ^
+      summary.hashCode ^
+      warnings.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is EvmPaymentPreview &&
+          runtimeType == other.runtimeType &&
+          previewId == other.previewId &&
+          chain == other.chain &&
+          walletAddress == other.walletAddress &&
+          recipient == other.recipient &&
+          tokenContract == other.tokenContract &&
+          amountWeiOrUnits == other.amountWeiOrUnits &&
+          gasLimit == other.gasLimit &&
+          gasPriceWei == other.gasPriceWei &&
+          maxFeePerGasWei == other.maxFeePerGasWei &&
+          maxPriorityFeePerGasWei == other.maxPriorityFeePerGasWei &&
+          feeModel == other.feeModel &&
+          nonce == other.nonce &&
+          estimatedFeeWei == other.estimatedFeeWei &&
+          summary == other.summary &&
+          warnings == other.warnings;
+}
+
+class EvmPaymentPreviewRequest {
+  final EvmChainConfig chain;
+  final String walletAddress;
+  final String recipient;
+  final String amountWeiOrUnits;
+  final String? tokenContract;
+  final String? memo;
+
+  const EvmPaymentPreviewRequest({
+    required this.chain,
+    required this.walletAddress,
+    required this.recipient,
+    required this.amountWeiOrUnits,
+    this.tokenContract,
+    this.memo,
+  });
+
+  @override
+  int get hashCode =>
+      chain.hashCode ^
+      walletAddress.hashCode ^
+      recipient.hashCode ^
+      amountWeiOrUnits.hashCode ^
+      tokenContract.hashCode ^
+      memo.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is EvmPaymentPreviewRequest &&
+          runtimeType == other.runtimeType &&
+          chain == other.chain &&
+          walletAddress == other.walletAddress &&
+          recipient == other.recipient &&
+          amountWeiOrUnits == other.amountWeiOrUnits &&
+          tokenContract == other.tokenContract &&
+          memo == other.memo;
+}
+
+class EvmPaymentSubmitRequest {
+  final String previewId;
+  final bool approved;
+  final EvmChainConfig chain;
+  final String walletAddress;
+  final String keystoreJson;
+  final String password;
+  final String recipient;
+  final String amountWeiOrUnits;
+  final String? tokenContract;
+  final String? gasLimit;
+  final String? gasPriceWei;
+  final String? maxFeePerGasWei;
+  final String? maxPriorityFeePerGasWei;
+  final String? nonce;
+
+  const EvmPaymentSubmitRequest({
+    required this.previewId,
+    required this.approved,
+    required this.chain,
+    required this.walletAddress,
+    required this.keystoreJson,
+    required this.password,
+    required this.recipient,
+    required this.amountWeiOrUnits,
+    this.tokenContract,
+    this.gasLimit,
+    this.gasPriceWei,
+    this.maxFeePerGasWei,
+    this.maxPriorityFeePerGasWei,
+    this.nonce,
+  });
+
+  @override
+  int get hashCode =>
+      previewId.hashCode ^
+      approved.hashCode ^
+      chain.hashCode ^
+      walletAddress.hashCode ^
+      keystoreJson.hashCode ^
+      password.hashCode ^
+      recipient.hashCode ^
+      amountWeiOrUnits.hashCode ^
+      tokenContract.hashCode ^
+      gasLimit.hashCode ^
+      gasPriceWei.hashCode ^
+      maxFeePerGasWei.hashCode ^
+      maxPriorityFeePerGasWei.hashCode ^
+      nonce.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is EvmPaymentSubmitRequest &&
+          runtimeType == other.runtimeType &&
+          previewId == other.previewId &&
+          approved == other.approved &&
+          chain == other.chain &&
+          walletAddress == other.walletAddress &&
+          keystoreJson == other.keystoreJson &&
+          password == other.password &&
+          recipient == other.recipient &&
+          amountWeiOrUnits == other.amountWeiOrUnits &&
+          tokenContract == other.tokenContract &&
+          gasLimit == other.gasLimit &&
+          gasPriceWei == other.gasPriceWei &&
+          maxFeePerGasWei == other.maxFeePerGasWei &&
+          maxPriorityFeePerGasWei == other.maxPriorityFeePerGasWei &&
+          nonce == other.nonce;
+}
+
+class EvmTokenAsset {
+  final String contractAddress;
+  final String symbol;
+  final String name;
+  final String balance;
+  final int decimals;
+
+  const EvmTokenAsset({
+    required this.contractAddress,
+    required this.symbol,
+    required this.name,
+    required this.balance,
+    required this.decimals,
+  });
+
+  @override
+  int get hashCode =>
+      contractAddress.hashCode ^
+      symbol.hashCode ^
+      name.hashCode ^
+      balance.hashCode ^
+      decimals.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is EvmTokenAsset &&
+          runtimeType == other.runtimeType &&
+          contractAddress == other.contractAddress &&
+          symbol == other.symbol &&
+          name == other.name &&
+          balance == other.balance &&
+          decimals == other.decimals;
+}
+
+class EvmTokenQuery {
+  final String contractAddress;
+
+  const EvmTokenQuery({
+    required this.contractAddress,
+  });
+
+  @override
+  int get hashCode => contractAddress.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is EvmTokenQuery &&
+          runtimeType == other.runtimeType &&
+          contractAddress == other.contractAddress;
+}
+
+class EvmTransactionHistoryEntry {
+  final String hash;
+  final BigInt? blockNumber;
+  final String status;
+
+  const EvmTransactionHistoryEntry({
+    required this.hash,
+    this.blockNumber,
+    required this.status,
+  });
+
+  @override
+  int get hashCode => hash.hashCode ^ blockNumber.hashCode ^ status.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is EvmTransactionHistoryEntry &&
+          runtimeType == other.runtimeType &&
+          hash == other.hash &&
+          blockNumber == other.blockNumber &&
+          status == other.status;
+}
+
+class EvmTransactionStatus {
+  final String transactionHash;
+  final EvmChainConfig chain;
+  final BigInt? blockNumber;
+  final String status;
+  final String? gasUsed;
+  final String? effectiveGasPriceWei;
+
+  const EvmTransactionStatus({
+    required this.transactionHash,
+    required this.chain,
+    this.blockNumber,
+    required this.status,
+    this.gasUsed,
+    this.effectiveGasPriceWei,
+  });
+
+  @override
+  int get hashCode =>
+      transactionHash.hashCode ^
+      chain.hashCode ^
+      blockNumber.hashCode ^
+      status.hashCode ^
+      gasUsed.hashCode ^
+      effectiveGasPriceWei.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is EvmTransactionStatus &&
+          runtimeType == other.runtimeType &&
+          transactionHash == other.transactionHash &&
+          chain == other.chain &&
+          blockNumber == other.blockNumber &&
+          status == other.status &&
+          gasUsed == other.gasUsed &&
+          effectiveGasPriceWei == other.effectiveGasPriceWei;
+}
+
+class EvmTransactionStatusRequest {
+  final EvmChainConfig chain;
+  final String transactionHash;
+
+  const EvmTransactionStatusRequest({
+    required this.chain,
+    required this.transactionHash,
+  });
+
+  @override
+  int get hashCode => chain.hashCode ^ transactionHash.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is EvmTransactionStatusRequest &&
+          runtimeType == other.runtimeType &&
+          chain == other.chain &&
+          transactionHash == other.transactionHash;
+}
+
+class EvmTransactionSubmitResult {
+  final String transactionHash;
+  final EvmChainConfig chain;
+  final String submittedAt;
+  final String status;
+  final BigInt? blockNumber;
+
+  const EvmTransactionSubmitResult({
+    required this.transactionHash,
+    required this.chain,
+    required this.submittedAt,
+    required this.status,
+    this.blockNumber,
+  });
+
+  @override
+  int get hashCode =>
+      transactionHash.hashCode ^
+      chain.hashCode ^
+      submittedAt.hashCode ^
+      status.hashCode ^
+      blockNumber.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is EvmTransactionSubmitResult &&
+          runtimeType == other.runtimeType &&
+          transactionHash == other.transactionHash &&
+          chain == other.chain &&
+          submittedAt == other.submittedAt &&
+          status == other.status &&
+          blockNumber == other.blockNumber;
+}
+
+class EvmUnlockWalletRequest {
+  final String keystoreJson;
+  final String password;
+
+  const EvmUnlockWalletRequest({
+    required this.keystoreJson,
+    required this.password,
+  });
+
+  @override
+  int get hashCode => keystoreJson.hashCode ^ password.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is EvmUnlockWalletRequest &&
+          runtimeType == other.runtimeType &&
+          keystoreJson == other.keystoreJson &&
+          password == other.password;
+}
+
+class EvmWalletKeystore {
+  final EvmWalletSummary wallet;
+  final String keystoreJson;
+
+  const EvmWalletKeystore({
+    required this.wallet,
+    required this.keystoreJson,
+  });
+
+  @override
+  int get hashCode => wallet.hashCode ^ keystoreJson.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is EvmWalletKeystore &&
+          runtimeType == other.runtimeType &&
+          wallet == other.wallet &&
+          keystoreJson == other.keystoreJson;
+}
+
+class EvmWalletSummary {
+  final String id;
+  final String name;
+  final String address;
+  final String? derivationPath;
+
+  const EvmWalletSummary({
+    required this.id,
+    required this.name,
+    required this.address,
+    this.derivationPath,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^ name.hashCode ^ address.hashCode ^ derivationPath.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is EvmWalletSummary &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          name == other.name &&
+          address == other.address &&
+          derivationPath == other.derivationPath;
 }
 
 class ExportPrivateKeyRequest {
@@ -474,7 +1407,10 @@ class ImportMnemonicRequest {
 
   @override
   int get hashCode =>
-      name.hashCode ^ mnemonic.hashCode ^ derivationPath.hashCode ^ password.hashCode;
+      name.hashCode ^
+      mnemonic.hashCode ^
+      derivationPath.hashCode ^
+      password.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -499,7 +1435,8 @@ class ImportPrivateKeyRequest {
   });
 
   @override
-  int get hashCode => name.hashCode ^ privateKeyBase58.hashCode ^ password.hashCode;
+  int get hashCode =>
+      name.hashCode ^ privateKeyBase58.hashCode ^ password.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -585,6 +1522,11 @@ enum MobileErrorCode {
   userRejected,
   biometricCancelled,
   totpInvalid,
+  unsupportedChain,
+  gasEstimateFailed,
+  invalidChainId,
+  invalidTypedData,
+  historyUnavailable,
   unsupported,
   notImplemented,
   ;
@@ -605,6 +1547,8 @@ class PaymentPreviewRequest {
   final String recipient;
   final String? mint;
   final String amount;
+  final PaymentOperation operation;
+  final BigInt amountBaseUnits;
   final String? memo;
 
   const PaymentPreviewRequest({
@@ -613,6 +1557,8 @@ class PaymentPreviewRequest {
     required this.recipient,
     this.mint,
     required this.amount,
+    required this.operation,
+    required this.amountBaseUnits,
     this.memo,
   });
 
@@ -623,6 +1569,8 @@ class PaymentPreviewRequest {
       recipient.hashCode ^
       mint.hashCode ^
       amount.hashCode ^
+      operation.hashCode ^
+      amountBaseUnits.hashCode ^
       memo.hashCode;
 
   @override
@@ -635,6 +1583,8 @@ class PaymentPreviewRequest {
           recipient == other.recipient &&
           mint == other.mint &&
           amount == other.amount &&
+          operation == other.operation &&
+          amountBaseUnits == other.amountBaseUnits &&
           memo == other.memo;
 }
 
@@ -966,7 +1916,11 @@ class SquadsInfoRequest {
   });
 
   @override
-  int get hashCode => network.hashCode ^ rpcUrl.hashCode ^ multisig.hashCode ^ proposal.hashCode;
+  int get hashCode =>
+      network.hashCode ^
+      rpcUrl.hashCode ^
+      multisig.hashCode ^
+      proposal.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -1190,7 +2144,8 @@ class SquadsProposalsRequest {
   });
 
   @override
-  int get hashCode => network.hashCode ^ rpcUrl.hashCode ^ multisig.hashCode ^ limit.hashCode;
+  int get hashCode =>
+      network.hashCode ^ rpcUrl.hashCode ^ multisig.hashCode ^ limit.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -1421,7 +2376,8 @@ class TransactionHistoryEntry {
   });
 
   @override
-  int get hashCode => signature.hashCode ^ slot.hashCode ^ blockTime.hashCode ^ status.hashCode;
+  int get hashCode =>
+      signature.hashCode ^ slot.hashCode ^ blockTime.hashCode ^ status.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -1503,7 +2459,9 @@ class UnlockWalletResponse {
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is UnlockWalletResponse && runtimeType == other.runtimeType && wallet == other.wallet;
+      other is UnlockWalletResponse &&
+          runtimeType == other.runtimeType &&
+          wallet == other.wallet;
 }
 
 class WalletKeystore {

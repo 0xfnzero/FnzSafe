@@ -6,7 +6,7 @@ const repoRoot = path.resolve(__dirname, "..");
 const tauriRoot = path.join(repoRoot, "src-tauri");
 const sourceIcon = path.join(tauriRoot, "icons", "icon.icns");
 const buildScript = path.join(tauriRoot, "build.rs");
-const debugApp = path.join(tauriRoot, "target", "debug", "FnzeroSafe");
+const debugApp = path.join(tauriRoot, "target", "debug", "FnzSafe");
 
 const existingBundleIcons = [
   path.join(
@@ -15,7 +15,7 @@ const existingBundleIcons = [
     "release",
     "bundle",
     "macos",
-    "FnzeroSafe.app",
+    "FnzSafe.app",
     "Contents",
     "Resources",
     "icon.icns",

@@ -125,13 +125,13 @@ final _router = GoRouter(
   ],
 );
 
-class FnzeroSafeMobileApp extends StatelessWidget {
-  const FnzeroSafeMobileApp({super.key});
+class FnzSafeMobileApp extends StatelessWidget {
+  const FnzSafeMobileApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp.router(
-      title: 'FnzeroSafe',
+      title: 'FnzSafe',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
           seedColor: const Color(0xff14b8a6),

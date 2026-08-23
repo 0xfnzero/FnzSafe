@@ -1,0 +1,24 @@
+[package]
+name = "fnzero-safe-evm-services"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+aes-gcm = { version = "0.10", features = ["zeroize"] }
+alloy-primitives = { version = "=0.8.26", features = ["serde"] }
+argon2 = { version = "0.5", features = ["zeroize"] }
+base64 = "0.22"
+bip32 = { version = "0.5", features = ["secp256k1"] }
+bip39 = "2"
+hex = "0.4"
+k256 = { version = "0.13", features = ["ecdsa", "sha256"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha3 = "0.10"
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+zeroize = "1"

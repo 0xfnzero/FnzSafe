@@ -1,10 +1,10 @@
 <div align="center">
-    <h1>FnzeroSafe</h1>
-    <h3><em>本地优先的 Solana 钱包、安全 Keystore、桌面端与 iOS/Android 移动端应用</em></h3>
+    <h1>FnzSafe</h1>
+    <h3><em>本地优先的 Solana 与 EVM 钱包、安全 Keystore、桌面端与 iOS/Android 移动端应用</em></h3>
 </div>
 
 <p align="center">
-    <strong>FnzeroSafe 是一个开源 Solana 钱包安全工作区，覆盖加密 Keystore、桌面端签名、移动端钱包、dApp 签名、Pump 交易、Squads 多签、Bot 集成，以及仅桌面端开放的高级 Program 工作流。</strong>
+    <strong>FnzSafe 是一个开源 Solana 与 EVM 钱包安全工作区，覆盖加密 Keystore、桌面端签名、移动端钱包、dApp 签名、Pump 交易、Squads 多签、Bot 集成，以及仅桌面端开放的高级 Program 工作流。</strong>
 </p>
 
 <p align="center">
@@ -25,6 +25,7 @@
 <p align="center">
     <img src="https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white" alt="Rust">
     <img src="https://img.shields.io/badge/Solana-9945FF?style=for-the-badge&logo=solana&logoColor=white" alt="Solana">
+    <img src="https://img.shields.io/badge/EVM-3C3C3D?style=for-the-badge&logo=ethereum&logoColor=white" alt="EVM">
     <img src="https://img.shields.io/badge/Next.js-000000?style=for-the-badge&logo=nextdotjs&logoColor=white" alt="Next.js">
     <img src="https://img.shields.io/badge/Tauri-24C8DB?style=for-the-badge&logo=tauri&logoColor=white" alt="Tauri">
     <img src="https://img.shields.io/badge/Flutter-02569B?style=for-the-badge&logo=flutter&logoColor=white" alt="Flutter">
@@ -43,7 +44,7 @@
 ## 文档大纲
 
 1. [项目概览](#1-项目概览)
-   1. [FnzeroSafe 适合什么场景](#11-fnzerosafe-适合什么场景)
+   1. [FnzSafe 适合什么场景](#11-fnzsafe-适合什么场景)
    2. [产品形态](#12-产品形态)
    3. [能力矩阵](#13-能力矩阵)
    4. [平台矩阵](#14-平台矩阵)
@@ -57,6 +58,7 @@
    2. [iOS 端](#42-ios-端)
    3. [Android 端](#43-android-端)
    4. [CLI](#44-cli)
+   5. [官网钱包接入](#45-官网钱包接入)
 5. [打包发布](#5-打包发布)
    1. [Release 目录](#51-release-目录)
    2. [macOS 桌面端](#52-macos-桌面端)
@@ -75,9 +77,9 @@
 
 ## 1. 项目概览
 
-### 1.1 FnzeroSafe 适合什么场景
+### 1.1 FnzSafe 适合什么场景
 
-FnzeroSafe 是一个本地优先的 Solana 钱包与密钥管理工作区。仓库内同时包含 Rust 核心库、交互式 CLI、本地桌面 API、Next.js 前端、Tauri 桌面壳，以及面向 iOS/Android 的 Flutter 移动端应用。
+FnzSafe 是一个本地优先的 Solana 与 EVM 钱包和密钥管理工作区。仓库内同时包含 Rust 核心库、交互式 CLI、本地桌面 API、Next.js 前端、Tauri 桌面壳，以及面向 iOS/Android 的 Flutter 移动端应用。
 
 | 方向 | 覆盖范围 |
 |---|---|
@@ -90,6 +92,7 @@ FnzeroSafe 是一个本地优先的 Solana 钱包与密钥管理工作区。仓�
 | 交易 | Pump.fun 与 PumpSwap 卖出流程、返现查看与领取、SWQoS token 配置 |
 | Program | 仅桌面端开放 Program 部署、升级、源码构建、权限与部署管理 |
 | 自动化 | Rust SDK、CLI helper、本地 API、Bot 集成示例 |
+| EVM | 内置 EVM 链注册表、自定义 RPC 模型、secp256k1 钱包、ERC-20 资产、EIP-1559 转账、EIP-712/dApp 签名 |
 
 ### 1.2 产品形态
 
@@ -108,6 +111,10 @@ FnzeroSafe 是一个本地优先的 Solana 钱包与密钥管理工作区。仓�
 | 钱包创建/导入/解锁/导出 | 支持 | 支持 | 支持 | Secret 保存在加密 Keystore 中 |
 | SOL/SPL 资产和交易历史 | 支持 | 支持 | 支持 | 使用 Solana RPC |
 | SOL/SPL/WSOL 转账 | 支持 | 支持 | 支持 | 必须用户确认 |
+| EVM 钱包和自定义 RPC 链 | 支持 | 支持 | 支持 | 内置常见链，也支持用户提供 EVM RPC |
+| EVM native/ERC-20 资产 | 支持 | 支持 | 支持 | native 余额、ERC-20 元数据、token 余额 |
+| EVM native/ERC-20 转账 | 支持 | 支持 | 支持 | 优先 EIP-1559 type-2，必要时回退 legacy gas |
+| EVM dApp 签名/发送 | 支持 | 支持 | 支持 | `personal_sign`、`eth_signTypedData_v4`、`eth_signTransaction`、`eth_sendTransaction` |
 | dApp 消息签名 | 支持 | 支持 | 支持 | 移动端通过 WebView/provider 流程 |
 | dApp 交易签名/发送 | 支持 | 支持 | 支持 | 必须用户确认 |
 | Squads 多签 | 支持 | 支持 | 支持 | 创建、proposal、approve/reject/execute |
@@ -138,6 +145,7 @@ FnzeroSafe 是一个本地优先的 Solana 钱包与密钥管理工作区。仓�
 ├─ Makefile
 ├─ crates/
 │  ├─ core/                      # Rust SDK 与 CLI 二进制：fnzero-safe
+│  ├─ evm-services/              # 通用 EVM 链、钱包、资产、fee、交易和 dApp 服务
 │  ├─ app-services/              # 共享钱包/资产/转账/dApp/Squads 服务
 │  ├─ desktop-api/               # 桌面端/Web 使用的本地 Axum API
 │  └─ mobile-bridge/             # flutter_rust_bridge FFI 层
@@ -151,7 +159,7 @@ FnzeroSafe 是一个本地优先的 Solana 钱包与密钥管理工作区。仓�
 └─ release/                      # 打包产物目录，已被 Git 忽略
 ```
 
-对外产品名统一是 **FnzeroSafe**。`fnzero-safe-core`、`fnzero-safe-desktop-api`、`fnzero-safe-mobile-bridge` 这类名称只是 Cargo workspace 内部包名，用来保证各 crate 名称唯一。
+对外产品名统一是 **FnzSafe**。`fnzero-safe-core`、`fnzero-safe-desktop-api`、`fnzero-safe-mobile-bridge` 这类名称只是 Cargo workspace 内部包名，用来保证各 crate 名称唯一。
 
 ---
 
@@ -271,6 +279,60 @@ cargo install --path crates/core --features full
 fnzero-safe start
 ```
 
+### 4.5 网站与 dApp 钱包接入
+
+FnzSafe deep link 是任何网站或 dApp 都可以集成的通用能力，不是
+Fnzero 官网专用的钱包绑定流程。网站应该继续保留 Phantom、Solflare、
+Backpack、OKX 等标准 wallet-adapter 连接流程。FnzSafe 可以排在钱包
+列表前面；当用户选择 FnzSafe 时，网站可以通过下面的协议链接拉起桌面端：
+
+```text
+fnzsafe://sign?method=signMessage&wallet_public_key=<SOLANA_PUBLIC_KEY>&network=devnet&message_base64=<BASE64_MESSAGE>&app_name=Example%20DApp&app_url=https%3A%2F%2Fexample.com%2F&request_purpose=login&callback_url=https%3A%2F%2Fexample.com%2Fwallet%2Fcallback
+```
+
+可复用的网站/dApp helper 放在
+`packages/shared-contracts/fnzsafe-deep-link.ts`：
+
+```ts
+import {
+  buildFnzSafeAuthMessage,
+  buildFnzSafeSignDeepLink,
+  encodeFnzSafeMessageBase64,
+  openFnzSafeDeepLinkWithFallback,
+  prioritizeFnzSafeWallets,
+} from "./packages/shared-contracts/fnzsafe-deep-link";
+
+const wallets = prioritizeFnzSafeWallets(adapterWallets);
+
+const message = buildFnzSafeAuthMessage({
+  domain: "example.com",
+  address: walletPublicKey,
+  chain: "solana:devnet",
+  statement: "Sign in to Example DApp.",
+  uri: "https://example.com/",
+  nonce,
+});
+const messageBase64 = encodeFnzSafeMessageBase64(message);
+
+const deepLink = buildFnzSafeSignDeepLink({
+  method: "signMessage",
+  walletPublicKey,
+  network: "devnet",
+  messageBase64,
+  appName: "Example DApp",
+  appUrl: "https://example.com/",
+  requestPurpose: "login",
+  callbackUrl: "https://example.com/wallet/callback",
+});
+
+openFnzSafeDeepLinkWithFallback(deepLink, {
+  onFallback: () => openGenericWalletPicker(wallets),
+});
+```
+
+浏览器无法在打开前可靠判断自定义协议是否已安装。helper 会先尝试
+`fnzsafe://...`；如果页面没有失焦，再回退到普通钱包选择器，不影响其它钱包连接。
+
 ---
 
 ## 5. 打包发布
@@ -287,8 +349,8 @@ release/
 ├─ ios/
 │  └─ *.app 或 *.ipa
 ├─ macos/
-│  ├─ FnzeroSafe.app
-│  └─ FnzeroSafe_*.dmg
+│  ├─ FnzSafe.app
+│  └─ FnzSafe_*.dmg
 └─ windows/
    └─ *.msi 和/或 *.exe
 ```
@@ -393,7 +455,7 @@ make package
 | 变量 | 用途 |
 |---|---|
 | `FNZERO_SAFE_API_TOKEN` | 桌面/Web 开发使用的固定本地 API token |
-| `FNZERO_SAFE_DB_PATH` | 覆盖钱包数据库路径 |
+| `FNZERO_SAFE_DB_PATH` | 覆盖钱包数据库路径。`make dev` 使用 `apps/desktop/data/fnzero-safe.sqlite3`，如果新文件不存在且旧开发钱包库 `apps/desktop/data/sol-safekey.sqlite3` 存在，会自动复制旧库到新文件。 |
 | `FNZERO_SAFE_ALLOWED_ORIGINS` | 额外允许访问本地 API 的 origin，多个用逗号分隔 |
 | `FNZERO_SAFE_ALLOW_SECRET_EXPORT=true` | 允许非桌面本机调试上下文导出明文私钥/助记词 |
 | `FNZERO_SAFE_ALLOW_DIRECT_SECRET_INPUT=true` | 允许 Web 调试上下文直接提交明文私钥 |
@@ -422,7 +484,7 @@ make package
 7. **明文导出控制**：明文私钥和助记词导出有意加限制，只应临时用于迁移或本机调试。
 8. **移动端不开放 Program 工作流**：移动端不暴露 Program deploy、upgrade、source build 或 generic invoke API。
 
-存入资产前请先备份加密 Keystore。密码、私钥、助记词无法由 FnzeroSafe 恢复。
+存入资产前请先备份加密 Keystore。密码、私钥、助记词无法由 FnzSafe 恢复。
 
 ---
 

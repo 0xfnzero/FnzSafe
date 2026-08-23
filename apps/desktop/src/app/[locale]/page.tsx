@@ -180,6 +180,50 @@ function errorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
+function isResettableBiometricError(message: string): boolean {
+  return (
+    message.includes("无权读取 Keychain 凭据") ||
+    message.includes("还没有为这个钱包启用 Touch ID") ||
+    message.includes("not enabled Touch ID") ||
+    message.includes("not been enabled")
+  );
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function waitForBiometricPromptReadiness(): Promise<void> {
+  if (typeof window === "undefined" || typeof document === "undefined") return;
+  if (document.visibilityState === "visible" && document.hasFocus()) {
+    await wait(250);
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      if (document.visibilityState !== "visible" || !document.hasFocus()) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      window.removeEventListener("focus", done);
+      document.removeEventListener("visibilitychange", done);
+      resolve();
+    };
+    const timeout = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener("focus", done);
+      document.removeEventListener("visibilitychange", done);
+      resolve();
+    }, 1800);
+    window.addEventListener("focus", done);
+    document.addEventListener("visibilitychange", done);
+    done();
+  });
+  await wait(300);
+}
+
 function decodeBase64Bytes(value?: string): Uint8Array | null {
   if (!value || typeof window === "undefined") return null;
   try {
@@ -1032,18 +1076,32 @@ interface DappSignRequestEvent {
   app_id: string;
   app_name: string;
   app_url: string;
+  request_purpose?: string;
   method: "signTransaction" | "signAllTransactions" | "signAndSendTransaction" | "sendTransaction" | "signMessage" | string;
   wallet_public_key: string;
   network: string;
   transaction_base64: string;
   transaction_format: "legacy" | "versioned" | "v0" | "auto" | string;
   message_base64?: string;
+  callback_url?: string;
+  known_programs?: Array<{ program_id: string; label: string }>;
+  created_at_ms: number;
+}
+
+interface DappConnectRequestEvent {
+  request_id: string;
+  app_id: string;
+  app_name: string;
+  app_url: string;
+  network: string;
+  callback_url: string;
   created_at_ms: number;
 }
 
 interface DappSignResult {
   approved: boolean;
   error?: string;
+  public_key?: string;
   signature?: string;
   raw_transaction?: string;
   recent_blockhash?: string;
@@ -1386,6 +1444,184 @@ interface WalletTransactionsState {
   loaded: number;
   loading: boolean;
   error?: string;
+}
+
+interface DesktopEvmChainConfig {
+  chain_id: number;
+  name: string;
+  native_symbol: string;
+  rpc_url: string;
+  explorer_url?: string | null;
+  testnet: boolean;
+}
+
+interface DesktopEvmWalletSummary {
+  id: string;
+  name: string;
+  address: string;
+  derivation_path?: string | null;
+}
+
+interface DesktopEvmWalletKeystore {
+  wallet: DesktopEvmWalletSummary;
+  keystore_json: string;
+}
+
+interface DesktopEvmTokenAsset {
+  contract_address: string;
+  symbol: string;
+  name: string;
+  balance: string;
+  decimals: number;
+}
+
+interface DesktopEvmTransactionHistoryEntry {
+  hash: string;
+  block_number?: number | null;
+  status: string;
+}
+
+interface DesktopEvmAssetSnapshot {
+  chain: DesktopEvmChainConfig;
+  wallet_address: string;
+  native_balance_wei: string;
+  tokens: DesktopEvmTokenAsset[];
+  recent_transactions: DesktopEvmTransactionHistoryEntry[];
+  history_status: string;
+  history_message?: string | null;
+  refreshed_at_ms: number;
+}
+
+interface DesktopEvmPaymentPreview {
+  preview_id: string;
+  chain: DesktopEvmChainConfig;
+  wallet_address: string;
+  recipient: string;
+  token_contract?: string | null;
+  amount_wei_or_units: string;
+  gas_limit: string;
+  gas_price_wei: string;
+  max_fee_per_gas_wei?: string | null;
+  max_priority_fee_per_gas_wei?: string | null;
+  fee_model: string;
+  nonce: string;
+  estimated_fee_wei: string;
+  summary: string;
+  warnings: string[];
+}
+
+interface DesktopEvmTransactionSubmitResult {
+  transaction_hash: string;
+  chain: DesktopEvmChainConfig;
+  submitted_at: string;
+  status: string;
+  block_number?: number | null;
+}
+
+interface DesktopEvmTransactionStatus {
+  transaction_hash: string;
+  chain: DesktopEvmChainConfig;
+  block_number?: number | null;
+  status: string;
+  gas_used?: string | null;
+  effective_gas_price_wei?: string | null;
+}
+
+const DESKTOP_EVM_CUSTOM_CHAINS_STORAGE_KEY = "fnzero.desktop.evm.custom_chains.v1";
+const DESKTOP_EVM_SELECTED_CHAIN_STORAGE_KEY = "fnzero.desktop.evm.selected_chain.v1";
+const DESKTOP_EVM_TOKENS_STORAGE_PREFIX = "fnzero.desktop.evm.tokens.v1";
+
+function isDesktopEvmAddress(value: string): boolean {
+  return /^0x[0-9a-fA-F]{40}$/.test(value.trim());
+}
+
+function normalizeDesktopEvmChain(value: unknown): DesktopEvmChainConfig | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const chainId = Number(record.chain_id);
+  const name = String(record.name || "").trim();
+  const nativeSymbol = String(record.native_symbol || "").trim();
+  const rpcUrl = String(record.rpc_url || "").trim();
+  const explorerUrl = String(record.explorer_url || "").trim();
+  if (
+    !Number.isSafeInteger(chainId) ||
+    chainId <= 0 ||
+    !name ||
+    !nativeSymbol ||
+    !/^https?:\/\//.test(rpcUrl) ||
+    (explorerUrl && !/^https?:\/\//.test(explorerUrl))
+  ) {
+    return null;
+  }
+  return {
+    chain_id: chainId,
+    name,
+    native_symbol: nativeSymbol,
+    rpc_url: rpcUrl,
+    explorer_url: explorerUrl || null,
+    testnet: Boolean(record.testnet),
+  };
+}
+
+function loadStoredDesktopEvmChains(): DesktopEvmChainConfig[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(DESKTOP_EVM_CUSTOM_CHAINS_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(normalizeDesktopEvmChain).filter((item): item is DesktopEvmChainConfig => Boolean(item));
+  } catch {
+    return [];
+  }
+}
+
+function saveStoredDesktopEvmChains(chains: DesktopEvmChainConfig[]) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(DESKTOP_EVM_CUSTOM_CHAINS_STORAGE_KEY, JSON.stringify(chains));
+}
+
+function loadStoredDesktopEvmChainId(): string {
+  if (typeof window === "undefined") return "";
+  return window.localStorage.getItem(DESKTOP_EVM_SELECTED_CHAIN_STORAGE_KEY) || "";
+}
+
+function saveStoredDesktopEvmChainId(chainId: string) {
+  if (typeof window === "undefined") return;
+  const normalized = chainId.trim();
+  if (normalized) {
+    window.localStorage.setItem(DESKTOP_EVM_SELECTED_CHAIN_STORAGE_KEY, normalized);
+  } else {
+    window.localStorage.removeItem(DESKTOP_EVM_SELECTED_CHAIN_STORAGE_KEY);
+  }
+}
+
+function desktopEvmTokenStorageKey(chainId: number, walletAddress: string): string {
+  return `${DESKTOP_EVM_TOKENS_STORAGE_PREFIX}.${chainId}.${walletAddress.toLowerCase()}`;
+}
+
+function loadStoredDesktopEvmTokens(chainId: number, walletAddress: string): string[] {
+  if (typeof window === "undefined" || !walletAddress) return [];
+  try {
+    const raw = window.localStorage.getItem(desktopEvmTokenStorageKey(chainId, walletAddress));
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item) => (typeof item === "string" ? item.trim() : ""))
+      .filter((item): item is string => isDesktopEvmAddress(item));
+  } catch {
+    return [];
+  }
+}
+
+function saveStoredDesktopEvmTokens(chainId: number, walletAddress: string, tokens: string[]) {
+  if (typeof window === "undefined" || !walletAddress) return;
+  const normalized = Array.from(new Map(
+    tokens
+      .map((token) => token.trim())
+      .filter(isDesktopEvmAddress)
+      .map((token) => [token.toLowerCase(), token]),
+  ).values());
+  window.localStorage.setItem(desktopEvmTokenStorageKey(chainId, walletAddress), JSON.stringify(normalized));
 }
 
 interface NonceAccountRecord {
@@ -1975,6 +2211,11 @@ export default function Home() {
           icon: <RefreshCw className="w-4 h-4" />,
           network: true,
         },
+        {
+          id: "evm-workbench",
+          label: tf("features.evm-workbench.title", "Multi-chain Wallet"),
+          icon: <ArrowRightLeft className="w-4 h-4" />,
+        },
       ],
     },
     {
@@ -2058,6 +2299,8 @@ export default function Home() {
   const [privateKeyQrRevealed, setPrivateKeyQrRevealed] = useState(false);
   const [dappTabs, setDappTabs] = useState<DappBrowserTab[]>([DAPP_HOME_TAB]);
   const [activeDappTabId, setActiveDappTabId] = useState(DAPP_HOME_TAB_ID);
+  const [dappConnectRequest, setDappConnectRequest] = useState<DappConnectRequestEvent | null>(null);
+  const [dappConnectWalletId, setDappConnectWalletId] = useState("");
   const [dappSignRequest, setDappSignRequest] = useState<DappSignRequestEvent | null>(null);
   const [dappPassword, setDappPassword] = useState("");
   const [dappSaveBiometric, setDappSaveBiometric] = useState(false);
@@ -2155,12 +2398,39 @@ export default function Home() {
   const [walletSolBalanceCache, setWalletSolBalanceCache] = useState<Record<string, string>>({});
   const [walletTransactions, setWalletTransactions] = useState<WalletTransactionsState | null>(null);
   const [walletOverviewTab, setWalletOverviewTab] = useState<"assets" | "transactions">("assets");
+  const [walletChainView, setWalletChainView] = useState<"solana" | "evm">("solana");
   const [visibleTokenCount, setVisibleTokenCount] = useState(TOKEN_ASSET_PAGE_SIZE);
   const clientSettingsLoadedRef = useRef(false);
   const walletAssetsRef = useRef<WalletAssetsState | null>(null);
   const walletTransactionsRef = useRef<WalletTransactionsState | null>(null);
   const walletAssetsInFlightRef = useRef<Map<string, Promise<WalletAssetsState | null>>>(new Map());
   const walletTransactionsInFlightRef = useRef<Map<string, Promise<void>>>(new Map());
+  const [evmChains, setEvmChains] = useState<DesktopEvmChainConfig[]>([]);
+  const [evmCustomChainIds, setEvmCustomChainIds] = useState<number[]>([]);
+  const [evmChainId, setEvmChainId] = useState("");
+  const [evmWallet, setEvmWallet] = useState<DesktopEvmWalletSummary | null>(null);
+  const [evmKeystoreJson, setEvmKeystoreJson] = useState("");
+  const [evmPassword, setEvmPassword] = useState("");
+  const [evmPrivateKey, setEvmPrivateKey] = useState("");
+  const [evmRecipient, setEvmRecipient] = useState("");
+  const [evmAmount, setEvmAmount] = useState("");
+  const [evmTokenContract, setEvmTokenContract] = useState("");
+  const [evmTokenContracts, setEvmTokenContracts] = useState<string[]>([]);
+  const [evmNewTokenContract, setEvmNewTokenContract] = useState("");
+  const [evmAssets, setEvmAssets] = useState<DesktopEvmAssetSnapshot | null>(null);
+  const [evmPreview, setEvmPreview] = useState<DesktopEvmPaymentPreview | null>(null);
+  const [evmSubmitResult, setEvmSubmitResult] = useState<DesktopEvmTransactionSubmitResult | null>(null);
+  const [evmTransactionStatus, setEvmTransactionStatus] = useState<DesktopEvmTransactionStatus | null>(null);
+  const [evmBusy, setEvmBusy] = useState(false);
+  const [evmError, setEvmError] = useState<string | null>(null);
+  const [evmNewChain, setEvmNewChain] = useState({
+    chainId: "",
+    name: "",
+    nativeSymbol: "",
+    rpcUrl: "",
+    explorerUrl: "",
+    testnet: true,
+  });
   const nonceAccountsInFlightRef = useRef<Map<string, Promise<void>>>(new Map());
   const pendingTokenBalanceAdjustmentRef = useRef<PendingTokenBalanceAdjustment | undefined>(undefined);
   const lastAssetRefreshRef = useRef<Map<string, number>>(new Map());
@@ -2179,6 +2449,299 @@ export default function Home() {
   const [tokenMintInfo, setTokenMintInfo] = useState<TokenMintInfoState | null>(null);
   const walletAuth = (formId: string): WalletAuthTab =>
     normalizeWalletAuth((authMethod[formId] ?? "keystore") as WalletAuthTab);
+  const activeEvmChain =
+    evmChains.find((chain) => String(chain.chain_id) === evmChainId) || evmChains[0];
+  const activeEvmChainIsCustom =
+    Boolean(activeEvmChain && evmCustomChainIds.includes(activeEvmChain.chain_id));
+
+  const resetEvmChainScopedState = useCallback(() => {
+    setEvmAssets(null);
+    setEvmPreview(null);
+    setEvmSubmitResult(null);
+    setEvmTransactionStatus(null);
+  }, []);
+
+  const selectEvmChain = useCallback((chainId: string) => {
+    setEvmChainId(chainId);
+    setWalletChainView("evm");
+    saveStoredDesktopEvmChainId(chainId);
+    resetEvmChainScopedState();
+  }, [resetEvmChainScopedState]);
+
+  const loadEvmChains = useCallback(async () => {
+    const response = await apiFetch("evm/chains", {});
+    const data = await response.json();
+    if (!response.ok || !Array.isArray(data)) {
+      throw new Error(data?.error || "Failed to load chains");
+    }
+    const merged = new Map<number, DesktopEvmChainConfig>();
+    for (const chain of data as DesktopEvmChainConfig[]) {
+      merged.set(chain.chain_id, chain);
+    }
+    const customChains = loadStoredDesktopEvmChains();
+    for (const chain of customChains) {
+      merged.set(chain.chain_id, chain);
+    }
+    const chains = Array.from(merged.values()).sort((a, b) => {
+      if (a.testnet !== b.testnet) return a.testnet ? 1 : -1;
+      return a.chain_id - b.chain_id;
+    });
+    setEvmChains(chains);
+    setEvmCustomChainIds(customChains.map((chain) => chain.chain_id));
+    const storedChainId = loadStoredDesktopEvmChainId();
+    setEvmChainId((previous) => {
+      const candidate = previous || storedChainId;
+      const nextChainId =
+        candidate && chains.some((chain) => String(chain.chain_id) === candidate)
+          ? candidate
+          : String(chains[0]?.chain_id || "");
+      saveStoredDesktopEvmChainId(nextChainId);
+      return nextChainId;
+    });
+  }, []);
+
+  useEffect(() => {
+    void loadEvmChains().catch((error) => setEvmError(errorMessage(error, "Failed to load chains")));
+  }, [loadEvmChains]);
+
+  useEffect(() => {
+    if (!activeEvmChain || !evmWallet) {
+      setEvmTokenContracts([]);
+      return;
+    }
+    setEvmTokenContracts(loadStoredDesktopEvmTokens(activeEvmChain.chain_id, evmWallet.address));
+  }, [activeEvmChain, evmWallet]);
+
+  const withEvmBusy = useCallback(async (run: () => Promise<void>) => {
+    setEvmBusy(true);
+    setEvmError(null);
+    try {
+      await run();
+    } catch (error) {
+      const message = errorMessage(error, "Chain operation failed");
+      setEvmError(message);
+      toast.error(message);
+    } finally {
+      setEvmBusy(false);
+    }
+  }, []);
+
+  const createEvmWallet = () => withEvmBusy(async () => {
+    if (!evmPassword.trim()) throw new Error("Wallet password is required");
+    const response = await apiFetch("evm/wallet/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Multi-chain Wallet", password: evmPassword }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Failed to create wallet");
+    const created = data as DesktopEvmWalletKeystore;
+    setEvmWallet(created.wallet);
+    setEvmKeystoreJson(created.keystore_json);
+    setEvmPreview(null);
+    setEvmSubmitResult(null);
+    setEvmPassword("");
+    toast.success("Wallet created");
+  });
+
+  const importEvmPrivateKey = () => withEvmBusy(async () => {
+    if (!evmPrivateKey.trim() || !evmPassword.trim()) {
+      throw new Error("Private key and password are required");
+    }
+    const response = await apiFetch("evm/wallet/import-private-key", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Imported Multi-chain Wallet",
+        private_key_hex: evmPrivateKey.trim(),
+        password: evmPassword,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Failed to import wallet");
+    const imported = data as DesktopEvmWalletKeystore;
+    setEvmWallet(imported.wallet);
+    setEvmKeystoreJson(imported.keystore_json);
+    setEvmPassword("");
+    setEvmPrivateKey("");
+    setEvmPreview(null);
+    setEvmSubmitResult(null);
+    toast.success("Wallet imported");
+  });
+
+  const addDesktopEvmChain = () => {
+    const chainId = Number(evmNewChain.chainId);
+    const rpcUrl = evmNewChain.rpcUrl.trim();
+    if (!Number.isSafeInteger(chainId) || chainId <= 0 || !evmNewChain.name.trim() || !evmNewChain.nativeSymbol.trim()) {
+      setEvmError("Chain id, name, and native symbol are required");
+      return;
+    }
+    if (!/^https?:\/\//.test(rpcUrl)) {
+      setEvmError("RPC URL must start with http:// or https://");
+      return;
+    }
+    const explorerUrl = evmNewChain.explorerUrl.trim();
+    if (explorerUrl && !/^https?:\/\//.test(explorerUrl)) {
+      setEvmError("Explorer URL must start with http:// or https://");
+      return;
+    }
+    const nextChain: DesktopEvmChainConfig = {
+      chain_id: chainId,
+      name: evmNewChain.name.trim(),
+      native_symbol: evmNewChain.nativeSymbol.trim(),
+      rpc_url: rpcUrl,
+      explorer_url: explorerUrl || null,
+      testnet: evmNewChain.testnet,
+    };
+    const storedChains = new Map(loadStoredDesktopEvmChains().map((chain) => [chain.chain_id, chain]));
+    storedChains.set(nextChain.chain_id, nextChain);
+    const nextStoredChains = Array.from(storedChains.values()).sort((a, b) => a.chain_id - b.chain_id);
+    saveStoredDesktopEvmChains(nextStoredChains);
+    setEvmCustomChainIds(nextStoredChains.map((chain) => chain.chain_id));
+    setEvmChains((previous) => {
+      const merged = new Map(previous.map((chain) => [chain.chain_id, chain]));
+      merged.set(nextChain.chain_id, nextChain);
+      return Array.from(merged.values()).sort((a, b) => {
+        if (a.testnet !== b.testnet) return a.testnet ? 1 : -1;
+        return a.chain_id - b.chain_id;
+      });
+    });
+    selectEvmChain(String(nextChain.chain_id));
+    setEvmNewChain({ chainId: "", name: "", nativeSymbol: "", rpcUrl: "", explorerUrl: "", testnet: true });
+    setEvmAssets(null);
+  };
+
+  const removeDesktopEvmChain = () => {
+    if (!activeEvmChain || !activeEvmChainIsCustom) return;
+    const customChains = loadStoredDesktopEvmChains().filter((chain) => chain.chain_id !== activeEvmChain.chain_id);
+    saveStoredDesktopEvmChains(customChains);
+    setEvmCustomChainIds(customChains.map((chain) => chain.chain_id));
+    void loadEvmChains().then(() => {
+      setEvmAssets(null);
+      setEvmPreview(null);
+      setEvmSubmitResult(null);
+      setEvmTransactionStatus(null);
+    });
+  };
+
+  const addDesktopEvmToken = () => {
+    const contract = evmNewTokenContract.trim();
+    if (!contract) return;
+    if (!activeEvmChain || !evmWallet) {
+      setEvmError("Select a chain and wallet before adding a token");
+      return;
+    }
+    const next = Array.from(new Map([...evmTokenContracts, contract].map((item) => [item.toLowerCase(), item])).values());
+    if (!isDesktopEvmAddress(contract)) {
+      setEvmError("ERC-20 contract must be a 20-byte 0x address");
+      return;
+    }
+    setEvmTokenContracts(next);
+    saveStoredDesktopEvmTokens(activeEvmChain.chain_id, evmWallet.address, next);
+    setEvmNewTokenContract("");
+  };
+
+  const removeDesktopEvmToken = (contract: string) => {
+    if (!activeEvmChain || !evmWallet) return;
+    const next = evmTokenContracts.filter((item) => item.toLowerCase() !== contract.toLowerCase());
+    setEvmTokenContracts(next);
+    saveStoredDesktopEvmTokens(activeEvmChain.chain_id, evmWallet.address, next);
+    setEvmAssets((previous) => previous
+      ? {
+          ...previous,
+          tokens: previous.tokens.filter((item) => item.contract_address.toLowerCase() !== contract.toLowerCase()),
+        }
+      : previous,
+    );
+  };
+
+  const refreshEvmAssets = () => withEvmBusy(async () => {
+    if (!activeEvmChain || !evmWallet) throw new Error("Select a chain and wallet first");
+    const response = await apiFetch("evm/assets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chain: activeEvmChain,
+        wallet_address: evmWallet.address,
+        tokens: evmTokenContracts.map((contract_address) => ({ contract_address })),
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Failed to refresh chain assets");
+    setEvmAssets(data as DesktopEvmAssetSnapshot);
+  });
+
+  const previewEvmPayment = () => withEvmBusy(async () => {
+    if (!activeEvmChain || !evmWallet) throw new Error("Select a chain and wallet first");
+    const response = await apiFetch("evm/payment/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chain: activeEvmChain,
+        wallet_address: evmWallet.address,
+        recipient: evmRecipient.trim(),
+        amount_wei_or_units: evmAmount.trim(),
+        token_contract: evmTokenContract.trim() || null,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Failed to preview payment");
+    setEvmPreview(data as DesktopEvmPaymentPreview);
+    setEvmSubmitResult(null);
+    setEvmTransactionStatus(null);
+  });
+
+  const submitEvmPayment = (approved: boolean) => withEvmBusy(async () => {
+    if (!evmPreview) throw new Error("Create a payment preview first");
+    if (!approved) {
+      setEvmPreview(null);
+      setEvmSubmitResult(null);
+      setEvmTransactionStatus(null);
+      setEvmPassword("");
+      toast.success("Transaction rejected");
+      return;
+    }
+    const response = await apiFetch("evm/payment/submit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        preview_id: evmPreview.preview_id,
+        approved: true,
+        chain: evmPreview.chain,
+        wallet_address: evmPreview.wallet_address,
+        keystore_json: evmKeystoreJson,
+        password: evmPassword,
+        recipient: evmPreview.recipient,
+        amount_wei_or_units: evmPreview.amount_wei_or_units,
+        token_contract: evmPreview.token_contract,
+        gas_limit: evmPreview.gas_limit,
+        gas_price_wei: evmPreview.gas_price_wei,
+        max_fee_per_gas_wei: evmPreview.max_fee_per_gas_wei,
+        max_priority_fee_per_gas_wei: evmPreview.max_priority_fee_per_gas_wei,
+        nonce: evmPreview.nonce,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Failed to submit payment");
+    setEvmSubmitResult(data as DesktopEvmTransactionSubmitResult);
+    setEvmPassword("");
+    toast.success("Transaction submitted");
+  });
+
+  const refreshEvmTransactionStatus = () => withEvmBusy(async () => {
+    if (!evmSubmitResult) throw new Error("Submit a transaction first");
+    const response = await apiFetch("evm/transaction/status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chain: evmSubmitResult.chain,
+        transaction_hash: evmSubmitResult.transaction_hash,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Failed to load transaction status");
+    setEvmTransactionStatus(data as DesktopEvmTransactionStatus);
+  });
 
   useEffect(() => {
     setAppTheme(loadAppUiTheme());
@@ -2365,6 +2928,7 @@ export default function Home() {
         ? cachedStatus
         : await refreshBiometricWalletStatus(wallet);
     if (!status.supported || !status.configured) return null;
+    await waitForBiometricPromptReadiness();
     setBiometricBusyWalletId(wallet.id);
     try {
       return await invoke<string>("biometric_wallet_get_password", {
@@ -2374,7 +2938,18 @@ export default function Home() {
         },
       });
     } catch (error) {
-      toast.error(errorMessage(error, t("features.biometric.authFailed")));
+      const message = errorMessage(error, t("features.biometric.authFailed"));
+      if (isResettableBiometricError(message)) {
+        setBiometricStatuses((prev) => ({
+          ...prev,
+          [wallet.id]: {
+            ...(prev[wallet.id] ?? { supported: true }),
+            configured: false,
+            reason: message,
+          },
+        }));
+      }
+      toast.error(message);
       return null;
     } finally {
       setBiometricBusyWalletId(null);
@@ -2436,7 +3011,8 @@ export default function Home() {
   useEffect(() => {
     if (!isTauriWebview()) return;
     let unlisten: UnlistenFn | undefined;
-	    void listen<DappSignRequestEvent>("dapp://sign-request", (event) => {
+    let unlistenConnect: UnlistenFn | undefined;
+    const showConnectRequest = (request: DappConnectRequestEvent) => {
       void invoke("dapp_set_active_tab", {
         tabId: null,
         x: 0,
@@ -2444,34 +3020,67 @@ export default function Home() {
         width: 0,
         height: 0,
       }).catch(() => {});
-	      setDappSignRequest(event.payload);
-	      setDappPassword("");
-		      setDappSaveBiometric(false);
-		      setDappTransactionPreview(null);
-		      setDappTransactionPreviewError(null);
-		      setDappTransactionPreviewLoading(event.payload.method !== "signMessage");
-		      setDappPreviewDetailsOpen(false);
-		      toast.message(
-	        event.payload.method === "signMessage"
+      setDappConnectRequest(request);
+      setDappConnectWalletId(effectiveWalletId);
+      toast.message(tf("features.dapp-store.connectRequestToast", "DApp 请求连接钱包"));
+    };
+    const showSignRequest = (request: DappSignRequestEvent) => {
+      void invoke("dapp_set_active_tab", {
+        tabId: null,
+        x: 0,
+        y: 0,
+        width: 0,
+        height: 0,
+      }).catch(() => {});
+      setDappSignRequest(request);
+      setDappPassword("");
+      setDappSaveBiometric(false);
+      setDappTransactionPreview(null);
+      setDappTransactionPreviewError(null);
+      setDappTransactionPreviewLoading(request.method !== "signMessage");
+      setDappPreviewDetailsOpen(false);
+      toast.message(
+        request.method === "signMessage"
           ? tf("features.dapp-store.messageRequestToast", "DApp 发起了消息签名请求")
           : tf("features.dapp-store.transactionRequestToast", "DApp 发起了交易签名请求"),
       );
+    };
+    void listen<DappConnectRequestEvent>("dapp://connect-request", (event) => {
+      showConnectRequest(event.payload);
+    }).then((cleanup) => {
+      unlistenConnect = cleanup;
+    }).catch(() => {
+      // The web build has no Tauri event bridge.
+    });
+    void listen<DappSignRequestEvent>("dapp://sign-request", (event) => {
+      showSignRequest(event.payload);
     }).then((cleanup) => {
       unlisten = cleanup;
     }).catch(() => {
       // The web build has no Tauri event bridge.
     });
+    void invoke<DappConnectRequestEvent | null>("dapp_pending_connect_request")
+      .then((request) => {
+        if (request) showConnectRequest(request);
+      })
+      .catch(() => {});
+    void invoke<DappSignRequestEvent | null>("dapp_pending_sign_request")
+      .then((request) => {
+        if (request) showSignRequest(request);
+      })
+      .catch(() => {});
     return () => {
       unlisten?.();
+      unlistenConnect?.();
     };
-	  }, [tf]);
+  }, [effectiveWalletId, tf]);
 
-	  useEffect(() => {
-	    if (!dappSignRequest || dappSignRequest.method === "signMessage") {
-	      setDappTransactionPreview(null);
-	      setDappTransactionPreviewError(null);
-	      setDappTransactionPreviewLoading(false);
-	      return;
+  useEffect(() => {
+    if (!dappSignRequest || dappSignRequest.method === "signMessage") {
+      setDappTransactionPreview(null);
+      setDappTransactionPreviewError(null);
+      setDappTransactionPreviewLoading(false);
+      return;
 	    }
 	    let cancelled = false;
 	    setDappTransactionPreview(null);
@@ -2486,6 +3095,7 @@ export default function Home() {
 	            required_signer: dappSignRequest.wallet_public_key,
 	            transaction_base64: dappSignRequest.transaction_base64,
 	            transaction_format: dappSignRequest.transaction_format || "auto",
+	            known_programs: dappSignRequest.known_programs ?? [],
 	          }),
 	        });
 	        const data = await response.json();
@@ -5559,6 +6169,56 @@ export default function Home() {
     });
   };
 
+  const resolveDappConnectRequest = async (request: DappConnectRequestEvent, result: DappSignResult) => {
+    await invoke("resolve_dapp_connect_request", {
+      requestId: request.request_id,
+      result,
+    });
+  };
+
+  const rejectDappConnectRequest = async () => {
+    const request = dappConnectRequest;
+    if (!request) return;
+    setDappSignBusy(true);
+    try {
+      await resolveDappConnectRequest(request, {
+        approved: false,
+        error: "USER_REJECTED",
+      });
+      setDappConnectRequest(null);
+      setDappConnectWalletId("");
+    } catch (error) {
+      toast.error(errorMessage(error, "拒绝 DApp 连接失败"));
+    } finally {
+      setDappSignBusy(false);
+    }
+  };
+
+  const approveDappConnectRequest = async () => {
+    const request = dappConnectRequest;
+    if (!request) return;
+    const wallet = wallets.find((item) => item.id === (dappConnectWalletId || effectiveWalletId)) || wallets[0];
+    if (!wallet) {
+      toast.error(tf("features.dapp-store.noWallet", "Select a wallet first."));
+      return;
+    }
+    setDappSignBusy(true);
+    try {
+      setCurrentWallet(wallet.id);
+      await resolveDappConnectRequest(request, {
+        approved: true,
+        public_key: wallet.public_key,
+      });
+      toast.success(tf("features.dapp-store.connectSuccess", "DApp 已连接钱包"));
+      setDappConnectRequest(null);
+      setDappConnectWalletId("");
+    } catch (error) {
+      toast.error(errorMessage(error, "DApp 连接失败"));
+    } finally {
+      setDappSignBusy(false);
+    }
+  };
+
   const rejectDappSignRequest = async () => {
     const request = dappSignRequest;
     if (!request) return;
@@ -5568,14 +6228,14 @@ export default function Home() {
         approved: false,
         error: "用户拒绝了 DApp 交易签名请求",
       });
-	      setDappSignRequest(null);
-	      setDappPassword("");
-	      setDappSaveBiometric(false);
-		      setDappTransactionPreview(null);
-		      setDappTransactionPreviewError(null);
-		      setDappTransactionPreviewLoading(false);
-		      setDappPreviewDetailsOpen(false);
-		    } catch (error) {
+      setDappSignRequest(null);
+      setDappPassword("");
+      setDappSaveBiometric(false);
+      setDappTransactionPreview(null);
+      setDappTransactionPreviewError(null);
+      setDappTransactionPreviewLoading(false);
+      setDappPreviewDetailsOpen(false);
+    } catch (error) {
       toast.error(errorMessage(error, "拒绝 DApp 请求失败"));
     } finally {
       setDappSignBusy(false);
@@ -5595,42 +6255,42 @@ export default function Home() {
       toast.error(t("formUi.placeholderKeystorePassword"));
       return;
     }
-	    const isMessageSignature = request.method === "signMessage";
-	    if (!isMessageSignature) {
-	      if (dappTransactionPreviewLoading) {
-	        toast.error(tf("features.dapp-store.previewLoading", "交易预览仍在加载，请稍后再确认"));
-	        return;
-	      }
-	      if (dappTransactionPreviewError || !dappTransactionPreview) {
-	        toast.error(dappTransactionPreviewError || tf("features.dapp-store.previewRequired", "需要先完成交易预览"));
-	        return;
-	      }
-	      if (!dappTransactionPreview.required_signer_present) {
-	        toast.error(tf("features.dapp-store.signerMissing", "交易没有要求当前钱包签名，已拒绝"));
-	        return;
-	      }
-	    }
-	    const shouldSubmit = request.method === "sendTransaction" || request.method === "signAndSendTransaction";
+    const isMessageSignature = request.method === "signMessage";
+    if (!isMessageSignature) {
+      if (dappTransactionPreviewLoading) {
+        toast.error(tf("features.dapp-store.previewLoading", "交易预览仍在加载，请稍后再确认"));
+        return;
+      }
+      if (dappTransactionPreviewError || !dappTransactionPreview) {
+        toast.error(dappTransactionPreviewError || tf("features.dapp-store.previewRequired", "需要先完成交易预览"));
+        return;
+      }
+      if (!dappTransactionPreview.required_signer_present) {
+        toast.error(tf("features.dapp-store.signerMissing", "交易没有要求当前钱包签名，已拒绝"));
+        return;
+      }
+    }
+    const shouldSubmit = request.method === "sendTransaction" || request.method === "signAndSendTransaction";
     setDappSignBusy(true);
     try {
       const response = await apiFetch(
         isMessageSignature ? "external-sign/message" : shouldSubmit ? "external-sign/submit" : "external-sign/sign",
         {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          wallet_id: wallet.id,
-          password: walletPassword,
-          required_signer: request.wallet_public_key,
-          ...(isMessageSignature
-            ? { message_base64: request.message_base64 || "" }
-            : {
-                transaction_base64: request.transaction_base64,
-                transaction_format: request.transaction_format || "auto",
-              }),
-          network: request.network || effectiveRpcRequest,
-          request_id: request.request_id,
-        }),
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            wallet_id: wallet.id,
+            password: walletPassword,
+            required_signer: request.wallet_public_key,
+            ...(isMessageSignature
+              ? { message_base64: request.message_base64 || "" }
+              : {
+                  transaction_base64: request.transaction_base64,
+                  transaction_format: request.transaction_format || "auto",
+                }),
+            network: request.network || effectiveRpcRequest,
+            request_id: request.request_id,
+          }),
         },
       );
       const data = await response.json();
@@ -5654,14 +6314,14 @@ export default function Home() {
           ? tf("features.dapp-store.submitSuccess", "DApp 交易已提交")
           : tf("features.dapp-store.signSuccess", "DApp 交易已签名"),
       );
-	      setDappSignRequest(null);
-	      setDappPassword("");
-	      setDappSaveBiometric(false);
-		      setDappTransactionPreview(null);
-		      setDappTransactionPreviewError(null);
-		      setDappTransactionPreviewLoading(false);
-		      setDappPreviewDetailsOpen(false);
-		      if (!isMessageSignature) refreshWalletAfterMutation(wallet);
+      setDappSignRequest(null);
+      setDappPassword("");
+      setDappSaveBiometric(false);
+      setDappTransactionPreview(null);
+      setDappTransactionPreviewError(null);
+      setDappTransactionPreviewLoading(false);
+      setDappPreviewDetailsOpen(false);
+      if (!isMessageSignature) refreshWalletAfterMutation(wallet);
     } catch (error) {
       toast.error(
         errorMessage(
@@ -5691,36 +6351,60 @@ export default function Home() {
   };
   approveDappSignRequestRef.current = approveDappSignRequest;
 
-	  useEffect(() => {
-	    if (!dappSignRequest) {
-	      biometricDappAttemptRef.current = "";
-	      return;
-	    }
-      const wallet = wallets.find((item) => item.public_key === dappSignRequest.wallet_public_key);
-      if (!wallet || !canUseBiometricWallet(wallet)) {
+  useEffect(() => {
+    if (!dappSignRequest || walletsLoading) return;
+    if (wallets.some((item) => item.public_key === dappSignRequest.wallet_public_key)) return;
+    const request = dappSignRequest;
+    void (async () => {
+      try {
+        await resolveDappSignRequest(request, {
+          approved: false,
+          error: "FNZSAFE_WALLET_NOT_FOUND",
+        });
+      } catch {
+        // The request may have been cancelled by the user while wallets were loading.
+      }
+      toast.error(tf("features.dapp-store.walletMissing", "这个请求指定的钱包不在当前钱包列表中。"));
+      setDappSignRequest(null);
+      setDappPassword("");
+      setDappSaveBiometric(false);
+      setDappTransactionPreview(null);
+      setDappTransactionPreviewError(null);
+      setDappTransactionPreviewLoading(false);
+      setDappPreviewDetailsOpen(false);
+    })();
+  }, [dappSignRequest, tf, wallets, walletsLoading]);
+
+  useEffect(() => {
+    if (!dappSignRequest) {
+      biometricDappAttemptRef.current = "";
+      return;
+    }
+    const wallet = wallets.find((item) => item.public_key === dappSignRequest.wallet_public_key);
+    if (!wallet || !canUseBiometricWallet(wallet)) {
+      return;
+    }
+    if (dappSignBusy || biometricBusyWalletId === wallet.id) {
+      return;
+    }
+    if (dappSignRequest.method !== "signMessage") {
+      if (dappTransactionPreviewLoading || dappTransactionPreviewError || !dappTransactionPreview) {
         return;
       }
-      if (dappSignBusy || biometricBusyWalletId === wallet.id) {
+      if (!dappTransactionPreview.required_signer_present) {
         return;
       }
-      if (dappSignRequest.method !== "signMessage") {
-        if (dappTransactionPreviewLoading || dappTransactionPreviewError || !dappTransactionPreview) {
-          return;
-        }
-        if (!dappTransactionPreview.required_signer_present) {
-          return;
-        }
+    }
+    const attemptKey = `${dappSignRequest.request_id}:${wallet.id}`;
+    if (biometricDappAttemptRef.current === attemptKey) return;
+    biometricDappAttemptRef.current = attemptKey;
+    void (async () => {
+      const password = await getBiometricWalletPassword(wallet);
+      if (password) {
+        await approveDappSignRequestRef.current?.(password);
       }
-      const attemptKey = `${dappSignRequest.request_id}:${wallet.id}`;
-      if (biometricDappAttemptRef.current === attemptKey) return;
-      biometricDappAttemptRef.current = attemptKey;
-      void (async () => {
-        const password = await getBiometricWalletPassword(wallet);
-        if (password) {
-          await approveDappSignRequestRef.current?.(password);
-        }
-      })();
-	  }, [
+    })();
+  }, [
       biometricBusyWalletId,
       canUseBiometricWallet,
       dappSignBusy,
@@ -7410,7 +8094,9 @@ export default function Home() {
   const showExportBundlePrompt = passwordPrompt?.kind === "export-bundle";
   const passwordPromptIsBusy = loading || passwordConfirmationBusy;
   const passwordPromptWallet =
-    passwordPrompt && "formState" in passwordPrompt
+    passwordPrompt && "wallet" in passwordPrompt
+      ? passwordPrompt.wallet
+      : passwordPrompt && "formState" in passwordPrompt
       ? savedWalletFromForm(passwordPrompt.formState)
       : undefined;
   const showPasswordPromptBiometric =
@@ -7910,8 +8596,8 @@ export default function Home() {
 
   const sensitiveExportContent = (preview: SensitiveExportPreview): string => [
     preview.kind === "mnemonic"
-      ? "FnzeroSafe plaintext mnemonic export"
-      : "FnzeroSafe plaintext private key export",
+      ? "FnzSafe plaintext mnemonic export"
+      : "FnzSafe plaintext private key export",
     `Wallet: ${preview.walletName}`,
     `Public Key: ${preview.publicKey}`,
     "",
@@ -10383,7 +11069,7 @@ export default function Home() {
               hardware_fingerprint: formData.hardware_fingerprint,
               master_password: masterPassword,
               account: formData.account || "fnzero-safe",
-              issuer: formData.issuer || "FnzeroSafe",
+              issuer: formData.issuer || "FnzSafe",
             }),
           });
           const data = await response.json();
@@ -11082,6 +11768,203 @@ export default function Home() {
     );
 
     const renderWalletListPanel = () => {
+      const renderChainViewTabs = () => (
+        <div className="inline-flex rounded-lg border border-white/10 bg-white/5 p-1">
+          {[
+            { id: "solana" as const, label: t("features.wallet-list.chainViewSolana") },
+            { id: "evm" as const, label: activeEvmChain?.name || t("features.wallet-list.chainViewOtherChains") },
+          ].map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => setWalletChainView(item.id)}
+              className={`rounded-md px-4 py-2 text-sm font-semibold transition-colors ${
+                walletChainView === item.id
+                  ? "bg-white text-black"
+                  : "text-gray-300 hover:bg-white/10 hover:text-white"
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      );
+
+      const renderEvmWalletPanel = () => {
+        const currentEvmAssets =
+          evmWallet &&
+          activeEvmChain &&
+          evmAssets?.wallet_address.toLowerCase() === evmWallet.address.toLowerCase() &&
+          evmAssets.chain.chain_id === activeEvmChain.chain_id
+            ? evmAssets
+            : null;
+        const evmNativeBalance = currentEvmAssets?.native_balance_wei ?? "--";
+        const evmTokens = currentEvmAssets?.tokens ?? [];
+        const evmTransactions = currentEvmAssets?.recent_transactions ?? [];
+        return (
+          <div className="space-y-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              {renderChainViewTabs()}
+              <button
+                type="button"
+                onClick={() => handleSelectForm("evm-workbench")}
+                className="inline-flex w-fit items-center justify-center gap-2 rounded-lg bg-white px-3 py-2 text-sm font-semibold text-black hover:bg-gray-200"
+              >
+                <ArrowRightLeft className="h-4 w-4" />
+                {t("features.wallet-list.otherChainsOpenWorkbench")}
+              </button>
+            </div>
+
+            {!evmWallet ? (
+              <section className="rounded-2xl border border-white/10 bg-black/40 p-6 text-center">
+                <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-emerald-400/10">
+                  <Wallet className="h-8 w-8 text-emerald-100" />
+                </div>
+                <h3 className="mt-5 text-xl font-semibold">{t("features.wallet-list.otherChainsNoWalletTitle")}</h3>
+                <p className="mx-auto mt-2 max-w-md text-sm text-gray-400">{t("features.wallet-list.otherChainsNoWalletHint")}</p>
+                <button
+                  type="button"
+                  onClick={() => handleSelectForm("evm-workbench")}
+                  className="mt-6 inline-flex items-center justify-center gap-2 rounded-xl bg-white px-4 py-3 text-sm font-semibold text-black hover:bg-gray-200"
+                >
+                  <Wallet className="h-4 w-4" />
+                  {t("features.wallet-list.otherChainsCreateImport")}
+                </button>
+              </section>
+            ) : (
+              <>
+                <section className="overflow-hidden border-white/10 bg-transparent lg:rounded-xl lg:border lg:bg-black/50">
+                  <div className="rounded-2xl border border-white/10 bg-gradient-to-br from-emerald-500 to-sky-700 p-5 shadow-xl shadow-black/20 lg:rounded-none lg:border-0 lg:bg-none lg:p-4 lg:shadow-none">
+                    <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <span className="hidden h-11 w-11 shrink-0 items-center justify-center rounded-full bg-emerald-200 text-sm font-bold text-black lg:flex">
+                          {activeEvmChain?.native_symbol || "CHAIN"}
+                        </span>
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="max-w-full truncate text-lg font-semibold">{evmWallet.name}</h3>
+                            <span className="rounded-full border border-white/15 bg-white/15 px-2 py-0.5 text-xs text-white/80 lg:border-white/10 lg:bg-white/5 lg:text-gray-300">
+                              {activeEvmChain?.name || t("features.wallet-list.currentPublicChain")}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => copyToClipboard(evmWallet.address, "evm-wallet-home-address")}
+                            className="mt-1 block max-w-full truncate text-left font-mono text-xs text-white/75 hover:text-white lg:text-gray-400"
+                          >
+                            <span className="lg:hidden">{shortAddress(evmWallet.address)}</span>
+                            <span className="hidden lg:inline">{evmWallet.address}</span>
+                          </button>
+                        </div>
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <p className="text-xs text-white/70 lg:text-gray-400">
+                            {t("features.wallet-list.chainNativeBalance", { symbol: activeEvmChain?.native_symbol || "Native" })}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={refreshEvmAssets}
+                            disabled={evmBusy || !activeEvmChain}
+                            className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-white/20 text-white hover:bg-white/30 disabled:opacity-50 lg:bg-white/10 lg:text-gray-300 lg:hover:bg-white/20"
+                            title={t("features.wallet-list.chainRefreshAssets")}
+                            aria-label={t("features.wallet-list.chainRefreshAssets")}
+                          >
+                            <RefreshCw className={`h-3.5 w-3.5 ${evmBusy ? "animate-spin" : ""}`} />
+                          </button>
+                        </div>
+                        <div className="mt-1 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+                          <p className="max-w-full truncate text-4xl font-semibold tracking-normal lg:text-3xl">{evmNativeBalance}</p>
+                          <p className="text-sm text-white/75 lg:text-gray-400">wei</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-3 grid grid-cols-3 gap-3 lg:mt-0 lg:gap-0 lg:border-t lg:border-white/10 lg:bg-white/[0.03]">
+                    <button
+                      type="button"
+                      onClick={() => handleSelectForm("evm-workbench")}
+                      className="flex h-20 min-w-0 flex-col items-center justify-center gap-2 rounded-xl bg-white/10 px-2 text-xs font-semibold text-gray-200 hover:bg-white/15 lg:h-16 lg:rounded-none lg:border-r lg:border-white/10 lg:bg-transparent lg:hover:bg-white/10 sm:h-14 sm:flex-row sm:gap-2 sm:text-sm"
+                    >
+                      <Send className="h-5 w-5" />
+                      {t("features.wallet-list.send")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => copyToClipboard(evmWallet.address, "evm-wallet-receive-address")}
+                      className="flex h-20 min-w-0 flex-col items-center justify-center gap-2 rounded-xl bg-white/10 px-2 text-xs font-semibold text-gray-200 hover:bg-white/15 lg:h-16 lg:rounded-none lg:border-r lg:border-white/10 lg:bg-transparent lg:hover:bg-white/10 sm:h-14 sm:flex-row sm:gap-2 sm:text-sm"
+                    >
+                      <Download className="h-5 w-5" />
+                      {t("features.wallet-list.receive")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={refreshEvmAssets}
+                      disabled={evmBusy || !activeEvmChain}
+                      className="flex h-20 min-w-0 flex-col items-center justify-center gap-2 rounded-xl bg-white/10 px-2 text-xs font-semibold text-gray-200 hover:bg-white/15 disabled:opacity-50 lg:h-16 lg:rounded-none lg:bg-transparent lg:hover:bg-white/10 sm:h-14 sm:flex-row sm:gap-2 sm:text-sm"
+                    >
+                      <RefreshCw className={`h-5 w-5 ${evmBusy ? "animate-spin" : ""}`} />
+                      {t("features.wallet-list.refreshAssets")}
+                    </button>
+                  </div>
+                </section>
+
+                <section className="grid gap-4 lg:grid-cols-2">
+                  <div className="space-y-3 rounded-xl border border-white/10 bg-white/[0.03] p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className="text-sm font-semibold text-gray-200">{t("features.wallet-list.assets")}</h3>
+                      <span className="rounded bg-white/10 px-2 py-1 text-xs text-gray-400">
+                        {activeEvmChain?.name || t("features.wallet-list.currentPublicChain")}
+                      </span>
+                    </div>
+                    {evmTokens.length === 0 ? (
+                      <p className="rounded-lg border border-dashed border-white/10 bg-black/20 p-4 text-sm text-gray-500">
+                        {t("features.wallet-list.otherChainsAssetsEmpty")}
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        {evmTokens.map((token) => (
+                          <div key={token.contract_address} className="rounded-lg border border-white/10 bg-black/20 p-3 text-sm">
+                            <p className="font-medium text-white">{token.symbol} {token.balance}</p>
+                            <p className="mt-1 break-all text-xs text-gray-500">{token.name} · {token.contract_address}</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className="space-y-3 rounded-xl border border-white/10 bg-white/[0.03] p-4">
+                    <h3 className="text-sm font-semibold text-gray-200">
+                      {t("features.wallet-list.chainHistory", { chain: activeEvmChain?.name || t("features.wallet-list.currentPublicChain") })}
+                    </h3>
+                    {evmTransactions.length === 0 ? (
+                      <p className="rounded-lg border border-dashed border-white/10 bg-black/20 p-4 text-sm text-gray-500">
+                        {t("features.wallet-list.otherChainsNoHistory")}
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        {evmTransactions.map((entry) => (
+                          <div key={entry.hash} className="rounded-lg border border-white/10 bg-black/20 p-3 text-sm">
+                            <p className="text-white">{entry.status} · block {entry.block_number ?? "-"}</p>
+                            <p className="mt-1 break-all text-xs text-gray-500">{entry.hash}</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {currentEvmAssets?.history_message && (
+                      <p className="text-xs text-yellow-200">{currentEvmAssets.history_message}</p>
+                    )}
+                  </div>
+                </section>
+              </>
+            )}
+          </div>
+        );
+      };
+
+      if (walletChainView === "evm") {
+        return renderEvmWalletPanel();
+      }
+
       const assets =
         effectiveWallet &&
         walletAssets?.address === effectiveWallet.public_key &&
@@ -11188,6 +12071,9 @@ export default function Home() {
 
       return (
         <div className="space-y-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            {renderChainViewTabs()}
+          </div>
           <section className="overflow-hidden border-white/10 bg-transparent lg:rounded-xl lg:border lg:bg-black/50">
             <div className="rounded-2xl border border-white/10 bg-gradient-to-br from-blue-500 to-violet-700 p-5 shadow-xl shadow-black/20 lg:rounded-none lg:border-0 lg:bg-none lg:p-4 lg:shadow-none">
               <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -13403,10 +14289,211 @@ export default function Home() {
       );
     };
 
+    const renderEvmWorkbench = () => (
+      <div className="space-y-5">
+        <section className="space-y-3 rounded-lg border border-white/10 bg-white/[0.03] p-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase text-emerald-300">{activeEvmChain?.name || t("features.wallet-list.currentPublicChain")}</p>
+              <h2 className="text-2xl font-semibold text-white">{tf("features.evm-workbench.title", "Multi-chain Wallet")}</h2>
+              <p className="mt-1 text-sm text-gray-400">
+                {tf("features.evm-workbench.subtitle", "Ethereum, BNB Smart Chain, Polygon, Base, Arbitrum, and other supported public chains.")}
+              </p>
+            </div>
+            <button type="button" onClick={() => void loadEvmChains()} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-200 hover:bg-white/10">
+              <RefreshCw className="h-4 w-4" />
+              Refresh chains
+            </button>
+          </div>
+          {evmError && <div className="rounded-lg border border-red-400/30 bg-red-500/10 p-3 text-sm text-red-100">{evmError}</div>}
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+            <label className="space-y-1 text-sm text-gray-300">
+              Chain
+              <select
+                value={evmChainId}
+                onChange={(event) => selectEvmChain(event.target.value)}
+                className="h-10 w-full rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none"
+              >
+                {evmChains.map((chain) => (
+                  <option key={chain.chain_id} value={chain.chain_id}>
+                    {chain.name} ({chain.chain_id}) {chain.testnet ? "testnet" : "mainnet"}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-sm text-gray-300">
+              <p className="font-medium text-white">{activeEvmChain?.native_symbol || t("features.wallet-list.currentPublicChain")}</p>
+              <p className="mt-1 break-all text-xs text-gray-500">{activeEvmChain?.rpc_url || "No RPC selected"}</p>
+              <p className="mt-1 break-all text-xs text-gray-500">{activeEvmChain?.explorer_url || "No explorer configured"}</p>
+            </div>
+          </div>
+          <div className="grid gap-2 lg:grid-cols-6">
+            <input value={evmNewChain.chainId} onChange={(event) => setEvmNewChain((prev) => ({ ...prev, chainId: event.target.value }))} placeholder="Chain ID" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
+            <input value={evmNewChain.name} onChange={(event) => setEvmNewChain((prev) => ({ ...prev, name: event.target.value }))} placeholder="Name" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
+            <input value={evmNewChain.nativeSymbol} onChange={(event) => setEvmNewChain((prev) => ({ ...prev, nativeSymbol: event.target.value }))} placeholder="Symbol" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
+            <input value={evmNewChain.rpcUrl} onChange={(event) => setEvmNewChain((prev) => ({ ...prev, rpcUrl: event.target.value }))} placeholder="RPC URL" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none lg:col-span-2" />
+            <input value={evmNewChain.explorerUrl} onChange={(event) => setEvmNewChain((prev) => ({ ...prev, explorerUrl: event.target.value }))} placeholder="Explorer URL optional" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none lg:col-span-2" />
+            <label className="flex h-10 items-center gap-2 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-gray-200">
+              <input
+                type="checkbox"
+                checked={evmNewChain.testnet}
+                onChange={(event) => setEvmNewChain((prev) => ({ ...prev, testnet: event.target.checked }))}
+              />
+              Testnet
+            </label>
+            <button type="button" onClick={addDesktopEvmChain} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-500 px-3 text-sm font-semibold text-black hover:bg-emerald-400">
+              <Plus className="h-4 w-4" />
+              Add
+            </button>
+            <button
+              type="button"
+              onClick={removeDesktopEvmChain}
+              disabled={!activeEvmChainIsCustom}
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-100 hover:bg-white/10 disabled:opacity-50"
+            >
+              <Trash2 className="h-4 w-4" />
+              Delete custom
+            </button>
+          </div>
+        </section>
+
+        <section className="grid gap-4 lg:grid-cols-2">
+          <div className="space-y-3 rounded-lg border border-white/10 bg-white/[0.03] p-4">
+            <h3 className="text-lg font-semibold text-white">Wallet</h3>
+            <input value={evmPassword} onChange={(event) => setEvmPassword(event.target.value)} type="password" placeholder="Wallet password" className="h-10 w-full rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
+            <textarea value={evmPrivateKey} onChange={(event) => setEvmPrivateKey(event.target.value)} placeholder="Private key hex for import" rows={3} className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none" />
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={createEvmWallet} disabled={evmBusy} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-white px-3 text-sm font-semibold text-black disabled:opacity-50">
+                <Wallet className="h-4 w-4" />
+                Create
+              </button>
+              <button type="button" onClick={importEvmPrivateKey} disabled={evmBusy} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-100 hover:bg-white/10 disabled:opacity-50">
+                <Upload className="h-4 w-4" />
+                Import
+              </button>
+            </div>
+            {evmWallet && (
+              <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-sm">
+                <p className="font-medium text-white">{evmWallet.name}</p>
+                <p className="mt-1 break-all text-gray-400">{evmWallet.address}</p>
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-3 rounded-lg border border-white/10 bg-white/[0.03] p-4">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-lg font-semibold text-white">Assets</h3>
+              <button type="button" onClick={refreshEvmAssets} disabled={evmBusy || !evmWallet} className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-100 hover:bg-white/10 disabled:opacity-50">
+                <RefreshCw className="h-4 w-4" />
+                Refresh
+              </button>
+            </div>
+            <div className="flex gap-2">
+              <input value={evmNewTokenContract} onChange={(event) => setEvmNewTokenContract(event.target.value)} placeholder="ERC-20 contract" className="h-10 min-w-0 flex-1 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
+              <button type="button" onClick={addDesktopEvmToken} className="inline-flex h-10 items-center justify-center rounded-lg bg-emerald-500 px-3 text-sm font-semibold text-black hover:bg-emerald-400">
+                Add token
+              </button>
+            </div>
+            {evmTokenContracts.length > 0 && (
+              <div className="space-y-2">
+                {evmTokenContracts.map((contract) => (
+                  <div key={contract} className="flex items-center gap-2 rounded-lg border border-white/10 bg-black/20 p-2 text-xs text-gray-400">
+                    <span className="min-w-0 flex-1 break-all">{contract}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeDesktopEvmToken(contract)}
+                      className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/10 text-gray-300 hover:bg-white/10 hover:text-white"
+                      aria-label="Remove token"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-sm text-gray-300">
+              <p>{activeEvmChain?.native_symbol || "Native"} balance: {evmAssets?.native_balance_wei ?? "-"} wei</p>
+              <p className="mt-1 text-xs text-gray-500">History: {evmAssets?.history_status ?? "not loaded"} {evmAssets?.history_message ? `- ${evmAssets.history_message}` : ""}</p>
+            </div>
+            <div className="space-y-2">
+              {(evmAssets?.tokens || []).map((token) => (
+                <div key={token.contract_address} className="rounded-lg border border-white/10 bg-black/20 p-3 text-sm">
+                  <p className="font-medium text-white">{token.symbol} {token.balance}</p>
+                  <p className="break-all text-xs text-gray-500">{token.name} · {token.contract_address}</p>
+                </div>
+              ))}
+              {(evmAssets?.recent_transactions || []).map((entry) => (
+                <div key={entry.hash} className="rounded-lg border border-white/10 bg-black/20 p-3 text-sm">
+                  <p className="text-white">{entry.status} · block {entry.block_number ?? "-"}</p>
+                  <p className="break-all text-xs text-gray-500">{entry.hash}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="space-y-3 rounded-lg border border-white/10 bg-white/[0.03] p-4">
+          <h3 className="text-lg font-semibold text-white">Transfer Preview</h3>
+          <div className="grid gap-3 lg:grid-cols-3">
+            <input value={evmRecipient} onChange={(event) => setEvmRecipient(event.target.value)} placeholder="Recipient" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
+            <input value={evmAmount} onChange={(event) => setEvmAmount(event.target.value)} placeholder="Amount in wei or token units" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
+            <input value={evmTokenContract} onChange={(event) => setEvmTokenContract(event.target.value)} placeholder="ERC-20 contract optional" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={previewEvmPayment} disabled={evmBusy || !evmWallet} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-white px-3 text-sm font-semibold text-black disabled:opacity-50">
+              <ShieldCheck className="h-4 w-4" />
+              Preview
+            </button>
+            <button type="button" onClick={() => void submitEvmPayment(true)} disabled={evmBusy || !evmPreview} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-500 px-3 text-sm font-semibold text-black hover:bg-emerald-400 disabled:opacity-50">
+              <Send className="h-4 w-4" />
+              Confirm submit
+            </button>
+            <button type="button" onClick={() => void submitEvmPayment(false)} disabled={evmBusy || !evmPreview} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-100 hover:bg-white/10 disabled:opacity-50">
+              <X className="h-4 w-4" />
+              Reject
+            </button>
+          </div>
+          {evmPreview && (
+            <div className="grid gap-2 rounded-lg border border-emerald-300/20 bg-emerald-300/10 p-3 text-sm text-emerald-50 lg:grid-cols-2">
+              <p>Chain ID: {evmPreview.chain.chain_id}</p>
+              <p>Nonce: {evmPreview.nonce}</p>
+              <p>Gas limit: {evmPreview.gas_limit}</p>
+              <p>Fee model: {evmPreview.fee_model}</p>
+              <p>Gas price: {evmPreview.gas_price_wei} wei</p>
+              <p>Estimated fee: {evmPreview.estimated_fee_wei} wei</p>
+              <p className="break-all lg:col-span-2">Recipient: {evmPreview.recipient}</p>
+              {evmPreview.token_contract && <p className="break-all lg:col-span-2">Token: {evmPreview.token_contract}</p>}
+            </div>
+          )}
+          {evmSubmitResult && (
+            <div className="space-y-3 rounded-lg border border-white/10 bg-black/20 p-3 text-sm text-gray-300">
+              <p>Status: {evmSubmitResult.status}</p>
+              <p className="break-all">Hash: {evmSubmitResult.transaction_hash}</p>
+              <button type="button" onClick={refreshEvmTransactionStatus} disabled={evmBusy} className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-100 hover:bg-white/10 disabled:opacity-50">
+                <RefreshCw className="h-4 w-4" />
+                Check receipt
+              </button>
+              {evmTransactionStatus && (
+                <div className="grid gap-1 text-xs text-gray-400 lg:grid-cols-2">
+                  <p>Status: {evmTransactionStatus.status}</p>
+                  <p>Block: {evmTransactionStatus.block_number ?? "-"}</p>
+                  <p>Gas used: {evmTransactionStatus.gas_used ?? "-"}</p>
+                  <p>Effective gas: {evmTransactionStatus.effective_gas_price_wei ?? "-"}</p>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+      </div>
+    );
+
     const renderFormBody = () => {
       switch (formId) {
       case "wallet-list":
         return renderWalletListPanel();
+
+      case "evm-workbench":
+        return renderEvmWorkbench();
 
       case "dapp-store":
         return (
@@ -13793,6 +14880,62 @@ export default function Home() {
               <p className="text-xs text-gray-500">
                 {t("features.settings.rpcAddHint", { network: networkLabel(t, settingsNetwork) })}
               </p>
+            </section>
+
+            <section className="space-y-3 rounded-2xl border border-white/10 bg-white/5 p-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h3 className="text-sm font-semibold text-gray-200">{t("features.settings.evmChainTitle")}</h3>
+                  <p className="mt-1 text-xs text-gray-500">{t("features.settings.evmChainHint")}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void loadEvmChains()}
+                  disabled={evmBusy}
+                  className="inline-flex h-9 w-fit items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 text-xs text-gray-200 hover:bg-white/10 disabled:opacity-50"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${evmBusy ? "animate-spin" : ""}`} />
+                  {t("features.settings.evmChainRefresh")}
+                </button>
+              </div>
+              <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+                <label className="space-y-1 text-sm text-gray-300">
+                  {t("features.settings.evmChainSelect")}
+                  <select
+                    value={evmChainId}
+                    onChange={(event) => selectEvmChain(event.target.value)}
+                    disabled={evmChains.length === 0}
+                    className="h-10 w-full rounded-lg border border-white/10 bg-black/20 px-3 text-sm text-white outline-none focus:ring-2 focus:ring-white/20 disabled:opacity-50"
+                  >
+                    {evmChains.map((chain) => (
+                      <option key={chain.chain_id} value={chain.chain_id}>
+                        {chain.name} ({chain.chain_id}) {chain.testnet ? t("features.settings.evmChainTestnet") : t("features.settings.evmChainMainnet")}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => handleSelectForm("evm-workbench")}
+                  className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-white px-3 text-sm font-semibold text-black hover:bg-gray-200"
+                >
+                  <ArrowRightLeft className="h-4 w-4" />
+                  {t("features.settings.evmOpenWallet")}
+                </button>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-gray-400">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-full border border-emerald-300/20 bg-emerald-400/10 px-2 py-0.5 font-medium text-emerald-100">
+                    {activeEvmChain ? `${activeEvmChain.name} · ${activeEvmChain.native_symbol}` : t("features.settings.evmChainNone")}
+                  </span>
+                  {activeEvmChainIsCustom && (
+                    <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-gray-300">
+                      {t("features.settings.evmChainCustom")}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-2 break-all">{activeEvmChain?.rpc_url || t("features.settings.evmChainNoRpc")}</p>
+              </div>
             </section>
 
             <section className="rounded-2xl border border-white/10 bg-white/5 p-4">
@@ -19434,6 +20577,89 @@ export default function Home() {
           </div>
         </div>
       )}
+      {dappConnectRequest && (
+        <div className="fixed inset-0 z-[200] flex items-end bg-black/60 sm:items-center sm:justify-center">
+          <button
+            type="button"
+            aria-label={t("common.cancel")}
+            className="absolute inset-0 cursor-default"
+            onClick={() => void rejectDappConnectRequest()}
+          />
+          <div className="relative w-full border-t border-white/10 bg-zinc-950 px-4 py-5 shadow-2xl sm:mx-4 sm:max-w-xl sm:rounded-2xl sm:border">
+            <div className="space-y-4">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <h3 className="text-lg font-semibold">
+                    {tf("features.dapp-store.connectRequestTitle", "DApp 钱包连接确认")}
+                  </h3>
+                  <p className="mt-1 text-sm text-gray-400">
+                    {dappConnectRequest.app_name}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void rejectDappConnectRequest()}
+                  disabled={dappSignBusy}
+                  className="rounded-lg bg-white/10 p-2 text-gray-300 hover:bg-white/20 disabled:opacity-50"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="space-y-2 rounded-lg border border-white/10 bg-black/30 p-3">
+                {[
+                  [tf("features.dapp-store.requestAppUrl", "DApp 来源"), dappConnectRequest.app_url],
+                  [tf("features.dapp-store.requestNetwork", "网络"), dappConnectRequest.network],
+                ].map(([label, value]) => (
+                  <div key={label} className="grid gap-1 sm:grid-cols-[7rem_minmax(0,1fr)]">
+                    <span className="text-xs text-gray-500">{label}</span>
+                    <code className="select-text break-all text-xs text-gray-300">{value}</code>
+                  </div>
+                ))}
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  {tf("features.dapp-store.connectWallet", "连接钱包")}
+                </label>
+                <select
+                  value={dappConnectWalletId || effectiveWalletId}
+                  onChange={(event) => setDappConnectWalletId(event.target.value)}
+                  className="w-full rounded-lg border border-white/10 bg-black/40 px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-white/20"
+                  disabled={dappSignBusy || walletsLoading}
+                >
+                  {wallets.map((wallet) => (
+                    <option key={wallet.id} value={wallet.id}>
+                      {walletLabel(wallet)}
+                    </option>
+                  ))}
+                </select>
+                {wallets.length === 0 && (
+                  <p className="mt-2 text-xs text-amber-100">
+                    {tf("features.dapp-store.noWallet", "Select a wallet first.")}
+                  </p>
+                )}
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => void rejectDappConnectRequest()}
+                  disabled={dappSignBusy}
+                  className="rounded-lg bg-white/10 px-4 py-3 font-semibold text-gray-200 hover:bg-white/20 disabled:opacity-50"
+                >
+                  {t("common.cancel")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void approveDappConnectRequest()}
+                  disabled={dappSignBusy || walletsLoading || wallets.length === 0}
+                  className="rounded-lg bg-gradient-to-r from-blue-500 to-cyan-400 px-4 py-3 font-semibold text-white hover:from-blue-600 hover:to-cyan-500 disabled:opacity-50"
+                >
+                  {dappSignBusy ? t("common.processing") : tf("features.dapp-store.connectApprove", "连接钱包")}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {dappSignRequest && (
         <div className="fixed inset-0 z-[200] flex items-end bg-black/60 sm:items-center sm:justify-center">
           <button
@@ -19454,6 +20680,7 @@ export default function Home() {
                   <p className="mt-1 text-sm text-gray-400">
                     {dappSignRequest.app_name} · {dappSignRequest.method}
                   </p>
+                  <p className="mt-1 break-all text-xs text-gray-500">{dappSignRequest.app_url}</p>
                 </div>
                 <button
                   type="button"
@@ -19466,6 +20693,11 @@ export default function Home() {
               </div>
 	              <div className="space-y-2 rounded-lg border border-white/10 bg-black/30 p-3">
 	                {[
+                  [tf("features.dapp-store.requestApp", "请求网站"), dappSignRequest.app_name],
+                  [tf("features.dapp-store.requestOrigin", "来源"), dappSignRequest.app_url],
+                  ...(dappSignRequest.request_purpose
+                    ? [[tf("features.dapp-store.requestPurpose", "用途"), dappSignRequest.request_purpose]]
+                    : []),
                   [tf("features.dapp-store.requestWallet", "签名钱包"), dappSignRequest.wallet_public_key],
                   [tf("features.dapp-store.requestNetwork", "网络"), dappSignRequest.network],
                   [

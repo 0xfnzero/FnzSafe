@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../bridge/mobile_bridge.dart';
 import '../bridge/mobile_bridge_provider.dart';
 import '../bridge/mobile_models.dart';
 
@@ -20,6 +21,7 @@ class _WalletsScreenState extends ConsumerState<WalletsScreen> {
   final _secretController = TextEditingController();
   final _derivationPathController =
       TextEditingController(text: "m/44'/501'/0'/0'");
+  WalletFamily _family = WalletFamily.solana;
   String _mode = 'create';
   bool _busy = false;
 
@@ -71,6 +73,31 @@ class _WalletsScreenState extends ConsumerState<WalletsScreen> {
             selected: {_mode},
             onSelectionChanged: (value) => setState(() => _mode = value.first),
           ),
+          const SizedBox(height: 12),
+          SegmentedButton<WalletFamily>(
+            segments: const [
+              ButtonSegment(
+                value: WalletFamily.solana,
+                icon: Icon(Icons.token),
+                label: Text('Solana'),
+              ),
+              ButtonSegment(
+                value: WalletFamily.evm,
+                icon: Icon(Icons.hexagon_outlined),
+                label: Text('EVM'),
+              ),
+            ],
+            selected: {_family},
+            onSelectionChanged: (value) {
+              final family = value.first;
+              setState(() {
+                _family = family;
+                _derivationPathController.text = family == WalletFamily.evm
+                    ? "m/44'/60'/0'/0/0"
+                    : "m/44'/501'/0'/0'";
+              });
+            },
+          ),
           const SizedBox(height: 16),
           TextField(
             controller: _nameController,
@@ -98,7 +125,9 @@ class _WalletsScreenState extends ConsumerState<WalletsScreen> {
               decoration: InputDecoration(
                 labelText: switch (_mode) {
                   'keystore' => 'Keystore JSON',
-                  'private_key' => 'Private key base58',
+                  'private_key' => _family == WalletFamily.evm
+                      ? 'Private key hex'
+                      : 'Private key base58',
                   _ => 'Mnemonic',
                 },
                 border: const OutlineInputBorder(),
@@ -167,7 +196,9 @@ class _WalletsScreenState extends ConsumerState<WalletsScreen> {
                               : Icons.account_balance_wallet_outlined,
                         ),
                         title: Text(wallet.name),
-                        subtitle: Text(wallet.publicKey),
+                        subtitle: Text(
+                          '${wallet.family.name.toUpperCase()}  ${wallet.publicKey}',
+                        ),
                         onTap: () => _setActive(wallet),
                         trailing: IconButton(
                           tooltip: 'Delete',
@@ -199,26 +230,9 @@ class _WalletsScreenState extends ConsumerState<WalletsScreen> {
     await _run(() async {
       final bridge = ref.read(mobileBridgeProvider);
       final password = _passwordController.text;
-      final created = switch (_mode) {
-        'create' => await bridge.createWallet(
-            name: _nameController.text, password: password),
-        'keystore' => await bridge.importKeystore(
-            name: _nameController.text,
-            keystoreJson: _secretController.text,
-            password: password,
-          ),
-        'private_key' => await bridge.importPrivateKey(
-            name: _nameController.text,
-            privateKeyBase58: _secretController.text,
-            password: password,
-          ),
-        _ => await bridge.importMnemonic(
-            name: _nameController.text,
-            mnemonic: _secretController.text,
-            password: password,
-            derivationPath: _derivationPathController.text,
-          ),
-      };
+      final created = _family == WalletFamily.evm
+          ? await _submitEvm(bridge, password)
+          : await _submitSolana(bridge, password);
       await ref.read(mobileWalletStoreProvider).saveWalletKeystore(created);
       ref.read(activeWalletProvider.notifier).state = created.wallet;
       ref.invalidate(storedWalletsProvider);
@@ -233,12 +247,17 @@ class _WalletsScreenState extends ConsumerState<WalletsScreen> {
     await _run(() async {
       final keystoreJson =
           await ref.read(mobileWalletStoreProvider).readKeystoreJson(wallet.id);
-      final unlocked = await ref.read(mobileBridgeProvider).unlockWallet(
-          keystoreJson: keystoreJson, password: _passwordController.text);
+      final unlocked = wallet.family == WalletFamily.evm
+          ? await ref.read(mobileBridgeProvider).unlockEvmWallet(
+              keystoreJson: keystoreJson, password: _passwordController.text)
+          : await ref.read(mobileBridgeProvider).unlockWallet(
+              keystoreJson: keystoreJson, password: _passwordController.text);
       ref.read(activeWalletProvider.notifier).state = WalletSummary(
         id: wallet.id,
         name: wallet.name,
         publicKey: unlocked.publicKey,
+        family: wallet.family,
+        derivationPath: unlocked.derivationPath ?? wallet.derivationPath,
       );
       _passwordController.clear();
       _show('Unlocked ${wallet.name}');
@@ -249,12 +268,19 @@ class _WalletsScreenState extends ConsumerState<WalletsScreen> {
     await _run(() async {
       final keystoreJson =
           await ref.read(mobileWalletStoreProvider).readKeystoreJson(wallet.id);
-      final exported = await ref.read(mobileBridgeProvider).exportPrivateKey(
-          keystoreJson: keystoreJson, password: _passwordController.text);
+      final exportedText = wallet.family == WalletFamily.evm
+          ? (await ref.read(mobileBridgeProvider).exportEvmPrivateKey(
+                  keystoreJson: keystoreJson,
+                  password: _passwordController.text))
+              .privateKeyHex
+          : (await ref.read(mobileBridgeProvider).exportPrivateKey(
+                  keystoreJson: keystoreJson,
+                  password: _passwordController.text))
+              .privateKeyBase58;
       await SharePlus.instance.share(
         ShareParams(
-          text: exported.privateKeyBase58,
-          subject: 'FnzeroSafe private key export',
+          text: exportedText,
+          subject: 'FnzSafe private key export',
         ),
       );
       _passwordController.clear();
@@ -265,6 +291,52 @@ class _WalletsScreenState extends ConsumerState<WalletsScreen> {
     await ref.read(mobileWalletStoreProvider).setActiveWallet(wallet.id);
     ref.read(activeWalletProvider.notifier).state = wallet;
     ref.invalidate(storedActiveWalletProvider);
+  }
+
+  Future<WalletKeystore> _submitSolana(MobileBridge bridge, String password) {
+    return switch (_mode) {
+      'create' =>
+        bridge.createWallet(name: _nameController.text, password: password),
+      'keystore' => bridge.importKeystore(
+          name: _nameController.text,
+          keystoreJson: _secretController.text,
+          password: password,
+        ),
+      'private_key' => bridge.importPrivateKey(
+          name: _nameController.text,
+          privateKeyBase58: _secretController.text,
+          password: password,
+        ),
+      _ => bridge.importMnemonic(
+          name: _nameController.text,
+          mnemonic: _secretController.text,
+          password: password,
+          derivationPath: _derivationPathController.text,
+        ),
+    };
+  }
+
+  Future<WalletKeystore> _submitEvm(MobileBridge bridge, String password) {
+    return switch (_mode) {
+      'create' =>
+        bridge.createEvmWallet(name: _nameController.text, password: password),
+      'keystore' => bridge.importEvmKeystore(
+          name: _nameController.text,
+          keystoreJson: _secretController.text,
+          password: password,
+        ),
+      'private_key' => bridge.importEvmPrivateKey(
+          name: _nameController.text,
+          privateKeyHex: _secretController.text,
+          password: password,
+        ),
+      _ => bridge.importEvmMnemonic(
+          name: _nameController.text,
+          mnemonic: _secretController.text,
+          password: password,
+          derivationPath: _derivationPathController.text,
+        ),
+    };
   }
 
   Future<void> _delete(WalletSummary wallet) async {

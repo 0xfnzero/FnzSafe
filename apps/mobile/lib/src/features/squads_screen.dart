@@ -367,7 +367,9 @@ class _SquadsScreenState extends ConsumerState<SquadsScreen> {
           );
       ref.read(signingPreviewProvider.notifier).state = preview;
       ref.read(paymentSigningDraftProvider.notifier).state = null;
+      ref.read(evmPaymentSigningDraftProvider.notifier).state = null;
       ref.read(dappSigningDraftProvider.notifier).state = null;
+      ref.read(evmDappSigningDraftProvider.notifier).state = null;
       ref.read(squadsSigningDraftProvider.notifier).state = SquadsSigningDraft(
         preview: preview,
         kind: kind,

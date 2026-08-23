@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const uiRoot = path.resolve(__dirname, "..");
-const workspaceRoot = path.resolve(uiRoot, "..");
+const workspaceRoot = path.resolve(uiRoot, "../..");
 const ports = ["3840", process.env.FNZERO_SAFE_API_PORT || process.env.SOL_SAFEKEY_API_PORT || "3841"];
 const isWindows = process.platform === "win32";
 
@@ -72,6 +72,11 @@ function matchingProjectPids() {
     "scripts/dev-stack.cjs",
     "scripts/desktop-dev.cjs",
     "build-cache/debug/FnzeroSafe",
+    "build-cache/debug/FnzSafe",
+    "build-cache/release/FnzeroSafe",
+    "build-cache/release/FnzSafe",
+    "build-cache/release/bundle/macos/FnzeroSafe.app/Contents/MacOS/FnzeroSafe",
+    "build-cache/release/bundle/macos/FnzSafe.app/Contents/MacOS/FnzSafe",
     "build-cache/release/fnzero-safe-desktop-api",
   ];
   const pids = new Set();
