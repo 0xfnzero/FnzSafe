@@ -9189,7 +9189,7 @@ async fn external_sign_message(
         required_signer: required_signer.to_string(),
         signed_by: signed_by.to_string(),
         request_id: req.request_id,
-        signature: signature.to_string(),
+        signature: BASE64.encode(signature.as_ref()),
         message_base64: message_base64.to_string(),
     }))
 }
@@ -9905,6 +9905,34 @@ mod generic_program_deployment_policy_tests {
             .writable_accounts
             .iter()
             .any(|account| account == &recipient.to_string()));
+    }
+
+    #[tokio::test]
+    async fn external_sign_message_returns_base64_signature() {
+        std::env::set_var(ALLOW_DIRECT_SECRET_INPUT_ENV, "true");
+        let signer = Keypair::new();
+        let message_base64 = BASE64.encode(b"fnzero wallet binding test");
+        let Json(response) = external_sign_message(Json(ExternalSignMessageRequest {
+            wallet: WalletAuthRequest {
+                wallet_id: None,
+                private_key: None,
+                secret_key: Some(signer.to_base58_string()),
+                keystore_json: None,
+                encrypted_key: None,
+                password: None,
+            },
+            required_signer: signer.pubkey().to_string(),
+            message_base64: message_base64.clone(),
+            request_id: Some("req-1".to_string()),
+            expires_at: None,
+        }))
+        .await
+        .unwrap();
+
+        let signature_bytes = BASE64.decode(&response.signature).unwrap();
+        let signature = Signature::try_from(signature_bytes.as_slice()).unwrap();
+        assert!(signature.verify(signer.pubkey().as_ref(), b"fnzero wallet binding test"));
+        assert_eq!(response.message_base64, message_base64);
     }
 
     #[test]
