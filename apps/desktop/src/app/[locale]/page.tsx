@@ -180,6 +180,15 @@ function errorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
+function isResettableBiometricError(message: string): boolean {
+  return (
+    message.includes("无权读取 Keychain 凭据") ||
+    message.includes("还没有为这个钱包启用 Touch ID") ||
+    message.includes("not enabled Touch ID") ||
+    message.includes("not been enabled")
+  );
+}
+
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
@@ -1067,6 +1076,7 @@ interface DappSignRequestEvent {
   app_id: string;
   app_name: string;
   app_url: string;
+  request_purpose?: string;
   method: "signTransaction" | "signAllTransactions" | "signAndSendTransaction" | "sendTransaction" | "signMessage" | string;
   wallet_public_key: string;
   network: string;
@@ -2203,7 +2213,7 @@ export default function Home() {
         },
         {
           id: "evm-workbench",
-          label: tf("features.evm-workbench.title", "EVM Wallet"),
+          label: tf("features.evm-workbench.title", "Multi-chain Wallet"),
           icon: <ArrowRightLeft className="w-4 h-4" />,
         },
       ],
@@ -2388,6 +2398,7 @@ export default function Home() {
   const [walletSolBalanceCache, setWalletSolBalanceCache] = useState<Record<string, string>>({});
   const [walletTransactions, setWalletTransactions] = useState<WalletTransactionsState | null>(null);
   const [walletOverviewTab, setWalletOverviewTab] = useState<"assets" | "transactions">("assets");
+  const [walletChainView, setWalletChainView] = useState<"solana" | "evm">("solana");
   const [visibleTokenCount, setVisibleTokenCount] = useState(TOKEN_ASSET_PAGE_SIZE);
   const clientSettingsLoadedRef = useRef(false);
   const walletAssetsRef = useRef<WalletAssetsState | null>(null);
@@ -2452,6 +2463,7 @@ export default function Home() {
 
   const selectEvmChain = useCallback((chainId: string) => {
     setEvmChainId(chainId);
+    setWalletChainView("evm");
     saveStoredDesktopEvmChainId(chainId);
     resetEvmChainScopedState();
   }, [resetEvmChainScopedState]);
@@ -2460,7 +2472,7 @@ export default function Home() {
     const response = await apiFetch("evm/chains", {});
     const data = await response.json();
     if (!response.ok || !Array.isArray(data)) {
-      throw new Error(data?.error || "Failed to load EVM chains");
+      throw new Error(data?.error || "Failed to load chains");
     }
     const merged = new Map<number, DesktopEvmChainConfig>();
     for (const chain of data as DesktopEvmChainConfig[]) {
@@ -2489,7 +2501,7 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    void loadEvmChains().catch((error) => setEvmError(errorMessage(error, "Failed to load EVM chains")));
+    void loadEvmChains().catch((error) => setEvmError(errorMessage(error, "Failed to load chains")));
   }, [loadEvmChains]);
 
   useEffect(() => {
@@ -2506,7 +2518,7 @@ export default function Home() {
     try {
       await run();
     } catch (error) {
-      const message = errorMessage(error, "EVM operation failed");
+      const message = errorMessage(error, "Chain operation failed");
       setEvmError(message);
       toast.error(message);
     } finally {
@@ -2519,17 +2531,17 @@ export default function Home() {
     const response = await apiFetch("evm/wallet/create", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "Desktop EVM Wallet", password: evmPassword }),
+      body: JSON.stringify({ name: "Multi-chain Wallet", password: evmPassword }),
     });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "Failed to create EVM wallet");
+    if (!response.ok) throw new Error(data.error || "Failed to create wallet");
     const created = data as DesktopEvmWalletKeystore;
     setEvmWallet(created.wallet);
     setEvmKeystoreJson(created.keystore_json);
     setEvmPreview(null);
     setEvmSubmitResult(null);
     setEvmPassword("");
-    toast.success("EVM wallet created");
+    toast.success("Wallet created");
   });
 
   const importEvmPrivateKey = () => withEvmBusy(async () => {
@@ -2540,13 +2552,13 @@ export default function Home() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        name: "Imported EVM Wallet",
+        name: "Imported Multi-chain Wallet",
         private_key_hex: evmPrivateKey.trim(),
         password: evmPassword,
       }),
     });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "Failed to import EVM wallet");
+    if (!response.ok) throw new Error(data.error || "Failed to import wallet");
     const imported = data as DesktopEvmWalletKeystore;
     setEvmWallet(imported.wallet);
     setEvmKeystoreJson(imported.keystore_json);
@@ -2554,7 +2566,7 @@ export default function Home() {
     setEvmPrivateKey("");
     setEvmPreview(null);
     setEvmSubmitResult(null);
-    toast.success("EVM wallet imported");
+    toast.success("Wallet imported");
   });
 
   const addDesktopEvmChain = () => {
@@ -2616,12 +2628,12 @@ export default function Home() {
     const contract = evmNewTokenContract.trim();
     if (!contract) return;
     if (!activeEvmChain || !evmWallet) {
-      setEvmError("Select an EVM chain and wallet before adding a token");
+      setEvmError("Select a chain and wallet before adding a token");
       return;
     }
     const next = Array.from(new Map([...evmTokenContracts, contract].map((item) => [item.toLowerCase(), item])).values());
     if (!isDesktopEvmAddress(contract)) {
-      setEvmError("ERC-20 contract must be a 20-byte 0x EVM address");
+      setEvmError("ERC-20 contract must be a 20-byte 0x address");
       return;
     }
     setEvmTokenContracts(next);
@@ -2644,7 +2656,7 @@ export default function Home() {
   };
 
   const refreshEvmAssets = () => withEvmBusy(async () => {
-    if (!activeEvmChain || !evmWallet) throw new Error("Select an EVM chain and wallet first");
+    if (!activeEvmChain || !evmWallet) throw new Error("Select a chain and wallet first");
     const response = await apiFetch("evm/assets", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2655,12 +2667,12 @@ export default function Home() {
       }),
     });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "Failed to refresh EVM assets");
+    if (!response.ok) throw new Error(data.error || "Failed to refresh chain assets");
     setEvmAssets(data as DesktopEvmAssetSnapshot);
   });
 
   const previewEvmPayment = () => withEvmBusy(async () => {
-    if (!activeEvmChain || !evmWallet) throw new Error("Select an EVM chain and wallet first");
+    if (!activeEvmChain || !evmWallet) throw new Error("Select a chain and wallet first");
     const response = await apiFetch("evm/payment/preview", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2673,7 +2685,7 @@ export default function Home() {
       }),
     });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "Failed to preview EVM payment");
+    if (!response.ok) throw new Error(data.error || "Failed to preview payment");
     setEvmPreview(data as DesktopEvmPaymentPreview);
     setEvmSubmitResult(null);
     setEvmTransactionStatus(null);
@@ -2686,7 +2698,7 @@ export default function Home() {
       setEvmSubmitResult(null);
       setEvmTransactionStatus(null);
       setEvmPassword("");
-      toast.success("EVM transaction rejected");
+      toast.success("Transaction rejected");
       return;
     }
     const response = await apiFetch("evm/payment/submit", {
@@ -2710,10 +2722,10 @@ export default function Home() {
       }),
     });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "Failed to submit EVM payment");
+    if (!response.ok) throw new Error(data.error || "Failed to submit payment");
     setEvmSubmitResult(data as DesktopEvmTransactionSubmitResult);
     setEvmPassword("");
-    toast.success("EVM transaction submitted");
+    toast.success("Transaction submitted");
   });
 
   const refreshEvmTransactionStatus = () => withEvmBusy(async () => {
@@ -2727,7 +2739,7 @@ export default function Home() {
       }),
     });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "Failed to load EVM transaction status");
+    if (!response.ok) throw new Error(data.error || "Failed to load transaction status");
     setEvmTransactionStatus(data as DesktopEvmTransactionStatus);
   });
 
@@ -2926,7 +2938,18 @@ export default function Home() {
         },
       });
     } catch (error) {
-      toast.error(errorMessage(error, t("features.biometric.authFailed")));
+      const message = errorMessage(error, t("features.biometric.authFailed"));
+      if (isResettableBiometricError(message)) {
+        setBiometricStatuses((prev) => ({
+          ...prev,
+          [wallet.id]: {
+            ...(prev[wallet.id] ?? { supported: true }),
+            configured: false,
+            reason: message,
+          },
+        }));
+      }
+      toast.error(message);
       return null;
     } finally {
       setBiometricBusyWalletId(null);
@@ -11745,6 +11768,203 @@ export default function Home() {
     );
 
     const renderWalletListPanel = () => {
+      const renderChainViewTabs = () => (
+        <div className="inline-flex rounded-lg border border-white/10 bg-white/5 p-1">
+          {[
+            { id: "solana" as const, label: t("features.wallet-list.chainViewSolana") },
+            { id: "evm" as const, label: activeEvmChain?.name || t("features.wallet-list.chainViewOtherChains") },
+          ].map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => setWalletChainView(item.id)}
+              className={`rounded-md px-4 py-2 text-sm font-semibold transition-colors ${
+                walletChainView === item.id
+                  ? "bg-white text-black"
+                  : "text-gray-300 hover:bg-white/10 hover:text-white"
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      );
+
+      const renderEvmWalletPanel = () => {
+        const currentEvmAssets =
+          evmWallet &&
+          activeEvmChain &&
+          evmAssets?.wallet_address.toLowerCase() === evmWallet.address.toLowerCase() &&
+          evmAssets.chain.chain_id === activeEvmChain.chain_id
+            ? evmAssets
+            : null;
+        const evmNativeBalance = currentEvmAssets?.native_balance_wei ?? "--";
+        const evmTokens = currentEvmAssets?.tokens ?? [];
+        const evmTransactions = currentEvmAssets?.recent_transactions ?? [];
+        return (
+          <div className="space-y-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              {renderChainViewTabs()}
+              <button
+                type="button"
+                onClick={() => handleSelectForm("evm-workbench")}
+                className="inline-flex w-fit items-center justify-center gap-2 rounded-lg bg-white px-3 py-2 text-sm font-semibold text-black hover:bg-gray-200"
+              >
+                <ArrowRightLeft className="h-4 w-4" />
+                {t("features.wallet-list.otherChainsOpenWorkbench")}
+              </button>
+            </div>
+
+            {!evmWallet ? (
+              <section className="rounded-2xl border border-white/10 bg-black/40 p-6 text-center">
+                <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-emerald-400/10">
+                  <Wallet className="h-8 w-8 text-emerald-100" />
+                </div>
+                <h3 className="mt-5 text-xl font-semibold">{t("features.wallet-list.otherChainsNoWalletTitle")}</h3>
+                <p className="mx-auto mt-2 max-w-md text-sm text-gray-400">{t("features.wallet-list.otherChainsNoWalletHint")}</p>
+                <button
+                  type="button"
+                  onClick={() => handleSelectForm("evm-workbench")}
+                  className="mt-6 inline-flex items-center justify-center gap-2 rounded-xl bg-white px-4 py-3 text-sm font-semibold text-black hover:bg-gray-200"
+                >
+                  <Wallet className="h-4 w-4" />
+                  {t("features.wallet-list.otherChainsCreateImport")}
+                </button>
+              </section>
+            ) : (
+              <>
+                <section className="overflow-hidden border-white/10 bg-transparent lg:rounded-xl lg:border lg:bg-black/50">
+                  <div className="rounded-2xl border border-white/10 bg-gradient-to-br from-emerald-500 to-sky-700 p-5 shadow-xl shadow-black/20 lg:rounded-none lg:border-0 lg:bg-none lg:p-4 lg:shadow-none">
+                    <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <span className="hidden h-11 w-11 shrink-0 items-center justify-center rounded-full bg-emerald-200 text-sm font-bold text-black lg:flex">
+                          {activeEvmChain?.native_symbol || "CHAIN"}
+                        </span>
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="max-w-full truncate text-lg font-semibold">{evmWallet.name}</h3>
+                            <span className="rounded-full border border-white/15 bg-white/15 px-2 py-0.5 text-xs text-white/80 lg:border-white/10 lg:bg-white/5 lg:text-gray-300">
+                              {activeEvmChain?.name || t("features.wallet-list.currentPublicChain")}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => copyToClipboard(evmWallet.address, "evm-wallet-home-address")}
+                            className="mt-1 block max-w-full truncate text-left font-mono text-xs text-white/75 hover:text-white lg:text-gray-400"
+                          >
+                            <span className="lg:hidden">{shortAddress(evmWallet.address)}</span>
+                            <span className="hidden lg:inline">{evmWallet.address}</span>
+                          </button>
+                        </div>
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <p className="text-xs text-white/70 lg:text-gray-400">
+                            {t("features.wallet-list.chainNativeBalance", { symbol: activeEvmChain?.native_symbol || "Native" })}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={refreshEvmAssets}
+                            disabled={evmBusy || !activeEvmChain}
+                            className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-white/20 text-white hover:bg-white/30 disabled:opacity-50 lg:bg-white/10 lg:text-gray-300 lg:hover:bg-white/20"
+                            title={t("features.wallet-list.chainRefreshAssets")}
+                            aria-label={t("features.wallet-list.chainRefreshAssets")}
+                          >
+                            <RefreshCw className={`h-3.5 w-3.5 ${evmBusy ? "animate-spin" : ""}`} />
+                          </button>
+                        </div>
+                        <div className="mt-1 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+                          <p className="max-w-full truncate text-4xl font-semibold tracking-normal lg:text-3xl">{evmNativeBalance}</p>
+                          <p className="text-sm text-white/75 lg:text-gray-400">wei</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-3 grid grid-cols-3 gap-3 lg:mt-0 lg:gap-0 lg:border-t lg:border-white/10 lg:bg-white/[0.03]">
+                    <button
+                      type="button"
+                      onClick={() => handleSelectForm("evm-workbench")}
+                      className="flex h-20 min-w-0 flex-col items-center justify-center gap-2 rounded-xl bg-white/10 px-2 text-xs font-semibold text-gray-200 hover:bg-white/15 lg:h-16 lg:rounded-none lg:border-r lg:border-white/10 lg:bg-transparent lg:hover:bg-white/10 sm:h-14 sm:flex-row sm:gap-2 sm:text-sm"
+                    >
+                      <Send className="h-5 w-5" />
+                      {t("features.wallet-list.send")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => copyToClipboard(evmWallet.address, "evm-wallet-receive-address")}
+                      className="flex h-20 min-w-0 flex-col items-center justify-center gap-2 rounded-xl bg-white/10 px-2 text-xs font-semibold text-gray-200 hover:bg-white/15 lg:h-16 lg:rounded-none lg:border-r lg:border-white/10 lg:bg-transparent lg:hover:bg-white/10 sm:h-14 sm:flex-row sm:gap-2 sm:text-sm"
+                    >
+                      <Download className="h-5 w-5" />
+                      {t("features.wallet-list.receive")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={refreshEvmAssets}
+                      disabled={evmBusy || !activeEvmChain}
+                      className="flex h-20 min-w-0 flex-col items-center justify-center gap-2 rounded-xl bg-white/10 px-2 text-xs font-semibold text-gray-200 hover:bg-white/15 disabled:opacity-50 lg:h-16 lg:rounded-none lg:bg-transparent lg:hover:bg-white/10 sm:h-14 sm:flex-row sm:gap-2 sm:text-sm"
+                    >
+                      <RefreshCw className={`h-5 w-5 ${evmBusy ? "animate-spin" : ""}`} />
+                      {t("features.wallet-list.refreshAssets")}
+                    </button>
+                  </div>
+                </section>
+
+                <section className="grid gap-4 lg:grid-cols-2">
+                  <div className="space-y-3 rounded-xl border border-white/10 bg-white/[0.03] p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className="text-sm font-semibold text-gray-200">{t("features.wallet-list.assets")}</h3>
+                      <span className="rounded bg-white/10 px-2 py-1 text-xs text-gray-400">
+                        {activeEvmChain?.name || t("features.wallet-list.currentPublicChain")}
+                      </span>
+                    </div>
+                    {evmTokens.length === 0 ? (
+                      <p className="rounded-lg border border-dashed border-white/10 bg-black/20 p-4 text-sm text-gray-500">
+                        {t("features.wallet-list.otherChainsAssetsEmpty")}
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        {evmTokens.map((token) => (
+                          <div key={token.contract_address} className="rounded-lg border border-white/10 bg-black/20 p-3 text-sm">
+                            <p className="font-medium text-white">{token.symbol} {token.balance}</p>
+                            <p className="mt-1 break-all text-xs text-gray-500">{token.name} · {token.contract_address}</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className="space-y-3 rounded-xl border border-white/10 bg-white/[0.03] p-4">
+                    <h3 className="text-sm font-semibold text-gray-200">
+                      {t("features.wallet-list.chainHistory", { chain: activeEvmChain?.name || t("features.wallet-list.currentPublicChain") })}
+                    </h3>
+                    {evmTransactions.length === 0 ? (
+                      <p className="rounded-lg border border-dashed border-white/10 bg-black/20 p-4 text-sm text-gray-500">
+                        {t("features.wallet-list.otherChainsNoHistory")}
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        {evmTransactions.map((entry) => (
+                          <div key={entry.hash} className="rounded-lg border border-white/10 bg-black/20 p-3 text-sm">
+                            <p className="text-white">{entry.status} · block {entry.block_number ?? "-"}</p>
+                            <p className="mt-1 break-all text-xs text-gray-500">{entry.hash}</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {currentEvmAssets?.history_message && (
+                      <p className="text-xs text-yellow-200">{currentEvmAssets.history_message}</p>
+                    )}
+                  </div>
+                </section>
+              </>
+            )}
+          </div>
+        );
+      };
+
+      if (walletChainView === "evm") {
+        return renderEvmWalletPanel();
+      }
+
       const assets =
         effectiveWallet &&
         walletAssets?.address === effectiveWallet.public_key &&
@@ -11851,6 +12071,9 @@ export default function Home() {
 
       return (
         <div className="space-y-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            {renderChainViewTabs()}
+          </div>
           <section className="overflow-hidden border-white/10 bg-transparent lg:rounded-xl lg:border lg:bg-black/50">
             <div className="rounded-2xl border border-white/10 bg-gradient-to-br from-blue-500 to-violet-700 p-5 shadow-xl shadow-black/20 lg:rounded-none lg:border-0 lg:bg-none lg:p-4 lg:shadow-none">
               <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -14071,10 +14294,10 @@ export default function Home() {
         <section className="space-y-3 rounded-lg border border-white/10 bg-white/[0.03] p-4">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div>
-              <p className="text-xs font-semibold uppercase text-emerald-300">EVM</p>
-              <h2 className="text-2xl font-semibold text-white">{tf("features.evm-workbench.title", "EVM Wallet")}</h2>
+              <p className="text-xs font-semibold uppercase text-emerald-300">{activeEvmChain?.name || t("features.wallet-list.currentPublicChain")}</p>
+              <h2 className="text-2xl font-semibold text-white">{tf("features.evm-workbench.title", "Multi-chain Wallet")}</h2>
               <p className="mt-1 text-sm text-gray-400">
-                {tf("features.evm-workbench.subtitle", "Generic EVM chains, EOA wallets, ERC-20 assets, transfers, and receipt polling.")}
+                {tf("features.evm-workbench.subtitle", "Ethereum, BNB Smart Chain, Polygon, Base, Arbitrum, and other supported public chains.")}
               </p>
             </div>
             <button type="button" onClick={() => void loadEvmChains()} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-200 hover:bg-white/10">
@@ -14099,7 +14322,7 @@ export default function Home() {
               </select>
             </label>
             <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-sm text-gray-300">
-              <p className="font-medium text-white">{activeEvmChain?.native_symbol || "EVM"}</p>
+              <p className="font-medium text-white">{activeEvmChain?.native_symbol || t("features.wallet-list.currentPublicChain")}</p>
               <p className="mt-1 break-all text-xs text-gray-500">{activeEvmChain?.rpc_url || "No RPC selected"}</p>
               <p className="mt-1 break-all text-xs text-gray-500">{activeEvmChain?.explorer_url || "No explorer configured"}</p>
             </div>
@@ -20457,6 +20680,7 @@ export default function Home() {
                   <p className="mt-1 text-sm text-gray-400">
                     {dappSignRequest.app_name} · {dappSignRequest.method}
                   </p>
+                  <p className="mt-1 break-all text-xs text-gray-500">{dappSignRequest.app_url}</p>
                 </div>
                 <button
                   type="button"
@@ -20469,6 +20693,11 @@ export default function Home() {
               </div>
 	              <div className="space-y-2 rounded-lg border border-white/10 bg-black/30 p-3">
 	                {[
+                  [tf("features.dapp-store.requestApp", "请求网站"), dappSignRequest.app_name],
+                  [tf("features.dapp-store.requestOrigin", "来源"), dappSignRequest.app_url],
+                  ...(dappSignRequest.request_purpose
+                    ? [[tf("features.dapp-store.requestPurpose", "用途"), dappSignRequest.request_purpose]]
+                    : []),
                   [tf("features.dapp-store.requestWallet", "签名钱包"), dappSignRequest.wallet_public_key],
                   [tf("features.dapp-store.requestNetwork", "网络"), dappSignRequest.network],
                   [

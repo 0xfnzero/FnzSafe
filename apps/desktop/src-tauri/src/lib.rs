@@ -39,7 +39,7 @@ const DAPP_REQUEST_TTL_MS: u64 = 3 * 60 * 1000;
 const DAPP_WALLET_NAME: &str = "FnzSafe";
 const DESKTOP_API_BIN_NAME: &str = "fnzero-safe-desktop-api";
 #[cfg(target_os = "macos")]
-const BIOMETRIC_WALLET_PASSWORD_SERVICE: &str = "dev.fnzero-safe.wallet.password.v4";
+const BIOMETRIC_WALLET_PASSWORD_SERVICE: &str = "dev.fnzero-safe.wallet.password.v5";
 
 #[derive(Clone)]
 struct AllowedDapp {
@@ -69,6 +69,8 @@ struct DappSignRequestEvent {
     app_id: String,
     app_name: String,
     app_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_purpose: Option<String>,
     method: String,
     wallet_public_key: String,
     network: String,
@@ -265,6 +267,47 @@ fn biometric_touch_id_available() -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
+fn biometric_touch_id_authenticate() -> Result<(), String> {
+    use block2::RcBlock;
+    use objc2::runtime::Bool;
+    use objc2_foundation::{NSError, NSString};
+    use objc2_local_authentication::{LAContext, LAPolicy};
+    use std::sync::mpsc;
+
+    let context = unsafe { LAContext::new() };
+    unsafe {
+        context
+            .canEvaluatePolicy_error(LAPolicy::DeviceOwnerAuthenticationWithBiometrics)
+            .map_err(|error| biometric_local_auth_error_message(error.code()))?;
+    }
+
+    let reason = NSString::from_str("使用 Touch ID 解锁 FnzSafe 钱包密码");
+    let (tx, rx) = mpsc::channel();
+    let reply = RcBlock::new(move |success: Bool, error: *mut NSError| {
+        let result = if success.as_bool() {
+            Ok(())
+        } else if error.is_null() {
+            Err(-1)
+        } else {
+            Err(unsafe { (&*error).code() })
+        };
+        let _ = tx.send(result);
+    });
+
+    unsafe {
+        context.evaluatePolicy_localizedReason_reply(
+            LAPolicy::DeviceOwnerAuthenticationWithBiometrics,
+            &reason,
+            &reply,
+        );
+    }
+
+    rx.recv()
+        .map_err(|_| "Touch ID 验证未完成".to_string())?
+        .map_err(biometric_local_auth_error_message)
+}
+
+#[cfg(target_os = "macos")]
 mod biometric_wallet_keychain {
     use super::{biometric_error_message, BIOMETRIC_WALLET_PASSWORD_SERVICE};
     use security_framework::{
@@ -272,12 +315,13 @@ mod biometric_wallet_keychain {
         item::{ItemClass, ItemSearchOptions},
         passwords::{
             delete_generic_password, generic_password, set_generic_password_options,
-            AccessControlOptions, PasswordOptions,
+            PasswordOptions,
         },
     };
 
     const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
     const FALLBACK_SERVICES: &[&str] = &[
+        "dev.fnzero-safe.wallet.password.v4",
         "dev.fnzero-safe.wallet.password.v3",
         "dev.sol-safekey.fnzero-wallet.password.v1",
         "dev.sol-safekey.fnzero-wallet.password.v2",
@@ -314,9 +358,11 @@ mod biometric_wallet_keychain {
     }
 
     pub fn configured(primary_account: &str, fallback_accounts: &[String]) -> Result<bool, String> {
-        for account in account_candidates(primary_account, fallback_accounts) {
-            if exists(BIOMETRIC_WALLET_PASSWORD_SERVICE, account)? {
-                return Ok(true);
+        for service in candidate_services() {
+            for account in account_candidates(primary_account, fallback_accounts) {
+                if exists(service, account)? {
+                    return Ok(true);
+                }
             }
         }
         Ok(false)
@@ -326,7 +372,7 @@ mod biometric_wallet_keychain {
         let _ = delete_generic_password(BIOMETRIC_WALLET_PASSWORD_SERVICE, primary_account);
         let access_control = SecAccessControl::create_with_protection(
             Some(ProtectionMode::AccessibleWhenUnlockedThisDeviceOnly),
-            AccessControlOptions::BIOMETRY_CURRENT_SET.bits(),
+            0,
         )
         .map_err(biometric_error_message)?;
         let mut options = PasswordOptions::new_generic_password(
@@ -380,6 +426,7 @@ mod biometric_wallet_keychain {
                     }
                     Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => {}
                     Err(error) if error.code() == -25293 => {
+                        let _ = delete_generic_password(service, account);
                         last_error = Some(error);
                     }
                     Err(error) => {
@@ -462,6 +509,7 @@ fn biometric_wallet_get_password(req: BiometricWalletRequest) -> Result<String, 
     let accounts = biometric_wallet_accounts(&req.wallet_id, &req.public_key)?;
     #[cfg(target_os = "macos")]
     {
+        biometric_touch_id_authenticate()?;
         biometric_wallet_keychain::load(&accounts.primary, &accounts.fallbacks)
     }
     #[cfg(not(target_os = "macos"))]
@@ -1195,6 +1243,9 @@ fn parse_sign_deep_link(url: &tauri::Url) -> Result<DappSignRequestEvent, String
                 .map(|host| host.to_string())
                 .unwrap_or_else(|| "FnzSafe Web".to_string())
         });
+    let request_purpose = deep_link_query_param(url, "request_purpose")
+        .map(|value| validate_short_deep_link_text(&value, "request_purpose", 80))
+        .transpose()?;
     let request_id = deep_link_query_param(url, "request_id")
         .map(|value| validate_deep_link_request_id(&value))
         .transpose()?
@@ -1228,6 +1279,7 @@ fn parse_sign_deep_link(url: &tauri::Url) -> Result<DappSignRequestEvent, String
         app_id: "fnzsafe-deep-link".to_string(),
         app_name,
         app_url: app_url_string,
+        request_purpose,
         method,
         wallet_public_key,
         network,
@@ -2234,6 +2286,7 @@ fn dapp_submit_sign_request(
         app_id: session.app_id,
         app_name: session.app_name,
         app_url: session.url,
+        request_purpose: None,
         method,
         wallet_public_key: session.wallet_public_key,
         network: session.network,
@@ -2534,6 +2587,70 @@ fn repository_root_candidates() -> Vec<PathBuf> {
         })
 }
 
+fn stable_app_support_dir(app: &tauri::App) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(home) = env::var("HOME") {
+            let home = home.trim();
+            if !home.is_empty() {
+                return PathBuf::from(home)
+                    .join("Library")
+                    .join("Application Support")
+                    .join("FnzSafe");
+            }
+        }
+    }
+
+    app.path()
+        .app_data_dir()
+        .unwrap_or_else(|_| env::temp_dir().join("FnzSafe"))
+}
+
+fn set_private_file_permissions(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+}
+
+fn migrate_wallet_database_if_needed(target: &Path, sources: &[PathBuf]) {
+    if target.exists() {
+        return;
+    }
+    let Some(source) = sources.iter().find(|source| {
+        source != &target
+            && std::fs::metadata(source)
+                .map(|metadata| metadata.is_file() && metadata.len() > 0)
+                .unwrap_or(false)
+    }) else {
+        return;
+    };
+    if let Some(parent) = target.parent() {
+        if let Err(error) = std::fs::create_dir_all(parent) {
+            log::warn!("failed to create wallet data directory: {error}");
+            return;
+        }
+    }
+    match std::fs::copy(source, target) {
+        Ok(_) => {
+            set_private_file_permissions(target);
+            log::info!(
+                "migrated wallet database from {} to {}",
+                source.display(),
+                target.display()
+            );
+        }
+        Err(error) => {
+            log::warn!(
+                "failed to migrate wallet database from {} to {}: {error}",
+                source.display(),
+                target.display()
+            );
+        }
+    }
+}
+
 fn preferred_wallet_database_path(app: &tauri::App) -> PathBuf {
     if let Ok(path) = env::var("FNZERO_SAFE_DB_PATH") {
         let path = path.trim();
@@ -2548,25 +2665,20 @@ fn preferred_wallet_database_path(app: &tauri::App) -> PathBuf {
         }
     }
 
+    let app_support = stable_app_support_dir(app);
+    let target = app_support.join("fnzero-safe.sqlite3");
+    let mut migration_sources = vec![app_support.join("sol-safekey.sqlite3")];
     for root in repository_root_candidates() {
-        let desktop_data = root.join("apps/desktop/data");
-        let current = desktop_data.join("fnzero-safe.sqlite3");
-        let legacy = desktop_data.join("sol-safekey.sqlite3");
-        if current.exists() {
-            return current;
-        }
-        if legacy.exists() {
-            return legacy;
-        }
-        if desktop_data.is_dir() {
-            return current;
-        }
+        migration_sources.push(root.join("apps/desktop/data/fnzero-safe.sqlite3"));
+        migration_sources.push(root.join("apps/desktop/data/sol-safekey.sqlite3"));
+        migration_sources.push(root.join("crates/desktop-api/data/fnzero-safe.sqlite3"));
+        migration_sources.push(root.join("crates/desktop-api/data/sol-safekey.sqlite3"));
+        migration_sources.push(root.join("data/fnzero-safe.sqlite3"));
+        migration_sources.push(root.join("data/sol-safekey.sqlite3"));
     }
 
-    app.path()
-        .app_data_dir()
-        .unwrap_or_else(|_| env::temp_dir().join("FnzSafe"))
-        .join("fnzero-safe.sqlite3")
+    migrate_wallet_database_if_needed(&target, &migration_sources);
+    target
 }
 
 fn desktop_api_binary_candidates(app: &tauri::App) -> Vec<PathBuf> {
@@ -2868,25 +2980,26 @@ mod tests {
 
     #[test]
     fn sign_deep_link_parses_host_action() {
-        let url = "fnzsafe://sign?method=signMessage&wallet_public_key=11111111111111111111111111111111&network=devnet&message_base64=aGVsbG8=&app_name=Fnzero%20Website&app_url=https%3A%2F%2Ffnzero.dev%2F&callback_url=https%3A%2F%2Ffnzero.dev%2Fwallet%2Fcallback"
+        let url = "fnzsafe://sign?method=signMessage&wallet_public_key=11111111111111111111111111111111&network=devnet&message_base64=aGVsbG8=&app_name=Example%20DApp&app_url=https%3A%2F%2Fexample.com%2F&request_purpose=login&callback_url=https%3A%2F%2Fexample.com%2Fwallet%2Fcallback"
             .parse::<tauri::Url>()
             .unwrap();
 
         let request = parse_sign_deep_link(&url).unwrap();
         assert_eq!(request.app_id, "fnzsafe-deep-link");
-        assert_eq!(request.app_name, "Fnzero Website");
+        assert_eq!(request.app_name, "Example DApp");
+        assert_eq!(request.request_purpose.as_deref(), Some("login"));
         assert_eq!(request.method, "signMessage");
         assert_eq!(request.network, "devnet");
         assert_eq!(request.message_base64.as_deref(), Some("aGVsbG8="));
         assert_eq!(
             request.callback_url.as_deref(),
-            Some("https://fnzero.dev/wallet/callback")
+            Some("https://example.com/wallet/callback")
         );
     }
 
     #[test]
     fn sign_deep_link_allows_localhost_callback_for_local_development() {
-        let url = "fnzsafe://sign?method=signMessage&wallet_public_key=11111111111111111111111111111111&network=devnet&message_base64=aGVsbG8=&app_name=Fnzero%20Website&app_url=http%3A%2F%2Flocalhost%3A5174%2F&callback_url=http%3A%2F%2Flocalhost%3A5174%2Fwallet%2Fcallback"
+        let url = "fnzsafe://sign?method=signMessage&wallet_public_key=11111111111111111111111111111111&network=devnet&message_base64=aGVsbG8=&app_name=Local%20DApp&app_url=http%3A%2F%2Flocalhost%3A5174%2F&callback_url=http%3A%2F%2Flocalhost%3A5174%2Fwallet%2Fcallback"
             .parse::<tauri::Url>()
             .unwrap();
 
@@ -2915,12 +3028,12 @@ mod tests {
 
     #[test]
     fn sign_deep_link_parses_path_action_and_transaction() {
-        let url = "fnzsafe:///sign?method=signTransaction&wallet_public_key=11111111111111111111111111111111&transaction_base64=AQID&transaction_format=v0&app_url=https%3A%2F%2Fwww.fnzero.dev%2F"
+        let url = "fnzsafe:///sign?method=signTransaction&wallet_public_key=11111111111111111111111111111111&transaction_base64=AQID&transaction_format=v0&app_url=https%3A%2F%2Fdapp.example%2F"
             .parse::<tauri::Url>()
             .unwrap();
 
         let request = parse_sign_deep_link(&url).unwrap();
-        assert_eq!(request.app_name, "www.fnzero.dev");
+        assert_eq!(request.app_name, "dapp.example");
         assert_eq!(request.method, "signTransaction");
         assert_eq!(request.network, "mainnet");
         assert_eq!(request.transaction_base64, "AQID");
@@ -2930,7 +3043,7 @@ mod tests {
 
     #[test]
     fn sign_deep_link_rejects_cross_site_callback() {
-        let url = "fnzsafe://sign?method=signMessage&wallet_public_key=11111111111111111111111111111111&message_base64=aGVsbG8=&app_url=https%3A%2F%2Ffnzero.dev%2F&callback_url=https%3A%2F%2Fevil.example%2Fcallback"
+        let url = "fnzsafe://sign?method=signMessage&wallet_public_key=11111111111111111111111111111111&message_base64=aGVsbG8=&app_url=https%3A%2F%2Fexample.com%2F&callback_url=https%3A%2F%2Fevil.example%2Fcallback"
             .parse::<tauri::Url>()
             .unwrap();
 

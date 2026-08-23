@@ -279,14 +279,16 @@ cargo install --path crates/core --features full
 fnzero-safe start
 ```
 
-### 4.5 Website Wallet Integration
+### 4.5 Website And dApp Wallet Integration
 
-The official website should keep the normal wallet-adapter flow for Phantom,
-Solflare, Backpack, OKX, and other wallets. FnzSafe can be shown first, and when
-the user chooses it the site can launch the desktop app with:
+FnzSafe deep links are a generic integration surface for any website or dApp,
+not a Fnzero-only binding flow. Sites should keep the normal wallet-adapter
+flow for Phantom, Solflare, Backpack, OKX, and other wallets. FnzSafe can be
+shown first, and when the user chooses it the site can launch the desktop app
+with:
 
 ```text
-fnzsafe://sign?method=signMessage&wallet_public_key=<SOLANA_PUBLIC_KEY>&network=devnet&message_base64=<BASE64_MESSAGE>&app_name=Fnzero%20Website&app_url=https%3A%2F%2Ffnzero.dev%2F&callback_url=https%3A%2F%2Ffnzero.dev%2Fwallet%2Fcallback
+fnzsafe://sign?method=signMessage&wallet_public_key=<SOLANA_PUBLIC_KEY>&network=devnet&message_base64=<BASE64_MESSAGE>&app_name=Example%20DApp&app_url=https%3A%2F%2Fexample.com%2F&request_purpose=login&callback_url=https%3A%2F%2Fexample.com%2Fwallet%2Fcallback
 ```
 
 Reusable website helpers live in
@@ -294,21 +296,34 @@ Reusable website helpers live in
 
 ```ts
 import {
+  buildFnzSafeAuthMessage,
   buildFnzSafeSignDeepLink,
+  encodeFnzSafeMessageBase64,
   openFnzSafeDeepLinkWithFallback,
   prioritizeFnzSafeWallets,
 } from "./packages/shared-contracts/fnzsafe-deep-link";
 
 const wallets = prioritizeFnzSafeWallets(adapterWallets);
 
+const message = buildFnzSafeAuthMessage({
+  domain: "example.com",
+  address: walletPublicKey,
+  chain: "solana:devnet",
+  statement: "Sign in to Example DApp.",
+  uri: "https://example.com/",
+  nonce,
+});
+const messageBase64 = encodeFnzSafeMessageBase64(message);
+
 const deepLink = buildFnzSafeSignDeepLink({
   method: "signMessage",
   walletPublicKey,
   network: "devnet",
   messageBase64,
-  appName: "Fnzero Website",
-  appUrl: "https://fnzero.dev/",
-  callbackUrl: "https://fnzero.dev/wallet/callback",
+  appName: "Example DApp",
+  appUrl: "https://example.com/",
+  requestPurpose: "login",
+  callbackUrl: "https://example.com/wallet/callback",
 });
 
 openFnzSafeDeepLinkWithFallback(deepLink, {

@@ -15,6 +15,7 @@ export interface FnzSafeSignDeepLinkRequest {
   walletPublicKey: string;
   appUrl: string;
   appName?: string;
+  requestPurpose?: string;
   network?: string;
   requestId?: string;
   transactionBase64?: string;
@@ -35,6 +36,21 @@ export interface FnzSafeConnectDeepLinkRequest {
 export interface FnzSafeKnownProgram {
   programId: string;
   label: string;
+}
+
+export interface FnzSafeAuthMessageRequest {
+  domain: string;
+  address: string;
+  chain?: string;
+  statement?: string;
+  uri?: string;
+  version?: string;
+  nonce: string;
+  issuedAt?: string | Date;
+  expirationTime?: string | Date;
+  notBefore?: string | Date;
+  requestId?: string;
+  resources?: string[];
 }
 
 export interface FnzSafeOpenOptions {
@@ -72,6 +88,74 @@ function requireCleanText(value: string, field: string, maxLength: number): stri
     throw new Error(`Invalid ${field}`);
   }
   return trimmed;
+}
+
+function optionalCleanText(value: string | undefined, field: string, maxLength: number): string | undefined {
+  if (value === undefined) return undefined;
+  return requireCleanText(value, field, maxLength);
+}
+
+function requireDomain(value: string): string {
+  const trimmed = requireCleanText(value, "domain", 253).toLowerCase();
+  if (!/^(localhost|([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)$/u.test(trimmed)) {
+    throw new Error("Invalid domain");
+  }
+  return trimmed;
+}
+
+function formatIsoDate(value: string | Date | undefined, field: string): string | undefined {
+  if (value === undefined) return undefined;
+  const iso = value instanceof Date ? value.toISOString() : value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u.test(iso)) {
+    throw new Error(`Invalid ${field}`);
+  }
+  return iso;
+}
+
+export function buildFnzSafeAuthMessage(request: FnzSafeAuthMessageRequest): string {
+  const domain = requireDomain(request.domain);
+  const address = requireCleanText(request.address, "address", 128);
+  const chain = requireCleanText(request.chain || "solana", "chain", 64);
+  const version = requireCleanText(request.version || "1", "version", 16);
+  const nonce = requireCleanText(request.nonce, "nonce", 128);
+  const issuedAt = formatIsoDate(request.issuedAt ?? new Date(), "issuedAt");
+  const expirationTime = formatIsoDate(request.expirationTime, "expirationTime");
+  const notBefore = formatIsoDate(request.notBefore, "notBefore");
+  const statement = optionalCleanText(request.statement, "statement", 512);
+  const uri = request.uri ? requireAppUrl(request.uri, "uri") : undefined;
+  const requestId = optionalCleanText(request.requestId, "requestId", 128);
+  const resources = (request.resources ?? []).map((resource, index) =>
+    requireCallbackUrl(resource, `resources[${index}]`),
+  );
+
+  const lines = [
+    `${domain} wants you to sign in with your ${chain} account:`,
+    address,
+    "",
+  ];
+  if (statement) {
+    lines.push(statement, "");
+  }
+  if (uri) lines.push(`URI: ${uri}`);
+  lines.push(`Version: ${version}`);
+  lines.push(`Chain: ${chain}`);
+  lines.push(`Nonce: ${nonce}`);
+  if (issuedAt) lines.push(`Issued At: ${issuedAt}`);
+  if (expirationTime) lines.push(`Expiration Time: ${expirationTime}`);
+  if (notBefore) lines.push(`Not Before: ${notBefore}`);
+  if (requestId) lines.push(`Request ID: ${requestId}`);
+  if (resources.length > 0) {
+    lines.push("Resources:");
+    for (const resource of resources) lines.push(`- ${resource}`);
+  }
+  return lines.join("\n");
+}
+
+export function encodeFnzSafeMessageBase64(message: string): string {
+  const bytes = new TextEncoder().encode(message);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
 }
 
 function requireAppUrl(value: string, field: string): string {
@@ -121,6 +205,9 @@ export function buildFnzSafeSignDeepLink(request: FnzSafeSignDeepLinkRequest): s
   params.set("app_url", appUrl);
   params.set("network", requireCleanText(request.network || "mainnet", "network", 256));
   if (request.appName) params.set("app_name", requireCleanText(request.appName, "appName", 80));
+  if (request.requestPurpose) {
+    params.set("request_purpose", requireCleanText(request.requestPurpose, "requestPurpose", 80));
+  }
   if (request.requestId) params.set("request_id", requireCleanText(request.requestId, "requestId", 128));
   if (callbackUrl) params.set("callback_url", callbackUrl);
 

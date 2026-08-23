@@ -279,36 +279,50 @@ cargo install --path crates/core --features full
 fnzero-safe start
 ```
 
-### 4.5 官网钱包接入
+### 4.5 网站与 dApp 钱包接入
 
-官网应该继续保留 Phantom、Solflare、Backpack、OKX 等标准
-wallet-adapter 连接流程。FnzSafe 可以排在钱包列表前面；当用户选择
-FnzSafe 时，官网可以通过下面的协议链接拉起桌面端：
+FnzSafe deep link 是任何网站或 dApp 都可以集成的通用能力，不是
+Fnzero 官网专用的钱包绑定流程。网站应该继续保留 Phantom、Solflare、
+Backpack、OKX 等标准 wallet-adapter 连接流程。FnzSafe 可以排在钱包
+列表前面；当用户选择 FnzSafe 时，网站可以通过下面的协议链接拉起桌面端：
 
 ```text
-fnzsafe://sign?method=signMessage&wallet_public_key=<SOLANA_PUBLIC_KEY>&network=devnet&message_base64=<BASE64_MESSAGE>&app_name=Fnzero%20Website&app_url=https%3A%2F%2Ffnzero.dev%2F&callback_url=https%3A%2F%2Ffnzero.dev%2Fwallet%2Fcallback
+fnzsafe://sign?method=signMessage&wallet_public_key=<SOLANA_PUBLIC_KEY>&network=devnet&message_base64=<BASE64_MESSAGE>&app_name=Example%20DApp&app_url=https%3A%2F%2Fexample.com%2F&request_purpose=login&callback_url=https%3A%2F%2Fexample.com%2Fwallet%2Fcallback
 ```
 
-可复用的官网 helper 放在
+可复用的网站/dApp helper 放在
 `packages/shared-contracts/fnzsafe-deep-link.ts`：
 
 ```ts
 import {
+  buildFnzSafeAuthMessage,
   buildFnzSafeSignDeepLink,
+  encodeFnzSafeMessageBase64,
   openFnzSafeDeepLinkWithFallback,
   prioritizeFnzSafeWallets,
 } from "./packages/shared-contracts/fnzsafe-deep-link";
 
 const wallets = prioritizeFnzSafeWallets(adapterWallets);
 
+const message = buildFnzSafeAuthMessage({
+  domain: "example.com",
+  address: walletPublicKey,
+  chain: "solana:devnet",
+  statement: "Sign in to Example DApp.",
+  uri: "https://example.com/",
+  nonce,
+});
+const messageBase64 = encodeFnzSafeMessageBase64(message);
+
 const deepLink = buildFnzSafeSignDeepLink({
   method: "signMessage",
   walletPublicKey,
   network: "devnet",
   messageBase64,
-  appName: "Fnzero Website",
-  appUrl: "https://fnzero.dev/",
-  callbackUrl: "https://fnzero.dev/wallet/callback",
+  appName: "Example DApp",
+  appUrl: "https://example.com/",
+  requestPurpose: "login",
+  callbackUrl: "https://example.com/wallet/callback",
 });
 
 openFnzSafeDeepLinkWithFallback(deepLink, {
