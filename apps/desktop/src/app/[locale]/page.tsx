@@ -1670,6 +1670,53 @@ interface CashbackInfoState {
   error?: string;
 }
 
+type ExternalSignInputMode = "json" | "form";
+
+interface ExternalSignAccountSummary {
+  pubkey: string;
+  isSigner: boolean;
+  isWritable: boolean;
+}
+
+interface ExternalSignRequestSummary {
+  valid: boolean;
+  schema?: string;
+  operation?: string;
+  cluster?: string;
+  network?: string;
+  clusterGenesisHash?: string;
+  programId?: string;
+  bridgeMint?: string;
+  requiredSigner?: string;
+  transactionBase64?: string;
+  dataBase64?: string;
+  requestId?: string;
+  recipient?: string;
+  amount?: string;
+  expiresAt?: string;
+  recentBlockhash?: string;
+  lastValidBlockHeight?: string;
+  signerCount: number;
+  writableCount: number;
+  accounts: ExternalSignAccountSummary[];
+}
+
+interface ExternalSignInstructionAccountRequest {
+  pubkey: string;
+  is_signer: boolean;
+  is_writable: boolean;
+}
+
+interface ExternalSignInstructionRequest {
+  programId: string;
+  instructionName: string;
+  dataBase64: string;
+  network?: string;
+  requiredSigner?: string;
+  requestId?: string;
+  accounts: ExternalSignInstructionAccountRequest[];
+}
+
 function networkLabel(t: (key: string, vars?: Record<string, string | number>) => string, network: AppNetwork): string {
   return t(`features.check-balance.${network}`);
 }
@@ -1680,6 +1727,146 @@ function shortAddress(value: string): string {
 
 function shortSignature(value: string): string {
   return value.length > 20 ? `${value.slice(0, 8)}...${value.slice(-8)}` : value;
+}
+
+function externalSignRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function externalSignString(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value === "bigint") return value.toString();
+  return "";
+}
+
+function parseExternalSignRequestSummary(raw: string): ExternalSignRequestSummary | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return { valid: false, signerCount: 0, writableCount: 0, accounts: [] };
+  }
+
+  const request = externalSignRecord(parsed);
+  if (!request) {
+    return { valid: false, signerCount: 0, writableCount: 0, accounts: [] };
+  }
+
+  const transaction = externalSignRecord(request.transaction);
+  const args = externalSignRecord(request.arguments);
+  const readString = (...keys: string[]) => {
+    for (const key of keys) {
+      const value = externalSignString(request[key]) || externalSignString(transaction?.[key]) || externalSignString(args?.[key]);
+      if (value) return value;
+    }
+    return "";
+  };
+
+  const accounts = Array.isArray(request.accounts)
+    ? request.accounts
+        .map((account): ExternalSignAccountSummary | null => {
+          const record = externalSignRecord(account);
+          const pubkey = externalSignString(record?.pubkey);
+          if (!pubkey) return null;
+          return {
+            pubkey,
+            isSigner: Boolean(record?.isSigner ?? record?.is_signer),
+            isWritable: Boolean(record?.isWritable ?? record?.is_writable),
+          };
+        })
+        .filter((account): account is ExternalSignAccountSummary => Boolean(account))
+    : [];
+  const requiredSigner =
+    readString("requiredSigner", "required_signer", "signer", "signerPubkey", "signer_pubkey", "walletPublicKey", "wallet_public_key") ||
+    accounts.find((account) => account.isSigner)?.pubkey ||
+    "";
+  const dataBase64 = readString("dataBase64", "data_base64", "instructionDataBase64", "instruction_data_base64");
+  const transactionBase64 = readString("transactionBase64", "transaction_base64", "txBase64", "tx_base64", "base64");
+
+  return {
+    valid: true,
+    schema: readString("schema"),
+    operation: readString("operation", "method", "instruction"),
+    cluster: readString("cluster"),
+    network: readString("network"),
+    clusterGenesisHash: readString("clusterGenesisHash", "cluster_genesis_hash", "expectedGenesisHash", "expected_genesis_hash", "genesisHash", "genesis_hash"),
+    programId: readString("programId", "program_id"),
+    bridgeMint: readString("bridgeMint", "bridge_mint", "mint"),
+    requiredSigner,
+    transactionBase64,
+    dataBase64,
+    requestId: readString("requestId", "request_id", "requestID", "id", "orderId", "order_id"),
+    recipient: readString("recipient", "to", "destination", "destinationOwner", "destination_owner"),
+    amount: readString("amount", "amountLamports", "amount_lamports", "rawAmount", "raw_amount"),
+    expiresAt: readString("expiresAt", "expires_at"),
+    recentBlockhash: readString("recentBlockhash", "recent_blockhash"),
+    lastValidBlockHeight: readString("lastValidBlockHeight", "last_valid_block_height"),
+    signerCount: accounts.filter((account) => account.isSigner).length,
+    writableCount: accounts.filter((account) => account.isWritable).length,
+    accounts,
+  };
+}
+
+function parseExternalSignInstructionRequest(raw: string): ExternalSignInstructionRequest | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+
+  const request = externalSignRecord(parsed);
+  if (!request) return null;
+  const args = externalSignRecord(request.arguments);
+  const transaction = externalSignRecord(request.transaction);
+  const readString = (...keys: string[]) => {
+    for (const key of keys) {
+      const value = externalSignString(request[key]) || externalSignString(transaction?.[key]) || externalSignString(args?.[key]);
+      if (value) return value;
+    }
+    return "";
+  };
+  const programId = readString("programId", "program_id");
+  const dataBase64 = readString("dataBase64", "data_base64", "instructionDataBase64", "instruction_data_base64");
+  if (!programId || !dataBase64 || !Array.isArray(request.accounts)) return null;
+
+  const accounts = request.accounts
+    .map((account): ExternalSignInstructionAccountRequest | null => {
+      const record = externalSignRecord(account);
+      const pubkey = externalSignString(record?.pubkey);
+      if (!pubkey) return null;
+      return {
+        pubkey,
+        is_signer: Boolean(record?.isSigner ?? record?.is_signer),
+        is_writable: Boolean(record?.isWritable ?? record?.is_writable),
+      };
+    })
+    .filter((account): account is ExternalSignInstructionAccountRequest => Boolean(account));
+  if (accounts.length === 0) return null;
+
+  const requiredSigner =
+    readString("requiredSigner", "required_signer", "signer", "signerPubkey", "signer_pubkey", "walletPublicKey", "wallet_public_key") ||
+    accounts.find((account) => account.is_signer)?.pubkey ||
+    "";
+
+  return {
+    programId,
+    instructionName: readString("operation", "method", "instruction", "instructionName", "instruction_name") || "external_sign_instruction",
+    dataBase64,
+    network: readString("network", "cluster"),
+    requiredSigner,
+    requestId: readString("requestId", "request_id", "requestID", "id", "orderId", "order_id"),
+    accounts,
+  };
 }
 
 function programDeploymentHistorySignature(item: ProgramDeploymentHistoryItem): string | null {
@@ -2265,6 +2452,7 @@ export default function Home() {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const [selectedForm, setSelectedForm] = useState<string | null>("wallet-list");
   const [formData, setFormData] = useState<FormState>({});
+  const [externalSignInputMode, setExternalSignInputMode] = useState<ExternalSignInputMode>("json");
   const [copied, setCopied] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [authMethod, setAuthMethod] = useState<{ [key: string]: "keystore" | "private" | "encrypted" }>({});
@@ -5579,6 +5767,30 @@ export default function Home() {
     });
   };
 
+  const hydrateExternalSignFormDataFromJson = (source: FormState): FormState => {
+    const raw = String(source.externalSignRequestJson || "").trim();
+    if (!raw) return source;
+    const summary = parseExternalSignRequestSummary(raw);
+    if (!summary?.valid) return source;
+    const matchingWallet = summary.requiredSigner
+      ? wallets.find((wallet) => wallet.public_key === summary.requiredSigner)
+      : undefined;
+    return {
+      ...source,
+      externalSignRequestJson: raw,
+      ...(summary.requestId ? { requestId: summary.requestId } : {}),
+      ...(summary.requiredSigner ? { requiredSigner: summary.requiredSigner } : {}),
+      ...(summary.transactionBase64 ? { transactionBase64: summary.transactionBase64 } : {}),
+      ...(summary.dataBase64 ? { dataBase64: summary.dataBase64 } : {}),
+      ...(summary.expiresAt ? { expiresAt: summary.expiresAt } : {}),
+      ...(summary.clusterGenesisHash ? { expectedGenesisHash: summary.clusterGenesisHash } : {}),
+      ...(summary.recentBlockhash ? { recentBlockhash: summary.recentBlockhash } : {}),
+      ...(summary.lastValidBlockHeight ? { lastValidBlockHeight: summary.lastValidBlockHeight } : {}),
+      ...(summary.cluster || summary.network ? { network: summary.cluster || summary.network } : {}),
+      ...(matchingWallet ? { wallet_id: matchingWallet.id, keystoreJson: undefined } : {}),
+    };
+  };
+
   const importExternalSignRequest = () => {
     const raw = String(formData.externalSignRequestJson || "").trim();
     if (!raw) {
@@ -5601,23 +5813,35 @@ export default function Home() {
       request.transaction && typeof request.transaction === "object" && !Array.isArray(request.transaction)
         ? (request.transaction as Record<string, unknown>)
         : undefined;
+    const args =
+      request.arguments && typeof request.arguments === "object" && !Array.isArray(request.arguments)
+        ? (request.arguments as Record<string, unknown>)
+        : undefined;
+    const accounts = Array.isArray(request.accounts)
+      ? request.accounts
+          .map((account) => (account && typeof account === "object" && !Array.isArray(account) ? account as Record<string, unknown> : null))
+          .filter((account): account is Record<string, unknown> => Boolean(account))
+      : [];
     const readString = (...keys: string[]) => {
       for (const key of keys) {
-        const value = request[key] ?? nestedTransaction?.[key];
+        const value = request[key] ?? nestedTransaction?.[key] ?? args?.[key];
         if (typeof value === "string" && value.trim()) return value.trim();
         if (typeof value === "number" && Number.isFinite(value)) return String(value);
       }
       return "";
     };
 
-    const requiredSigner = readString("requiredSigner", "required_signer", "signer", "signerPubkey", "signer_pubkey");
+    const requiredSigner =
+      readString("requiredSigner", "required_signer", "signer", "signerPubkey", "signer_pubkey", "walletPublicKey", "wallet_public_key") ||
+      String(accounts.find((account) => Boolean(account.isSigner ?? account.is_signer))?.pubkey || "").trim();
     const transactionBase64 = readString("transactionBase64", "transaction_base64", "txBase64", "tx_base64", "base64");
-    const requestId = readString("requestId", "request_id", "id");
+    const dataBase64 = readString("dataBase64", "data_base64", "instructionDataBase64", "instruction_data_base64");
+    const requestId = readString("requestId", "request_id", "requestID", "id", "orderId", "order_id");
     const expiresAt = readString("expiresAt", "expires_at");
-    const expectedGenesisHash = readString("expectedGenesisHash", "expected_genesis_hash", "genesisHash", "genesis_hash");
+    const expectedGenesisHash = readString("expectedGenesisHash", "expected_genesis_hash", "clusterGenesisHash", "cluster_genesis_hash", "genesisHash", "genesis_hash");
     const recentBlockhash = readString("recentBlockhash", "recent_blockhash");
     const lastValidBlockHeight = readString("lastValidBlockHeight", "last_valid_block_height");
-    const network = readString("network");
+    const network = readString("network", "cluster");
     const matchingWallet = requiredSigner
       ? wallets.find((wallet) => wallet.public_key === requiredSigner)
       : undefined;
@@ -5628,6 +5852,7 @@ export default function Home() {
       ...(requestId ? { requestId } : {}),
       ...(requiredSigner ? { requiredSigner } : {}),
       ...(transactionBase64 ? { transactionBase64 } : {}),
+      ...(dataBase64 ? { dataBase64 } : {}),
       ...(expiresAt ? { expiresAt } : {}),
       ...(expectedGenesisHash ? { expectedGenesisHash } : {}),
       ...(recentBlockhash ? { recentBlockhash } : {}),
@@ -7822,7 +8047,8 @@ export default function Home() {
       case "external-sign": {
         const requiredSigner = String(nextFormData.requiredSigner || "").trim();
         const transactionBase64 = String(nextFormData.transactionBase64 || "").trim();
-        if (!requiredSigner || !transactionBase64) {
+        const instructionRequest = parseExternalSignInstructionRequest(String(nextFormData.externalSignRequestJson || ""));
+        if (!requiredSigner || (!transactionBase64 && !instructionRequest)) {
           return fail(t("features.external-sign.fillAllFields"));
         }
         if (!isLikelySolanaPublicKey(requiredSigner)) {
@@ -7999,16 +8225,22 @@ export default function Home() {
     const needsMasterPassword = shouldPromptForMasterPassword(formId);
 
     if (!needsWalletPassword && !needsMasterPassword) {
-      const nextFormData = formId === "program-deploy"
-        ? normalizedProgramDeployFormState(formOverride ?? formData)
+      const requestSource = formId === "external-sign"
+        ? hydrateExternalSignFormDataFromJson(formOverride ?? formData)
         : formOverride ?? formData;
+      const nextFormData = formId === "program-deploy"
+        ? normalizedProgramDeployFormState(requestSource)
+        : requestSource;
       void handleSubmit(formId, nextFormData);
       return;
     }
 
+    const requestSource = formId === "external-sign"
+      ? hydrateExternalSignFormDataFromJson(formOverride ?? formData)
+      : formOverride ?? formData;
     const nextFormData = formId === "program-deploy"
-      ? normalizedProgramDeployFormState(walletAuthFormData(formOverride ?? formData))
-      : walletAuthFormData(formOverride ?? formData);
+      ? normalizedProgramDeployFormState(walletAuthFormData(requestSource))
+      : walletAuthFormData(requestSource);
     const method = walletAuth(formId);
     if (needsWalletPassword &&
       method === "keystore" &&
@@ -10249,9 +10481,51 @@ export default function Home() {
             setLoading(false);
             return;
           }
+          const instructionRequest = parseExternalSignInstructionRequest(String(formData.externalSignRequestJson || ""));
+          const transactionBase64 = String(formData.transactionBase64 || "").trim();
+          if (!transactionBase64 && instructionRequest) {
+            const requestBody: Record<string, unknown> = {
+              program_id: instructionRequest.programId,
+              instruction_name: instructionRequest.instructionName,
+              accounts: instructionRequest.accounts,
+              data_base64: instructionRequest.dataBase64,
+              network: requestNetwork(instructionRequest.network || formData.network),
+              mode: "send",
+              additional_signers: [],
+            };
+            applyWalletAuth(requestBody as ApiRequestBody, m, formData, "private_key");
+            const response = await apiFetch("program/invoke", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(requestBody),
+            });
+            const data = await response.json();
+            if (response.ok) {
+              const signature = String(data.signature || "").trim();
+              toast.success(t("features.external-sign.success"));
+              setFormData((prev) => ({
+                ...prev,
+                status: data.status,
+                signature,
+                signedBy: instructionRequest.requiredSigner || String(formData.requiredSigner || "").trim(),
+                externalSignNetwork: requestNetwork(instructionRequest.network || formData.network),
+                requestId: instructionRequest.requestId || String(formData.requestId || "").trim(),
+                externalSignBackfillJson: JSON.stringify({
+                  signature,
+                  programId: instructionRequest.programId,
+                  instructionName: instructionRequest.instructionName,
+                  dataBase64: instructionRequest.dataBase64,
+                }, null, 2),
+              }));
+              refreshWalletAfterMutation(savedWalletFromForm(formData) ?? effectiveWallet);
+            } else {
+              toast.error(data.error || t("features.external-sign.error"));
+            }
+            break;
+          }
           const requestBody: ApiRequestBody = {
             required_signer: String(formData.requiredSigner || "").trim(),
-            transaction_base64: String(formData.transactionBase64 || "").trim(),
+            transaction_base64: transactionBase64,
             network: submitNetwork(),
           };
           const requestId = String(formData.requestId || "").trim();
@@ -18134,6 +18408,106 @@ export default function Home() {
             handleFormChange("requiredSigner", externalSignWallet.public_key);
           }
         };
+        const jsonSummary = parseExternalSignRequestSummary(String(formData.externalSignRequestJson || ""));
+        const summaryRows: Array<[string, string, string?]> = jsonSummary?.valid
+          ? [
+              [t("features.external-sign.requestId"), jsonSummary.requestId],
+              [tf("features.external-sign.schema", "Schema"), jsonSummary.schema],
+              [tf("features.external-sign.operation", "Operation"), jsonSummary.operation],
+              [tf("features.external-sign.cluster", "Cluster"), jsonSummary.cluster || jsonSummary.network],
+              [t("features.external-sign.expectedGenesisHash"), jsonSummary.clusterGenesisHash],
+              [tf("features.external-sign.programId", "Program ID"), jsonSummary.programId],
+              [tf("features.external-sign.bridgeMint", "Bridge Mint"), jsonSummary.bridgeMint],
+              [t("features.external-sign.requiredSigner"), jsonSummary.requiredSigner],
+              [t("features.external-sign.transactionBase64"), jsonSummary.transactionBase64, "external-sign-summary-transaction-base64"],
+              [tf("features.external-sign.dataBase64", "Data Base64"), jsonSummary.dataBase64, "external-sign-summary-data-base64"],
+              [tf("features.external-sign.recipient", "Recipient"), jsonSummary.recipient],
+              [tf("features.external-sign.amount", "Amount"), jsonSummary.amount],
+              [t("features.external-sign.expiresAt"), jsonSummary.expiresAt],
+              [tf("features.external-sign.recentBlockhash", "Recent Blockhash"), jsonSummary.recentBlockhash],
+              [tf("features.external-sign.lastValidBlockHeight", "Last Valid Block Height"), jsonSummary.lastValidBlockHeight],
+            ].filter((row): row is [string, string, string?] => Boolean(row[1]))
+          : [];
+        const renderExternalSignManualFields = () => (
+          <>
+            <div>
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <label className="block text-sm font-medium">{t("features.external-sign.requiredSigner")}</label>
+                <button
+                  type="button"
+                  onClick={fillSelectedWalletSigner}
+                  disabled={!externalSignWallet?.public_key}
+                  className="rounded bg-white/10 px-2 py-1 text-xs text-gray-200 hover:bg-white/20 disabled:opacity-40"
+                >
+                  {t("features.external-sign.useSelectedWallet")}
+                </button>
+              </div>
+              <input
+                type="text"
+                value={formData.requiredSigner || ""}
+                onChange={(e) => handleFormChange("requiredSigner", e.target.value.trim())}
+                className={`w-full px-4 py-2 bg-white/5 border rounded-lg focus:outline-none focus:ring-2 focus:ring-white/20 text-white font-mono text-sm select-text ${
+                  walletMismatch ? "border-red-400/60" : "border-white/10"
+                }`}
+                placeholder={t("features.external-sign.requiredSignerPlaceholder")}
+              />
+              {walletMismatch && (
+                <p className="mt-2 text-xs text-red-200">
+                  {t("features.external-sign.walletMismatch", {
+                    wallet: externalSignWallet?.public_key || "-",
+                    signer: requiredSigner,
+                  })}
+                </p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">{t("features.external-sign.transactionBase64")}</label>
+              <textarea
+                value={formData.transactionBase64 || ""}
+                onChange={(e) => handleFormChange("transactionBase64", e.target.value.trim())}
+                spellCheck={false}
+                className="w-full min-h-[160px] px-4 py-2 bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-white/20 text-white font-mono text-xs select-text"
+                placeholder={t("features.external-sign.transactionBase64Placeholder")}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div>
+                <label className="block text-sm font-medium mb-2">{t("features.external-sign.requestId")}</label>
+                <input
+                  type="text"
+                  value={formData.requestId || ""}
+                  onChange={(e) => handleFormChange("requestId", e.target.value)}
+                  className="w-full px-4 py-2 bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-white/20 text-white select-text"
+                  placeholder={t("features.external-sign.requestIdPlaceholder")}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-2">{t("features.external-sign.expiresAt")}</label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={formData.expiresAt || ""}
+                  onChange={(e) => handleFormChange("expiresAt", e.target.value.replace(/[^\d]/g, ""))}
+                  className="w-full px-4 py-2 bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-white/20 text-white select-text"
+                  placeholder={t("features.external-sign.expiresAtPlaceholder")}
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">{t("features.external-sign.expectedGenesisHash")}</label>
+              <input
+                type="text"
+                value={formData.expectedGenesisHash || ""}
+                onChange={(e) => handleFormChange("expectedGenesisHash", e.target.value.trim())}
+                className="w-full px-4 py-2 bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-white/20 text-white font-mono text-sm select-text"
+                placeholder={t("features.external-sign.expectedGenesisHashPlaceholder")}
+              />
+            </div>
+          </>
+        );
 
         return (
           <div className="space-y-4">
@@ -18215,103 +18589,140 @@ export default function Home() {
               </div>
             )}
 
-            <section className="space-y-3 rounded-lg border border-white/10 bg-white/[0.03] p-3">
-              <div>
-                <label className="block text-sm font-medium mb-2">{t("features.external-sign.requestJson")}</label>
-                <textarea
-                  value={formData.externalSignRequestJson || ""}
-                  onChange={(e) => handleFormChange("externalSignRequestJson", e.target.value)}
-                  spellCheck={false}
-                  className="w-full min-h-[140px] px-4 py-2 bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-white/20 text-white font-mono text-xs select-text"
-                  placeholder={t("features.external-sign.requestJsonPlaceholder")}
-                />
+            <section className="space-y-4 rounded-lg border border-white/10 bg-white/[0.03] p-3">
+              <div className="grid grid-cols-2 gap-2 rounded-lg bg-black/20 p-1">
+                {([
+                  ["json", tf("features.external-sign.jsonTab", "JSON")],
+                  ["form", tf("features.external-sign.formTab", "Form")],
+                ] as const).map(([mode, label]) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setExternalSignInputMode(mode)}
+                    className={`rounded-md px-3 py-2 text-sm font-semibold transition-colors ${
+                      externalSignInputMode === mode
+                        ? "bg-white/15 text-white shadow"
+                        : "text-gray-400 hover:bg-white/10 hover:text-gray-200"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
-              <button
-                type="button"
-                onClick={importExternalSignRequest}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-white/10 px-4 py-2 text-sm font-semibold hover:bg-white/20"
-              >
-                <Upload className="h-4 w-4" />
-                {t("features.external-sign.importRequest")}
-              </button>
+
+              {externalSignInputMode === "json" ? (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium mb-2">{t("features.external-sign.requestJson")}</label>
+                    <textarea
+                      value={formData.externalSignRequestJson || ""}
+                      onChange={(e) => handleFormChange("externalSignRequestJson", e.target.value)}
+                      spellCheck={false}
+                      className="w-full min-h-[180px] px-4 py-2 bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-white/20 text-white font-mono text-xs select-text"
+                      placeholder={t("features.external-sign.requestJsonPlaceholder")}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={importExternalSignRequest}
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-white/10 px-4 py-2 text-sm font-semibold hover:bg-white/20"
+                  >
+                    <Upload className="h-4 w-4" />
+                    {t("features.external-sign.importRequest")}
+                  </button>
+
+                  {jsonSummary ? (
+                    jsonSummary.valid ? (
+                      <div className="space-y-3 rounded-lg border border-white/10 bg-black/20 p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <h3 className="text-sm font-semibold text-white">{tf("features.external-sign.parsedSummary", "Parsed Summary")}</h3>
+                          <div className="flex flex-wrap gap-2 text-xs text-gray-300">
+                            <span className="rounded bg-white/10 px-2 py-1">
+                              {tf("features.external-sign.signersCount", "Signers: {count}", { count: jsonSummary.signerCount })}
+                            </span>
+                            <span className="rounded bg-white/10 px-2 py-1">
+                              {tf("features.external-sign.writableCount", "Writable: {count}", { count: jsonSummary.writableCount })}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
+                          {summaryRows.map(([label, value, copyId]) => (
+                            <div key={label} className="min-w-0 rounded-md border border-white/10 bg-white/[0.03] p-2">
+                              <div className="mb-1 text-[11px] font-medium uppercase tracking-normal text-gray-500">{label}</div>
+                              <div className="flex min-w-0 items-start gap-2">
+                                <code className="min-w-0 flex-1 break-all font-mono text-xs text-gray-100">{value}</code>
+                                {copyId ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => copyToClipboard(value, copyId)}
+                                    className="shrink-0 rounded bg-white/10 p-1.5 text-gray-200 hover:bg-white/20"
+                                    aria-label={t("common.copy")}
+                                    title={t("common.copy")}
+                                  >
+                                    {copied === copyId ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                                  </button>
+                                ) : null}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        {jsonSummary.accounts.length > 0 ? (
+                          <div>
+                            <div className="mb-2 text-xs font-medium text-gray-400">{tf("features.external-sign.accounts", "Accounts")}</div>
+                            <div className="max-h-56 overflow-y-auto rounded-md border border-white/10">
+                              {jsonSummary.accounts.map((account, index) => (
+                                <div
+                                  key={`${account.pubkey}:${index}`}
+                                  className="grid grid-cols-1 gap-2 border-b border-white/5 px-3 py-2 last:border-b-0 md:grid-cols-[1fr_auto]"
+                                >
+                                  <button
+                                    type="button"
+                                    onClick={() => copyToClipboard(account.pubkey, `external-sign-account:${index}`)}
+                                    className="min-w-0 break-all text-left font-mono text-xs text-gray-200 hover:text-white"
+                                    title={account.pubkey}
+                                  >
+                                    {account.pubkey}
+                                  </button>
+                                  <div className="flex flex-wrap gap-1">
+                                    {account.isSigner ? (
+                                      <span className="rounded bg-emerald-500/15 px-2 py-0.5 text-[11px] text-emerald-200">
+                                        {tf("features.external-sign.signer", "Signer")}
+                                      </span>
+                                    ) : null}
+                                    {account.isWritable ? (
+                                      <span className="rounded bg-cyan-500/15 px-2 py-0.5 text-[11px] text-cyan-200">
+                                        {tf("features.external-sign.writable", "Writable")}
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <p className="rounded-lg border border-red-400/20 bg-red-500/10 px-3 py-2 text-sm text-red-100">
+                        {t("features.external-sign.invalidRequestJson")}
+                      </p>
+                    )
+                  ) : null}
+                </>
+              ) : (
+                <div className="space-y-4">
+                  {renderExternalSignManualFields()}
+                </div>
+              )}
             </section>
 
-            <div>
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <label className="block text-sm font-medium">{t("features.external-sign.requiredSigner")}</label>
-                <button
-                  type="button"
-                  onClick={fillSelectedWalletSigner}
-                  disabled={!externalSignWallet?.public_key}
-                  className="rounded bg-white/10 px-2 py-1 text-xs text-gray-200 hover:bg-white/20 disabled:opacity-40"
-                >
-                  {t("features.external-sign.useSelectedWallet")}
-                </button>
-              </div>
-              <input
-                type="text"
-                value={formData.requiredSigner || ""}
-                onChange={(e) => handleFormChange("requiredSigner", e.target.value.trim())}
-                className={`w-full px-4 py-2 bg-white/5 border rounded-lg focus:outline-none focus:ring-2 focus:ring-white/20 text-white font-mono text-sm select-text ${
-                  walletMismatch ? "border-red-400/60" : "border-white/10"
-                }`}
-                placeholder={t("features.external-sign.requiredSignerPlaceholder")}
-              />
-              {walletMismatch && (
-                <p className="mt-2 text-xs text-red-200">
-                  {t("features.external-sign.walletMismatch", {
-                    wallet: externalSignWallet?.public_key || "-",
-                    signer: requiredSigner,
-                  })}
-                </p>
-              )}
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-2">{t("features.external-sign.transactionBase64")}</label>
-              <textarea
-                value={formData.transactionBase64 || ""}
-                onChange={(e) => handleFormChange("transactionBase64", e.target.value.trim())}
-                spellCheck={false}
-                className="w-full min-h-[160px] px-4 py-2 bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-white/20 text-white font-mono text-xs select-text"
-                placeholder={t("features.external-sign.transactionBase64Placeholder")}
-              />
-            </div>
-
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              <div>
-                <label className="block text-sm font-medium mb-2">{t("features.external-sign.requestId")}</label>
-                <input
-                  type="text"
-                  value={formData.requestId || ""}
-                  onChange={(e) => handleFormChange("requestId", e.target.value)}
-                  className="w-full px-4 py-2 bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-white/20 text-white select-text"
-                  placeholder={t("features.external-sign.requestIdPlaceholder")}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-2">{t("features.external-sign.expiresAt")}</label>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={formData.expiresAt || ""}
-                  onChange={(e) => handleFormChange("expiresAt", e.target.value.replace(/[^\d]/g, ""))}
-                  className="w-full px-4 py-2 bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-white/20 text-white select-text"
-                  placeholder={t("features.external-sign.expiresAtPlaceholder")}
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-2">{t("features.external-sign.expectedGenesisHash")}</label>
-              <input
-                type="text"
-                value={formData.expectedGenesisHash || ""}
-                onChange={(e) => handleFormChange("expectedGenesisHash", e.target.value.trim())}
-                className="w-full px-4 py-2 bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-white/20 text-white font-mono text-sm select-text"
-                placeholder={t("features.external-sign.expectedGenesisHashPlaceholder")}
-              />
-            </div>
+            {walletMismatch && externalSignInputMode === "json" ? (
+              <p className="rounded-lg border border-red-400/20 bg-red-500/10 px-3 py-2 text-xs text-red-100">
+                {t("features.external-sign.walletMismatch", {
+                  wallet: externalSignWallet?.public_key || "-",
+                  signer: requiredSigner,
+                })}
+              </p>
+            ) : null}
 
             <button
               type="button"
