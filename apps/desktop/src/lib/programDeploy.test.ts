@@ -13,7 +13,7 @@ import {
 } from "./programDeploy";
 
 const DEVNET_GENESIS_HASH = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG";
-const MAINNET_GENESIS_HASH = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+const MAINNET_GENESIS_HASH = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d";
 const TESTNET_GENESIS_HASH = "4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY";
 
 function ephemeralSolanaKeypairBytes(): Uint8Array {
@@ -113,6 +113,7 @@ test("accepts canonical built-in cluster genesis hashes", () => {
   ]) {
     assert.equal(isLikelySolanaGenesisHash(genesisHash), true);
   }
+  assert.equal(isLikelySolanaGenesisHash("5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"), false);
   assert.equal(isLikelySolanaGenesisHash("11111111111111111111111111111111"), false);
   assert.equal(isLikelySolanaGenesisHash(`${DEVNET_GENESIS_HASH}1`), false);
   assert.equal(isLikelySolanaGenesisHash("not-a-genesis-hash"), false);

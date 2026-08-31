@@ -426,7 +426,7 @@ const PROGRAM_DEPLOYMENT_ATTEMPT_STATUSES = new Set([
 ]);
 
 const SOLANA_GENESIS_HASHES: Record<AppNetwork, string> = {
-  mainnet: "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+  mainnet: "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
   devnet: "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
   testnet: "4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY",
 };
@@ -618,6 +618,7 @@ interface ProgramDeploymentJournalState {
   conflictingJournal: ProgramDeploymentJournalRecord | null;
   conflictingDeploymentAttempts: ProgramDeploymentAttemptRecord[];
   loading: boolean;
+  updatedAtMs: number;
   error?: string;
 }
 
@@ -633,6 +634,7 @@ function emptyProgramDeploymentJournalState(): ProgramDeploymentJournalState {
     conflictingJournal: null,
     conflictingDeploymentAttempts: [],
     loading: false,
+    updatedAtMs: 0,
   };
 }
 
@@ -2520,6 +2522,7 @@ export default function Home() {
   const [programSourceLoading, setProgramSourceLoading] = useState(false);
   const [programSourceBuildConfirmation, setProgramSourceBuildConfirmation] = useState<string | null>(null);
   const [programSourceBuildStartedAtMs, setProgramSourceBuildStartedAtMs] = useState<number | null>(null);
+  const [programSourceLogTimeMs, setProgramSourceLogTimeMs] = useState(() => Date.now());
   const [programDeployInlineError, setProgramDeployInlineError] = useState<{
     friendly: string;
     raw: string;
@@ -3335,9 +3338,15 @@ export default function Home() {
     const requestId = deploymentJournalRequestIdRef.current + 1;
     deploymentJournalRequestIdRef.current = requestId;
     deploymentJournalLoadedIntentKeyRef.current = intentKey;
+    const updatedAtMs = Date.now();
     setProgramDeploymentJournal((previous) =>
       options.preserveCurrent && previous.intentKey === intentKey
-        ? { ...previous, loading: true, error: undefined }
+        ? {
+            ...previous,
+            loading: true,
+            updatedAtMs: previous.updatedAtMs || updatedAtMs,
+            error: undefined,
+          }
         : {
             intentKey,
             network: intent.network,
@@ -3349,6 +3358,7 @@ export default function Home() {
             conflictingJournal: null,
             conflictingDeploymentAttempts: [],
             loading: true,
+            updatedAtMs,
             error: undefined,
           },
     );
@@ -3430,7 +3440,7 @@ export default function Home() {
           };
         });
       }
-      setProgramDeploymentJournal({
+      setProgramDeploymentJournal((previous) => ({
         intentKey,
         network: data.network,
         genesisHash: data.genesis_hash,
@@ -3441,13 +3451,22 @@ export default function Home() {
         conflictingJournal,
         conflictingDeploymentAttempts,
         loading: false,
-      });
+        updatedAtMs:
+          options.preserveCurrent && previous.intentKey === intentKey
+            ? previous.updatedAtMs || Date.now()
+            : Date.now(),
+      }));
     } catch (error) {
       if (requestId !== deploymentJournalRequestIdRef.current) return;
       const message = error instanceof Error ? error.message : t("features.program-deploy.journalLoadError");
       setProgramDeploymentJournal((previous) =>
         options.preserveCurrent && previous.intentKey === intentKey
-          ? { ...previous, loading: false, error: message }
+          ? {
+              ...previous,
+              loading: false,
+              updatedAtMs: previous.updatedAtMs || Date.now(),
+              error: message,
+            }
           : {
               intentKey,
               network: intent.network,
@@ -3459,6 +3478,7 @@ export default function Home() {
               conflictingJournal: null,
               conflictingDeploymentAttempts: [],
               loading: false,
+              updatedAtMs: Date.now(),
               error: message,
             },
       );
@@ -3546,6 +3566,7 @@ export default function Home() {
               conflictingJournal: null,
               conflictingDeploymentAttempts: [],
               loading: false,
+              updatedAtMs: 0,
             }
           : previous,
       );
@@ -9175,9 +9196,9 @@ export default function Home() {
       setProgramSourceBuildConfirmation(sourceDir);
       return;
     }
-    if (build) {
-      setProgramSourceBuildStartedAtMs(Date.now());
-    }
+    const sourceLogTimeMs = Date.now();
+    setProgramSourceLogTimeMs(sourceLogTimeMs);
+    if (build) setProgramSourceBuildStartedAtMs(sourceLogTimeMs);
     setProgramSourceLoading(true);
     setProgramDeployInlineError(null);
     clearProgramDeploymentProgress();
@@ -10123,12 +10144,13 @@ export default function Home() {
             body: JSON.stringify(requestBody),
           };
           const deploymentIntentKey = programDeploymentIntentKey(deploymentIntent);
+          const deploymentStartedAtMs = Date.now();
           let deploymentSucceeded = false;
           setLastProgramDeploymentIntent(deploymentIntent);
           deploymentJournalLoadedIntentKeyRef.current = deploymentIntentKey;
           setProgramDeploymentJournal((previous) =>
             previous.intentKey === deploymentIntentKey
-              ? { ...previous, loading: true, error: undefined }
+              ? { ...previous, loading: true, updatedAtMs: deploymentStartedAtMs, error: undefined }
               : {
                   intentKey: deploymentIntentKey,
                   network: deploymentIntent.network,
@@ -10140,6 +10162,7 @@ export default function Home() {
                   conflictingJournal: null,
                   conflictingDeploymentAttempts: [],
                   loading: true,
+                  updatedAtMs: deploymentStartedAtMs,
                   error: undefined,
                 },
           );
@@ -10303,6 +10326,7 @@ export default function Home() {
                   ? {
                       ...previous,
                       loading: false,
+                      updatedAtMs: Date.now(),
                       error: data.error || t("features.program-deploy.error"),
                     }
                   : previous,
@@ -10342,6 +10366,7 @@ export default function Home() {
                 ? {
                     ...previous,
                     loading: false,
+                    updatedAtMs: Date.now(),
                     error: message,
                   }
                 : previous,
@@ -17219,8 +17244,15 @@ export default function Home() {
         const journalStatusLabel = deploymentJournal
           ? t(`features.program-deploy.deploymentStatuses.${deploymentJournal.status}`)
           : "";
+        const formatDeploymentLogTimeMs = (milliseconds: number) =>
+          new Date(milliseconds).toLocaleTimeString();
         const formatDeploymentLogTime = (seconds: number | null | undefined) =>
-          seconds ? new Date(seconds * 1000).toLocaleTimeString() : new Date().toLocaleTimeString();
+          formatDeploymentLogTimeMs(seconds ? seconds * 1000 : programDeploymentJournal.updatedAtMs);
+        const sourceLogTime = formatDeploymentLogTimeMs(programSourceLogTimeMs);
+        const journalEventLogTime = formatDeploymentLogTimeMs(programDeploymentJournal.updatedAtMs);
+        const journalActivityLogTime = formatDeploymentLogTime(
+          lastDeploymentActivitySeconds || deploymentJournal?.updated_at,
+        );
         const shortDeploymentSignature = (signature: string | null | undefined) =>
           signature && signature.length > 18
             ? `${signature.slice(0, 10)}...${signature.slice(-8)}`
@@ -17230,23 +17262,23 @@ export default function Home() {
           if (!text) return;
           const parts = text.split(/\r?\n/).filter((line) => line.trim()).slice(-80);
           if (parts.length === 0) return;
-          lines.push(`[${new Date().toLocaleTimeString()}] ${label}`);
+          lines.push(`[${sourceLogTime}] ${label}`);
           parts.forEach((line) => lines.push(line));
         };
         const deploymentLogLines: string[] = [];
         if (programSourceDir) {
-          deploymentLogLines.push(`[${new Date().toLocaleTimeString()}] ${t("features.program-deploy.sourceDir")}: ${programSourceDir}`);
+          deploymentLogLines.push(`[${sourceLogTime}] ${t("features.program-deploy.sourceDir")}: ${programSourceDir}`);
         }
         if (formData.sourceBuildTemplate || formData.sourceBuildCommand || formData.sourceBuildStatus) {
           deploymentLogLines.push(
-            `[${new Date().toLocaleTimeString()}] ${t("features.program-deploy.sourceBuildTemplate")}: ${String(formData.sourceBuildTemplate || "-")}`,
+            `[${sourceLogTime}] ${t("features.program-deploy.sourceBuildTemplate")}: ${String(formData.sourceBuildTemplate || "-")}`,
           );
           deploymentLogLines.push(
-            `[${new Date().toLocaleTimeString()}] ${t("features.program-deploy.sourceBuildCommand")}: ${String(formData.sourceBuildCommand || "-")}`,
+            `[${sourceLogTime}] ${t("features.program-deploy.sourceBuildCommand")}: ${String(formData.sourceBuildCommand || "-")}`,
           );
-          deploymentLogLines.push(`[${new Date().toLocaleTimeString()}] build status: ${String(formData.sourceBuildStatus || (programSourceLoading ? "running" : "-"))}`);
+          deploymentLogLines.push(`[${sourceLogTime}] build status: ${String(formData.sourceBuildStatus || (programSourceLoading ? "running" : "-"))}`);
         } else if (programSourceLoading) {
-          deploymentLogLines.push(`[${new Date().toLocaleTimeString()}] ${t("features.program-deploy.sourceAutoReadingTitle")}`);
+          deploymentLogLines.push(`[${sourceLogTime}] ${t("features.program-deploy.sourceAutoReadingTitle")}`);
         }
         if (formData.sourceImportWarnings) {
           appendLimitedLogText(deploymentLogLines, "warnings", formData.sourceImportWarnings);
@@ -17260,7 +17292,7 @@ export default function Home() {
         appendLimitedLogText(deploymentLogLines, "stdout", formData.sourceBuildStdout);
         appendLimitedLogText(deploymentLogLines, "stderr", formData.sourceBuildStderr);
         if (programSourceLoading) {
-          deploymentLogLines.push(`[${new Date().toLocaleTimeString()}] ${t("features.program-deploy.sourceBuildStarted")}`);
+          deploymentLogLines.push(`[${sourceLogTime}] ${t("features.program-deploy.sourceBuildStarted")}`);
         }
         if (deploymentJournal) {
           const statusText =
@@ -17285,20 +17317,20 @@ export default function Home() {
               })}`,
             );
             deploymentLogLines.push(
-              `[${new Date().toLocaleTimeString()}] ${t("features.program-deploy.journalRemainingChunks", {
+              `[${journalActivityLogTime}] ${t("features.program-deploy.journalRemainingChunks", {
                 remaining: remainingWriteChunks,
               })}`,
             );
             if (lastDeploymentActivitySeconds > 0) {
               deploymentLogLines.push(
-                `[${new Date().toLocaleTimeString()}] ${t("features.program-deploy.journalLastActivity", {
+                `[${journalActivityLogTime}] ${t("features.program-deploy.journalLastActivity", {
                   age: formatDeploymentElapsed(lastDeploymentActivityAgeSeconds),
                 })}`,
               );
             }
             if (waitingWriteAttempt?.chunk_index !== null && waitingWriteAttempt?.chunk_index !== undefined) {
               deploymentLogLines.push(
-                `[${new Date().toLocaleTimeString()}] ${t("features.program-deploy.journalWaitingWriteConfirmation", {
+                `[${journalActivityLogTime}] ${t("features.program-deploy.journalWaitingWriteConfirmation", {
                   chunk: waitingWriteAttempt.chunk_index,
                   signature: shortDeploymentSignature(waitingWriteAttempt.signature),
                 })}`,
@@ -17306,7 +17338,7 @@ export default function Home() {
             }
             if (deploymentProgressIsSlow) {
               deploymentLogLines.push(
-                `[${new Date().toLocaleTimeString()}] ${t("features.program-deploy.journalSlowConfirmationHint")}`,
+                `[${journalActivityLogTime}] ${t("features.program-deploy.journalSlowConfirmationHint")}`,
               );
             }
           }
@@ -17332,11 +17364,11 @@ export default function Home() {
               );
             });
           if (programDeploymentJournal.loading) {
-            deploymentLogLines.push(`[${new Date().toLocaleTimeString()}] ${t("features.program-deploy.journalAutoRefreshing")}`);
+            deploymentLogLines.push(`[${journalEventLogTime}] ${t("features.program-deploy.journalAutoRefreshing")}`);
           }
           if (programDeploymentJournal.error) {
-            deploymentLogLines.push(`[${new Date().toLocaleTimeString()}] ${programDeploymentJournal.error}`);
-            deploymentLogLines.push(`[${new Date().toLocaleTimeString()}] ${t("features.program-deploy.journalRpcUnavailableHint")}`);
+            deploymentLogLines.push(`[${journalEventLogTime}] ${programDeploymentJournal.error}`);
+            deploymentLogLines.push(`[${journalEventLogTime}] ${t("features.program-deploy.journalRpcUnavailableHint")}`);
           }
         } else if (conflictingJournalMessage) {
           deploymentLogLines.push(`[${formatDeploymentLogTime(conflictingJournal?.updated_at)}] ${conflictingJournalMessage}`);
@@ -17345,10 +17377,10 @@ export default function Home() {
             deploymentLogLines.push(`[${formatDeploymentLogTime(conflictingJournal.updated_at)}] recorded status: ${conflictingJournal.status}`);
           }
         } else if (programDeploymentJournal.error) {
-          deploymentLogLines.push(`[${new Date().toLocaleTimeString()}] ${programDeploymentJournal.error}`);
-          deploymentLogLines.push(`[${new Date().toLocaleTimeString()}] ${t("features.program-deploy.journalRpcUnavailableHint")}`);
+          deploymentLogLines.push(`[${journalEventLogTime}] ${programDeploymentJournal.error}`);
+          deploymentLogLines.push(`[${journalEventLogTime}] ${t("features.program-deploy.journalRpcUnavailableHint")}`);
         } else if (programDeploymentJournal.loading) {
-          deploymentLogLines.push(`[${new Date().toLocaleTimeString()}] ${t("features.program-deploy.journalLoading")}`);
+          deploymentLogLines.push(`[${journalEventLogTime}] ${t("features.program-deploy.journalLoading")}`);
         } else {
           deploymentLogLines.push(
             loading

@@ -117,8 +117,7 @@ export function isLikelySolanaGenesisHash(value: string): boolean {
     decoded &&
       normalized.length >= 32 &&
       normalized.length <= 44 &&
-      decoded.length > 0 &&
-      decoded.length <= 32 &&
+      decoded.length === 32 &&
       decoded.some((byte) => byte !== 0) &&
       encodeBase58(decoded) === normalized,
   );
