@@ -434,6 +434,7 @@ make package
 | 命令 | 说明 |
 |---|---|
 | `make dev` | 启动桌面端开发环境；会先停止旧的本地应用/API 进程 |
+| `make stop` | 停止全部本地 FnzSafe 开发进程 |
 | `make package-macos` | 构建 macOS 桌面端包到 `release/macos/` |
 | `make package-windows` | 构建 Windows 桌面端包到 `release/windows/` |
 | `make package-ios` | 构建 iOS `.app` 或签名 `.ipa` 到 `release/ios/` |

@@ -1,6 +1,6 @@
 {
   "name": "@fnzero/safe",
-  "version": "0.4.0",
+  "version": "0.4.5",
   "private": true,
   "engines": {
     "node": "20 || >=22"
@@ -9,6 +9,7 @@
     "dev": "next dev -H 127.0.0.1 -p 3840",
     "predev:stack": "node scripts/kill-dev-processes.cjs && node scripts/ensure-out.cjs",
     "dev:stack": "node scripts/dev-stack.cjs",
+    "stop": "node scripts/kill-dev-processes.cjs",
     "backend": "cargo run --release -p fnzero-safe-desktop-api",
     "prebuild": "node scripts/assert-no-next-dev.cjs && node scripts/check-sensitive-inputs.cjs",
     "build": "next build",

@@ -51,15 +51,20 @@ use solana_account_decoder_client_types::{
     token::{TokenAccountType, UiExtension},
     UiAccount, UiAccountData, UiAccountEncoding,
 };
-use solana_client::rpc_client::{GetConfirmedSignaturesForAddress2Config, RpcClient};
+use solana_client::{
+    client_error::{ClientError, ClientErrorKind},
+    rpc_client::{GetConfirmedSignaturesForAddress2Config, RpcClient},
+};
 use solana_commitment_config::CommitmentConfig;
 use solana_derivation_path::DerivationPath;
 use solana_loader_v3_interface::{
-    get_program_data_address, instruction as loader_v3_instruction, state::UpgradeableLoaderState,
+    get_program_data_address,
+    instruction::{self as loader_v3_instruction, MINIMUM_EXTEND_PROGRAM_BYTES},
+    state::UpgradeableLoaderState,
 };
 use solana_rpc_client_api::{
     config::{RpcAccountInfoConfig, RpcSimulateTransactionConfig, RpcTransactionConfig},
-    request::{Address as RpcAddress, TokenAccountsFilter},
+    request::{Address as RpcAddress, RpcError, RpcResponseErrorData, TokenAccountsFilter},
     response::RpcKeyedAccount,
 };
 use solana_sdk::account::Account;
@@ -73,6 +78,7 @@ use solana_sdk::signer::keypair::{
     generate_seed_from_seed_phrase_and_passphrase, keypair_from_seed_and_derivation_path,
 };
 use solana_sdk::transaction::{Transaction, VersionedTransaction};
+use solana_system_interface::MAX_PERMITTED_DATA_LENGTH;
 use solana_transaction_status_client_types::{
     option_serializer::OptionSerializer, EncodedTransaction, TransactionStatus, UiInstruction,
     UiMessage, UiParsedInstruction, UiTransactionEncoding,
@@ -108,11 +114,18 @@ use wallet_store::WalletTokenAssetRecord;
 
 const API_TOKEN_HEADER: &str = "x-fnzero-safe-token";
 const LEGACY_API_TOKEN_HEADER: &str = "x-sol-safekey-token";
-const MAX_JSON_BODY_BYTES: usize = 6 * 1024 * 1024;
-const MAX_SECURE_ENVELOPE_BYTES: usize = MAX_JSON_BODY_BYTES * 2;
+const fn base64_encoded_len(byte_len: usize) -> usize {
+    byte_len.saturating_add(2) / 3 * 4
+}
+
+const MAX_PROGRAM_SO_BYTES: usize =
+    MAX_PERMITTED_DATA_LENGTH as usize - UpgradeableLoaderState::size_of_programdata_metadata();
+const MAX_PROGRAM_SO_BASE64_BYTES: usize = base64_encoded_len(MAX_PROGRAM_SO_BYTES);
+const MAX_PROGRAM_REQUEST_OVERHEAD_BYTES: usize = 1024 * 1024;
+const MAX_JSON_BODY_BYTES: usize = MAX_PROGRAM_SO_BASE64_BYTES + MAX_PROGRAM_REQUEST_OVERHEAD_BYTES;
+const MAX_SECURE_ENVELOPE_BYTES: usize = base64_encoded_len(MAX_JSON_BODY_BYTES + 16) + 16 * 1024;
 const MAX_KEYSTORE_JSON_BYTES: usize = 128 * 1024;
-const MAX_PROGRAM_SO_BYTES: usize = 3 * 1024 * 1024;
-const MAX_PROGRAM_SO_BASE64_BYTES: usize = 4 * 1024 * 1024;
+const PROGRAMDATA_MINIMUM_EXTENSION_BYTES: usize = MINIMUM_EXTEND_PROGRAM_BYTES as usize;
 const MAX_PROGRAM_IDL_JSON_BYTES: usize = 2 * 1024 * 1024;
 const MAX_GENERIC_PROGRAM_INSTRUCTION_DATA_BYTES: usize = 8 * 1024;
 const MAX_EXTERNAL_SIGN_MESSAGE_BYTES: usize = 16 * 1024;
@@ -122,6 +135,8 @@ const PROGRAM_WRITE_CHUNK_BYTES: usize = 800;
 const SOLANA_TRANSACTION_PACKET_DATA_BYTES: usize = 1232;
 const UPGRADEABLE_LOADER_ID: Pubkey =
     Pubkey::from_str_const("BPFLoaderUpgradeab1e11111111111111111111111");
+const ENABLE_EXTEND_PROGRAM_CHECKED_FEATURE_ID: Pubkey =
+    Pubkey::from_str_const("2oMRZEDWT2tqtYMofhmmfQ8SsjqUFzT6sYXppQDavxwz");
 const UPGRADEABLE_LOADER_ID_STR: &str = "BPFLoaderUpgradeab1e11111111111111111111111";
 const SBF_VERIFY_BUSY_MESSAGE: &str = "SBF 验证容量已满，请等待当前验证结束后重试";
 const PROGRAM_DEPLOY_BUSY_MESSAGE: &str =
@@ -1838,8 +1853,8 @@ fn validate_program_binary(program: &[u8]) -> Result<(), ApiError> {
     if program.len() > MAX_PROGRAM_SO_BYTES {
         return Err(ApiError {
             message: format!(
-                "Program .so 文件过大，最大支持 {} MB",
-                MAX_PROGRAM_SO_BYTES / 1024 / 1024
+                "Program .so 文件过大：最大支持 {} bytes（Solana 账户上限扣除 ProgramData 元数据）",
+                MAX_PROGRAM_SO_BYTES
             ),
         });
     }
@@ -1977,6 +1992,16 @@ async fn wait_for_signature_commitment(
     }
 }
 
+fn send_error_is_preflight_rejection(error: &ClientError) -> bool {
+    matches!(
+        error.kind(),
+        ClientErrorKind::RpcError(RpcError::RpcResponseError {
+            data: RpcResponseErrorData::SendTransactionPreflightFailure(_),
+            ..
+        })
+    )
+}
+
 async fn submit_signed_transaction_once(
     client: &RpcClient,
     transaction: &Transaction,
@@ -2005,6 +2030,13 @@ async fn submit_signed_transaction_once(
                 });
             }
             None
+        }
+        Err(error) if send_error_is_preflight_rejection(&error) => {
+            return Err(ApiError {
+                message: format!(
+                    "{action}交易在 RPC 预检模拟阶段失败，未提交到链上: {error}；{context}"
+                ),
+            });
         }
         Err(error) => Some(error.to_string()),
     };
@@ -2067,6 +2099,13 @@ async fn submit_signed_versioned_transaction_once(
                 });
             }
             None
+        }
+        Err(error) if send_error_is_preflight_rejection(&error) => {
+            return Err(ApiError {
+                message: format!(
+                    "{action}交易在 RPC 预检模拟阶段失败，未提交到链上: {error}；{context}"
+                ),
+            });
         }
         Err(error) => Some(error.to_string()),
     };
@@ -3769,7 +3808,7 @@ async fn main() -> anyhow::Result<()> {
         .route_layer(middleware::from_fn(decrypt_secure_body))
         .route_layer(middleware::from_fn(require_api_token))
         .route_layer(middleware::from_fn(require_local_origin))
-        .layer(DefaultBodyLimit::max(MAX_JSON_BODY_BYTES))
+        .layer(DefaultBodyLimit::max(MAX_SECURE_ENVELOPE_BYTES))
         .layer(middleware::from_fn(add_security_headers))
         .layer(middleware::from_fn(catch_panics))
         .fallback(serve_assets);
@@ -6500,6 +6539,119 @@ mod deployment_journal_tests {
         .unwrap();
         immutable.resize(UpgradeableLoaderState::size_of_programdata_metadata(), 0);
         assert!(loader_upgrade_authority_from_programdata(&immutable).is_err());
+    }
+
+    #[test]
+    fn programdata_extension_plan_expands_to_required_program_size() {
+        let metadata_len = UpgradeableLoaderState::size_of_programdata_metadata();
+        let previous_capacity = 512 * 1024;
+        let plan = programdata_extension_plan(metadata_len + previous_capacity, 600_000)
+            .unwrap()
+            .unwrap();
+        assert_eq!(plan.previous_capacity, previous_capacity);
+        assert_eq!(plan.additional_bytes, 81_920);
+        assert_eq!(plan.new_capacity, 606_208);
+    }
+
+    #[test]
+    fn programdata_extension_plan_uses_cluster_minimum_increment() {
+        let metadata_len = UpgradeableLoaderState::size_of_programdata_metadata();
+        let previous_capacity = 512 * 1024;
+        let plan =
+            programdata_extension_plan(metadata_len + previous_capacity, previous_capacity + 1)
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            plan.additional_bytes,
+            PROGRAMDATA_MINIMUM_EXTENSION_BYTES as u32
+        );
+        assert_eq!(plan.new_capacity, previous_capacity + 10_240);
+    }
+
+    #[test]
+    fn programdata_extension_plan_uses_one_transaction_for_large_extension() {
+        let metadata_len = UpgradeableLoaderState::size_of_programdata_metadata();
+        let previous_capacity = 1024 * 1024;
+        let plan = programdata_extension_plan(
+            metadata_len + previous_capacity,
+            previous_capacity + 50_000,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(plan.additional_bytes, 51_200);
+        assert_eq!(plan.new_capacity, previous_capacity + 51_200);
+    }
+
+    #[test]
+    fn programdata_extension_plan_handles_existing_partial_capacity() {
+        let metadata_len = UpgradeableLoaderState::size_of_programdata_metadata();
+        let previous_capacity = 600_000;
+        let plan =
+            programdata_extension_plan(metadata_len + previous_capacity, previous_capacity + 1)
+                .unwrap()
+                .unwrap();
+        assert_eq!(plan.previous_capacity, previous_capacity);
+        assert_eq!(plan.additional_bytes, 10_240);
+        assert_eq!(plan.new_capacity, previous_capacity + 10_240);
+    }
+
+    #[test]
+    fn programdata_extension_plan_skips_sufficient_capacity() {
+        let metadata_len = UpgradeableLoaderState::size_of_programdata_metadata();
+        let existing_capacity = 512 * 1024;
+        assert_eq!(
+            programdata_extension_plan(metadata_len + existing_capacity, existing_capacity)
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn programdata_extension_plan_uses_protocol_maximum_for_small_final_chunk() {
+        let metadata_len = UpgradeableLoaderState::size_of_programdata_metadata();
+        let max_account_len = MAX_PERMITTED_DATA_LENGTH as usize;
+        let max_program_len = max_account_len - metadata_len;
+        let plan = programdata_extension_plan(max_account_len - 4_760, max_program_len)
+            .unwrap()
+            .unwrap();
+        assert_eq!(plan.additional_bytes, 4_760);
+        assert_eq!(plan.new_account_len, max_account_len);
+        assert_eq!(plan.new_capacity, max_program_len);
+    }
+
+    #[test]
+    fn programdata_extension_plan_rejects_program_over_protocol_limit() {
+        let metadata_len = UpgradeableLoaderState::size_of_programdata_metadata();
+        let max_program_len = MAX_PERMITTED_DATA_LENGTH as usize - metadata_len;
+        let error = programdata_extension_plan(metadata_len + 1, max_program_len + 1).unwrap_err();
+        assert!(error.contains("超过 Solana Upgradeable Loader 上限"));
+    }
+
+    #[test]
+    fn program_size_limit_is_derived_from_solana_protocol_constants() {
+        assert_eq!(PROGRAMDATA_MINIMUM_EXTENSION_BYTES, 10_240);
+        assert_eq!(MAX_PROGRAM_SO_BYTES, 10_485_715);
+        assert_eq!(
+            MAX_PROGRAM_SO_BYTES + UpgradeableLoaderState::size_of_programdata_metadata(),
+            MAX_PERMITTED_DATA_LENGTH as usize
+        );
+    }
+
+    #[test]
+    fn preflight_rejection_is_known_not_to_have_been_submitted() {
+        let simulation = serde_json::from_value(json!({ "err": null })).unwrap();
+        let preflight_error =
+            ClientError::from(ClientErrorKind::RpcError(RpcError::RpcResponseError {
+                code: -32002,
+                message: "Transaction simulation failed".to_string(),
+                data: RpcResponseErrorData::SendTransactionPreflightFailure(simulation),
+            }));
+        assert!(send_error_is_preflight_rejection(&preflight_error));
+
+        let ambiguous_error = ClientError::from(ClientErrorKind::RpcError(
+            RpcError::RpcRequestError("connection reset".to_string()),
+        ));
+        assert!(!send_error_is_preflight_rejection(&ambiguous_error));
     }
 
     fn record(
@@ -10495,8 +10647,8 @@ async fn deploy_program(
     if max_data_len > MAX_PROGRAM_SO_BYTES {
         return Err(ApiError {
             message: format!(
-                "最大 Program 数据长度不能超过 {} MB",
-                MAX_PROGRAM_SO_BYTES / 1024 / 1024
+                "最大 Program 数据长度不能超过 {} bytes（Solana Upgradeable Loader 协议上限）",
+                MAX_PROGRAM_SO_BYTES
             ),
         });
     }
@@ -11947,12 +12099,92 @@ struct UpgradeProgramResponse {
     program_bytes: usize,
     program_sha256: String,
     rent_lamports: u64,
+    extension_rent_lamports: u64,
+    previous_programdata_capacity: usize,
+    programdata_capacity: usize,
+    extend_signature: Option<String>,
     create_buffer_signature: String,
     write_signatures: Vec<String>,
     upgrade_signature: String,
     deployed_slot: u64,
     readback_verified: bool,
     status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProgramDataExtensionPlan {
+    previous_capacity: usize,
+    new_capacity: usize,
+    new_account_len: usize,
+    additional_bytes: u32,
+}
+
+fn programdata_extension_plan(
+    current_account_len: usize,
+    required_program_len: usize,
+) -> Result<Option<ProgramDataExtensionPlan>, String> {
+    let metadata_len = UpgradeableLoaderState::size_of_programdata_metadata();
+    let max_account_len = usize::try_from(MAX_PERMITTED_DATA_LENGTH)
+        .map_err(|_| "当前平台无法表示 Solana 最大账户长度".to_string())?;
+    let max_program_len = max_account_len
+        .checked_sub(metadata_len)
+        .ok_or_else(|| "Solana 最大账户长度小于 ProgramData 元数据".to_string())?;
+    if current_account_len > max_account_len {
+        return Err(format!(
+            "ProgramData 账户长度 {} 超过 Solana 协议上限 {}",
+            current_account_len, max_account_len
+        ));
+    }
+    if required_program_len > max_program_len {
+        return Err(format!(
+            "Program .so 长度 {} 超过 Solana Upgradeable Loader 上限 {}",
+            required_program_len, max_program_len
+        ));
+    }
+    let previous_capacity = current_account_len
+        .checked_sub(metadata_len)
+        .ok_or_else(|| "ProgramData 账户长度不足".to_string())?;
+    if required_program_len <= previous_capacity {
+        return Ok(None);
+    }
+
+    let required_additional_bytes = required_program_len
+        .checked_sub(previous_capacity)
+        .ok_or_else(|| "ProgramData 扩容长度计算失败".to_string())?;
+    let minimum_extension_count = required_additional_bytes
+        .checked_add(PROGRAMDATA_MINIMUM_EXTENSION_BYTES - 1)
+        .ok_or_else(|| "ProgramData 扩容长度计算溢出".to_string())?
+        / PROGRAMDATA_MINIMUM_EXTENSION_BYTES;
+    let additional_bytes = minimum_extension_count
+        .checked_mul(PROGRAMDATA_MINIMUM_EXTENSION_BYTES)
+        .ok_or_else(|| "ProgramData 扩容总长度溢出".to_string())?;
+    let rounded_account_len = current_account_len
+        .checked_add(additional_bytes)
+        .ok_or_else(|| "ProgramData 扩容后长度溢出".to_string())?;
+    // Loader accepts any extension at or above its protocol minimum. The only
+    // smaller valid extension is one that reaches the maximum account length.
+    let new_account_len = rounded_account_len.min(max_account_len);
+    let additional_bytes = new_account_len
+        .checked_sub(current_account_len)
+        .ok_or_else(|| "ProgramData 扩容总长度计算失败".to_string())?;
+    let new_capacity = new_account_len
+        .checked_sub(metadata_len)
+        .ok_or_else(|| "ProgramData 扩容后容量溢出".to_string())?;
+
+    let additional_bytes = u32::try_from(additional_bytes)
+        .map_err(|_| "ProgramData 扩容字节数超出链上指令范围".to_string())?;
+    if (additional_bytes as usize) < PROGRAMDATA_MINIMUM_EXTENSION_BYTES
+        && new_account_len != max_account_len
+    {
+        return Err("ProgramData 小额扩容未达到 Solana 最大账户长度".to_string());
+    }
+
+    Ok(Some(ProgramDataExtensionPlan {
+        previous_capacity,
+        new_capacity,
+        new_account_len,
+        additional_bytes,
+    }))
 }
 
 async fn upgrade_generic_program(
@@ -12080,16 +12312,21 @@ async fn upgrade_program_inner(
             message: "ProgramData 账户长度不足".to_string(),
         });
     }
-    let max_program_len = programdata_account.data.len() - metadata_len;
-    if program_bytes.len() > max_program_len {
-        return Err(ApiError {
-            message: format!(
-                "新 .so 长度为 {} bytes，超过 ProgramData 容量 {} bytes；无法用当前 Program ID 升级，请重新部署更大 max_data_len 的 Program",
-                program_bytes.len(),
-                max_program_len
-            ),
-        });
-    }
+    let extension_plan =
+        programdata_extension_plan(programdata_account.data.len(), program_bytes.len())
+            .map_err(|message| ApiError { message })?;
+    let previous_programdata_capacity = programdata_account.data.len() - metadata_len;
+    let extension_rent_lamports = if let Some(plan) = extension_plan.as_ref() {
+        client
+            .get_minimum_balance_for_rent_exemption(plan.new_account_len)
+            .map_err(|error| ApiError {
+                message: format!("计算 ProgramData 扩容租金失败: {error}"),
+            })?
+            .saturating_sub(programdata_account.lamports)
+    } else {
+        0
+    };
+    let mut max_program_len = previous_programdata_capacity;
 
     let spill = if let Some(spill) = req
         .spill_address
@@ -12112,14 +12349,22 @@ async fn upgrade_program_inner(
         .map_err(|error| ApiError {
             message: format!("计算 buffer 租金失败: {error}"),
         })?;
-    // create buffer + write chunks + upgrade; keep a small SOL reserve for fee spikes
-    let estimated_fee_lamports = (write_chunk_count.saturating_add(2).saturating_mul(10_000))
-        .saturating_add(50_000_000) as u64;
+    // Optional extension + create buffer + write chunks + upgrade; keep a small SOL reserve.
+    let extension_transaction_count = if extension_plan.is_some() { 1 } else { 0 };
+    let transaction_count = write_chunk_count
+        .saturating_add(2)
+        .saturating_add(extension_transaction_count);
+    let estimated_fee_lamports =
+        (transaction_count.saturating_mul(10_000)).saturating_add(50_000_000) as u64;
     let estimated_required_balance_lamports = buffer_lamports
+        .checked_add(extension_rent_lamports)
+        .ok_or_else(|| ApiError {
+            message: "ProgramData 扩容与 Buffer 租金总额溢出".to_string(),
+        })?
         .checked_add(estimated_fee_lamports)
         .ok_or_else(|| ApiError {
-        message: "升级所需余额总额溢出".to_string(),
-    })?;
+            message: "升级所需余额总额溢出".to_string(),
+        })?;
     let payer_balance = client
         .get_balance(&payer_pubkey)
         .map_err(|error| ApiError {
@@ -12128,16 +12373,116 @@ async fn upgrade_program_inner(
     if payer_balance < estimated_required_balance_lamports {
         return Err(ApiError {
             message: format!(
-                "升级钱包余额不足：当前 {:.4} SOL（{} lamports），至少需要约 {:.4} SOL（{} lamports）。其中升级 Buffer 租金约 {:.4} SOL，交易费预留约 {:.4} SOL。Buffer 租金升级成功后会退回 spill 地址，但创建 Buffer 时必须先备足余额。",
+                "升级钱包余额不足：当前 {:.4} SOL（{} lamports），至少需要约 {:.4} SOL（{} lamports）。其中 ProgramData 扩容租金约 {:.4} SOL，升级 Buffer 租金约 {:.4} SOL，交易费预留约 {:.4} SOL。Buffer 租金升级成功后会退回 spill 地址，ProgramData 扩容租金会留在链上账户。",
                 payer_balance as f64 / 1_000_000_000.0,
                 payer_balance,
                 estimated_required_balance_lamports as f64 / 1_000_000_000.0,
                 estimated_required_balance_lamports,
+                extension_rent_lamports as f64 / 1_000_000_000.0,
                 buffer_lamports as f64 / 1_000_000_000.0,
                 estimated_fee_lamports as f64 / 1_000_000_000.0
             ),
         });
     }
+
+    let extend_signature = if let Some(plan) = extension_plan {
+        publish_program_upgrade_progress(|progress| {
+            progress.stage = "extending_programdata".to_string();
+            progress.message = format!(
+                "正在扩容 ProgramData：{} → {} bytes（补充租金 {} lamports）",
+                plan.previous_capacity, plan.new_capacity, extension_rent_lamports
+            );
+        })
+        .await;
+        let extend_program_checked_active = client
+            .get_feature_activation_slot(&ENABLE_EXTEND_PROGRAM_CHECKED_FEATURE_ID)
+            .map_err(|error| ApiError {
+                message: format!("查询 ProgramData 扩容指令 feature 状态失败: {error}"),
+            })?
+            .is_some();
+        let extend_ix = if extend_program_checked_active {
+            tracing::info!(
+                "using ExtendProgramChecked to expand {} by {} bytes",
+                program_id,
+                plan.additional_bytes
+            );
+            loader_v3_instruction::extend_program_checked(
+                &program_id,
+                &payer_pubkey,
+                Some(&payer_pubkey),
+                plan.additional_bytes,
+            )
+        } else {
+            tracing::info!(
+                "using legacy ExtendProgram to expand {} by {} bytes because checked feature is inactive",
+                program_id,
+                plan.additional_bytes
+            );
+            loader_v3_instruction::extend_program(
+                &program_id,
+                Some(&payer_pubkey),
+                plan.additional_bytes,
+            )
+        };
+        let (signature, _) = sign_and_send_with_commitment(
+            &client,
+            vec![extend_ix],
+            &[&payer],
+            &payer_pubkey,
+            "扩容 ProgramData",
+            CommitmentConfig::finalized(),
+            "finalized",
+            Duration::from_secs(90),
+        )
+        .await?;
+        let expanded_account = client
+            .get_account_with_commitment(&programdata_address, CommitmentConfig::finalized())
+            .map_err(|error| ApiError {
+                message: format!("扩容后回读 ProgramData 失败: {error}"),
+            })?
+            .value
+            .ok_or_else(|| ApiError {
+                message: format!("扩容后 ProgramData {} 不存在", programdata_address),
+            })?;
+        if expanded_account.data.len() < plan.new_account_len {
+            return Err(ApiError {
+                message: format!(
+                    "ProgramData 扩容交易已 finalized，但回读长度为 {}，预期至少为 {}；扩容签名 {}",
+                    expanded_account.data.len(),
+                    plan.new_account_len,
+                    signature
+                ),
+            });
+        }
+        let expanded_authority = loader_upgrade_authority_from_programdata(&expanded_account.data)?;
+        if expanded_authority != payer_pubkey {
+            return Err(ApiError {
+                message: format!(
+                    "ProgramData 扩容后 Upgrade Authority 为 {}，预期为 {}",
+                    expanded_authority, payer_pubkey
+                ),
+            });
+        }
+        max_program_len = expanded_account.data.len() - metadata_len;
+        if max_program_len < plan.new_capacity {
+            return Err(ApiError {
+                message: format!(
+                    "ProgramData 扩容未达到目标容量：当前 {} bytes，预期至少 {} bytes",
+                    max_program_len, plan.new_capacity
+                ),
+            });
+        }
+        publish_program_upgrade_progress(|progress| {
+            progress.last_signature = Some(signature.clone());
+            progress.message =
+                format!("ProgramData 扩容已完成，当前容量 {} bytes", max_program_len);
+        })
+        .await;
+        Some(signature)
+    } else {
+        None
+    };
+
     publish_program_upgrade_progress(|progress| {
         progress.stage = "creating_buffer".to_string();
         progress.message = format!("正在创建升级 Buffer（{}）", buffer_keypair.pubkey());
@@ -12275,7 +12620,11 @@ async fn upgrade_program_inner(
         genesis_hash,
         program_bytes: program_bytes.len(),
         program_sha256,
-        rent_lamports: buffer_lamports,
+        rent_lamports: buffer_lamports.saturating_add(extension_rent_lamports),
+        extension_rent_lamports,
+        previous_programdata_capacity,
+        programdata_capacity: max_program_len,
+        extend_signature,
         create_buffer_signature,
         write_signatures,
         upgrade_signature,

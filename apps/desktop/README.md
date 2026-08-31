@@ -33,6 +33,12 @@ make dev
 该命令会先停止旧的本地开发进程，再启动本地 Web/API 开发栈并打开 Tauri 桌面壳。请保持本地运行，
 不要通过公网代理、隧道或端口转发暴露 API 端口。
 
+Stop all local FnzSafe development processes before packaging (打包前停止全部本地开发进程):
+
+```bash
+make stop
+```
+
 Development endpoints:
 
 - English UI: `http://127.0.0.1:3840/en/`

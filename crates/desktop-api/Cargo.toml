@@ -1,6 +1,6 @@
 [package]
 name = "fnzero-safe-desktop-api"
-version = "0.4.0"
+version = "0.4.5"
 edition = "2021"
 rust-version = "1.89"
 license = "MIT"
@@ -18,11 +18,12 @@ sol-trade-sdk = "=4.0.21"
 solana-client = "3.1"
 solana-commitment-config = "3.1"
 solana-account-decoder-client-types = "3.1"
-solana-loader-v3-interface = { version = "6.1", features = ["bincode"] }
+solana-loader-v3-interface = { version = "=6.1.1", features = ["bincode"] }
 solana-program-runtime = { version = "=3.1.12", features = ["agave-unstable-api"] }
 solana-rpc-client-api = "3.1"
 solana-sbpf = "=0.13.1"
 solana-sdk = "3.0"
+solana-system-interface = "3.2"
 solana-svm-feature-set = { version = "=3.1.12", features = ["agave-unstable-api"] }
 solana-transaction-status-client-types = "3.1"
 axum = "0.8"

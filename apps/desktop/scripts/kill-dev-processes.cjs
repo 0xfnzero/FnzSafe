@@ -1,4 +1,4 @@
-const { execSync } = require("node:child_process");
+const { execFileSync, execSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 
@@ -15,9 +15,26 @@ function exec(command) {
   }
 }
 
+function execFile(file, args) {
+  try {
+    return execFileSync(file, args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch {
+    return "";
+  }
+}
+
 function commandLine(pid) {
-  if (isWindows) return "";
-  return exec(`ps -p ${pid} -o command=`);
+  const numericPid = Number(pid);
+  if (!Number.isInteger(numericPid) || numericPid <= 0) return "";
+  if (isWindows) {
+    return execFile("powershell.exe", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      `(Get-CimInstance Win32_Process -Filter 'ProcessId = ${numericPid}').CommandLine`,
+    ]);
+  }
+  return exec(`ps -p ${numericPid} -o command=`);
 }
 
 function processCwd(pid) {
@@ -43,7 +60,14 @@ function ancestorPids() {
   let pid = process.ppid;
   while (pid && !pids.has(pid)) {
     pids.add(pid);
-    const parent = Number(exec(`ps -p ${pid} -o ppid=`));
+    const parent = isWindows
+      ? Number(execFile("powershell.exe", [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          `(Get-CimInstance Win32_Process -Filter 'ProcessId = ${Number(pid)}').ParentProcessId`,
+        ]))
+      : Number(exec(`ps -p ${Number(pid)} -o ppid=`));
     if (!Number.isInteger(parent) || parent <= 1) break;
     pid = parent;
   }
@@ -51,16 +75,31 @@ function ancestorPids() {
 }
 
 function pidsListeningOnPort(port) {
+  const numericPort = Number(port);
+  if (!Number.isInteger(numericPort) || numericPort < 1 || numericPort > 65535) return [];
   if (isWindows) {
-    const command = [
-      "powershell",
+    return execFile("powershell.exe", [
       "-NoProfile",
+      "-NonInteractive",
       "-Command",
-      `"Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess"`,
-    ].join(" ");
-    return exec(command).split(/\s+/).filter(Boolean);
+      `Get-NetTCPConnection -LocalPort ${numericPort} -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess`,
+    ]).split(/\s+/).filter(Boolean);
   }
-  return exec(`lsof -nP -iTCP:${port} -sTCP:LISTEN -t`).split(/\s+/).filter(Boolean);
+  return exec(`lsof -nP -iTCP:${numericPort} -sTCP:LISTEN -t`).split(/\s+/).filter(Boolean);
+}
+
+function isProjectProcess(pid) {
+  const cwd = processCwd(pid);
+  const command = commandLine(pid);
+  const comparableCommand = isWindows ? command.toLowerCase() : command;
+  const comparableUiRoot = isWindows ? uiRoot.toLowerCase() : uiRoot;
+  const comparableWorkspaceRoot = isWindows ? workspaceRoot.toLowerCase() : workspaceRoot;
+  return (
+    cwd === uiRoot ||
+    cwd === workspaceRoot ||
+    comparableCommand.includes(`${comparableUiRoot}${path.sep}`) ||
+    comparableCommand.includes(`${comparableWorkspaceRoot}${path.sep}`)
+  );
 }
 
 function matchingProjectPids() {
@@ -82,14 +121,7 @@ function matchingProjectPids() {
   const pids = new Set();
   for (const pattern of patterns) {
     for (const pid of exec(`pgrep -f '${pattern}'`).split(/\s+/).filter(Boolean)) {
-      const cwd = processCwd(pid);
-      const command = commandLine(pid);
-      if (
-        cwd === uiRoot ||
-        cwd === workspaceRoot ||
-        command.includes(`${uiRoot}${path.sep}`) ||
-        command.includes(`${workspaceRoot}${path.sep}`)
-      ) {
+      if (isProjectProcess(pid)) {
         pids.add(pid);
       }
     }
@@ -98,6 +130,10 @@ function matchingProjectPids() {
 }
 
 function isRunning(pid) {
+  if (!isWindows) {
+    const state = exec(`ps -p ${Number(pid)} -o stat=`);
+    if (!state || state.startsWith("Z")) return false;
+  }
   try {
     process.kill(Number(pid), 0);
     return true;
@@ -110,7 +146,10 @@ function stopPids(pids) {
   const protectedPids = ancestorPids();
   const targets = [...new Set(pids.map(Number))]
     .filter((pid) => Number.isInteger(pid) && pid > 1 && !protectedPids.has(pid));
-  if (targets.length === 0) return;
+  if (targets.length === 0) {
+    console.log("[dev:cleanup] no local FnzSafe development processes are running");
+    return;
+  }
 
   console.log(`[dev:cleanup] stopping stale process PID(s): ${targets.join(", ")}`);
   for (const pid of targets) {
@@ -135,12 +174,22 @@ function stopPids(pids) {
       /* ignore */
     }
   }
+
+  const remaining = targets.filter(isRunning);
+  if (remaining.length > 0) {
+    console.error(`[dev:cleanup] unable to stop PID(s): ${remaining.join(", ")}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log("[dev:cleanup] all local FnzSafe development processes stopped");
 }
 
 const pids = new Set(matchingProjectPids());
 for (const port of ports) {
   for (const pid of pidsListeningOnPort(port)) {
-    pids.add(pid);
+    if (isProjectProcess(pid)) {
+      pids.add(pid);
+    }
   }
 }
 stopPids([...pids]);

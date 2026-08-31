@@ -9,10 +9,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use std::env;
-use std::net::{SocketAddr, TcpStream};
+use std::fs;
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicU16, Ordering},
+    Mutex,
+};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{
     Emitter, LogicalPosition, LogicalSize, Manager, Position, Rect, Size, WebviewBuilder,
@@ -23,10 +27,17 @@ use zeroize::Zeroizing;
 
 /// Must match `DEFAULT_API_PORT` in `src/lib/api.ts`
 const FNZERO_SAFE_API_PORT: u16 = 3841;
-const MAX_PROXY_BODY_BYTES: usize = 12 * 1024 * 1024;
+const FNZERO_SAFE_API_PORT_ATTEMPTS: u16 = 32;
+const SOLANA_MAX_ACCOUNT_DATA_BYTES: usize = 10 * 1024 * 1024;
+const UPGRADEABLE_LOADER_PROGRAMDATA_METADATA_BYTES: usize = 45;
+const MAX_PROGRAM_SO_BYTES: usize =
+    SOLANA_MAX_ACCOUNT_DATA_BYTES - UPGRADEABLE_LOADER_PROGRAMDATA_METADATA_BYTES;
+const MAX_PROGRAM_SO_BASE64_BYTES: usize = (MAX_PROGRAM_SO_BYTES + 2) / 3 * 4;
+const MAX_PROXY_BODY_BYTES: usize = MAX_PROGRAM_SO_BASE64_BYTES + 1024 * 1024;
 const MAX_DOWNLOAD_FILE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_SECURE_PUBLIC_KEY_PEM_BYTES: usize = 2 * 1024;
 const PROGRAM_DEPLOY_PROXY_TIMEOUT_SECS: u64 = 60 * 60;
+const MAX_PROGRAM_OPERATION_PROXY_TIMEOUT_SECS: u64 = 24 * 60 * 60;
 const SECURE_BODY_HEADER: &str = "x-fnzero-safe-secure-body";
 const SECURE_BODY_VERSION: &str = "1";
 const DAPP_TAB_LABEL_PREFIX: &str = "dapp-tab-";
@@ -38,6 +49,7 @@ const DAPP_CONNECT_REQUEST_EVENT: &str = "dapp://connect-request";
 const DAPP_REQUEST_TTL_MS: u64 = 3 * 60 * 1000;
 const DAPP_WALLET_NAME: &str = "FnzSafe";
 const DESKTOP_API_BIN_NAME: &str = "fnzero-safe-desktop-api";
+const DESKTOP_API_PID_FILE_NAME: &str = "desktop-api.pid";
 #[cfg(target_os = "macos")]
 const BIOMETRIC_WALLET_PASSWORD_SERVICE: &str = "dev.fnzero-safe.wallet.password.v6";
 
@@ -138,9 +150,251 @@ struct DappBridgeState {
     connect_requests: Mutex<HashMap<String, DappPendingConnectRequest>>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct ManagedProcessPidRecord {
+    pid: u32,
+    executable: String,
+}
+
+fn managed_process_command(pid: u32) -> Option<String> {
+    #[cfg(unix)]
+    {
+        let output = Command::new("ps")
+            .args([
+                "-ww",
+                "-p",
+                &pid.to_string(),
+                "-o",
+                "stat=",
+                "-o",
+                "command=",
+            ])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let process = String::from_utf8(output.stdout).ok()?;
+        let process = process.trim();
+        let split_at = process.find(char::is_whitespace)?;
+        let status = &process[..split_at];
+        if status.starts_with('Z') {
+            return None;
+        }
+        let command = process[split_at..].trim().to_string();
+        (!command.is_empty()).then_some(command)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let output = Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                &format!(
+                    "(Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}').ExecutablePath"
+                ),
+            ])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let executable = String::from_utf8(output.stdout).ok()?;
+        let executable = executable.trim().to_string();
+        (!executable.is_empty()).then_some(executable)
+    }
+    #[cfg(not(any(unix, target_os = "windows")))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn normalize_windows_executable_path(path: &str) -> String {
+    let normalized = path.trim().replace('/', "\\");
+    let normalized = normalized
+        .strip_prefix(r"\\?\UNC\")
+        .map(|path| format!(r"\\{path}"))
+        .or_else(|| normalized.strip_prefix(r"\\?\").map(ToOwned::to_owned))
+        .unwrap_or(normalized);
+    normalized.to_lowercase()
+}
+
+fn managed_process_matches(record: &ManagedProcessPidRecord) -> bool {
+    let Some(command) = managed_process_command(record.pid) else {
+        return false;
+    };
+    #[cfg(target_os = "windows")]
+    {
+        normalize_windows_executable_path(&command)
+            == normalize_windows_executable_path(&record.executable)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        command == record.executable
+            || command
+                .strip_prefix(&record.executable)
+                .is_some_and(|suffix| suffix.starts_with(' '))
+    }
+}
+
+fn signal_managed_process(pid: u32, force: bool) -> bool {
+    #[cfg(unix)]
+    {
+        Command::new("kill")
+            .arg(if force { "-KILL" } else { "-TERM" })
+            .arg(pid.to_string())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = force;
+        Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
+    #[cfg(not(any(unix, target_os = "windows")))]
+    {
+        let _ = (pid, force);
+        false
+    }
+}
+
+fn terminate_managed_process(record: &ManagedProcessPidRecord) -> Result<(), String> {
+    if record.pid <= 1 || record.pid == std::process::id() {
+        return Ok(());
+    }
+    if managed_process_command(record.pid).is_none() {
+        return Ok(());
+    }
+    if !managed_process_matches(record) {
+        return Err(format!(
+            "PID {} 已被其他进程复用，拒绝终止；记录的程序为 {}",
+            record.pid, record.executable
+        ));
+    }
+    if !signal_managed_process(record.pid, false) {
+        return Err(format!("无法终止历史 FnzSafe 进程 PID {}", record.pid));
+    }
+    for _ in 0..30 {
+        if managed_process_command(record.pid).is_none() {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    if !managed_process_matches(record) {
+        return Ok(());
+    }
+    if !signal_managed_process(record.pid, true) {
+        return Err(format!("无法强制终止历史 FnzSafe 进程 PID {}", record.pid));
+    }
+    for _ in 0..10 {
+        if managed_process_command(record.pid).is_none() {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    Err(format!("历史 FnzSafe 进程 PID {} 仍在运行", record.pid))
+}
+
+fn read_managed_pid_file(path: &Path) -> Result<Option<ManagedProcessPidRecord>, String> {
+    let contents = match fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("读取 PID 文件 {} 失败: {error}", path.display())),
+    };
+    serde_json::from_str(&contents)
+        .map(Some)
+        .map_err(|error| format!("解析 PID 文件 {} 失败: {error}", path.display()))
+}
+
+fn write_managed_pid_file(path: &Path, executable: &Path, pid: u32) -> Result<(), String> {
+    let executable = executable
+        .canonicalize()
+        .unwrap_or_else(|_| executable.to_path_buf());
+    let record = ManagedProcessPidRecord {
+        pid,
+        executable: executable.to_string_lossy().to_string(),
+    };
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("PID 文件路径无父目录: {}", path.display()))?;
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("创建 PID 文件目录 {} 失败: {error}", parent.display()))?;
+    let contents =
+        serde_json::to_vec(&record).map_err(|error| format!("序列化 PID 文件失败: {error}"))?;
+    fs::write(path, contents)
+        .map_err(|error| format!("写入 PID 文件 {} 失败: {error}", path.display()))?;
+    set_private_file_permissions(path);
+    Ok(())
+}
+
+fn remove_owned_pid_file(path: &Path, pid: u32) {
+    if read_managed_pid_file(path)
+        .ok()
+        .flatten()
+        .is_some_and(|record| record.pid == pid)
+    {
+        let _ = fs::remove_file(path);
+    }
+}
+
+fn terminate_recorded_process(path: &Path) -> Result<(), String> {
+    if let Some(record) = read_managed_pid_file(path)? {
+        terminate_managed_process(&record)?;
+        match fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!("删除 PID 文件 {} 失败: {error}", path.display()));
+            }
+        }
+    }
+    Ok(())
+}
+
 struct DesktopApiProcess {
     child: Mutex<Option<Child>>,
+    port: AtomicU16,
+    pid_file: PathBuf,
+}
+
+impl DesktopApiProcess {
+    fn new(pid_file: PathBuf) -> Self {
+        Self {
+            child: Mutex::new(None),
+            port: AtomicU16::new(FNZERO_SAFE_API_PORT),
+            pid_file,
+        }
+    }
+
+    fn port(&self) -> u16 {
+        self.port.load(Ordering::Relaxed)
+    }
+
+    fn set_port(&self, port: u16) {
+        self.port.store(port, Ordering::Relaxed);
+    }
+}
+
+impl Drop for DesktopApiProcess {
+    fn drop(&mut self) {
+        let Ok(child) = self.child.get_mut() else {
+            return;
+        };
+        if let Some(mut child) = child.take() {
+            let pid = child.id();
+            let _ = child.kill();
+            let _ = child.wait();
+            remove_owned_pid_file(&self.pid_file, pid);
+        }
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -486,11 +740,18 @@ fn proxied_api_path_requires_token(path: &str) -> bool {
     !matches!(path.trim_matches('/'), "health" | "secure/session")
 }
 
-async fn fetch_secure_session(client: &reqwest::Client) -> Result<SecureSessionResponse, String> {
-    let session_url = format!(
-        "http://127.0.0.1:{}/api/secure/session",
-        FNZERO_SAFE_API_PORT
-    );
+fn proxied_api_path_is_long_running_program_operation(path: &str) -> bool {
+    matches!(
+        path.trim_matches('/'),
+        "program/deploy" | "program/upgrade" | "squads/program/prepare-upgrade-buffer"
+    )
+}
+
+async fn fetch_secure_session(
+    client: &reqwest::Client,
+    api_port: u16,
+) -> Result<SecureSessionResponse, String> {
+    let session_url = format!("http://127.0.0.1:{api_port}/api/secure/session");
     let session_resp = client
         .get(session_url)
         .send()
@@ -515,6 +776,7 @@ async fn fetch_secure_session(client: &reqwest::Client) -> Result<SecureSessionR
 /// HTTP from Rust → avoids WKWebView `fetch` URL issues with localhost /api.
 #[tauri::command]
 async fn proxy_api_request(
+    process: tauri::State<'_, DesktopApiProcess>,
     method: String,
     path: String,
     headers: Option<Vec<ProxyRequestHeader>>,
@@ -537,7 +799,8 @@ async fn proxy_api_request(
             return Err("request body too large".to_string());
         }
     }
-    let url = format!("http://127.0.0.1:{}/api/{}", FNZERO_SAFE_API_PORT, path);
+    let api_port = process.port();
+    let url = format!("http://127.0.0.1:{api_port}/api/{path}");
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(
@@ -556,6 +819,11 @@ async fn proxy_api_request(
         "PATCH" => client.patch(&url),
         _ => return Err(format!("unsupported HTTP method: {}", method)),
     };
+    if proxied_api_path_is_long_running_program_operation(path) {
+        req = req.timeout(std::time::Duration::from_secs(
+            MAX_PROGRAM_OPERATION_PROXY_TIMEOUT_SECS,
+        ));
+    }
 
     req = req.header("Content-Type", "application/json");
     req = req.header("Origin", "tauri://localhost");
@@ -580,7 +848,7 @@ async fn proxy_api_request(
             }
         }
         if !token_attached {
-            session = Some(fetch_secure_session(&client).await?);
+            session = Some(fetch_secure_session(&client, api_port).await?);
             let token = session
                 .as_ref()
                 .and_then(|session| session.api_token.as_deref())
@@ -594,7 +862,7 @@ async fn proxy_api_request(
         if secure_proxy && matches!(method_upper.as_str(), "POST" | "PUT" | "PATCH") {
             let b = Zeroizing::new(b);
             if session.is_none() {
-                session = Some(fetch_secure_session(&client).await?);
+                session = Some(fetch_secure_session(&client, api_port).await?);
             }
             let session = session.as_ref().expect("secure session is initialized");
             let encrypted_body = encrypt_secure_body(&b, &session.public_key_pem)?;
@@ -2465,9 +2733,26 @@ fn desktop_api_binary_name() -> String {
     }
 }
 
-fn api_port_is_open() -> bool {
-    let addr = SocketAddr::from(([127, 0, 0, 1], FNZERO_SAFE_API_PORT));
+fn api_port_is_open(port: u16) -> bool {
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
     TcpStream::connect_timeout(&addr, Duration::from_millis(180)).is_ok()
+}
+
+fn first_available_api_port(start_port: u16, attempts: u16) -> Result<u16, String> {
+    for offset in 0..attempts {
+        let Some(port) = start_port.checked_add(offset) else {
+            break;
+        };
+        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+        if TcpListener::bind(addr).is_ok() {
+            return Ok(port);
+        }
+    }
+    Err(format!(
+        "本地后端端口不可用：已检查 {}-{}",
+        start_port,
+        start_port.saturating_add(attempts.saturating_sub(1))
+    ))
 }
 
 fn repository_root_candidates() -> Vec<PathBuf> {
@@ -2509,6 +2794,57 @@ fn stable_app_support_dir(app: &tauri::App) -> PathBuf {
     app.path()
         .app_data_dir()
         .unwrap_or_else(|_| env::temp_dir().join("FnzSafe"))
+}
+
+fn prelaunch_app_support_dir() -> PathBuf {
+    for key in ["FNZERO_SAFE_DB_PATH", "SOL_SAFEKEY_DB_PATH"] {
+        if let Ok(path) = env::var(key) {
+            let path = PathBuf::from(path.trim());
+            if let Some(parent) = path.parent().filter(|_| !path.as_os_str().is_empty()) {
+                return parent.to_path_buf();
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    if let Ok(home) = env::var("HOME") {
+        let home = home.trim();
+        if !home.is_empty() {
+            return PathBuf::from(home)
+                .join("Library")
+                .join("Application Support")
+                .join("FnzSafe");
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    if let Ok(local_app_data) = env::var("LOCALAPPDATA") {
+        let local_app_data = local_app_data.trim();
+        if !local_app_data.is_empty() {
+            return PathBuf::from(local_app_data).join("FnzSafe");
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        if let Ok(data_home) = env::var("XDG_DATA_HOME") {
+            let data_home = data_home.trim();
+            if !data_home.is_empty() {
+                return PathBuf::from(data_home).join("FnzSafe");
+            }
+        }
+        if let Ok(home) = env::var("HOME") {
+            let home = home.trim();
+            if !home.is_empty() {
+                return PathBuf::from(home)
+                    .join(".local")
+                    .join("share")
+                    .join("FnzSafe");
+            }
+        }
+    }
+
+    env::temp_dir().join("FnzSafe")
 }
 
 fn set_private_file_permissions(path: &Path) {
@@ -2630,9 +2966,17 @@ fn start_desktop_api_if_needed(
     app: &tauri::App,
     process: &DesktopApiProcess,
 ) -> Result<(), String> {
-    if api_port_is_open() {
+    if cfg!(debug_assertions) && api_port_is_open(FNZERO_SAFE_API_PORT) {
+        process.set_port(FNZERO_SAFE_API_PORT);
+        log::info!(
+            "using externally managed desktop API at 127.0.0.1:{} in debug mode",
+            FNZERO_SAFE_API_PORT
+        );
         return Ok(());
     }
+
+    let api_port = first_available_api_port(FNZERO_SAFE_API_PORT, FNZERO_SAFE_API_PORT_ATTEMPTS)?;
+    process.set_port(api_port);
 
     let binary = desktop_api_binary_candidates(app)
         .into_iter()
@@ -2651,6 +2995,7 @@ fn start_desktop_api_if_needed(
     let mut command = Command::new(&binary);
     command
         .env("FNZERO_SAFE_DB_PATH", &database_path)
+        .env("PORT", api_port.to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -2661,6 +3006,7 @@ fn start_desktop_api_if_needed(
     let child = command
         .spawn()
         .map_err(|error| format!("启动本地后端失败: {error}"))?;
+    let child_pid = child.id();
     {
         let mut guard = process
             .child
@@ -2668,12 +3014,37 @@ fn start_desktop_api_if_needed(
             .map_err(|_| "本地后端进程状态锁已损坏".to_string())?;
         *guard = Some(child);
     }
+    if let Err(error) = write_managed_pid_file(&process.pid_file, &binary, child_pid) {
+        if let Ok(mut guard) = process.child.lock() {
+            if let Some(mut child) = guard.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+        return Err(error);
+    }
 
     for _ in 0..40 {
-        if api_port_is_open() {
+        {
+            let mut guard = process
+                .child
+                .lock()
+                .map_err(|_| "本地后端进程状态锁已损坏".to_string())?;
+            if let Some(child) = guard.as_mut() {
+                if let Some(status) = child
+                    .try_wait()
+                    .map_err(|error| format!("检查本地后端进程失败: {error}"))?
+                {
+                    guard.take();
+                    remove_owned_pid_file(&process.pid_file, child_pid);
+                    return Err(format!("本地后端启动后提前退出: {status}"));
+                }
+            }
+        }
+        if api_port_is_open(api_port) {
             log::info!(
                 "started local desktop API at 127.0.0.1:{} with database {}",
-                FNZERO_SAFE_API_PORT,
+                api_port,
                 database_path.display()
             );
             return Ok(());
@@ -2681,19 +3052,26 @@ fn start_desktop_api_if_needed(
         std::thread::sleep(Duration::from_millis(100));
     }
 
-    Err(format!(
-        "本地后端已启动但端口 {} 尚未就绪",
-        FNZERO_SAFE_API_PORT
-    ))
+    if let Ok(mut guard) = process.child.lock() {
+        if let Some(mut child) = guard.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+    remove_owned_pid_file(&process.pid_file, child_pid);
+    Err(format!("本地后端已启动但端口 {api_port} 尚未就绪"))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let pid_dir = prelaunch_app_support_dir();
+    let desktop_api_pid_file = pid_dir.join(DESKTOP_API_PID_FILE_NAME);
+
     tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_single_instance::Builder::new().build())
         .manage(DappBridgeState::default())
-        .manage(DesktopApiProcess::default())
+        .manage(DesktopApiProcess::new(desktop_api_pid_file.clone()))
         .invoke_handler(tauri::generate_handler![
             proxy_api_request,
             open_external_url,
@@ -2715,7 +3093,13 @@ pub fn run() {
             save_download_file,
             open_download_file_location
         ])
-        .setup(|app| {
+        .setup(move |app| {
+            if !cfg!(debug_assertions) {
+                if let Err(error) = terminate_recorded_process(&desktop_api_pid_file) {
+                    log::warn!("failed to stop recorded desktop API process: {error}");
+                }
+            }
+
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
@@ -2804,6 +3188,83 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(plaintext.as_slice(), body.as_bytes());
+    }
+
+    #[test]
+    fn only_program_write_operations_receive_the_extended_proxy_timeout() {
+        assert!(proxied_api_path_is_long_running_program_operation(
+            "program/deploy"
+        ));
+        assert!(proxied_api_path_is_long_running_program_operation(
+            "/program/upgrade/"
+        ));
+        assert!(proxied_api_path_is_long_running_program_operation(
+            "squads/program/prepare-upgrade-buffer"
+        ));
+        assert!(!proxied_api_path_is_long_running_program_operation(
+            "program/info"
+        ));
+    }
+
+    #[test]
+    fn api_port_selection_skips_an_occupied_port() {
+        let listener = (0..16)
+            .find_map(|_| {
+                let listener = TcpListener::bind(("127.0.0.1", 0)).ok()?;
+                (listener.local_addr().ok()?.port() <= u16::MAX - 32).then_some(listener)
+            })
+            .expect("failed to reserve a suitable test port");
+        let occupied_port = listener.local_addr().unwrap().port();
+        let selected = first_available_api_port(occupied_port, 32).unwrap();
+        assert_ne!(selected, occupied_port);
+        assert!(selected > occupied_port);
+    }
+
+    #[test]
+    fn managed_pid_record_requires_the_recorded_executable() {
+        let executable = env::current_exe().unwrap();
+        let matching = ManagedProcessPidRecord {
+            pid: std::process::id(),
+            executable: executable.to_string_lossy().to_string(),
+        };
+        assert!(managed_process_matches(&matching));
+
+        let mismatched = ManagedProcessPidRecord {
+            executable: "/tmp/not-fnzsafe".to_string(),
+            ..matching
+        };
+        assert!(!managed_process_matches(&mismatched));
+    }
+
+    #[test]
+    fn windows_executable_path_normalization_handles_verbatim_prefix_and_case() {
+        assert_eq!(
+            normalize_windows_executable_path(r"\\?\C:\Program Files\FnzSafe\api.exe"),
+            normalize_windows_executable_path(r"c:/program files/fnzsafe/API.exe")
+        );
+        assert_eq!(
+            normalize_windows_executable_path(r"\\?\UNC\server\share\api.exe"),
+            normalize_windows_executable_path(r"\\server\share\API.exe")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recorded_process_can_be_terminated_after_identity_check() {
+        let mut child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        let record = ManagedProcessPidRecord {
+            pid: child.id(),
+            executable: "/bin/sleep".to_string(),
+        };
+        if !managed_process_matches(&record) {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("spawned process did not match its recorded executable");
+        }
+        terminate_managed_process(&record).unwrap();
+        let status = child.wait().unwrap();
+        assert!(!status.success());
+        assert!(managed_process_command(record.pid).is_none());
     }
 
     #[test]

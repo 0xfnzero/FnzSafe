@@ -2,11 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import QRCode from "qrcode";
 import { toast } from "sonner";
 import { useTranslations } from '@/hooks/useTranslations';
+import desktopPackage from "../../../package.json";
 import {
   Key,
   Lock,
@@ -118,6 +120,7 @@ import {
   isLikelySolanaGenesisHash,
   isLikelySolanaPublicKey,
   MAX_PROGRAM_KEYPAIR_FILE_BYTES,
+  MAX_PROGRAM_SO_FILE_BYTES,
   parseProgramKeypairJson,
   programIdFromKeypairBytes,
   serializeProgramKeypairJson,
@@ -149,7 +152,6 @@ import {
 } from "@/lib/walletAuth";
 
 const MAX_KEYSTORE_FILE_BYTES = 128 * 1024;
-const MAX_PROGRAM_SO_FILE_BYTES = 3 * 1024 * 1024;
 const FALLBACK_PROGRAM_WRITE_CHUNK_BYTES = 800;
 const TRANSACTION_PAGE_SIZE = 20;
 const MAX_TRANSACTION_HISTORY = 100;
@@ -2471,6 +2473,7 @@ export default function Home() {
   const [newRpcUrl, setNewRpcUrl] = useState("");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(false);
+  const [appVersion, setAppVersion] = useState(desktopPackage.version);
   const [appTheme, setAppTheme] = useState<AppUiTheme>("deep-sea");
   const [walletActionsMenuOpen, setWalletActionsMenuOpen] = useState<string | null>(null);
   const [walletFaucetMenuOpen, setWalletFaucetMenuOpen] = useState(false);
@@ -2515,6 +2518,8 @@ export default function Home() {
   const [lastProgramDeploymentIntent, setLastProgramDeploymentIntent] =
     useState<ProgramDeploymentJournalIntent | null>(null);
   const [programSourceLoading, setProgramSourceLoading] = useState(false);
+  const [programSourceBuildConfirmation, setProgramSourceBuildConfirmation] = useState<string | null>(null);
+  const [programSourceBuildStartedAtMs, setProgramSourceBuildStartedAtMs] = useState<number | null>(null);
   const [programDeployInlineError, setProgramDeployInlineError] = useState<{
     friendly: string;
     raw: string;
@@ -2686,6 +2691,14 @@ export default function Home() {
           : String(chains[0]?.chain_id || "");
       saveStoredDesktopEvmChainId(nextChainId);
       return nextChainId;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!isTauriWebview()) return;
+
+    void getVersion().then(setAppVersion).catch(() => {
+      // Keep the package version fallback when the native API is unavailable.
     });
   }, []);
 
@@ -3621,7 +3634,7 @@ export default function Home() {
   ]);
 
   useEffect(() => {
-    if (selectedForm !== "program-deploy") return;
+    if (selectedForm !== "program-deploy" && selectedForm !== "program-upgrade") return;
     const timer = window.setInterval(() => setProgramDeploymentNowMs(Date.now()), 1_000);
     return () => window.clearInterval(timer);
   }, [selectedForm]);
@@ -9147,14 +9160,23 @@ export default function Home() {
     }
   };
 
-  const handleProgramSourceImport = async (build: boolean, sourceDirOverride?: string) => {
+  const handleProgramSourceImport = async (
+    build: boolean,
+    sourceDirOverride?: string,
+    buildConfirmed = false,
+    silent = false,
+  ) => {
     const sourceDir = String(sourceDirOverride || formData.programSourceDir || "").trim();
     if (!sourceDir) {
       toast.error(t("features.program-deploy.sourceDirRequired"));
       return;
     }
-    if (build && !window.confirm(t("features.program-deploy.sourceBuildConfirm"))) {
+    if (build && !buildConfirmed) {
+      setProgramSourceBuildConfirmation(sourceDir);
       return;
+    }
+    if (build) {
+      setProgramSourceBuildStartedAtMs(Date.now());
     }
     setProgramSourceLoading(true);
     setProgramDeployInlineError(null);
@@ -9292,9 +9314,9 @@ export default function Home() {
 
       if (Array.isArray(finalData.source_validation_errors) && finalData.source_validation_errors.length > 0) {
         showProgramDeployInlineError(finalData.source_validation_errors.join("\n"));
-      } else if (Array.isArray(finalData.warnings) && finalData.warnings.length > 0) {
+      } else if (!silent && Array.isArray(finalData.warnings) && finalData.warnings.length > 0) {
         toast.warning(finalData.warnings[0]);
-      } else {
+      } else if (!silent) {
         toast.success(
           build
             ? t("features.program-deploy.sourceBuildSuccess")
@@ -9304,6 +9326,9 @@ export default function Home() {
     } catch (error) {
       showProgramDeployInlineError(error instanceof Error ? error.message : t("features.program-deploy.sourceImportError"));
     } finally {
+      if (build) {
+        setProgramSourceBuildStartedAtMs(null);
+      }
       setProgramSourceLoading(false);
     }
   };
@@ -9400,7 +9425,7 @@ export default function Home() {
     const trimmedSourceDir = String(sourceDir || "").trim();
     if (!trimmedSourceDir) return;
     window.setTimeout(() => {
-      void handleProgramSourceImport(false, trimmedSourceDir);
+      void handleProgramSourceImport(false, trimmedSourceDir, false, true);
     }, 0);
   };
 
@@ -10963,6 +10988,7 @@ export default function Home() {
                 programId: data.program_id || programId,
                 programSha256: data.program_sha256 || programSha256,
                 programBytes: Number(data.program_bytes || formData.programSoSize || 0) || undefined,
+                maxDataLen: Number(data.programdata_capacity || 0) || undefined,
                 upgradeAuthority: data.authority || upgradeAuthority,
                 bufferAddress: data.buffer_address,
                 status: "finalized",
@@ -10991,6 +11017,7 @@ export default function Home() {
                 programdataAddress: data.programdata_address,
                 programSha256: data.program_sha256 || programSha256,
                 programBytes: Number(data.program_bytes || formData.programSoSize || 0) || undefined,
+                maxDataLen: Number(data.programdata_capacity || 0) || undefined,
                 upgradeAuthority: data.authority || upgradeAuthority,
                 bufferAddress: data.buffer_address,
                 createBufferSignature: data.create_buffer_signature,
@@ -11010,7 +11037,9 @@ export default function Home() {
               message: t("features.program-upgrade.stats", {
                 writes: Array.isArray(data.write_signatures) ? data.write_signatures.length : 0,
                 bytes: data.program_bytes || 0,
+                capacity: data.programdata_capacity || data.program_bytes || 0,
                 rent: data.rent_lamports || 0,
+                extensionRent: data.extension_rent_lamports || 0,
               }),
             }));
           } else {
@@ -13845,6 +13874,13 @@ export default function Home() {
       );
     };
 
+    const programSourceBuildInProgress = Boolean(
+      programSourceLoading && programSourceBuildStartedAtMs !== null,
+    );
+    const programSourceBuildElapsedSeconds = programSourceBuildStartedAtMs === null
+      ? 0
+      : Math.max(0, Math.floor((programDeploymentNowMs - programSourceBuildStartedAtMs) / 1_000));
+
     const renderProgramSourceImport = () => (
       <section className="space-y-3 border-b border-white/10 pb-4">
         <div>
@@ -13882,7 +13918,9 @@ export default function Home() {
             disabled={programSourceLoading || loading}
             className="inline-flex items-center justify-center gap-2 rounded-lg bg-white/10 px-4 py-2 text-sm font-medium hover:bg-white/20 disabled:opacity-50"
           >
-            {programSourceLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+            {programSourceLoading && !programSourceBuildInProgress
+              ? <RefreshCw className="h-4 w-4 animate-spin" />
+              : <Upload className="h-4 w-4" />}
             {t("features.program-deploy.sourceImportButton")}
           </button>
           <button
@@ -13891,10 +13929,55 @@ export default function Home() {
             disabled={programSourceLoading || loading}
             className="inline-flex items-center justify-center gap-2 rounded-lg bg-white/10 px-4 py-2 text-sm font-medium hover:bg-white/20 disabled:opacity-50"
           >
-            {programSourceLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            {t("features.program-deploy.sourceBuildButton")}
+            <RefreshCw className={`h-4 w-4 ${programSourceBuildInProgress ? "animate-spin" : ""}`} />
+            {programSourceBuildInProgress
+              ? t("features.program-deploy.sourceBuildingButton")
+              : t("features.program-deploy.sourceBuildButton")}
           </button>
         </div>
+        {programSourceBuildInProgress && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="space-y-3 rounded-lg border border-cyan-300/25 bg-cyan-400/10 p-3 text-cyan-50"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex min-w-0 items-start gap-2">
+                <RefreshCw className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-cyan-200" />
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold">
+                    {t("features.program-deploy.sourceBuildProgressTitle")}
+                  </p>
+                  <p className="mt-1 text-xs leading-5 text-cyan-100/75">
+                    {formData.sourceBuildStatus === "running"
+                      ? t("features.program-deploy.sourceBuildProgressRunning")
+                      : t("features.program-deploy.sourceBuildProgressPreparing")}
+                  </p>
+                </div>
+              </div>
+              <span className="shrink-0 font-mono text-xs text-cyan-100/80">
+                {t("features.program-deploy.sourceBuildElapsed", {
+                  seconds: programSourceBuildElapsedSeconds,
+                })}
+              </span>
+            </div>
+            <div className="h-1.5 overflow-hidden rounded-full bg-black/40">
+              <div className="h-full w-2/3 animate-pulse rounded-full bg-cyan-300" />
+            </div>
+            {(formData.sourceBuildTemplate || formData.sourceBuildCommand) && (
+              <div className="grid gap-1 rounded-md bg-black/30 px-3 py-2 text-xs text-cyan-100/80">
+                {formData.sourceBuildTemplate && (
+                  <p className="break-words">
+                    {t("features.program-deploy.sourceBuildTemplate")}: {formData.sourceBuildTemplate}
+                  </p>
+                )}
+                {formData.sourceBuildCommand && (
+                  <code className="break-all text-cyan-50">{formData.sourceBuildCommand}</code>
+                )}
+              </div>
+            )}
+          </div>
+        )}
         {(formData.sourceBuildCommand || formData.sourceBuildTemplate || formData.sourceBuildBlockedReason || formData.sourceValidationErrors || formData.sourceImportWarnings) && (
           <div className="space-y-2 rounded-lg bg-black/30 p-3 text-xs text-gray-300">
             {formData.sourceBuildTemplate && (
@@ -17697,14 +17780,18 @@ export default function Home() {
                   <div className="min-w-0">
                     <p className="text-sm font-semibold text-amber-100">
                       {programSourceLoading
-                        ? t("features.program-deploy.sourceAutoReadingTitle")
+                        ? programSourceBuildInProgress
+                          ? t("features.program-deploy.sourceBuildProgressTitle")
+                          : t("features.program-deploy.sourceAutoReadingTitle")
                         : sourceNeedsProgramKeypair
                           ? t("features.program-deploy.programKeypairRequiredTitle")
                           : t("features.program-deploy.compileRequiredTitle")}
                     </p>
                     <p className="mt-1 text-xs text-amber-100/80">
                       {programSourceLoading
-                        ? t("features.program-deploy.sourceAutoReadingHint")
+                        ? programSourceBuildInProgress
+                          ? t("features.program-deploy.sourceBuildProgressRunning")
+                          : t("features.program-deploy.sourceAutoReadingHint")
                         : sourceNeedsProgramKeypair
                           ? t("features.program-deploy.programKeypairRequiredHint")
                           : t("features.program-deploy.compileRequiredHint")}
@@ -19123,14 +19210,18 @@ export default function Home() {
                   <div className="min-w-0 space-y-1">
                     <p className="text-sm font-semibold">
                       {programSourceLoading
-                        ? t("features.program-deploy.sourceAutoReadingTitle")
+                        ? programSourceBuildInProgress
+                          ? t("features.program-deploy.sourceBuildProgressTitle")
+                          : t("features.program-deploy.sourceAutoReadingTitle")
                         : upgradeNeedsCompile
                           ? t("features.program-upgrade.compileRequiredTitle")
                           : t("features.program-upgrade.staleArtifactTitle")}
                     </p>
                     <p className="text-xs leading-5 opacity-85">
                       {programSourceLoading
-                        ? t("features.program-deploy.sourceAutoReadingHint")
+                        ? programSourceBuildInProgress
+                          ? t("features.program-deploy.sourceBuildProgressRunning")
+                          : t("features.program-deploy.sourceAutoReadingHint")
                         : upgradeNeedsCompile
                           ? t("features.program-upgrade.compileRequiredHint")
                           : t("features.program-upgrade.staleArtifactHint", {
@@ -19196,6 +19287,7 @@ export default function Home() {
                             idle: t("features.program-upgrade.stage.idle"),
                             preparing: t("features.program-upgrade.stage.preparing"),
                             verifying: t("features.program-upgrade.stage.verifying"),
+                            extending_programdata: t("features.program-upgrade.stage.extending_programdata"),
                             creating_buffer: t("features.program-upgrade.stage.creating_buffer"),
                             writing: t("features.program-upgrade.stage.writing"),
                             upgrading: t("features.program-upgrade.stage.upgrading"),
@@ -19218,6 +19310,8 @@ export default function Home() {
                       ? 100
                       : stage === "upgrading" || stage === "verifying_readback"
                         ? 100
+                        : stage === "extending_programdata"
+                          ? 1
                         : total > 0
                           ? Math.min(99, Math.round((completed / total) * 100))
                           : stage === "creating_buffer"
@@ -19247,7 +19341,7 @@ export default function Home() {
                     { id: "verifying_readback", label: t("features.program-upgrade.progressStepVerify") },
                   ].map((step, index) => {
                     const stage = String(programUpgradeProgress?.stage || "");
-                    const order = ["preparing", "verifying", "creating_buffer", "writing", "upgrading", "verifying_readback", "finalized"];
+                    const order = ["preparing", "verifying", "extending_programdata", "creating_buffer", "writing", "upgrading", "verifying_readback", "finalized"];
                     const currentIdx = order.indexOf(stage);
                     const stepIdx = order.indexOf(step.id);
                     const done =
@@ -19255,7 +19349,7 @@ export default function Home() {
                       (currentIdx >= 0 && stepIdx >= 0 && currentIdx > stepIdx);
                     const active =
                       stage === step.id ||
-                      (step.id === "creating_buffer" && (stage === "preparing" || stage === "verifying")) ||
+                      (step.id === "creating_buffer" && (stage === "preparing" || stage === "verifying" || stage === "extending_programdata")) ||
                       (step.id === "writing" && stage === "writing");
                     return (
                       <li
@@ -20690,6 +20784,7 @@ export default function Home() {
               {t("app.title")}
             </h1>
             <p className="mt-1 hidden truncate whitespace-nowrap text-sm text-gray-400 sm:block">{t("app.subtitle")}</p>
+            <p className="mt-1 hidden truncate text-xs text-gray-500 sm:block">{t("app.version", { version: appVersion })}</p>
             <p className="mt-1 truncate text-xs text-gray-400 lg:hidden">{selectedFormTitle}</p>
           </div>
           <div className="flex shrink-0 items-start gap-2">
@@ -20790,6 +20885,7 @@ export default function Home() {
         <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-4">
           <div className="min-w-0">
             <p className="truncate text-lg font-semibold">{t("app.title")}</p>
+            <p className="mt-1 truncate text-xs text-gray-500">{t("app.version", { version: appVersion })}</p>
             <p className="mt-1 truncate text-sm text-gray-400">{selectedFormTitle}</p>
           </div>
           <button
@@ -20954,6 +21050,62 @@ export default function Home() {
           </div>,
           document.body,
         )}
+      {programSourceBuildConfirmation && (
+        <div className="fixed inset-0 z-[200] flex items-end bg-black/60 sm:items-center sm:justify-center">
+          <button
+            type="button"
+            aria-label={t("common.cancel")}
+            className="absolute inset-0 cursor-default"
+            onClick={() => setProgramSourceBuildConfirmation(null)}
+          />
+          <div className="relative w-full border-t border-white/10 bg-zinc-950 px-4 py-5 shadow-2xl sm:mx-4 sm:max-w-lg sm:rounded-2xl sm:border">
+            <div className="space-y-4">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <h3 className="text-lg font-semibold">
+                    {t("features.program-deploy.sourceBuildConfirmTitle")}
+                  </h3>
+                  <p className="mt-1 text-sm leading-6 text-gray-400">
+                    {t("features.program-deploy.sourceBuildConfirm")}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setProgramSourceBuildConfirmation(null)}
+                  className="shrink-0 rounded-lg bg-white/10 p-2 text-gray-300 hover:bg-white/20"
+                  aria-label={t("common.cancel")}
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <code className="block max-h-28 overflow-auto break-all rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-xs text-gray-300">
+                {programSourceBuildConfirmation}
+              </code>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setProgramSourceBuildConfirmation(null)}
+                  className="rounded-lg bg-white/10 px-4 py-3 text-sm font-semibold hover:bg-white/20"
+                >
+                  {t("common.cancel")}
+                </button>
+                <button
+                  type="button"
+                  autoFocus
+                  onClick={() => {
+                    const sourceDir = programSourceBuildConfirmation;
+                    setProgramSourceBuildConfirmation(null);
+                    void handleProgramSourceImport(true, sourceDir, true);
+                  }}
+                  className="rounded-lg bg-amber-500/20 px-4 py-3 text-sm font-semibold text-amber-50 hover:bg-amber-500/30"
+                >
+                  {t("features.program-deploy.sourceBuildButton")}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {historyDeletePrompt && (
         <div className="fixed inset-0 z-[200] flex items-end bg-black/60 sm:items-center sm:justify-center">
           <button

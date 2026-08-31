@@ -230,6 +230,13 @@ make dev
 
 The local API is designed for loopback use only. Do not expose `3841` through a public proxy, tunnel, or port forward.
 
+Stop the local desktop development processes before a release build:
+
+```bash
+make stop
+make package-macos
+```
+
 ### 4.2 iOS App
 
 ```bash
@@ -436,6 +443,7 @@ This runs Android, iOS, macOS, and Windows package targets in sequence. For CI, 
 | Command | Description |
 |---|---|
 | `make dev` | Start desktop development; stale local app/API processes are stopped first |
+| `make stop` | Stop all local FnzSafe development processes |
 | `make package-macos` | Build macOS desktop package into `release/macos/` |
 | `make package-windows` | Build Windows desktop package into `release/windows/` |
 | `make package-ios` | Build iOS `.app` or signed `.ipa` into `release/ios/` |

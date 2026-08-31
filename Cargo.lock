@@ -124,7 +124,7 @@ dependencies = [
  "solana-hash 3.1.0",
  "solana-instruction 3.4.0",
  "solana-keccak-hasher 3.0.0",
- "solana-loader-v3-interface 6.1.0",
+ "solana-loader-v3-interface 6.1.1",
  "solana-poseidon",
  "solana-program-entrypoint 3.1.0",
  "solana-program-runtime",
@@ -3205,7 +3205,7 @@ dependencies = [
 
 [[package]]
 name = "fnzero-safe-desktop"
-version = "0.4.0"
+version = "0.4.5"
 dependencies = [
  "aes-gcm",
  "aws-lc-rs",
@@ -3232,7 +3232,7 @@ dependencies = [
 
 [[package]]
 name = "fnzero-safe-desktop-api"
-version = "0.4.0"
+version = "0.4.5"
 dependencies = [
  "aes-gcm",
  "agave-syscalls",
@@ -3261,12 +3261,13 @@ dependencies = [
  "solana-client",
  "solana-commitment-config",
  "solana-derivation-path",
- "solana-loader-v3-interface 6.1.0",
+ "solana-loader-v3-interface 6.1.1",
  "solana-program-runtime",
  "solana-rpc-client-api",
  "solana-sbpf",
  "solana-sdk",
  "solana-svm-feature-set",
+ "solana-system-interface 3.2.0",
  "solana-transaction-status-client-types",
  "spl-token",
  "tokio",
@@ -7892,7 +7893,7 @@ dependencies = [
  "solana-epoch-schedule 3.0.0",
  "solana-fee-calculator 3.2.0",
  "solana-instruction 3.4.0",
- "solana-loader-v3-interface 6.1.0",
+ "solana-loader-v3-interface 6.1.1",
  "solana-nonce 3.2.0",
  "solana-program-option 3.0.0",
  "solana-program-pack 3.0.0",
@@ -8154,7 +8155,7 @@ dependencies = [
  "solana-bincode 3.1.0",
  "solana-clock 3.0.0",
  "solana-instruction 3.4.0",
- "solana-loader-v3-interface 6.1.0",
+ "solana-loader-v3-interface 6.1.1",
  "solana-loader-v4-interface 3.1.0",
  "solana-packet",
  "solana-program-entrypoint 3.1.0",
@@ -8954,17 +8955,17 @@ dependencies = [
 
 [[package]]
 name = "solana-loader-v3-interface"
-version = "6.1.0"
+version = "6.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dee44c9b1328c5c712c68966fb8de07b47f3e7bac006e74ddd1bb053d3e46e5d"
+checksum = "2e0538d4dbc9022e01616f1c58f2db98ece739c5d5ed4a2ef8737a953e76a2d4"
 dependencies = [
  "serde",
  "serde_bytes",
  "serde_derive",
  "solana-instruction 3.4.0",
- "solana-pubkey 3.0.0",
+ "solana-pubkey 4.2.0",
  "solana-sdk-ids 3.0.0",
- "solana-system-interface 2.0.0",
+ "solana-system-interface 3.2.0",
 ]
 
 [[package]]
@@ -9008,7 +9009,7 @@ dependencies = [
  "solana-bincode 3.1.0",
  "solana-bpf-loader-program",
  "solana-instruction 3.4.0",
- "solana-loader-v3-interface 6.1.0",
+ "solana-loader-v3-interface 6.1.1",
  "solana-loader-v4-interface 3.1.0",
  "solana-packet",
  "solana-program-runtime",
@@ -9536,7 +9537,7 @@ dependencies = [
  "solana-hash 3.1.0",
  "solana-instruction 3.4.0",
  "solana-last-restart-slot 3.0.0",
- "solana-loader-v3-interface 6.1.0",
+ "solana-loader-v3-interface 6.1.1",
  "solana-program-entrypoint 3.1.0",
  "solana-pubkey 3.0.0",
  "solana-rent 3.0.0",
@@ -10661,7 +10662,7 @@ dependencies = [
  "solana-hash 3.1.0",
  "solana-instruction 3.4.0",
  "solana-loader-v2-interface 3.0.0",
- "solana-loader-v3-interface 6.1.0",
+ "solana-loader-v3-interface 6.1.1",
  "solana-message 3.1.0",
  "solana-program-option 3.0.0",
  "solana-pubkey 3.0.0",

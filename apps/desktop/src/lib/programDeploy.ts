@@ -1,5 +1,8 @@
 const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-const MAX_PROGRAM_BYTES = 3 * 1024 * 1024;
+const SOLANA_MAX_ACCOUNT_DATA_BYTES = 10 * 1024 * 1024;
+const UPGRADEABLE_LOADER_PROGRAMDATA_METADATA_BYTES = 45;
+export const MAX_PROGRAM_SO_FILE_BYTES =
+  SOLANA_MAX_ACCOUNT_DATA_BYTES - UPGRADEABLE_LOADER_PROGRAMDATA_METADATA_BYTES;
 const DEPLOYMENT_STAGES = new Set(["create_buffer", "write", "deploy"]);
 const DEPLOYMENT_ATTEMPT_STATUSES = new Set([
   "signed",
@@ -284,7 +287,7 @@ export function buildProgramDeploymentReceiptJson(
     !/^[a-f0-9]{64}$/.test(expectedProgramSha256) ||
     !Number.isSafeInteger(expected.programBytes) ||
     expected.programBytes <= 0 ||
-    expected.programBytes > MAX_PROGRAM_BYTES
+    expected.programBytes > MAX_PROGRAM_SO_FILE_BYTES
   ) {
     throw new Error("invalid-deployment-expectations");
   }
@@ -311,7 +314,7 @@ export function buildProgramDeploymentReceiptJson(
   if (
     programBytes !== expected.programBytes ||
     maxDataLen < programBytes ||
-    maxDataLen > MAX_PROGRAM_BYTES
+    maxDataLen > MAX_PROGRAM_SO_FILE_BYTES
   ) {
     throw new Error("invalid-program-length");
   }
