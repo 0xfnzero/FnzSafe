@@ -19,18 +19,28 @@ name = "FnzSafe"
 path = "src/main.rs"
 
 [build-dependencies]
-tauri-build = { version = "=2.5.6", features = [] }
+tauri-build = { version = "=2.6.3", features = [] }
 
 [dependencies]
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
-tauri = { version = "=2.10.3", features = ["unstable"] }
-tauri-plugin-deep-link = "2.4.9"
-tauri-plugin-log = "2"
-tauri-plugin-single-instance = { version = "2.4.3", features = ["deep-link"] }
+tauri = { version = "=2.11.5", default-features = false, features = ["cef", "unstable", "devtools", "rustls-tls"] }
+tauri-runtime-cef = { git = "https://github.com/tauri-apps/tauri.git", tag = "tauri-cef-v3.0.0-alpha.25", features = ["sandbox"] }
+tauri-plugin-deep-link = { git = "https://github.com/tauri-apps/plugins-workspace.git", rev = "1423992771e0b57582ca3b06a6adc46ec26aa784", package = "tauri-plugin-deep-link" }
+tauri-plugin-log = { git = "https://github.com/tauri-apps/plugins-workspace.git", rev = "1423992771e0b57582ca3b06a6adc46ec26aa784", package = "tauri-plugin-log" }
+tauri-plugin-single-instance = { git = "https://github.com/tauri-apps/plugins-workspace.git", rev = "1423992771e0b57582ca3b06a6adc46ec26aa784", package = "tauri-plugin-single-instance", features = ["deep-link"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 aes-gcm = "0.10"
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+pbkdf2 = "0.12"
+sha1 = "0.10"
+sha2 = "0.10"
+rusqlite = { version = "0.37", features = ["bundled"] }
+tempfile = "3"
+time = "0.3"
+cookie = "0.18"
 aws-lc-rs = { version = "=1.17.3", default-features = false, features = ["non-fips", "prebuilt-nasm"] }
 base64 = "0.22"
 pem-rfc7468 = { version = "0.7", features = ["std"] }
@@ -41,6 +51,10 @@ rfd = "0.15"
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6.2"
 objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSGraphics", "NSView"] }
 objc2-foundation = "0.3.2"
 objc2-local-authentication = "0.3.2"
 security-framework = { version = "3.5", features = ["OSX_10_13"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_UI_WindowsAndMessaging"] }

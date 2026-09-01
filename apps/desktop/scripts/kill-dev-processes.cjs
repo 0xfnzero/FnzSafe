@@ -6,6 +6,16 @@ const uiRoot = path.resolve(__dirname, "..");
 const workspaceRoot = path.resolve(uiRoot, "../..");
 const ports = ["3840", process.env.FNZERO_SAFE_API_PORT || process.env.SOL_SAFEKEY_API_PORT || "3841"];
 const isWindows = process.platform === "win32";
+const desktopApiBinaryNames = new Set([
+  "fnzero-safe-desktop-api",
+  "fnzero-safe-desktop-api.exe",
+]);
+const managedPidFileNames = [
+  "desktop.pid",
+  "desktop-app.pid",
+  "desktop-api.pid",
+  "desktop-web.pid",
+];
 
 function exec(command) {
   try {
@@ -55,6 +65,73 @@ function processCwd(pid) {
   }
 }
 
+function appSupportDir() {
+  const dbPath = String(process.env.FNZERO_SAFE_DB_PATH || process.env.SOL_SAFEKEY_DB_PATH || "").trim();
+  if (dbPath) return path.dirname(dbPath);
+  if (process.platform === "darwin") {
+    return path.join(process.env.HOME || uiRoot, "Library", "Application Support", "FnzSafe");
+  }
+  if (process.platform === "win32") {
+    return path.join(process.env.LOCALAPPDATA || process.env.APPDATA || uiRoot, "FnzSafe");
+  }
+  return path.join(process.env.XDG_DATA_HOME || path.join(process.env.HOME || uiRoot, ".local", "share"), "FnzSafe");
+}
+
+function managedPidRecords() {
+  const directories = [
+    appSupportDir(),
+    path.join(uiRoot, "data"),
+    path.join(workspaceRoot, "crates", "desktop-api", "data"),
+  ];
+  const files = directories.flatMap((directory) =>
+    managedPidFileNames.map((name) => path.join(directory, name)),
+  );
+  const records = [];
+  for (const file of files) {
+    try {
+      const data = JSON.parse(fs.readFileSync(file, "utf8"));
+      const pid = Number(data.pid);
+      const executable = String(data.executable || "").trim();
+      if (Number.isInteger(pid) && pid > 1 && executable) {
+        records.push({ pid, executable, file });
+      }
+    } catch {
+      /* missing or stale PID file */
+    }
+  }
+  return records;
+}
+
+function executableBasename(value) {
+  return path.basename(String(value || "").trim());
+}
+
+function managedRecordStillMatches(record) {
+  const command = commandLine(record.pid);
+  if (!command) return false;
+  const executableName = executableBasename(record.executable);
+  if (desktopApiBinaryNames.has(executableName)) {
+    return command.includes(executableName);
+  }
+  if (command === record.executable || command.startsWith(`${record.executable} `)) {
+    return true;
+  }
+  if (record.executable.includes("next dev")) {
+    return /next(\s+dev|-server)/.test(command);
+  }
+  if (record.executable.includes("fnzero-safe-desktop-api")) {
+    return command.includes("fnzero-safe-desktop-api");
+  }
+  if (executableName === "FnzSafe" || executableName === "FnzeroSafe") {
+    return command.includes("/FnzSafe.app/Contents/MacOS/") || command.includes("/FnzeroSafe.app/Contents/MacOS/");
+  }
+  return false;
+}
+
+function managedRecordIsStale(record) {
+  return !commandLine(record.pid);
+}
+
 function ancestorPids() {
   const pids = new Set([process.pid]);
   let pid = process.ppid;
@@ -99,6 +176,21 @@ function isProjectProcess(pid) {
     cwd === workspaceRoot ||
     comparableCommand.includes(`${comparableUiRoot}${path.sep}`) ||
     comparableCommand.includes(`${comparableWorkspaceRoot}${path.sep}`)
+  );
+}
+
+function isFnzSafeProcess(pid) {
+  const command = commandLine(pid);
+  if (!command) return false;
+  const normalizedCommand = command.replace(/\\/g, "/");
+  return (
+    isProjectProcess(pid) ||
+    normalizedCommand.includes("fnzero-safe-desktop-api") ||
+    normalizedCommand.includes("/FnzSafe.app/Contents/MacOS/FnzSafe") ||
+    normalizedCommand.includes("/FnzeroSafe.app/Contents/MacOS/FnzeroSafe") ||
+    normalizedCommand.includes("/FnzSafe.app/Contents/MacOS/FnzeroSafe") ||
+    normalizedCommand.includes("scripts/dev-stack.cjs") ||
+    normalizedCommand.includes("scripts/desktop-dev.cjs")
   );
 }
 
@@ -175,6 +267,11 @@ function stopPids(pids) {
     }
   }
 
+  const forceDeadline = Date.now() + 2000;
+  while (targets.some(isRunning) && Date.now() < forceDeadline) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+  }
+
   const remaining = targets.filter(isRunning);
   if (remaining.length > 0) {
     console.error(`[dev:cleanup] unable to stop PID(s): ${remaining.join(", ")}`);
@@ -184,12 +281,29 @@ function stopPids(pids) {
   console.log("[dev:cleanup] all local FnzSafe development processes stopped");
 }
 
+const records = managedPidRecords();
 const pids = new Set(matchingProjectPids());
+for (const record of records) {
+  if (managedRecordStillMatches(record)) {
+    pids.add(String(record.pid));
+  }
+}
 for (const port of ports) {
   for (const pid of pidsListeningOnPort(port)) {
-    if (isProjectProcess(pid)) {
+    if (isFnzSafeProcess(pid)) {
       pids.add(pid);
     }
   }
 }
 stopPids([...pids]);
+if (process.exitCode !== 1) {
+  const stopped = new Set([...pids].map((pid) => Number(pid)));
+  for (const record of records) {
+    if (!stopped.has(Number(record.pid)) && !managedRecordIsStale(record)) continue;
+    try {
+      fs.rmSync(record.file, { force: true });
+    } catch {
+      /* ignore */
+    }
+  }
+}

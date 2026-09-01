@@ -6,6 +6,9 @@ const path = require("node:path");
 const root = path.resolve(__dirname, "..");
 const workspaceRoot = path.resolve(root, "../..");
 const isWindows = process.platform === "win32";
+const desktopApiPidFileName = "desktop-api.pid";
+const desktopWebPidFileName = "desktop-web.pid";
+const cleanupScript = path.join(__dirname, "kill-dev-processes.cjs");
 let shuttingDown = false;
 const children = [];
 
@@ -53,15 +56,77 @@ function desktopDatabasePath() {
   return nextPath;
 }
 
-function spawnManaged(label, command, args, env) {
+function appSupportDir() {
+  const dbPath = String(process.env.FNZERO_SAFE_DB_PATH || process.env.SOL_SAFEKEY_DB_PATH || "").trim();
+  if (dbPath) return path.dirname(dbPath);
+  if (process.platform === "darwin") {
+    return path.join(process.env.HOME || root, "Library", "Application Support", "FnzSafe");
+  }
+  if (process.platform === "win32") {
+    return path.join(process.env.LOCALAPPDATA || process.env.APPDATA || root, "FnzSafe");
+  }
+  return path.join(process.env.XDG_DATA_HOME || path.join(process.env.HOME || root, ".local", "share"), "FnzSafe");
+}
+
+function pidFilePath(name) {
+  return path.join(appSupportDir(), name);
+}
+
+function writeManagedPidFile(file, child, command, args) {
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        pid: child.pid,
+        executable: [command, ...args].join(" "),
+      }),
+    );
+    fs.chmodSync(file, 0o600);
+  } catch (error) {
+    console.warn(`[dev:stack] failed to write PID file ${file}: ${error.message}`);
+  }
+}
+
+function removeOwnedPidFile(file, pid) {
+  try {
+    const record = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (Number(record.pid) === Number(pid)) {
+      fs.rmSync(file, { force: true });
+    }
+  } catch {
+    /* missing or stale PID file */
+  }
+}
+
+function runCleanupScript({ fatal }) {
+  const { execFileSync } = require("node:child_process");
+  try {
+    execFileSync(process.execPath, [cleanupScript], {
+      cwd: root,
+      stdio: "inherit",
+      env: process.env,
+    });
+  } catch (error) {
+    if (!fatal) return;
+    const status = typeof error.status === "number" ? error.status : 1;
+    process.exit(status);
+  }
+}
+
+function spawnManaged(label, command, args, env, pidFileName) {
   const child = spawn(command, args, {
     cwd: root,
     stdio: "inherit",
     shell: isWindows,
-    detached: !isWindows,
+    detached: false,
     env,
   });
-  children.push(child);
+  const pidFile = pidFileName ? pidFilePath(pidFileName) : null;
+  if (pidFile) {
+    writeManagedPidFile(pidFile, child, command, args);
+  }
+  children.push({ child, pidFile });
 
   child.on("error", (error) => {
     if (!shuttingDown) {
@@ -80,8 +145,9 @@ function spawnManaged(label, command, args, env) {
   return child;
 }
 
-function stopProcess(child, signal = "SIGTERM") {
-  if (!child || !child.pid || child.exitCode !== null || child.killed) return;
+function stopProcess(entry, signal = "SIGTERM") {
+  const child = entry?.child ?? entry;
+  if (!child || !child.pid) return;
   try {
     if (isWindows) {
       child.kill(signal);
@@ -95,15 +161,21 @@ function stopProcess(child, signal = "SIGTERM") {
       /* ignore */
     }
   }
+  if (entry?.pidFile) {
+    removeOwnedPidFile(entry.pidFile, child.pid);
+  }
 }
 
 function cleanup(signal = "SIGTERM") {
   if (shuttingDown) return;
   shuttingDown = true;
-  for (const child of children) {
-    stopProcess(child, signal);
+  for (const entry of children) {
+    stopProcess(entry, signal);
   }
+  runCleanupScript({ fatal: false });
 }
+
+runCleanupScript({ fatal: true });
 
 const token = sharedApiToken();
 const env = {
@@ -115,8 +187,8 @@ const env = {
   FNZERO_SAFE_DB_PATH: desktopDatabasePath(),
 };
 
-spawnManaged("Next.js", "npm", ["exec", "--", "next", "dev", "-H", "127.0.0.1", "-p", "3840"], env);
-spawnManaged("Rust API", "cargo", ["run", "--release", "-p", "fnzero-safe-desktop-api"], env);
+spawnManaged("Next.js", "npm", ["exec", "--", "next", "dev", "-H", "127.0.0.1", "-p", "3840"], env, desktopWebPidFileName);
+spawnManaged("Rust API", "cargo", ["run", "--release", "-p", "fnzero-safe-desktop-api"], env, desktopApiPidFileName);
 
 process.once("SIGINT", () => {
   cleanup("SIGINT");

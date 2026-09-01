@@ -18,3 +18,14 @@ repository = "https://github.com/0xfnzero/FnzeroSafe"
 fnzero-safe-core = { path = "crates/core", version = "0.1.8" }
 fnzero-safe-evm-services = { path = "crates/evm-services", version = "0.1.0" }
 fnzero-safe-app-services = { path = "crates/app-services", version = "0.1.0" }
+
+# CEF support is currently shipped from Tauri's pinned preview tag. Keep every
+# Tauri crate on the same source so plugins use the Chromium runtime as well.
+[patch.crates-io]
+tauri = { git = "https://github.com/tauri-apps/tauri.git", tag = "tauri-cef-v3.0.0-alpha.25" }
+tauri-build = { git = "https://github.com/tauri-apps/tauri.git", tag = "tauri-cef-v3.0.0-alpha.25" }
+tauri-codegen = { git = "https://github.com/tauri-apps/tauri.git", tag = "tauri-cef-v3.0.0-alpha.25" }
+tauri-macros = { git = "https://github.com/tauri-apps/tauri.git", tag = "tauri-cef-v3.0.0-alpha.25" }
+tauri-plugin = { git = "https://github.com/tauri-apps/tauri.git", tag = "tauri-cef-v3.0.0-alpha.25" }
+tauri-runtime = { git = "https://github.com/tauri-apps/tauri.git", tag = "tauri-cef-v3.0.0-alpha.25" }
+tauri-utils = { git = "https://github.com/tauri-apps/tauri.git", tag = "tauri-cef-v3.0.0-alpha.25" }

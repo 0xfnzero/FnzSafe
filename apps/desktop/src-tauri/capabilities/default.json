@@ -13,6 +13,8 @@
     "allow-navigate-dapp-tab",
     "allow-set-active-dapp-tab",
     "allow-close-dapp-tab",
+    "allow-request-dapp-tab-text",
+    "allow-browser-management",
     "allow-resolve-dapp-sign-request",
     "allow-resolve-dapp-connect-request",
     "allow-biometric-wallet-status",

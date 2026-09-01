@@ -19,6 +19,30 @@ description = "Close an embedded Solana DApp browser tab."
 commands.allow = ["dapp_close_tab"]
 
 [[permission]]
+identifier = "allow-request-dapp-tab-text"
+description = "Allow the main FnzSafe window to request visible text from an embedded browser tab."
+commands.allow = ["dapp_request_tab_text"]
+
+[[permission]]
+identifier = "allow-submit-dapp-page-text"
+description = "Allow an embedded browser tab to return its visible page text to the main FnzSafe window."
+commands.allow = ["dapp_submit_page_text"]
+
+[[permission]]
+identifier = "allow-browser-management"
+description = "Manage the embedded browser, import Chrome data, and use protected browser credentials from the trusted main window."
+commands.allow = [
+  "browser_chrome_profiles",
+  "browser_import_chrome",
+  "browser_passwords_list",
+  "browser_password_delete",
+  "browser_passwords_clear",
+  "browser_autofill",
+  "browser_tab_action",
+  "browser_take_screenshot"
+]
+
+[[permission]]
 identifier = "allow-submit-dapp-sign-request"
 description = "Allow an allowlisted DApp webview to submit a transaction signing request."
 commands.allow = ["dapp_submit_sign_request"]

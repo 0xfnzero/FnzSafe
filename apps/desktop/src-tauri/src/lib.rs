@@ -25,6 +25,13 @@ use tauri::{
 use tauri_plugin_deep_link::DeepLinkExt;
 use zeroize::Zeroizing;
 
+mod browser_profile;
+
+type DesktopRuntime = tauri::Cef;
+type DesktopApp = tauri::App<DesktopRuntime>;
+type DesktopAppHandle = tauri::AppHandle<DesktopRuntime>;
+type DesktopWebview = tauri::Webview<DesktopRuntime>;
+
 /// Must match `DEFAULT_API_PORT` in `src/lib/api.ts`
 const FNZERO_SAFE_API_PORT: u16 = 3841;
 const FNZERO_SAFE_API_PORT_ATTEMPTS: u16 = 32;
@@ -45,10 +52,14 @@ const DAPP_SIGN_REQUEST_EVENT: &str = "dapp://sign-request";
 const DAPP_TAB_URL_EVENT: &str = "dapp://tab-url";
 const DAPP_TAB_TITLE_EVENT: &str = "dapp://tab-title";
 const DAPP_NEW_WINDOW_EVENT: &str = "dapp://new-window";
+const DAPP_TAB_TEXT_EVENT: &str = "dapp://tab-text";
+const DAPP_DOWNLOAD_EVENT: &str = "dapp://download";
 const DAPP_CONNECT_REQUEST_EVENT: &str = "dapp://connect-request";
 const DAPP_REQUEST_TTL_MS: u64 = 3 * 60 * 1000;
 const DAPP_WALLET_NAME: &str = "FnzSafe";
 const DESKTOP_API_BIN_NAME: &str = "fnzero-safe-desktop-api";
+const LEGACY_DESKTOP_APP_PID_FILE_NAME: &str = "desktop.pid";
+const DESKTOP_APP_PID_FILE_NAME: &str = "desktop-app.pid";
 const DESKTOP_API_PID_FILE_NAME: &str = "desktop-api.pid";
 #[cfg(target_os = "macos")]
 const BIOMETRIC_WALLET_PASSWORD_SERVICE: &str = "dev.fnzero-safe.wallet.password.v6";
@@ -414,6 +425,42 @@ struct DappTabTitleEvent {
 struct DappNewWindowEvent {
     source_tab_id: String,
     url: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct DappTabTextEvent {
+    tab_id: String,
+    url: String,
+    text: String,
+    tweets: Vec<DappCapturedTweet>,
+    captured_at_ms: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct DappCapturedTweet {
+    #[serde(default)]
+    tweet_id: String,
+    #[serde(default)]
+    author: String,
+    #[serde(default)]
+    author_name: String,
+    #[serde(default)]
+    author_handle: String,
+    #[serde(default)]
+    avatar_url: Option<String>,
+    text: String,
+    #[serde(default)]
+    source_url: Option<String>,
+    #[serde(default)]
+    published_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct DappDownloadEvent {
+    tab_id: String,
+    url: String,
+    path: String,
+    status: &'static str,
 }
 
 #[derive(Serialize)]
@@ -1027,7 +1074,7 @@ fn dapp_tab_id_from_label(label: &str) -> Option<String> {
         .map(ToString::to_string)
 }
 
-fn dapp_browser_data_directory(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+fn dapp_browser_data_directory(app: &DesktopAppHandle) -> Result<PathBuf, String> {
     let mut data_dir = app
         .path()
         .app_data_dir()
@@ -1466,7 +1513,7 @@ fn parse_sign_deep_link(url: &tauri::Url) -> Result<DappSignRequestEvent, String
 }
 
 fn enqueue_dapp_sign_request(
-    app: &tauri::AppHandle,
+    app: &DesktopAppHandle,
     state: &DappBridgeState,
     webview_label: String,
     event: DappSignRequestEvent,
@@ -1497,7 +1544,7 @@ fn enqueue_dapp_sign_request(
 }
 
 fn enqueue_dapp_connect_request(
-    app: &tauri::AppHandle,
+    app: &DesktopAppHandle,
     state: &DappBridgeState,
     event: DappConnectRequestEvent,
 ) -> Result<(), String> {
@@ -1525,7 +1572,7 @@ fn enqueue_dapp_connect_request(
         .map_err(|error| format!("failed to notify main window: {error}"))
 }
 
-fn focus_main_window(app: &tauri::AppHandle) {
+fn focus_main_window(app: &DesktopAppHandle) {
     if let Some(window) = app.get_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
@@ -1564,21 +1611,21 @@ fn append_dapp_result_to_callback_url(
     Ok(url.to_string())
 }
 
-fn handle_sign_deep_link(app: &tauri::AppHandle, url: &tauri::Url) -> Result<(), String> {
+fn handle_sign_deep_link(app: &DesktopAppHandle, url: &tauri::Url) -> Result<(), String> {
     let event = parse_sign_deep_link(url)?;
     focus_main_window(app);
     let state = app.state::<DappBridgeState>();
     enqueue_dapp_sign_request(app, state.inner(), "deep-link".to_string(), event)
 }
 
-fn handle_connect_deep_link(app: &tauri::AppHandle, url: &tauri::Url) -> Result<(), String> {
+fn handle_connect_deep_link(app: &DesktopAppHandle, url: &tauri::Url) -> Result<(), String> {
     let event = parse_connect_deep_link(url)?;
     focus_main_window(app);
     let state = app.state::<DappBridgeState>();
     enqueue_dapp_connect_request(app, state.inner(), event)
 }
 
-fn handle_fnzsafe_deep_link(app: &tauri::AppHandle, url: &tauri::Url) -> Result<(), String> {
+fn handle_fnzsafe_deep_link(app: &DesktopAppHandle, url: &tauri::Url) -> Result<(), String> {
     if is_connect_deep_link(url) {
         handle_connect_deep_link(app, url)
     } else {
@@ -1586,7 +1633,7 @@ fn handle_fnzsafe_deep_link(app: &tauri::AppHandle, url: &tauri::Url) -> Result<
     }
 }
 
-fn handle_current_fnzsafe_deep_links(app: &tauri::AppHandle) {
+fn handle_current_fnzsafe_deep_links(app: &DesktopAppHandle) {
     match app.deep_link().get_current() {
         Ok(Some(urls)) => {
             for url in urls {
@@ -2166,7 +2213,7 @@ fn open_external_url(url: String) -> Result<(), String> {
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 fn dapp_open_tab(
-    app: tauri::AppHandle,
+    app: DesktopAppHandle,
     state: tauri::State<'_, DappBridgeState>,
     tab_id: String,
     url: String,
@@ -2222,6 +2269,8 @@ fn dapp_open_tab(
     let app_for_nav = app.clone();
     let app_for_title = app.clone();
     let app_for_new_window = app.clone();
+    let app_for_download = app.clone();
+    let tab_id_for_download = tab_id_for_nav.clone();
     let data_directory = dapp_browser_data_directory(&app)?;
     let mut builder = WebviewBuilder::new(label.clone(), WebviewUrl::External(url.clone()))
         .data_directory(data_directory)
@@ -2286,6 +2335,39 @@ fn dapp_open_tab(
                 );
             }
             tauri::webview::NewWindowResponse::Deny
+        })
+        .on_download(move |_webview, event| {
+            match event {
+                tauri::webview::DownloadEvent::Requested { url, destination } => {
+                    let _ = app_for_download.emit_to(
+                        "main",
+                        DAPP_DOWNLOAD_EVENT,
+                        DappDownloadEvent {
+                            tab_id: tab_id_for_download.clone(),
+                            url: url.to_string(),
+                            path: destination.to_string_lossy().to_string(),
+                            status: "started",
+                        },
+                    );
+                }
+                tauri::webview::DownloadEvent::Finished { url, path, success } => {
+                    let _ = app_for_download.emit_to(
+                        "main",
+                        DAPP_DOWNLOAD_EVENT,
+                        DappDownloadEvent {
+                            tab_id: tab_id_for_download.clone(),
+                            url: url.to_string(),
+                            path: path
+                                .as_deref()
+                                .map(|value| value.to_string_lossy().to_string())
+                                .unwrap_or_default(),
+                            status: if success { "completed" } else { "failed" },
+                        },
+                    );
+                }
+                _ => {}
+            }
+            true
         });
 
     if let (Some(dapp), Some(wallet_public_key)) = (dapp.as_ref(), wallet_public_key.as_ref()) {
@@ -2300,8 +2382,9 @@ fn dapp_open_tab(
         .set_bounds(bounds)
         .map_err(|error| format!("failed to position dapp tab: {error}"))?;
     webview
-        .hide()
-        .map_err(|error| format!("failed to hide loading dapp tab: {error}"))?;
+        .show()
+        .map_err(|error| format!("failed to show dapp tab: {error}"))?;
+    raise_embedded_webview(&webview)?;
 
     if let (Some(dapp), Some(wallet_public_key)) = (dapp, wallet_public_key) {
         state
@@ -2325,7 +2408,7 @@ fn dapp_open_tab(
 
 #[tauri::command]
 fn dapp_navigate_tab(
-    app: tauri::AppHandle,
+    app: DesktopAppHandle,
     state: tauri::State<'_, DappBridgeState>,
     tab_id: String,
     url: String,
@@ -2355,9 +2438,66 @@ fn dapp_navigate_tab(
     Ok(())
 }
 
+fn raise_embedded_webview(webview: &DesktopWebview) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::rc::Retained;
+        use objc2_app_kit::{NSView, NSWindowOrderingMode};
+        use tauri_runtime_cef::cef::{ImplBrowser, ImplBrowserHost};
+
+        webview
+            .with_webview(move |platform_webview| {
+                let browser = platform_webview.browser();
+                let Some(host) = browser.host() else {
+                    return;
+                };
+                let handle = host.window_handle();
+                let Some(view) = (unsafe { Retained::<NSView>::retain(handle.cast()) }) else {
+                    return;
+                };
+                let Some(parent) = (unsafe { view.superview() }) else {
+                    return;
+                };
+                parent.addSubview_positioned_relativeTo(&view, NSWindowOrderingMode::Above, None);
+            })
+            .map_err(|error| format!("failed to raise dapp tab: {error}"))?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use tauri_runtime_cef::cef::{ImplBrowser, ImplBrowserHost};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            SetWindowPos, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        };
+
+        webview
+            .with_webview(|platform_webview| {
+                let browser = platform_webview.browser();
+                let Some(host) = browser.host() else {
+                    return;
+                };
+                let hwnd = host.window_handle();
+                unsafe {
+                    let _ = SetWindowPos(
+                        hwnd.0.cast(),
+                        HWND_TOP,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    );
+                }
+            })
+            .map_err(|error| format!("failed to raise dapp tab: {error}"))?;
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 fn dapp_set_active_tab(
-    app: tauri::AppHandle,
+    app: DesktopAppHandle,
     tab_id: Option<String>,
     x: f64,
     y: f64,
@@ -2370,29 +2510,35 @@ fn dapp_set_active_tab(
     } else {
         None
     };
+    let mut active_webview = None;
     for (label, webview) in app.webviews() {
         if !label.starts_with(DAPP_TAB_LABEL_PREFIX) {
             continue;
         }
         if active_label.as_deref() == Some(label.as_str()) {
-            if let Some(bounds) = bounds {
-                webview
-                    .set_bounds(bounds)
-                    .map_err(|error| format!("failed to position dapp tab: {error}"))?;
-            }
-            webview
-                .show()
-                .map_err(|error| format!("failed to show dapp tab: {error}"))?;
+            active_webview = Some(webview);
         } else {
             let _ = webview.hide();
         }
+    }
+
+    if let Some(webview) = active_webview {
+        webview
+            .show()
+            .map_err(|error| format!("failed to show dapp tab: {error}"))?;
+        if let Some(bounds) = bounds {
+            webview
+                .set_bounds(bounds)
+                .map_err(|error| format!("failed to position dapp tab: {error}"))?;
+        }
+        raise_embedded_webview(&webview)?;
     }
     Ok(())
 }
 
 #[tauri::command]
 fn dapp_close_tab(
-    app: tauri::AppHandle,
+    app: DesktopAppHandle,
     state: tauri::State<'_, DappBridgeState>,
     tab_id: String,
 ) -> Result<(), String> {
@@ -2411,9 +2557,195 @@ fn dapp_close_tab(
 }
 
 #[tauri::command]
+fn dapp_request_tab_text(
+    app: DesktopAppHandle,
+    tab_id: String,
+    advance: Option<bool>,
+) -> Result<(), String> {
+    let label = dapp_tab_label(&tab_id)?;
+    let webview = app
+        .get_webview(&label)
+        .ok_or_else(|| "dapp tab is not open".to_string())?;
+    let advance = if advance.unwrap_or(false) {
+        "true"
+    } else {
+        "false"
+    };
+    let script = format!(
+        r#"
+(function () {{
+  try {{
+    const invoke = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
+    if (typeof invoke !== "function") return;
+
+    const isTwitter = /(^|\.)((x)|(twitter))\.com$/i.test(window.location.hostname);
+    const clean = (value, limit) => String(value || "").trim().slice(0, limit);
+    const absoluteTwitterStatusUrl = (href) => {{
+      try {{
+        const url = new URL(href, window.location.origin);
+        if (!/(^|\.)((x)|(twitter))\.com$/i.test(url.hostname)) return "";
+        const match = url.pathname.match(/^\/([A-Za-z0-9_]{{1,15}})\/status\/(\d+)/);
+        return match ? `${{url.origin}}/${{match[1]}}/status/${{match[2]}}` : "";
+      }} catch (_) {{
+        return "";
+      }}
+    }};
+
+    const tweetNodes = isTwitter
+      ? Array.from(document.querySelectorAll("article[data-testid='tweet'], [data-testid='tweet']"))
+      : [];
+    const tweets = tweetNodes.slice(0, 200).map((node) => {{
+      const time = node.querySelector("time[datetime]");
+      const statusAnchors = Array.from(node.querySelectorAll("a[href*='/status/']"));
+      const statusAnchor = time?.closest("a[href*='/status/']") ||
+        statusAnchors.find((anchor) => absoluteTwitterStatusUrl(anchor.getAttribute("href") || ""));
+      const sourceUrl = absoluteTwitterStatusUrl(statusAnchor?.getAttribute("href") || "");
+      const statusMatch = sourceUrl.match(/^https?:\/\/[^/]+\/([A-Za-z0-9_]{{1,15}})\/status\/(\d+)/i);
+      const textNodes = Array.from(node.querySelectorAll("[data-testid='tweetText']"));
+      const text = clean(
+        textNodes.length > 0
+          ? textNodes.map((item) => item.innerText || item.textContent || "").join("\n")
+          : node.innerText || node.textContent || "",
+        4000,
+      );
+      const userName = node.querySelector("[data-testid='User-Name']");
+      const author = clean(userName?.innerText || userName?.textContent || "", 160);
+      const authorName = clean(
+        author.split(/\n+/).find((line) => line.trim() && !line.trim().startsWith("@") && line.trim() !== "·") || "",
+        80,
+      );
+      const avatar = node.querySelector("[data-testid='Tweet-User-Avatar'] img[src]") ||
+        node.querySelector("img[src*='pbs.twimg.com/profile_images/']");
+      return {{
+        tweet_id: clean(statusMatch?.[2], 32),
+        author,
+        author_name: authorName,
+        author_handle: clean(statusMatch?.[1], 15).toLowerCase(),
+        avatar_url: clean(avatar?.currentSrc || avatar?.getAttribute("src"), 2048) || null,
+        text,
+        source_url: sourceUrl || null,
+        published_at: clean(time?.getAttribute("datetime"), 64) || null,
+      }};
+    }}).filter((tweet) => tweet.text);
+
+    const readableNodes = tweetNodes.length > 0
+      ? tweetNodes
+      : Array.from(document.querySelectorAll("main, body")).slice(0, 1);
+    const text = readableNodes
+      .map((node) => clean(node.innerText || node.textContent || "", 250000))
+      .filter(Boolean)
+      .join("\n\n")
+      .slice(0, 250000);
+    invoke("dapp_submit_page_text", {{ text, tweets, url: window.location.href }});
+
+    if ({advance} && isTwitter) {{
+      const viewport = Math.max(window.innerHeight || 0, 600);
+      window.scrollBy({{ top: Math.floor(viewport * 0.8), left: 0, behavior: "auto" }});
+    }}
+  }} catch (_) {{}}
+}})();
+"#,
+    );
+    webview
+        .eval(&script)
+        .map_err(|error| format!("failed to request dapp page text: {error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn dapp_submit_page_text(
+    webview: DesktopWebview,
+    app: DesktopAppHandle,
+    text: String,
+    tweets: Option<Vec<DappCapturedTweet>>,
+    url: String,
+) -> Result<(), String> {
+    let webview_label = webview.label().to_string();
+    let tab_id = dapp_tab_id_from_label(&webview_label)
+        .ok_or_else(|| "page text can only be submitted from dapp tabs".to_string())?;
+    let parsed_url = parse_dapp_browser_url(&url)?;
+    if !is_safe_browser_url(&parsed_url) {
+        return Err("unsafe dapp page URL".to_string());
+    }
+    let clipped_text = text.chars().take(250_000).collect::<String>();
+    let clipped_tweets = tweets
+        .unwrap_or_default()
+        .into_iter()
+        .take(200)
+        .filter_map(|tweet| {
+            let text = tweet.text.trim().chars().take(4_000).collect::<String>();
+            if text.is_empty() {
+                return None;
+            }
+            let author_handle = tweet
+                .author_handle
+                .trim()
+                .trim_start_matches('@')
+                .chars()
+                .take(15)
+                .collect::<String>()
+                .to_ascii_lowercase();
+            let author_handle = author_handle
+                .chars()
+                .all(|value| value.is_ascii_alphanumeric() || value == '_')
+                .then_some(author_handle)
+                .unwrap_or_default();
+            let source_url = tweet.source_url.and_then(|value| {
+                let parsed = tauri::Url::parse(value.trim()).ok()?;
+                let host = parsed.host_str()?.to_ascii_lowercase();
+                let is_twitter = host == "x.com"
+                    || host.ends_with(".x.com")
+                    || host == "twitter.com"
+                    || host.ends_with(".twitter.com");
+                (is_twitter && parsed.path().contains("/status/")).then(|| parsed.to_string())
+            });
+            let avatar_url = tweet.avatar_url.and_then(|value| {
+                let parsed = tauri::Url::parse(value.trim()).ok()?;
+                let host = parsed.host_str()?.to_ascii_lowercase();
+                let is_x_image = parsed.scheme() == "https"
+                    && (host == "pbs.twimg.com" || host.ends_with(".pbs.twimg.com"));
+                (is_x_image && parsed.as_str().len() <= 2_048).then(|| parsed.to_string())
+            });
+            Some(DappCapturedTweet {
+                tweet_id: tweet
+                    .tweet_id
+                    .trim()
+                    .chars()
+                    .filter(char::is_ascii_digit)
+                    .take(32)
+                    .collect(),
+                author: tweet.author.trim().chars().take(160).collect(),
+                author_name: tweet.author_name.trim().chars().take(80).collect(),
+                author_handle,
+                avatar_url,
+                text,
+                source_url,
+                published_at: tweet
+                    .published_at
+                    .map(|value| value.trim().chars().take(64).collect())
+                    .filter(|value: &String| !value.is_empty()),
+            })
+        })
+        .collect::<Vec<_>>();
+    app.emit_to(
+        "main",
+        DAPP_TAB_TEXT_EVENT,
+        DappTabTextEvent {
+            tab_id,
+            url: parsed_url.as_str().to_string(),
+            text: clipped_text,
+            tweets: clipped_tweets,
+            captured_at_ms: now_ms(),
+        },
+    )
+    .map_err(|error| format!("failed to emit dapp page text: {error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
 fn dapp_submit_sign_request(
-    webview: tauri::Webview,
-    app: tauri::AppHandle,
+    webview: DesktopWebview,
+    app: DesktopAppHandle,
     state: tauri::State<'_, DappBridgeState>,
     method: String,
     transaction_base64: Option<String>,
@@ -2477,7 +2809,7 @@ fn dapp_submit_sign_request(
 
 #[tauri::command]
 fn dapp_poll_sign_request(
-    webview: tauri::Webview,
+    webview: DesktopWebview,
     state: tauri::State<'_, DappBridgeState>,
     request_id: String,
 ) -> Result<DappPollResponse, String> {
@@ -2654,6 +2986,12 @@ fn safe_download_filename(filename: &str) -> Result<String, String> {
 }
 
 fn downloads_dir() -> Result<PathBuf, String> {
+    #[cfg(windows)]
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .ok_or_else(|| "user profile directory is unavailable".to_string())?;
+    #[cfg(not(windows))]
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or_else(|| "HOME directory is unavailable".to_string())?;
@@ -2777,7 +3115,7 @@ fn repository_root_candidates() -> Vec<PathBuf> {
         })
 }
 
-fn stable_app_support_dir(app: &tauri::App) -> PathBuf {
+fn stable_app_support_dir(app: &DesktopApp) -> PathBuf {
     #[cfg(target_os = "macos")]
     {
         if let Ok(home) = env::var("HOME") {
@@ -2892,7 +3230,7 @@ fn migrate_wallet_database_if_needed(target: &Path, sources: &[PathBuf]) {
     }
 }
 
-fn preferred_wallet_database_path(app: &tauri::App) -> PathBuf {
+fn preferred_wallet_database_path(app: &DesktopApp) -> PathBuf {
     if let Ok(path) = env::var("FNZERO_SAFE_DB_PATH") {
         let path = path.trim();
         if !path.is_empty() {
@@ -2922,7 +3260,7 @@ fn preferred_wallet_database_path(app: &tauri::App) -> PathBuf {
     target
 }
 
-fn desktop_api_binary_candidates(app: &tauri::App) -> Vec<PathBuf> {
+fn desktop_api_binary_candidates(app: &DesktopApp) -> Vec<PathBuf> {
     let binary_name = desktop_api_binary_name();
     let mut candidates = Vec::new();
 
@@ -2963,7 +3301,7 @@ fn desktop_api_binary_candidates(app: &tauri::App) -> Vec<PathBuf> {
 }
 
 fn start_desktop_api_if_needed(
-    app: &tauri::App,
+    app: &DesktopApp,
     process: &DesktopApiProcess,
 ) -> Result<(), String> {
     if cfg!(debug_assertions) && api_port_is_open(FNZERO_SAFE_API_PORT) {
@@ -3062,12 +3400,33 @@ fn start_desktop_api_if_needed(
     Err(format!("本地后端已启动但端口 {api_port} 尚未就绪"))
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
+#[tauri::cef_entry_point]
 pub fn run() {
     let pid_dir = prelaunch_app_support_dir();
+    let legacy_desktop_app_pid_file = pid_dir.join(LEGACY_DESKTOP_APP_PID_FILE_NAME);
+    let desktop_app_pid_file = pid_dir.join(DESKTOP_APP_PID_FILE_NAME);
     let desktop_api_pid_file = pid_dir.join(DESKTOP_API_PID_FILE_NAME);
+    let current_pid = std::process::id();
+    if let Err(error) = terminate_recorded_process(&legacy_desktop_app_pid_file) {
+        eprintln!("failed to stop legacy recorded desktop app process: {error}");
+    }
+    if let Err(error) = terminate_recorded_process(&desktop_app_pid_file) {
+        eprintln!("failed to stop recorded desktop app process: {error}");
+    }
+    match env::current_exe() {
+        Ok(current_exe) => {
+            if let Err(error) =
+                write_managed_pid_file(&desktop_app_pid_file, &current_exe, current_pid)
+            {
+                eprintln!("failed to write desktop app PID file: {error}");
+            }
+        }
+        Err(error) => {
+            eprintln!("failed to resolve current desktop app executable: {error}");
+        }
+    }
 
-    tauri::Builder::default()
+    let run_result = tauri::Builder::<DesktopRuntime>::default()
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_single_instance::Builder::new().build())
         .manage(DappBridgeState::default())
@@ -3079,6 +3438,16 @@ pub fn run() {
             dapp_navigate_tab,
             dapp_set_active_tab,
             dapp_close_tab,
+            dapp_request_tab_text,
+            dapp_submit_page_text,
+            browser_profile::browser_chrome_profiles,
+            browser_profile::browser_import_chrome,
+            browser_profile::browser_passwords_list,
+            browser_profile::browser_password_delete,
+            browser_profile::browser_passwords_clear,
+            browser_profile::browser_autofill,
+            browser_profile::browser_tab_action,
+            browser_profile::browser_take_screenshot,
             dapp_submit_sign_request,
             dapp_poll_sign_request,
             dapp_pending_sign_request,
@@ -3129,8 +3498,9 @@ pub fn run() {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .run(tauri::generate_context!());
+    remove_owned_pid_file(&desktop_app_pid_file, current_pid);
+    run_result.expect("error while running tauri application");
 }
 
 #[cfg(test)]

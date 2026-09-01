@@ -19,14 +19,14 @@
     "test:devnet-airdrop": "node scripts/test-devnet-airdrop.cjs",
     "test:program-deploy": "node scripts/test-program-deploy.cjs",
     "lint": "node scripts/check-sensitive-inputs.cjs && eslint",
-    "tauri": "tauri",
+    "tauri": "node scripts/run-tauri-cef.cjs",
     "predesktop:dev": "node scripts/kill-dev-processes.cjs && node scripts/refresh-desktop-icons.cjs",
     "desktop:dev": "node scripts/desktop-dev.cjs",
-    "desktop:build": "tauri build"
+    "desktop:build": "npm run tauri -- build"
   },
   "dependencies": {
     "@base-ui/react": "^1.3.0",
-    "@tauri-apps/api": "^2.10.1",
+    "@tauri-apps/api": "^2.11.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.577.0",
@@ -41,7 +41,6 @@
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.5",
-    "@tauri-apps/cli": "^2.10.1",
     "@types/node": "^20",
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19",

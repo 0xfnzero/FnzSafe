@@ -18,6 +18,7 @@ import {
   ArrowLeft,
   ChevronRight,
   ChevronDown,
+  ChevronUp,
   Copy,
   Check,
   RefreshCw,
@@ -54,10 +55,16 @@ import {
   HelpCircle,
   Minus,
   QrCode,
+  Clock,
+  FileText,
+  ListFilter,
+  Radio,
+  ShoppingCart,
 } from "lucide-react";
 import LanguageSwitcher from '@/components/LanguageSwitcher';
 import { FieldHelp } from "@/components/FieldHelp";
 import { SavedWalletPicker } from "@/components/SavedWalletPicker";
+import { BrowserMenu } from "@/components/BrowserMenu";
 import { DEFAULT_API_PORT } from "@/lib/api";
 import { apiFetch } from "@/lib/apiFetch";
 import {
@@ -1132,6 +1139,42 @@ interface DappTransactionPreview {
   warnings: string[];
 }
 
+type TweetSignalChain =
+  | "Solana"
+  | "Ethereum"
+  | "Base"
+  | "BSC"
+  | "Polygon"
+  | "Arbitrum"
+  | "Sui"
+  | "Unknown EVM";
+
+interface TweetTokenSignal {
+  id: string;
+  chain: TweetSignalChain;
+  contractAddress: string;
+  author: string;
+  authorName?: string;
+  avatarUrl?: string;
+  tweetText: string;
+  sourceUrl?: string;
+  publishedAt?: string;
+  detectedAt: string;
+}
+
+interface CapturedTweet {
+  tweet_id: string;
+  author: string;
+  author_name?: string;
+  author_handle: string;
+  avatar_url?: string | null;
+  text: string;
+  source_url?: string | null;
+  published_at?: string | null;
+}
+
+type TwitterSignalCaptureStatus = "idle" | "waiting" | "scanning" | "success" | "empty" | "error";
+
 const DAPP_CATEGORIES: DappCategoryId[] = ["trend", "defi", "trading", "nft", "staking"];
 const DAPP_CATALOG: DappCatalogItem[] = [
   {
@@ -1335,6 +1378,19 @@ const DAPP_HOME_TAB: DappBrowserTab = {
   loading: false,
 };
 
+const TWITTER_BROWSER_HOME_TAB_ID = "twitter-signals-home";
+const TWITTER_BROWSER_HOME_TAB: DappBrowserTab = {
+  id: TWITTER_BROWSER_HOME_TAB_ID,
+  title: "推文监控",
+  url: "",
+  addressInput: "",
+  closable: false,
+  showAddressBar: false,
+  walletConnected: false,
+  webviewOpen: false,
+  loading: false,
+};
+
 interface DappTabUrlEvent {
   tab_id: string;
   url: string;
@@ -1351,8 +1407,20 @@ interface DappNewWindowEvent {
   url: string;
 }
 
+interface DappTabTextEvent {
+  tab_id: string;
+  url: string;
+  text: string;
+  tweets?: CapturedTweet[];
+  captured_at_ms: number;
+}
+
 function newDappTabId(): string {
   return `dapp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function newTwitterBrowserTabId(): string {
+  return `twitter-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function normalizeDappBrowserUrl(input: string): string {
@@ -1383,6 +1451,380 @@ function dappForUrl(url: string): DappCatalogItem | undefined {
   } catch {
     return undefined;
   }
+}
+
+const TWITTER_SIGNAL_STORAGE_KEY = "fnzero-safe.twitter-signals.v1";
+const DEFAULT_TWITTER_SIGNAL_INTERVAL_SEC = 60;
+const MAX_TWITTER_SIGNAL_SOURCE_CHARS = 250_000;
+const MAX_TWITTER_SIGNALS = 300;
+const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+const EVM_ADDRESS_RE = /0x[a-fA-F0-9]{40}\b/g;
+const SUI_ADDRESS_RE = /0x[a-fA-F0-9]{64}\b/g;
+const SOLANA_ADDRESS_RE = /[1-9A-HJ-NP-Za-km-z]{32,44}/g;
+
+function normalizeTwitterHandle(value: string): string {
+  return value.trim().replace(/^@+/, "").toLowerCase();
+}
+
+function twitterWatchedHandleSet(value: string): Set<string> {
+  return new Set(
+    value
+      .split(/[\s,;，；]+/)
+      .map(normalizeTwitterHandle)
+      .filter(Boolean),
+  );
+}
+
+function tweetAuthorFromText(text: string, watchedHandles: Set<string>): string {
+  const handles = Array.from(text.matchAll(/@([A-Za-z0-9_]{1,15})/g)).map((match) => normalizeTwitterHandle(match[1] ?? ""));
+  const watchedMatch = handles.find((handle) => watchedHandles.has(handle));
+  return watchedMatch ? `@${watchedMatch}` : handles[0] ? `@${handles[0]}` : "-";
+}
+
+function tweetMatchesWatchedHandles(
+  text: string,
+  watchedHandles: Set<string>,
+  authorHandle?: string,
+): boolean {
+  if (watchedHandles.size === 0) return true;
+  const normalizedAuthor = normalizeTwitterHandle(authorHandle ?? "");
+  if (normalizedAuthor) return watchedHandles.has(normalizedAuthor);
+  const normalizedText = text.toLowerCase();
+  return Array.from(watchedHandles).some((handle) =>
+    normalizedText.includes(`@${handle}`) || normalizedText.includes(`/${handle}`),
+  );
+}
+
+function decodedBase58ByteLength(value: string): number | null {
+  const bytes: number[] = [];
+  for (const character of value) {
+    const digit = BASE58_ALPHABET.indexOf(character);
+    if (digit < 0) return null;
+    let carry = digit;
+    for (let index = 0; index < bytes.length; index += 1) {
+      carry += bytes[index] * 58;
+      bytes[index] = carry & 0xff;
+      carry >>= 8;
+    }
+    while (carry > 0) {
+      bytes.push(carry & 0xff);
+      carry >>= 8;
+    }
+  }
+  let leadingZeroBytes = 0;
+  while (leadingZeroBytes < value.length && value[leadingZeroBytes] === "1") {
+    leadingZeroBytes += 1;
+  }
+  return bytes.length + leadingZeroBytes;
+}
+
+function isLikelySolanaTokenAddress(candidate: string, source: string, index: number): boolean {
+  if (candidate.length < 32 || candidate.length > 44) return false;
+  if (/^\d+$/.test(candidate)) return false;
+  if (decodedBase58ByteLength(candidate) !== 32) return false;
+  const before = source[index - 1] ?? "";
+  const after = source[index + candidate.length] ?? "";
+  if (/[A-Za-z0-9]/.test(before) || /[A-Za-z0-9]/.test(after)) return false;
+  return true;
+}
+
+function detectTweetSignalChain(text: string, address: string): TweetSignalChain {
+  const lower = text.toLowerCase();
+  if (address.startsWith("0x") && address.length === 66) {
+    if (/\bsui\b/.test(lower)) return "Sui";
+  }
+  if (address.startsWith("0x")) {
+    if (/\bbase\b/.test(lower)) return "Base";
+    if (/\bbsc\b|\bbnb\b|binance/.test(lower)) return "BSC";
+    if (/\bpolygon\b|\bmatic\b/.test(lower)) return "Polygon";
+    if (/\barb\b|arbitrum/.test(lower)) return "Arbitrum";
+    if (/\beth\b|ethereum|erc-20|erc20/.test(lower)) return "Ethereum";
+    return "Unknown EVM";
+  }
+  if (/\bsol\b|solana|pump\.fun|pumpfun|jup\.ag|raydium/i.test(text)) return "Solana";
+  return "Solana";
+}
+
+function tweetSourceUrl(text: string): string | undefined {
+  const match = text.match(/https:\/\/(?:x\.com|twitter\.com)\/[A-Za-z0-9_]+\/status\/\d+/i);
+  return match?.[0];
+}
+
+function isTwitterPageUrl(value: string): boolean {
+  try {
+    const host = new URL(value).hostname.toLowerCase();
+    return host === "x.com" || host.endsWith(".x.com") || host === "twitter.com" || host.endsWith(".twitter.com");
+  } catch {
+    return false;
+  }
+}
+
+function shortSignalId(value: string): string {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = Math.imul(31, hash) + value.charCodeAt(index);
+    hash |= 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+function compactContractAddress(value: string): string {
+  if (value.length <= 20) return value;
+  const prefixLength = value.startsWith("0x") ? 8 : 7;
+  return `${value.slice(0, prefixLength)}...${value.slice(-7)}`;
+}
+
+interface TweetSignalInput {
+  text: string;
+  author?: string;
+  authorName?: string;
+  authorHandle?: string;
+  avatarUrl?: string;
+  sourceUrl?: string;
+  publishedAt?: string;
+  tweetId?: string;
+}
+
+function parseTweetSignalInputs(
+  inputs: TweetSignalInput[],
+  watchedUsers: string,
+  now = new Date(),
+): TweetTokenSignal[] {
+  const watchedHandles = twitterWatchedHandleSet(watchedUsers);
+  const seen = new Set<string>();
+  const detectedAt = now.toISOString();
+  const signals: TweetTokenSignal[] = [];
+
+  for (const input of inputs) {
+    const text = input.text.trim();
+    if (!text || !tweetMatchesWatchedHandles(text, watchedHandles, input.authorHandle)) continue;
+    const candidates: Array<{ address: string; chain: TweetSignalChain }> = [];
+    for (const match of text.matchAll(SUI_ADDRESS_RE)) {
+      candidates.push({ address: match[0], chain: detectTweetSignalChain(text, match[0]) });
+    }
+    for (const match of text.matchAll(EVM_ADDRESS_RE)) {
+      if (candidates.some((item) => item.address.toLowerCase() === match[0].toLowerCase())) continue;
+      candidates.push({ address: match[0], chain: detectTweetSignalChain(text, match[0]) });
+    }
+    for (const match of text.matchAll(SOLANA_ADDRESS_RE)) {
+      const index = match.index ?? 0;
+      if (!isLikelySolanaTokenAddress(match[0], text, index)) continue;
+      candidates.push({ address: match[0], chain: "Solana" });
+    }
+
+    const sourceIdentity = input.sourceUrl || input.tweetId || `${input.authorHandle ?? input.author ?? ""}:${text}`;
+    for (const candidate of candidates) {
+      const key = `${candidate.chain}:${candidate.address.toLowerCase()}:${sourceIdentity}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const normalizedHandle = normalizeTwitterHandle(input.authorHandle ?? "");
+      signals.push({
+        id: shortSignalId(key),
+        chain: candidate.chain,
+        contractAddress: candidate.address,
+        author: normalizedHandle
+          ? `@${normalizedHandle}`
+          : input.author?.trim() || tweetAuthorFromText(text, watchedHandles),
+        authorName: input.authorName?.trim() || undefined,
+        avatarUrl: input.avatarUrl?.trim() || undefined,
+        tweetText: text,
+        sourceUrl: input.sourceUrl || tweetSourceUrl(text),
+        publishedAt: input.publishedAt,
+        detectedAt,
+      });
+    }
+  }
+  return signals;
+}
+
+function parseTweetTokenSignals(source: string, watchedUsers: string, now = new Date()): TweetTokenSignal[] {
+  const clippedSource = source.slice(0, MAX_TWITTER_SIGNAL_SOURCE_CHARS);
+  const blocks = clippedSource
+    .split(/\n{2,}|(?=https:\/\/(?:x\.com|twitter\.com)\/[A-Za-z0-9_]+\/status\/\d+)/i)
+    .map((block) => block.trim())
+    .filter(Boolean);
+  return parseTweetSignalInputs(blocks.map((text) => ({ text })), watchedUsers, now);
+}
+
+function parseCapturedTweetTokenSignals(
+  tweets: CapturedTweet[],
+  watchedUsers: string,
+  now = new Date(),
+): TweetTokenSignal[] {
+  return parseTweetSignalInputs(
+    tweets.map((tweet) => ({
+      text: tweet.text,
+      author: tweet.author,
+      authorName: tweet.author_name,
+      authorHandle: tweet.author_handle,
+      avatarUrl: tweet.avatar_url || undefined,
+      sourceUrl: tweet.source_url || undefined,
+      publishedAt: tweet.published_at || undefined,
+      tweetId: tweet.tweet_id,
+    })),
+    watchedUsers,
+    now,
+  );
+}
+
+function mergeTweetTokenSignals(
+  existing: TweetTokenSignal[],
+  incoming: TweetTokenSignal[],
+): TweetTokenSignal[] {
+  const existingById = new Map(existing.map((signal) => [signal.id, signal]));
+  const merged = incoming.map((signal) => {
+    const previous = existingById.get(signal.id);
+    existingById.delete(signal.id);
+    return previous ? { ...signal, detectedAt: previous.detectedAt } : signal;
+  });
+  for (const signal of existing) {
+    if (existingById.has(signal.id)) merged.push(signal);
+  }
+  return merged.slice(0, MAX_TWITTER_SIGNALS);
+}
+
+function filterTweetTokenSignals(
+  signals: TweetTokenSignal[],
+  watchedUsers: string,
+): TweetTokenSignal[] {
+  const watchedHandles = twitterWatchedHandleSet(watchedUsers);
+  if (watchedHandles.size === 0) return signals;
+  return signals.filter((signal) =>
+    tweetMatchesWatchedHandles(signal.tweetText, watchedHandles, signal.author),
+  );
+}
+
+const TWEET_SIGNAL_TEXT_TOKEN_RE = /(https?:\/\/[^\s]+|@[A-Za-z0-9_]{1,15}|#[\p{L}\p{N}_]+|\$[A-Za-z][A-Za-z0-9_]*|0x[a-fA-F0-9]{40,64}|[1-9A-HJ-NP-Za-km-z]{32,44})/gu;
+
+function twitterTextTokenUrl(token: string): string | undefined {
+  const value = token.replace(/[.,!?;:)\]}]+$/g, "");
+  if (/^@[A-Za-z0-9_]{1,15}$/.test(value)) return `https://x.com/${value.slice(1)}`;
+  if (/^\$[A-Za-z][A-Za-z0-9_]*$/.test(value)) {
+    return `https://x.com/search?q=${encodeURIComponent(value)}&src=cashtag_click`;
+  }
+  if (/^#[\p{L}\p{N}_]+$/u.test(value)) {
+    return `https://x.com/search?q=${encodeURIComponent(value)}&src=hashtag_click`;
+  }
+  if (/^https?:\/\//i.test(value)) return value;
+  return undefined;
+}
+
+function SelectableTwitterLink({
+  url,
+  onOpen,
+  className,
+  children,
+}: {
+  url: string;
+  onOpen: (url: string) => void;
+  className?: string;
+  children: ReactNode;
+}) {
+  const clickTimerRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (clickTimerRef.current !== null) window.clearTimeout(clickTimerRef.current);
+  }, []);
+
+  const clearPendingOpen = () => {
+    if (clickTimerRef.current === null) return;
+    window.clearTimeout(clickTimerRef.current);
+    clickTimerRef.current = null;
+  };
+
+  return (
+    <span
+      role="link"
+      tabIndex={0}
+      className={`cursor-pointer select-text hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sky-300/60 ${className || ""}`}
+      onClick={(event) => {
+        if (event.detail > 1) {
+          clearPendingOpen();
+          return;
+        }
+        clearPendingOpen();
+        clickTimerRef.current = window.setTimeout(() => {
+          clickTimerRef.current = null;
+          const selection = window.getSelection();
+          if (selection && !selection.isCollapsed && selection.toString().trim()) return;
+          onOpen(url);
+        }, 240);
+      }}
+      onDoubleClick={clearPendingOpen}
+      onKeyDown={(event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        clearPendingOpen();
+        onOpen(url);
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+function renderTweetSignalText(
+  text: string,
+  contractAddress: string,
+  onOpen: (url: string) => void,
+): ReactNode[] {
+  const contract = contractAddress.toLowerCase();
+  return text.split(TWEET_SIGNAL_TEXT_TOKEN_RE).map((part, index) => {
+    if (!part) return null;
+    const normalized = part.replace(/[.,!?;:)\]}]+$/g, "").toLowerCase();
+    if (normalized === contract) {
+      return <span key={`${index}-${part}`} className="font-medium text-emerald-300">{part}</span>;
+    }
+    const targetUrl = twitterTextTokenUrl(part);
+    if (targetUrl) {
+      return (
+        <SelectableTwitterLink key={`${index}-${part}`} url={targetUrl} onOpen={onOpen} className="text-sky-400">
+          {part}
+        </SelectableTwitterLink>
+      );
+    }
+    return part;
+  });
+}
+
+function tweetSignalChainClass(chain: TweetSignalChain): string {
+  if (chain === "Solana") return "border-violet-300/25 bg-violet-300/10 text-violet-200";
+  if (chain === "BSC") return "border-amber-300/25 bg-amber-300/10 text-amber-200";
+  if (chain === "Sui") return "border-cyan-300/25 bg-cyan-300/10 text-cyan-200";
+  return "border-sky-300/25 bg-sky-300/10 text-sky-200";
+}
+
+function formatTweetSignalTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function TweetSignalAvatar({ signal }: { signal: TweetTokenSignal }) {
+  const [failed, setFailed] = useState(false);
+  const label = signal.authorName || signal.author || "X";
+  const initial = label.replace(/^@/, "").slice(0, 1).toUpperCase() || "X";
+  return (
+    <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-700 text-xs font-semibold text-white ring-1 ring-white/10">
+      {signal.avatarUrl && !failed ? (
+        // eslint-disable-next-line @next/next/no-img-element -- X profile images are dynamic remote assets with local fallback handling.
+        <img
+          src={signal.avatarUrl}
+          alt=""
+          className="h-full w-full object-cover"
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          onError={() => setFailed(true)}
+        />
+      ) : initial}
+    </span>
+  );
 }
 
 function dappNativeWindowTopOffset(): number {
@@ -2086,6 +2528,9 @@ function defaultBackTarget(formId: string): string | null {
     case "program-invoke-standalone":
     case "external-sign":
       return "contract-tools";
+    case "dapp-store":
+    case "twitter-signals":
+      return "browser-workbench";
     case "create-nonce":
       return "nonce-workbench";
     case "squads-proposals":
@@ -2436,10 +2881,24 @@ export default function Home() {
       ],
     },
     {
-      id: "dapp-store",
-      label: tf("features.dapp-store.title", "DApp Store"),
+      id: "browser-workbench",
+      label: tf("features.browser-workbench.title", "浏览器"),
       icon: <Compass className="w-5 h-5" />,
       network: true,
+      children: [
+        {
+          id: "dapp-store",
+          label: tf("features.dapp-store.title", "DApp Store"),
+          icon: <Compass className="w-4 h-4" />,
+          network: true,
+        },
+        {
+          id: "twitter-signals",
+          label: tf("features.twitter-signals.title", "推文线索"),
+          icon: <Radio className="w-4 h-4" />,
+          network: true,
+        },
+      ],
     },
     {
       id: "squads-workspace",
@@ -2492,6 +2951,8 @@ export default function Home() {
   const [privateKeyQrRevealed, setPrivateKeyQrRevealed] = useState(false);
   const [dappTabs, setDappTabs] = useState<DappBrowserTab[]>([DAPP_HOME_TAB]);
   const [activeDappTabId, setActiveDappTabId] = useState(DAPP_HOME_TAB_ID);
+  const [twitterBrowserTabs, setTwitterBrowserTabs] = useState<DappBrowserTab[]>([TWITTER_BROWSER_HOME_TAB]);
+  const [activeTwitterBrowserTabId, setActiveTwitterBrowserTabId] = useState(TWITTER_BROWSER_HOME_TAB_ID);
   const [dappConnectRequest, setDappConnectRequest] = useState<DappConnectRequestEvent | null>(null);
   const [dappConnectWalletId, setDappConnectWalletId] = useState("");
   const [dappSignRequest, setDappSignRequest] = useState<DappSignRequestEvent | null>(null);
@@ -2504,6 +2965,20 @@ export default function Home() {
   const [dappTransactionPreviewError, setDappTransactionPreviewError] = useState<string | null>(null);
   const [dappTransactionPreviewLoading, setDappTransactionPreviewLoading] = useState(false);
   const [dappPreviewDetailsOpen, setDappPreviewDetailsOpen] = useState(false);
+  const [dappBrowserOverlayOpen, setDappBrowserOverlayOpen] = useState(false);
+  const [twitterBrowserOverlayOpen, setTwitterBrowserOverlayOpen] = useState(false);
+  const [twitterWatchedUsers, setTwitterWatchedUsers] = useState("");
+  const [twitterSignalSource, setTwitterSignalSource] = useState("");
+  const [twitterSignals, setTwitterSignals] = useState<TweetTokenSignal[]>([]);
+  const [twitterSignalAutoScan, setTwitterSignalAutoScan] = useState(false);
+  const [twitterSignalIntervalSec, setTwitterSignalIntervalSec] = useState(DEFAULT_TWITTER_SIGNAL_INTERVAL_SEC);
+  const [twitterSignalLastScanAt, setTwitterSignalLastScanAt] = useState<string | null>(null);
+  const [twitterSignalCaptureBusy, setTwitterSignalCaptureBusy] = useState(false);
+  const [twitterSignalCaptureStatus, setTwitterSignalCaptureStatus] = useState<TwitterSignalCaptureStatus>("idle");
+  const [twitterSignalCaptureError, setTwitterSignalCaptureError] = useState("");
+  const [twitterSignalLastTweetCount, setTwitterSignalLastTweetCount] = useState(0);
+  const [twitterSignalManualImportOpen, setTwitterSignalManualImportOpen] = useState(false);
+  const [expandedTwitterSignalIds, setExpandedTwitterSignalIds] = useState<Set<string>>(() => new Set());
   const [biometricStatuses, setBiometricStatuses] = useState<Record<string, BiometricWalletStatus>>({});
   const [biometricBusyWalletId, setBiometricBusyWalletId] = useState<string | null>(null);
   const [savePasswordToBiometric, setSavePasswordToBiometric] = useState(false);
@@ -2582,6 +3057,13 @@ export default function Home() {
   const dappBrowserTabBarRef = useRef<HTMLDivElement | null>(null);
   const dappBrowserAddressBarRef = useRef<HTMLDivElement | null>(null);
   const dappBrowserViewportRef = useRef<HTMLDivElement | null>(null);
+  const twitterBrowserShellRef = useRef<HTMLDivElement | null>(null);
+  const twitterBrowserTabBarRef = useRef<HTMLDivElement | null>(null);
+  const twitterBrowserAddressBarRef = useRef<HTMLDivElement | null>(null);
+  const twitterBrowserViewportRef = useRef<HTMLDivElement | null>(null);
+  const twitterSignalNotifyCaptureRef = useRef(false);
+  const twitterSignalCaptureInFlightRef = useRef(false);
+  const twitterSignalCaptureTimeoutRef = useRef<number | null>(null);
   const programDeploymentWatchdogTrippedRef = useRef(false);
   lastProgramDeploymentIntentRef.current = lastProgramDeploymentIntent;
   programDeploymentJournalRef.current = programDeploymentJournal;
@@ -6106,6 +6588,13 @@ export default function Home() {
   };
 
   const activeDappTab = dappTabs.find((tab) => tab.id === activeDappTabId) ?? dappTabs[0] ?? DAPP_HOME_TAB;
+  const activeTwitterBrowserTab = twitterBrowserTabs.find((tab) => tab.id === activeTwitterBrowserTabId)
+    ?? twitterBrowserTabs[0]
+    ?? TWITTER_BROWSER_HOME_TAB;
+  const twitterDappTab = activeTwitterBrowserTab.webviewOpen && isTwitterPageUrl(activeTwitterBrowserTab.url)
+    ? activeTwitterBrowserTab
+    : [...twitterBrowserTabs].reverse().find((tab) => tab.webviewOpen && isTwitterPageUrl(tab.url));
+  const visibleTwitterSignals = filterTweetTokenSignals(twitterSignals, twitterWatchedUsers);
   const dappSearchTerm = dappSearch.trim().toLowerCase();
   const dappStoreVisibleDapps = SOLANA_DAPP_CATALOG.filter((dapp) => {
     const matchesCategory = dappCategory === "trend" || dapp.category === dappCategory;
@@ -6139,28 +6628,69 @@ export default function Home() {
     };
   }, [activeDappTab.showAddressBar]);
 
+  const twitterBrowserBounds = useCallback(() => {
+    const viewport = twitterBrowserViewportRef.current;
+    if (!viewport) return null;
+    const rect = viewport.getBoundingClientRect();
+    const nativeTopOffset = dappNativeWindowTopOffset();
+    const width = Math.max(0, Math.floor(rect.width));
+    const height = Math.max(0, Math.floor(rect.height));
+    // Ignore transient measurements while the full-height workspace is still settling.
+    if (width < 40 || height < 160) return null;
+    return {
+      x: Math.round(rect.left),
+      y: Math.round(rect.top + nativeTopOffset),
+      width,
+      height,
+    };
+  }, []);
+
   const setActiveNativeDappTab = useCallback(async () => {
     if (!isTauriWebview()) return;
-    const tab = dappTabs.find((item) => item.id === activeDappTabId);
-    const bounds = dappBrowserBounds();
+    const isDappWorkspace = selectedForm === "dapp-store";
+    const isTwitterWorkspace = selectedForm === "twitter-signals";
+    const tab = isDappWorkspace
+      ? dappTabs.find((item) => item.id === activeDappTabId)
+      : isTwitterWorkspace
+        ? twitterBrowserTabs.find((item) => item.id === activeTwitterBrowserTabId)
+        : undefined;
+    const bounds = isDappWorkspace
+      ? dappBrowserBounds()
+      : isTwitterWorkspace
+        ? twitterBrowserBounds()
+        : null;
+    const overlayOpen = isDappWorkspace ? dappBrowserOverlayOpen : twitterBrowserOverlayOpen;
+    const activeTabId = isDappWorkspace ? activeDappTabId : activeTwitterBrowserTabId;
     const shouldShowNativeTab =
-      selectedForm === "dapp-store" &&
+      (isDappWorkspace || isTwitterWorkspace) &&
       !dappSignRequest &&
+      !overlayOpen &&
       Boolean(tab?.webviewOpen) &&
-      !tab?.loading &&
       Boolean(bounds);
     try {
       await invoke("dapp_set_active_tab", {
-        tabId: shouldShowNativeTab ? activeDappTabId : null,
+        tabId: shouldShowNativeTab ? activeTabId : null,
         x: bounds?.x ?? 0,
         y: bounds?.y ?? 0,
         width: bounds?.width ?? 0,
         height: bounds?.height ?? 0,
       });
-    } catch {
+    } catch (error) {
       // A tab can be closed while React is still settling layout; the next sync will correct it.
+      console.warn("failed to synchronize embedded browser tab", error);
     }
-  }, [activeDappTabId, dappBrowserBounds, dappSignRequest, dappTabs, selectedForm]);
+  }, [
+    activeDappTabId,
+    activeTwitterBrowserTabId,
+    dappBrowserBounds,
+    dappBrowserOverlayOpen,
+    dappSignRequest,
+    dappTabs,
+    selectedForm,
+    twitterBrowserBounds,
+    twitterBrowserOverlayOpen,
+    twitterBrowserTabs,
+  ]);
 
   const createDappWebview = useCallback(async (
     tabId: string,
@@ -6193,6 +6723,13 @@ export default function Home() {
         appId: dapp?.id ?? null,
         walletPublicKey: wallet?.public_key ?? null,
         network: effectiveRpcRequest,
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+      });
+      await invoke("dapp_set_active_tab", {
+        tabId,
         x: bounds.x,
         y: bounds.y,
         width: bounds.width,
@@ -6246,7 +6783,7 @@ export default function Home() {
           url,
           addressInput: url,
           closable: true,
-          showAddressBar: Boolean(options.showAddressBar),
+          showAddressBar: options.showAddressBar ?? true,
           appId: matchedDapp?.id,
           walletConnected: false,
           webviewOpen: false,
@@ -6259,6 +6796,114 @@ export default function Home() {
       void createDappWebview(tabId, url, matchedDapp);
     });
   }, [createDappWebview, effectiveWallet]);
+
+  const createTwitterBrowserWebview = useCallback(async (
+    tabId: string,
+    url: string,
+    dapp?: DappCatalogItem,
+  ) => {
+    if (!isTauriWebview()) {
+      toast.error(tf("features.dapp-store.tauriOnly", "内置浏览器需要在桌面客户端中使用。"));
+      return;
+    }
+    const bounds = twitterBrowserBounds();
+    if (!bounds) {
+      requestAnimationFrame(() => {
+        void createTwitterBrowserWebview(tabId, url, dapp);
+      });
+      return;
+    }
+    const wallet = dapp ? effectiveWallet : undefined;
+    if (dapp && !wallet) {
+      toast.error(tf("features.dapp-store.noWallet", "请先选择一个钱包。"));
+      return;
+    }
+    setTwitterBrowserTabs((tabs) => tabs.map((tab) =>
+      tab.id === tabId ? { ...tab, webviewOpen: true, loading: true } : tab,
+    ));
+    try {
+      await invoke("dapp_open_tab", {
+        tabId,
+        url,
+        appId: dapp?.id ?? null,
+        walletPublicKey: wallet?.public_key ?? null,
+        network: effectiveRpcRequest,
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+      });
+      await invoke("dapp_set_active_tab", {
+        tabId,
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+      });
+      setTwitterBrowserTabs((tabs) => tabs.map((tab) =>
+        tab.id === tabId
+          ? {
+            ...tab,
+            url,
+            addressInput: url,
+            appId: dapp?.id,
+            walletConnected: Boolean(dapp && wallet),
+            webviewOpen: true,
+          }
+          : tab,
+      ));
+    } catch (error) {
+      setTwitterBrowserTabs((tabs) => tabs.map((tab) =>
+        tab.id === tabId ? { ...tab, webviewOpen: false, loading: false } : tab,
+      ));
+      toast.error(errorMessage(error, tf("features.dapp-store.openFailed", "打开页面失败")));
+    }
+  }, [effectiveRpcRequest, effectiveWallet, tf, twitterBrowserBounds]);
+
+  const openUrlInTwitterBrowserTab = useCallback((
+    rawUrl: string,
+    options: { dapp?: DappCatalogItem; tabId?: string; showAddressBar?: boolean } = {},
+  ) => {
+    let url: string;
+    try {
+      url = normalizeDappBrowserUrl(rawUrl);
+    } catch (error) {
+      toast.error(errorMessage(error, "网址格式不正确"));
+      return;
+    }
+    const matchedDapp = options.dapp ?? (effectiveWallet ? dappForUrl(url) : undefined);
+    const tabId = options.tabId ?? newTwitterBrowserTabId();
+    const title = matchedDapp?.name ?? new URL(url).hostname;
+    setTwitterBrowserTabs((tabs) => {
+      const existing = tabs.find((tab) => tab.id === tabId);
+      if (existing) {
+        return tabs.map((tab) =>
+          tab.id === tabId
+            ? { ...tab, title, url, addressInput: url, appId: matchedDapp?.id, walletConnected: false, loading: true }
+            : tab,
+        );
+      }
+      return [
+        ...tabs,
+        {
+          id: tabId,
+          title,
+          url,
+          addressInput: url,
+          closable: true,
+          showAddressBar: options.showAddressBar ?? true,
+          appId: matchedDapp?.id,
+          walletConnected: false,
+          webviewOpen: false,
+          loading: true,
+        },
+      ];
+    });
+    setActiveTwitterBrowserTabId(tabId);
+    requestAnimationFrame(() => {
+      void createTwitterBrowserWebview(tabId, url, matchedDapp);
+    });
+  }, [createTwitterBrowserWebview, effectiveWallet]);
 
   const openDapp = async (dapp: DappCatalogItem) => {
     const wallet = effectiveWallet;
@@ -6288,6 +6933,25 @@ export default function Home() {
     setActiveDappTabId(tabId);
   };
 
+  const addBlankTwitterBrowserTab = () => {
+    const tabId = newTwitterBrowserTabId();
+    setTwitterBrowserTabs((tabs) => [
+      ...tabs,
+      {
+        id: tabId,
+        title: tf("features.twitter-signals.newTab", "新标签页"),
+        url: "",
+        addressInput: "",
+        closable: true,
+        showAddressBar: true,
+        walletConnected: false,
+        webviewOpen: false,
+        loading: false,
+      },
+    ]);
+    setActiveTwitterBrowserTabId(tabId);
+  };
+
   const closeDappTab = (tabId: string) => {
     const tabIndex = dappTabs.findIndex((tab) => tab.id === tabId);
     const tab = dappTabs[tabIndex];
@@ -6296,6 +6960,20 @@ export default function Home() {
     setDappTabs(nextTabs);
     if (activeDappTabId === tabId) {
       setActiveDappTabId(nextTabs[Math.max(0, tabIndex - 1)]?.id ?? DAPP_HOME_TAB_ID);
+    }
+    if (isTauriWebview()) {
+      void invoke("dapp_close_tab", { tabId }).catch(() => {});
+    }
+  };
+
+  const closeTwitterBrowserTab = (tabId: string) => {
+    const tabIndex = twitterBrowserTabs.findIndex((tab) => tab.id === tabId);
+    const tab = twitterBrowserTabs[tabIndex];
+    if (!tab?.closable) return;
+    const nextTabs = twitterBrowserTabs.filter((item) => item.id !== tabId);
+    setTwitterBrowserTabs(nextTabs);
+    if (activeTwitterBrowserTabId === tabId) {
+      setActiveTwitterBrowserTabId(nextTabs[Math.max(0, tabIndex - 1)]?.id ?? TWITTER_BROWSER_HOME_TAB_ID);
     }
     if (isTauriWebview()) {
       void invoke("dapp_close_tab", { tabId }).catch(() => {});
@@ -6339,6 +7017,208 @@ export default function Home() {
       });
   };
 
+  const submitTwitterBrowserAddress = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const tab = activeTwitterBrowserTab;
+    const value = tab.addressInput.trim();
+    if (!value) return;
+    if (tab.id === TWITTER_BROWSER_HOME_TAB_ID || !tab.webviewOpen) {
+      openUrlInTwitterBrowserTab(value, {
+        tabId: tab.id === TWITTER_BROWSER_HOME_TAB_ID ? undefined : tab.id,
+        showAddressBar: true,
+      });
+      return;
+    }
+    let url: string;
+    try {
+      url = normalizeDappBrowserUrl(value);
+    } catch (error) {
+      toast.error(errorMessage(error, "网址格式不正确"));
+      return;
+    }
+    setTwitterBrowserTabs((tabs) => tabs.map((item) =>
+      item.id === tab.id ? { ...item, loading: true } : item,
+    ));
+    void invoke("dapp_navigate_tab", { tabId: tab.id, url })
+      .then(() => {
+        setTwitterBrowserTabs((tabs) => tabs.map((item) =>
+          item.id === tab.id ? { ...item, url, addressInput: url, title: new URL(url).hostname } : item,
+        ));
+      })
+      .catch((error) => {
+        setTwitterBrowserTabs((tabs) => tabs.map((item) =>
+          item.id === tab.id ? { ...item, loading: false } : item,
+        ));
+        toast.error(errorMessage(error, tf("features.dapp-store.openFailed", "打开页面失败")));
+      });
+  };
+
+  const scanTwitterSignals = useCallback(() => {
+    const signals = parseTweetTokenSignals(twitterSignalSource, "");
+    const visibleSignals = filterTweetTokenSignals(signals, twitterWatchedUsers);
+    setTwitterSignals(signals);
+    setTwitterSignalLastScanAt(new Date().toISOString());
+    setTwitterSignalCaptureStatus(visibleSignals.length > 0 ? "success" : "empty");
+    setTwitterSignalCaptureError("");
+    toast.success(
+      visibleSignals.length > 0
+        ? tf("features.twitter-signals.scanSuccess", "已提取 {count} 条带合约地址的推文", { count: visibleSignals.length })
+        : tf("features.twitter-signals.scanEmpty", "没有找到带合约地址的推文"),
+    );
+  }, [tf, twitterSignalSource, twitterWatchedUsers]);
+
+  const captureTwitterSignalsFromActiveTab = useCallback(async (
+    options: { notify?: boolean; advance?: boolean } = {},
+  ) => {
+    if (!isTauriWebview()) {
+      if (options.notify) toast.error(tf("features.twitter-signals.captureTauriOnly", "抓取页面需要在桌面客户端中使用。"));
+      return false;
+    }
+    const tab = twitterDappTab;
+    if (!tab) {
+      setTwitterSignalCaptureStatus("waiting");
+      if (options.notify) toast.error(tf("features.twitter-signals.noBrowserTab", "请先在内置浏览器打开 X/Twitter 页面。"));
+      return false;
+    }
+    if (tab.loading || twitterSignalCaptureInFlightRef.current) return false;
+    twitterSignalCaptureInFlightRef.current = true;
+    setTwitterSignalCaptureBusy(true);
+    setTwitterSignalCaptureStatus("scanning");
+    setTwitterSignalCaptureError("");
+    try {
+      twitterSignalNotifyCaptureRef.current = Boolean(options.notify);
+      if (twitterSignalCaptureTimeoutRef.current !== null) {
+        window.clearTimeout(twitterSignalCaptureTimeoutRef.current);
+      }
+      twitterSignalCaptureTimeoutRef.current = window.setTimeout(() => {
+        twitterSignalCaptureTimeoutRef.current = null;
+        twitterSignalCaptureInFlightRef.current = false;
+        twitterSignalNotifyCaptureRef.current = false;
+        setTwitterSignalCaptureBusy(false);
+        setTwitterSignalCaptureStatus("error");
+        setTwitterSignalCaptureError(tf("features.twitter-signals.captureTimeout", "X 页面没有及时返回数据，请确认关注流已经加载完成。"));
+      }, 12_000);
+      await invoke("dapp_request_tab_text", { tabId: tab.id, advance: Boolean(options.advance) });
+      if (options.notify) {
+        toast.message(tf("features.twitter-signals.captureRequested", "正在读取 X 页面中的推文..."));
+      }
+      return true;
+    } catch (error) {
+      twitterSignalCaptureInFlightRef.current = false;
+      twitterSignalNotifyCaptureRef.current = false;
+      if (twitterSignalCaptureTimeoutRef.current !== null) {
+        window.clearTimeout(twitterSignalCaptureTimeoutRef.current);
+        twitterSignalCaptureTimeoutRef.current = null;
+      }
+      setTwitterSignalCaptureBusy(false);
+      setTwitterSignalCaptureStatus("error");
+      const message = errorMessage(error, tf("features.twitter-signals.captureFailed", "抓取 X 页面失败"));
+      setTwitterSignalCaptureError(message);
+      if (options.notify) {
+        toast.error(message);
+      }
+      return false;
+    }
+  }, [tf, twitterDappTab]);
+
+  const openTwitterLoginInBrowser = () => {
+    if (twitterDappTab) {
+      setActiveTwitterBrowserTabId(twitterDappTab.id);
+      return;
+    }
+    requestAnimationFrame(() => {
+      openUrlInTwitterBrowserTab("https://x.com/home", { showAddressBar: true });
+    });
+  };
+
+  const openSignalBuy = (signal: TweetTokenSignal) => {
+    if (signal.chain !== "Solana") {
+      toast.error(tf("features.twitter-signals.solanaBuyOnly", "当前一键购买只支持 Solana 代币。"));
+      return;
+    }
+    if (!effectiveWallet) {
+      toast.error(tf("features.dapp-store.noWallet", "请先选择一个钱包。"));
+      return;
+    }
+    const url = `https://jup.ag/swap/SOL-${encodeURIComponent(signal.contractAddress)}`;
+    requestAnimationFrame(() => {
+      openUrlInTwitterBrowserTab(url, { showAddressBar: true });
+    });
+  };
+
+  const openSignalTweet = (url: string) => {
+    requestAnimationFrame(() => {
+      openUrlInTwitterBrowserTab(url, { showAddressBar: true });
+    });
+  };
+
+  const copyTwitterSignalJson = () => {
+    const payload = JSON.stringify(visibleTwitterSignals, null, 2);
+    void copyToClipboard(payload, "twitter-signals-json");
+  };
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage.getItem(TWITTER_SIGNAL_STORAGE_KEY);
+      if (!raw) return;
+      const data = JSON.parse(raw) as Record<string, unknown>;
+      if (typeof data.watchedUsers === "string") setTwitterWatchedUsers(data.watchedUsers);
+      if (typeof data.source === "string") setTwitterSignalSource(data.source);
+      if (Array.isArray(data.signals)) setTwitterSignals(data.signals as TweetTokenSignal[]);
+      if (typeof data.lastScanAt === "string") setTwitterSignalLastScanAt(data.lastScanAt);
+      if (typeof data.intervalSec === "number" && Number.isFinite(data.intervalSec)) {
+        setTwitterSignalIntervalSec(Math.min(3600, Math.max(15, Math.floor(data.intervalSec))));
+      }
+    } catch {
+      // Ignore corrupt local signal cache; users can paste fresh source text.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const payload = {
+      watchedUsers: twitterWatchedUsers,
+      source: twitterSignalSource,
+      signals: twitterSignals,
+      lastScanAt: twitterSignalLastScanAt,
+      intervalSec: twitterSignalIntervalSec,
+    };
+    window.localStorage.setItem(TWITTER_SIGNAL_STORAGE_KEY, JSON.stringify(payload));
+  }, [
+    twitterSignalIntervalSec,
+    twitterSignalLastScanAt,
+    twitterSignalSource,
+    twitterSignals,
+    twitterWatchedUsers,
+  ]);
+
+  useEffect(() => {
+    if (!twitterSignalAutoScan) return;
+    const intervalMs = Math.min(3600, Math.max(15, twitterSignalIntervalSec)) * 1000;
+    const capture = () => {
+      if (!twitterDappTab || twitterDappTab.loading) {
+        setTwitterSignalCaptureStatus("waiting");
+        return;
+      }
+      void captureTwitterSignalsFromActiveTab({ advance: true });
+    };
+    capture();
+    const timer = window.setInterval(capture, intervalMs);
+    return () => window.clearInterval(timer);
+  }, [
+    captureTwitterSignalsFromActiveTab,
+    twitterSignalAutoScan,
+    twitterSignalIntervalSec,
+    twitterDappTab,
+  ]);
+
+  useEffect(() => () => {
+    if (twitterSignalCaptureTimeoutRef.current !== null) {
+      window.clearTimeout(twitterSignalCaptureTimeoutRef.current);
+    }
+  }, []);
+
   useEffect(() => {
     if (!isTauriWebview()) return;
     const unlisteners: UnlistenFn[] = [];
@@ -6355,6 +7235,16 @@ export default function Home() {
             }
             : tab,
         ));
+        setTwitterBrowserTabs((tabs) => tabs.map((tab) =>
+          tab.id === event.payload.tab_id
+            ? {
+              ...tab,
+              url: event.payload.url,
+              addressInput: event.payload.url,
+              loading: event.payload.loaded ? false : tab.loading,
+            }
+            : tab,
+        ));
       }),
       listen<DappTabTitleEvent>("dapp://tab-title", (event) => {
         setDappTabs((tabs) => tabs.map((tab) =>
@@ -6362,9 +7252,48 @@ export default function Home() {
             ? { ...tab, title: event.payload.title || tab.title }
             : tab,
         ));
+        setTwitterBrowserTabs((tabs) => tabs.map((tab) =>
+          tab.id === event.payload.tab_id
+            ? { ...tab, title: event.payload.title || tab.title }
+            : tab,
+        ));
       }),
       listen<DappNewWindowEvent>("dapp://new-window", (event) => {
-        openUrlInDappTab(event.payload.url);
+        if (event.payload.source_tab_id.startsWith("twitter-")) {
+          openUrlInTwitterBrowserTab(event.payload.url);
+        } else {
+          openUrlInDappTab(event.payload.url);
+        }
+      }),
+      listen<DappTabTextEvent>("dapp://tab-text", (event) => {
+        const text = event.payload.text || "";
+        const capturedTweets = Array.isArray(event.payload.tweets) ? event.payload.tweets : [];
+        const notify = twitterSignalNotifyCaptureRef.current;
+        twitterSignalNotifyCaptureRef.current = false;
+        twitterSignalCaptureInFlightRef.current = false;
+        if (twitterSignalCaptureTimeoutRef.current !== null) {
+          window.clearTimeout(twitterSignalCaptureTimeoutRef.current);
+          twitterSignalCaptureTimeoutRef.current = null;
+        }
+        setTwitterSignalCaptureBusy(false);
+        setTwitterSignalSource(text);
+        const capturedAt = new Date(event.payload.captured_at_ms);
+        const signals = event.payload.tweets
+          ? parseCapturedTweetTokenSignals(capturedTweets, "", capturedAt)
+          : parseTweetTokenSignals(text, "", capturedAt);
+        const visibleSignals = filterTweetTokenSignals(signals, twitterWatchedUsers);
+        setTwitterSignals((existing) => mergeTweetTokenSignals(existing, signals));
+        setTwitterSignalLastScanAt(new Date(event.payload.captured_at_ms).toISOString());
+        setTwitterSignalLastTweetCount(capturedTweets.length);
+        setTwitterSignalCaptureStatus(visibleSignals.length > 0 ? "success" : "empty");
+        setTwitterSignalCaptureError("");
+        if (notify) {
+          toast.success(
+            visibleSignals.length > 0
+              ? tf("features.twitter-signals.captureSuccess", "已从当前页面提取 {count} 条代币线索", { count: visibleSignals.length })
+              : tf("features.twitter-signals.captureEmpty", "当前页面没有提取到合约地址"),
+          );
+        }
       }),
     ]).then((cleanups) => {
       if (cancelled) {
@@ -6379,7 +7308,7 @@ export default function Home() {
       cancelled = true;
       unlisteners.forEach((cleanup) => cleanup());
     };
-  }, [openUrlInDappTab]);
+  }, [openUrlInDappTab, openUrlInTwitterBrowserTab, tf, twitterWatchedUsers]);
 
   useEffect(() => {
     void setActiveNativeDappTab();
@@ -6395,7 +7324,14 @@ export default function Home() {
     return () => {
       timers.forEach((timer) => window.clearTimeout(timer));
     };
-  }, [activeDappTabId, activeDappTab.showAddressBar, selectedForm, setActiveNativeDappTab]);
+  }, [
+    activeDappTab.showAddressBar,
+    activeDappTabId,
+    activeTwitterBrowserTab.showAddressBar,
+    activeTwitterBrowserTabId,
+    selectedForm,
+    setActiveNativeDappTab,
+  ]);
 
   useEffect(() => {
     if (!isTauriWebview()) return;
@@ -6407,6 +7343,10 @@ export default function Home() {
       dappBrowserTabBarRef.current,
       dappBrowserAddressBarRef.current,
       dappBrowserViewportRef.current,
+      twitterBrowserShellRef.current,
+      twitterBrowserTabBarRef.current,
+      twitterBrowserAddressBarRef.current,
+      twitterBrowserViewportRef.current,
     ].filter((element): element is HTMLDivElement => Boolean(element));
     const observer = typeof ResizeObserver !== "undefined" && observedElements.length > 0
       ? new ResizeObserver(sync)
@@ -14896,6 +15836,439 @@ export default function Home() {
       case "evm-workbench":
         return renderEvmWorkbench();
 
+      case "twitter-signals": {
+        const solanaSignals = visibleTwitterSignals.filter((signal) => signal.chain === "Solana").length;
+        const evmSignals = visibleTwitterSignals.length - solanaSignals;
+        const lastScanLabel = twitterSignalLastScanAt
+          ? new Date(twitterSignalLastScanAt).toLocaleString()
+          : tf("features.twitter-signals.neverScanned", "尚未扫描");
+        const twitterSourceLabel = twitterDappTab
+          ? twitterDappTab.title || twitterDappTab.url
+          : tf("features.twitter-signals.sourceDisconnected", "尚未连接 X 关注流");
+        const captureStatusLabel: Record<TwitterSignalCaptureStatus, string> = {
+          idle: tf("features.twitter-signals.statusIdle", "等待开始扫描"),
+          waiting: tf("features.twitter-signals.statusWaiting", "等待 X 关注流加载"),
+          scanning: tf("features.twitter-signals.statusScanning", "正在读取可见推文"),
+          success: tf(
+            "features.twitter-signals.statusSuccess",
+            "最近一轮读取 {count} 条可见推文",
+            { count: twitterSignalLastTweetCount },
+          ),
+          empty: tf(
+            "features.twitter-signals.statusEmpty",
+            "读取了 {count} 条可见推文，未发现匹配的合约地址",
+            { count: twitterSignalLastTweetCount },
+          ),
+          error: tf("features.twitter-signals.statusError", "扫描失败"),
+        };
+        return (
+          <div ref={twitterBrowserShellRef} className="app-dapp-browser flex h-full min-h-0 flex-col overflow-hidden bg-zinc-950">
+            <div ref={twitterBrowserTabBarRef} className="flex h-10 shrink-0 items-end gap-1 overflow-x-auto border-b border-white/10 bg-black/35 px-2 pt-1">
+              {twitterBrowserTabs.map((tab, index) => {
+                const active = tab.id === activeTwitterBrowserTabId;
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setActiveTwitterBrowserTabId(tab.id)}
+                    className={`group flex h-9 min-w-0 max-w-52 items-center gap-2 rounded-t-lg border px-3 text-left text-sm transition-colors ${
+                      active
+                        ? "border-white/10 border-b-zinc-950 bg-zinc-950 text-white"
+                        : "border-transparent bg-white/[0.04] text-gray-400 hover:bg-white/[0.08] hover:text-gray-100"
+                    } ${index === 0 ? "shrink-0" : "shrink"}`}
+                    title={tab.id === TWITTER_BROWSER_HOME_TAB_ID
+                      ? tf("features.twitter-signals.homeTab", "推文监控")
+                      : tab.title}
+                  >
+                    {tab.id === TWITTER_BROWSER_HOME_TAB_ID
+                      ? <Radio className="h-3.5 w-3.5 shrink-0" />
+                      : <Compass className="h-3.5 w-3.5 shrink-0" />}
+                    <span className="min-w-0 truncate">
+                      {tab.id === TWITTER_BROWSER_HOME_TAB_ID
+                        ? tf("features.twitter-signals.homeTab", "推文监控")
+                        : tab.title}
+                    </span>
+                    {tab.closable && (
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          closeTwitterBrowserTab(tab.id);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            closeTwitterBrowserTab(tab.id);
+                          }
+                        }}
+                        className="ml-auto inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-gray-500 opacity-70 hover:bg-white/10 hover:text-white group-hover:opacity-100"
+                        aria-label={t("common.cancel")}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+              <button
+                type="button"
+                onClick={addBlankTwitterBrowserTab}
+                className="app-dapp-new-tab-button mb-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-transparent bg-[#111a24] text-[#9aa8bb] hover:border-[#28405c] hover:bg-[#172536] hover:text-[#e7eef8]"
+                aria-label={tf("features.twitter-signals.newTab", "新标签页")}
+              >
+                <Plus className="h-4 w-4" />
+              </button>
+            </div>
+
+            {activeTwitterBrowserTab.showAddressBar && (
+              <div ref={twitterBrowserAddressBarRef} className="shrink-0 border-b border-white/10 bg-zinc-950 px-2 py-2">
+                <BrowserMenu
+                  activeTabId={activeTwitterBrowserTab.id}
+                  tabOpen={activeTwitterBrowserTab.id !== TWITTER_BROWSER_HOME_TAB_ID && activeTwitterBrowserTab.webviewOpen}
+                  onOverlayChange={setTwitterBrowserOverlayOpen}
+                  onNavigate={(url) => openUrlInTwitterBrowserTab(url, {
+                    tabId: activeTwitterBrowserTab.id === TWITTER_BROWSER_HOME_TAB_ID ? undefined : activeTwitterBrowserTab.id,
+                    showAddressBar: true,
+                  })}
+                  addressField={(
+                    <form onSubmit={submitTwitterBrowserAddress} className="min-w-0 flex-1">
+                      <div className="app-dapp-address-field flex min-w-0 flex-1 items-center gap-3 rounded-xl border border-white/10 bg-black/35 px-4">
+                        <ExternalLink className="h-4 w-4 shrink-0 text-gray-500" />
+                        <input
+                          value={activeTwitterBrowserTab.addressInput}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            setTwitterBrowserTabs((tabs) => tabs.map((tab) =>
+                              tab.id === activeTwitterBrowserTab.id ? { ...tab, addressInput: value } : tab,
+                            ));
+                          }}
+                          className="app-dapp-address-input h-10 min-w-0 flex-1 bg-transparent pl-1 pr-3 text-sm text-gray-100 outline-none placeholder:text-gray-600"
+                          placeholder="https://"
+                          spellCheck={false}
+                          autoCapitalize="none"
+                        />
+                      </div>
+                    </form>
+                  )}
+                />
+              </div>
+            )}
+
+            <div ref={twitterBrowserViewportRef} className="relative min-h-0 flex-1 overflow-hidden bg-black">
+              {activeTwitterBrowserTab.id === TWITTER_BROWSER_HOME_TAB_ID ? (
+                <div className="h-full overflow-y-auto bg-[#081019] p-3 text-gray-100 sm:p-4">
+                  <div className="mx-auto max-w-[1900px] space-y-3">
+            <section className="border-b border-white/10 pb-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="inline-flex h-7 items-center gap-1.5 rounded-md border border-sky-300/25 bg-sky-300/10 px-2 text-xs font-semibold text-sky-100">
+                  <Radio className="h-3.5 w-3.5" />
+                  {tf("features.twitter-signals.badge", "Twitter / X")}
+                </span>
+                <span className="mr-auto" />
+                <span className="text-xs text-gray-500">
+                  {tf("features.twitter-signals.detected", "已提取")} <strong className="font-semibold text-white">{visibleTwitterSignals.length}</strong>
+                </span>
+                <span className="text-xs text-violet-300">Solana {solanaSignals}</span>
+                <span className="text-xs text-sky-300">EVM / Sui {evmSignals}</span>
+                <button
+                  type="button"
+                  onClick={openTwitterLoginInBrowser}
+                  className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md border border-white/10 bg-white/[0.06] px-2.5 text-xs font-semibold text-gray-200 transition-colors hover:bg-white/10"
+                >
+                  <Compass className="h-3.5 w-3.5" />
+                  {tf("features.twitter-signals.openTwitter", "打开 X")}
+                </button>
+              </div>
+
+              <div className="mt-3 flex flex-wrap items-end gap-2">
+                <label className="min-w-[220px] flex-1 md:max-w-sm">
+                  <span className="mb-1 block text-[11px] font-medium text-gray-500">
+                    {tf("features.twitter-signals.watchedUsers", "关注用户")}
+                  </span>
+                  <input
+                    value={twitterWatchedUsers}
+                    onChange={(event) => setTwitterWatchedUsers(event.target.value)}
+                    className="h-9 w-full rounded-md border border-white/10 bg-black/25 px-2.5 text-sm text-gray-100 outline-none placeholder:text-gray-600 focus:border-sky-300/30"
+                    placeholder={tf("features.twitter-signals.watchedUsersPlaceholder", "@user1, @user2，可留空")}
+                    spellCheck={false}
+                  />
+                </label>
+                <label>
+                  <span className="mb-1 block text-[11px] font-medium text-gray-500">
+                    {tf("features.twitter-signals.scanSchedule", "定时扫描")}
+                  </span>
+                  <span className="flex h-9 items-center rounded-md border border-white/10 bg-black/25">
+                    <Clock className="ml-2 h-3.5 w-3.5 text-gray-500" />
+                    <input
+                      type="number"
+                      min={15}
+                      max={3600}
+                      value={twitterSignalIntervalSec}
+                      onChange={(event) => {
+                        const value = Number(event.target.value);
+                        setTwitterSignalIntervalSec(Number.isFinite(value) ? Math.min(3600, Math.max(0, Math.floor(value))) : DEFAULT_TWITTER_SIGNAL_INTERVAL_SEC);
+                      }}
+                      onBlur={() => setTwitterSignalIntervalSec((value) => Math.min(3600, Math.max(15, value)))}
+                      className="h-full w-14 bg-transparent px-2 text-right text-sm text-gray-100 outline-none"
+                    />
+                    <span className="pr-2 text-xs text-gray-500">{tf("features.twitter-signals.seconds", "秒")}</span>
+                  </span>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (twitterSignalAutoScan) {
+                      setTwitterSignalAutoScan(false);
+                      setTwitterSignalCaptureStatus("idle");
+                      return;
+                    }
+                    setTwitterSignalAutoScan(true);
+                    if (!twitterDappTab) {
+                      setTwitterSignalCaptureStatus("waiting");
+                      openTwitterLoginInBrowser();
+                    }
+                  }}
+                  className={`inline-flex h-9 items-center justify-center gap-1.5 rounded-md px-2.5 text-xs font-semibold transition-colors ${
+                    twitterSignalAutoScan
+                      ? "bg-emerald-300 text-zinc-950 hover:bg-emerald-200"
+                      : "border border-white/10 bg-white/[0.06] text-gray-200 hover:bg-white/10"
+                  }`}
+                >
+                  <Radio className="h-3.5 w-3.5" />
+                  {twitterSignalAutoScan
+                    ? tf("features.twitter-signals.autoOn", "扫描中")
+                    : tf("features.twitter-signals.autoOff", "开启")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void captureTwitterSignalsFromActiveTab({ advance: true, notify: true })}
+                  disabled={twitterSignalCaptureBusy}
+                  className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-sky-300/25 bg-sky-300/10 px-2.5 text-xs font-semibold text-sky-100 transition-colors hover:bg-sky-300/15 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {twitterSignalCaptureBusy ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Compass className="h-3.5 w-3.5" />}
+                  {tf("features.twitter-signals.capturePage", "立即扫描")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTwitterSignalManualImportOpen((open) => !open)}
+                  className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-white/10 bg-white/[0.06] px-2.5 text-xs font-semibold text-gray-200 transition-colors hover:bg-white/10"
+                  aria-expanded={twitterSignalManualImportOpen}
+                >
+                  <Upload className="h-3.5 w-3.5" />
+                  {twitterSignalManualImportOpen
+                    ? tf("features.twitter-signals.hideManualImport", "收起导入")
+                    : tf("features.twitter-signals.manualImport", "手工导入")}
+                  {twitterSignalManualImportOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTwitterSignalSource("");
+                    setTwitterSignals([]);
+                    setExpandedTwitterSignalIds(new Set());
+                    setTwitterSignalLastScanAt(null);
+                    setTwitterSignalLastTweetCount(0);
+                    setTwitterSignalCaptureStatus("idle");
+                    setTwitterSignalCaptureError("");
+                  }}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-white/10 bg-white/[0.06] text-gray-300 transition-colors hover:bg-white/10 hover:text-white"
+                  title={tf("features.twitter-signals.clear", "清空")}
+                  aria-label={tf("features.twitter-signals.clear", "清空")}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={copyTwitterSignalJson}
+                  disabled={visibleTwitterSignals.length === 0}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-white/10 bg-white/[0.06] text-gray-300 transition-colors hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                  title={tf("features.twitter-signals.copyJson", "复制 JSON")}
+                  aria-label={tf("features.twitter-signals.copyJson", "复制 JSON")}
+                >
+                  {copied === "twitter-signals-json" ? <Check className="h-3.5 w-3.5" /> : <FileText className="h-3.5 w-3.5" />}
+                </button>
+              </div>
+
+              <div className="mt-2 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+                <span className="max-w-full truncate text-gray-400" title={twitterDappTab?.url}>
+                  {tf("features.twitter-signals.dataSource", "数据源：{source}", { source: twitterSourceLabel })}
+                </span>
+                <span className={twitterSignalCaptureStatus === "error" ? "text-red-300" : "text-gray-500"}>
+                  {twitterSignalCaptureError || captureStatusLabel[twitterSignalCaptureStatus]}
+                </span>
+                <span className="text-gray-600">
+                  {tf("features.twitter-signals.lastScan", "上次扫描：{time}", { time: lastScanLabel })}
+                </span>
+              </div>
+
+              {twitterSignalManualImportOpen && (
+                <div className="mt-3 border-t border-white/10 pt-3">
+                  <label className="block text-xs font-semibold text-gray-300">
+                    {tf("features.twitter-signals.sourceText", "手工导入推文文本")}
+                  </label>
+                  <textarea
+                    value={twitterSignalSource}
+                    onChange={(event) => setTwitterSignalSource(event.target.value.slice(0, MAX_TWITTER_SIGNAL_SOURCE_CHARS))}
+                    className="mt-2 h-32 w-full resize-y rounded-md border border-white/10 bg-black/25 px-3 py-2 text-sm leading-5 text-gray-100 outline-none placeholder:text-gray-600 focus:border-sky-300/30"
+                    placeholder={tf("features.twitter-signals.sourcePlaceholder", "粘贴从 X 复制的推文列表、搜索结果或导出的 tweet 文本...")}
+                    spellCheck={false}
+                  />
+                  <button
+                    type="button"
+                    onClick={scanTwitterSignals}
+                    className="mt-2 inline-flex h-9 items-center justify-center gap-1.5 rounded-md bg-white px-3 text-xs font-semibold text-black transition-colors hover:bg-gray-200"
+                  >
+                    <ListFilter className="h-3.5 w-3.5" />
+                    {tf("features.twitter-signals.scanNow", "扫描并结构化")}
+                  </button>
+                </div>
+              )}
+            </section>
+
+            <section className="overflow-hidden rounded-lg border border-white/10 bg-white/[0.025]">
+              <div className="flex min-h-10 items-center justify-between gap-3 border-b border-white/10 px-3 py-2 md:px-4">
+                <h3 className="text-sm font-semibold text-gray-200">
+                  {tf("features.twitter-signals.resultTitle", "代币合约列表")}
+                </h3>
+                <span className="text-xs tabular-nums text-gray-500">{visibleTwitterSignals.length}</span>
+              </div>
+              {visibleTwitterSignals.length === 0 ? (
+                <p className="px-4 py-14 text-center text-sm text-gray-500">
+                  {tf("features.twitter-signals.empty", "还没有提取到合约地址。")}
+                </p>
+              ) : (
+                <div className="max-h-[calc(100vh-19rem)] min-h-40 divide-y divide-white/[0.08] overflow-y-auto">
+                  {visibleTwitterSignals.map((signal) => {
+                    const expanded = expandedTwitterSignalIds.has(signal.id);
+                    const canExpand = signal.tweetText.length > 180;
+                    const displayTime = formatTweetSignalTime(signal.publishedAt || signal.detectedAt);
+                    const authorProfileUrl = twitterTextTokenUrl(signal.author);
+                    return (
+                      <article
+                        key={signal.id}
+                        className="group grid grid-cols-[36px_minmax(0,1fr)] gap-x-3 gap-y-2 px-3 py-2.5 transition-colors hover:bg-white/[0.035] md:px-4 lg:grid-cols-[36px_minmax(0,1fr)_max-content_auto] xl:grid-cols-[36px_minmax(320px,520px)_max-content_max-content] xl:justify-start 2xl:grid-cols-[36px_minmax(380px,680px)_max-content_max-content]"
+                      >
+                        <TweetSignalAvatar key={signal.avatarUrl || signal.author} signal={signal} />
+                        <div className="min-w-0">
+                          <div className="flex min-w-0 cursor-text select-text items-center gap-1 overflow-hidden text-[13px] leading-5">
+                            {authorProfileUrl ? (
+                              <SelectableTwitterLink url={authorProfileUrl} onOpen={openSignalTweet} className="truncate font-semibold text-gray-100">
+                                {signal.authorName || signal.author}
+                              </SelectableTwitterLink>
+                            ) : signal.authorName ? (
+                              <span className="truncate font-semibold text-gray-100">{signal.authorName}</span>
+                            ) : (
+                              <span className="truncate font-semibold text-gray-100">{signal.author}</span>
+                            )}
+                            {signal.authorName && (
+                              authorProfileUrl ? (
+                                <SelectableTwitterLink url={authorProfileUrl} onOpen={openSignalTweet} className="shrink-0 text-gray-500">
+                                  {signal.author}
+                                </SelectableTwitterLink>
+                              ) : <span className="shrink-0 text-gray-500">{signal.author}</span>
+                            )}
+                            {displayTime && (
+                              <>
+                                <span className="shrink-0 text-gray-600" aria-hidden="true">·</span>
+                                <time className="shrink-0 text-gray-500" title={new Date(signal.publishedAt || signal.detectedAt).toLocaleString()}>
+                                  {displayTime}
+                                </time>
+                              </>
+                            )}
+                          </div>
+                          <p className={`mt-0.5 cursor-text select-text whitespace-pre-wrap break-words text-sm leading-5 text-gray-200 ${expanded ? "" : "line-clamp-3"}`}>
+                            {renderTweetSignalText(
+                              signal.tweetText.replace(/\n{2,}/g, "\n"),
+                              signal.contractAddress,
+                              openSignalTweet,
+                            )}
+                          </p>
+                          {canExpand && (
+                            <button
+                              type="button"
+                              onClick={() => setExpandedTwitterSignalIds((current) => {
+                                const next = new Set(current);
+                                if (next.has(signal.id)) next.delete(signal.id);
+                                else next.add(signal.id);
+                                return next;
+                              })}
+                              className="mt-0.5 inline-flex items-center gap-0.5 text-xs font-medium text-sky-400 hover:text-sky-300"
+                            >
+                              {expanded
+                                ? tf("features.twitter-signals.showLess", "收起")
+                                : tf("features.twitter-signals.showMore", "显示更多")}
+                              {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                            </button>
+                          )}
+                        </div>
+                        <div className="col-start-2 min-w-0 self-start lg:col-start-3 lg:row-start-1">
+                          <p className="flex min-w-0 items-center gap-1.5 whitespace-nowrap text-[11px] leading-5 text-emerald-200/90">
+                            <span className={`inline-flex shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold leading-4 ${tweetSignalChainClass(signal.chain)}`}>
+                              {signal.chain}
+                            </span>
+                            <code className="min-w-0 overflow-hidden text-ellipsis">{compactContractAddress(signal.contractAddress)}</code>
+                          </p>
+                        </div>
+                        <div className="col-start-2 flex shrink-0 items-center gap-1 self-start lg:col-start-4 lg:row-start-1">
+                          <button
+                            type="button"
+                            onClick={() => copyToClipboard(signal.contractAddress, `twitter-signal-${signal.id}`)}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-full text-gray-400 transition-colors hover:bg-white/10 hover:text-white"
+                            title={t("common.copy")}
+                            aria-label={t("common.copy")}
+                          >
+                            {copied === `twitter-signal-${signal.id}` ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                          </button>
+                          {signal.sourceUrl && (
+                            <button
+                              type="button"
+                              onClick={() => openSignalTweet(signal.sourceUrl || "")}
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-full text-gray-400 transition-colors hover:bg-white/10 hover:text-white"
+                              title={tf("features.twitter-signals.openTweet", "打开推文")}
+                              aria-label={tf("features.twitter-signals.openTweet", "打开推文")}
+                            >
+                              <ExternalLink className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => openSignalBuy(signal)}
+                            disabled={signal.chain !== "Solana" || !effectiveWallet}
+                            className="inline-flex h-8 items-center justify-center gap-1 rounded-md bg-emerald-300 px-2 text-[11px] font-semibold text-zinc-950 transition-colors hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-40"
+                            title={signal.chain === "Solana" ? undefined : tf("features.twitter-signals.solanaBuyOnly", "当前一键购买只支持 Solana 代币。")}
+                          >
+                            <ShoppingCart className="h-3.5 w-3.5" />
+                            {tf("features.twitter-signals.buy", "购买")}
+                          </button>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+                  </div>
+                </div>
+              ) : activeTwitterBrowserTab.webviewOpen ? (
+                <div className="absolute inset-0 bg-black">
+                  {activeTwitterBrowserTab.loading && (
+                    <div className="flex h-full items-center justify-center text-gray-500">
+                      <RefreshCw className="h-5 w-5 animate-spin" />
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="flex h-full items-center justify-center px-4 text-sm text-gray-500">
+                  {activeTwitterBrowserTab.title}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      }
+
       case "dapp-store":
         return (
           <div ref={dappBrowserShellRef} className="app-dapp-browser flex h-full min-h-0 flex-col overflow-hidden bg-zinc-950">
@@ -14952,24 +16325,35 @@ export default function Home() {
 
             {activeDappTab.showAddressBar && (
               <div ref={dappBrowserAddressBarRef} className="shrink-0 border-b border-white/10 bg-zinc-950 px-2 py-2">
-                <form onSubmit={submitDappAddress}>
-                  <div className="app-dapp-address-field flex min-w-0 flex-1 items-center gap-3 rounded-xl border border-white/10 bg-black/35 px-4">
-                    <ExternalLink className="h-4 w-4 shrink-0 text-gray-500" />
-                    <input
-                      value={activeDappTab.addressInput}
-                      onChange={(event) => {
-                        const value = event.target.value;
-                        setDappTabs((tabs) => tabs.map((tab) =>
-                          tab.id === activeDappTab.id ? { ...tab, addressInput: value } : tab,
-                        ));
-                      }}
-                      className="app-dapp-address-input h-10 min-w-0 flex-1 bg-transparent pl-1 pr-3 text-sm text-gray-100 outline-none placeholder:text-gray-600"
-                      placeholder="https://"
-                      spellCheck={false}
-                      autoCapitalize="none"
-                    />
-                  </div>
-                </form>
+                <BrowserMenu
+                  activeTabId={activeDappTab.id}
+                  tabOpen={activeDappTab.id !== DAPP_HOME_TAB_ID && activeDappTab.webviewOpen}
+                  onOverlayChange={setDappBrowserOverlayOpen}
+                  onNavigate={(url) => openUrlInDappTab(url, {
+                    tabId: activeDappTab.id === DAPP_HOME_TAB_ID ? undefined : activeDappTab.id,
+                    showAddressBar: true,
+                  })}
+                  addressField={(
+                    <form onSubmit={submitDappAddress} className="min-w-0 flex-1">
+                      <div className="app-dapp-address-field flex min-w-0 flex-1 items-center gap-3 rounded-xl border border-white/10 bg-black/35 px-4">
+                        <ExternalLink className="h-4 w-4 shrink-0 text-gray-500" />
+                        <input
+                          value={activeDappTab.addressInput}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            setDappTabs((tabs) => tabs.map((tab) =>
+                              tab.id === activeDappTab.id ? { ...tab, addressInput: value } : tab,
+                            ));
+                          }}
+                          className="app-dapp-address-input h-10 min-w-0 flex-1 bg-transparent pl-1 pr-3 text-sm text-gray-100 outline-none placeholder:text-gray-600"
+                          placeholder="https://"
+                          spellCheck={false}
+                          autoCapitalize="none"
+                        />
+                      </div>
+                    </form>
+                  )}
+                />
               </div>
             )}
 
@@ -20607,7 +21991,7 @@ export default function Home() {
         : null;
 
     return (
-      <div className={formId === "dapp-store" ? "h-full min-h-0" : "space-y-4"}>
+      <div className={formId === "dapp-store" || formId === "twitter-signals" ? "h-full min-h-0" : "space-y-4"}>
         {showTokenActionHeader && (
           <div className="space-y-4 rounded-2xl border border-white/10 bg-white/5 p-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -20697,7 +22081,9 @@ export default function Home() {
         "wallet-list": t("features.wallet-list.title"),
         "wsol-workbench": t("features.wsol-workbench.title"),
         "pump-workbench": t("features.pump-workbench.title"),
+        "browser-workbench": tf("features.browser-workbench.title", "浏览器"),
         "dapp-store": tf("features.dapp-store.title", "DApp Store"),
+        "twitter-signals": tf("features.twitter-signals.title", "推文线索"),
         "contract-tools": tf("features.contract-tools.title", "合约工具"),
         "program-workbench": t("features.program-workbench.title"),
         "nonce-workbench": t("features.nonce-workbench.title"),
@@ -20743,8 +22129,8 @@ export default function Home() {
       } as Record<string, string>)[selectedForm] ||
       t("formUi.pickFeature")
     : t("app.welcome");
-  const isDappBrowserForm = selectedForm === "dapp-store";
-  const showFormHeader = selectedForm !== "wallet-list" && !isDappBrowserForm;
+  const isBrowserWorkspaceForm = selectedForm === "dapp-store" || selectedForm === "twitter-signals";
+  const showFormHeader = selectedForm !== "wallet-list" && !isBrowserWorkspaceForm;
   const isWideWorkspaceForm = [
     "contract-tools",
     "program-workbench",
@@ -20754,15 +22140,16 @@ export default function Home() {
     "program-invoke-standalone",
     "external-sign",
     "dapp-store",
+    "twitter-signals",
     "squads-prepare-upgrade-buffer",
     "squads-program-upgrade",
   ].includes(selectedForm || "");
-  const contentContainerClass = isDappBrowserForm
+  const contentContainerClass = isBrowserWorkspaceForm
     ? "h-full min-h-0 w-full p-0"
     : isWideWorkspaceForm
     ? "mx-auto w-full max-w-[1760px] p-3 space-y-3 sm:p-4 lg:p-5 lg:space-y-4 2xl:max-w-[1900px]"
     : "max-w-5xl mx-auto p-3 space-y-3 sm:p-4 lg:p-8 lg:space-y-4";
-  const contentCardClass = isDappBrowserForm
+  const contentCardClass = isBrowserWorkspaceForm
     ? "app-content-card app-dapp-card h-full min-h-0 bg-black/40"
     : "app-content-card bg-black/40 backdrop-blur-xl rounded-xl border border-white/10 p-3 sm:p-4 lg:rounded-2xl lg:p-6";
   const themeOptions: ThemeOption[] = [
@@ -20984,9 +22371,9 @@ export default function Home() {
 
       {/* Main Content */}
       <div className={`app-main-surface min-w-0 flex-1 bg-gradient-to-br from-black via-purple-950 to-black ${
-        isDappBrowserForm ? "overflow-hidden" : "overflow-y-auto"
+        isBrowserWorkspaceForm ? "overflow-hidden" : "overflow-y-auto"
       }`}>
-        <div className={isDappBrowserForm ? "h-full min-h-0" : "min-h-full overflow-y-auto"}>
+        <div className={isBrowserWorkspaceForm ? "h-full min-h-0" : "min-h-full overflow-y-auto"}>
           <div className={contentContainerClass}>
             <div className={contentCardClass}>
               {showFormHeader && (

@@ -38,7 +38,7 @@ function spawnManaged(label, command, args, env = process.env) {
 }
 
 function stopProcess(child, signal = "SIGTERM") {
-  if (!child || !child.pid || child.exitCode !== null || child.killed) {
+  if (!child || !child.pid) {
     return;
   }
 

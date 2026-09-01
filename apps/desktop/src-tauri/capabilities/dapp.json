@@ -27,11 +27,16 @@
       "https://magiceden.io/*",
       "https://*.magiceden.io/*",
       "https://sanctum.so/*",
-      "https://*.sanctum.so/*"
+      "https://*.sanctum.so/*",
+      "https://x.com/*",
+      "https://*.x.com/*",
+      "https://twitter.com/*",
+      "https://*.twitter.com/*"
     ]
   },
   "permissions": [
     "core:default",
+    "allow-submit-dapp-page-text",
     "allow-submit-dapp-sign-request",
     "allow-poll-dapp-sign-request"
   ]
