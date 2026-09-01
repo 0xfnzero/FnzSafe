@@ -1142,24 +1142,83 @@ interface DappTransactionPreview {
 type TweetSignalChain =
   | "Solana"
   | "Ethereum"
-  | "Base"
   | "BSC"
+  | "Base"
   | "Polygon"
   | "Arbitrum"
+  | "Optimism"
+  | "Avalanche"
+  | "Fantom"
+  | "Linea"
+  | "Scroll"
+  | "zkSync Era"
+  | "Blast"
+  | "Mantle"
+  | "opBNB"
+  | "Cronos"
+  | "Gnosis"
+  | "Celo"
+  | "Moonbeam"
+  | "Moonriver"
+  | "Aurora"
+  | "Harmony"
+  | "HECO"
+  | "OKX Chain"
+  | "X Layer"
+  | "Kava EVM"
+  | "Metis"
+  | "Ronin"
+  | "Monad"
+  | "Berachain"
+  | "Sonic"
+  | "HyperEVM"
+  | "World Chain"
+  | "Zora"
+  | "Mode"
+  | "Taiko"
+  | "Manta Pacific"
+  | "Rootstock"
+  | "Bitlayer"
+  | "Merlin Chain"
+  | "Kaia"
+  | "Sei"
   | "Sui"
-  | "Unknown EVM";
+  | "Aptos"
+  | "TON"
+  | "Tron"
+  | "Bitcoin"
+  | "Cardano"
+  | "Near"
+  | "Injective"
+  | "Cosmos"
+  | "Osmosis"
+  | "Polkadot"
+  | "Kusama"
+  | "XRP Ledger"
+  | "Dogecoin"
+  | "Litecoin"
+  | "Robinhood"
+  | "Unknown EVM"
+  | "Unknown";
 
 interface TweetTokenSignal {
   id: string;
   chain: TweetSignalChain;
-  contractAddress: string;
+  contractAddress?: string;
+  tokenSymbols?: string[];
   author: string;
   authorName?: string;
   avatarUrl?: string;
   tweetText: string;
+  links?: TweetSignalLink[];
   sourceUrl?: string;
   publishedAt?: string;
   detectedAt: string;
+}
+
+interface TweetSignalLink {
+  target: string;
+  display: string;
 }
 
 interface CapturedTweet {
@@ -1171,6 +1230,7 @@ interface CapturedTweet {
   text: string;
   source_url?: string | null;
   published_at?: string | null;
+  links?: TweetSignalLink[];
 }
 
 type TwitterSignalCaptureStatus = "idle" | "waiting" | "scanning" | "success" | "empty" | "error";
@@ -1409,6 +1469,7 @@ interface DappNewWindowEvent {
 
 interface DappTabTextEvent {
   tab_id: string;
+  request_id: string;
   url: string;
   text: string;
   tweets?: CapturedTweet[];
@@ -1462,6 +1523,85 @@ const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvw
 const EVM_ADDRESS_RE = /0x[a-fA-F0-9]{40}\b/g;
 const SUI_ADDRESS_RE = /0x[a-fA-F0-9]{64}\b/g;
 const SOLANA_ADDRESS_RE = /[1-9A-HJ-NP-Za-km-z]{32,44}/g;
+const TRON_ADDRESS_RE = /T[1-9A-HJ-NP-Za-km-z]{33}\b/g;
+const TON_ADDRESS_RE = /\b(?:EQ|UQ)[A-Za-z0-9_-]{46}(?![A-Za-z0-9_-])/g;
+const TOKEN_CASHTAG_RE = /\$[A-Za-z][A-Za-z0-9_]{0,14}\b/g;
+
+type TweetChainFamily = "evm" | "move" | "other";
+
+interface TweetChainRule {
+  chain: TweetSignalChain;
+  family: TweetChainFamily;
+  patterns: RegExp[];
+}
+
+const TWEET_CHAIN_RULES: TweetChainRule[] = [
+  { chain: "Robinhood", family: "evm", patterns: [/\brobinhood(?:\s+chain)?\b/gi, /\bRBH\b/g, /\$rbh\b/gi, /Robinhood\s*链/g] },
+  { chain: "Ethereum", family: "evm", patterns: [/\bethereum\b/gi, /\beth\b/gi, /\$eth\b/gi, /\berc-?20\b/gi, /以太(?:坊|链|网络)?/g] },
+  { chain: "BSC", family: "evm", patterns: [/\bbsc\b/gi, /\bBNB\b/g, /\bbnb\s*(?:smart\s*)?chain\b/gi, /\$bnb\b/gi, /\bbep-?20\b/gi, /币安(?:智能|智慧)?链|币安链|BNB\s*链/gi] },
+  { chain: "Base", family: "evm", patterns: [/\bbase\s+(?:chain|network|mainnet)\b/gi, /\bon\s+base\b/gi, /\$base\b/gi, /Base\s*(?:链|网络|主网)/g] },
+  { chain: "Polygon", family: "evm", patterns: [/\bpolygon\b/gi, /\bmatic\b/gi, /\$matic\b/gi, /Polygon\s*链|马蹄链|多边形链/gi] },
+  { chain: "Arbitrum", family: "evm", patterns: [/\barbitrum(?:\s+one)?\b/gi, /\bARB\b/g, /\$arb\b/gi, /\barb\s+(?:chain|network|mainnet)\b/gi, /Arbitrum\s*链|ARB\s*链/gi] },
+  { chain: "Optimism", family: "evm", patterns: [/\boptimism\b/gi, /\bOP\b/g, /\bop\s+mainnet\b/gi, /\$op\b/gi, /Optimism\s*链|OP\s*链/gi] },
+  { chain: "Avalanche", family: "evm", patterns: [/\bavalanche\b/gi, /\bavax\b/gi, /\$avax\b/gi, /雪崩链|Avalanche\s*链/gi] },
+  { chain: "Fantom", family: "evm", patterns: [/\bfantom\b/gi, /\bFTM\b/g, /\$ftm\b/gi, /Fantom\s*链/gi] },
+  { chain: "Linea", family: "evm", patterns: [/\blinea\b/gi, /Linea\s*链/gi] },
+  { chain: "Scroll", family: "evm", patterns: [/\bscroll\s+(?:chain|network|mainnet)\b/gi, /\bon\s+scroll\b/gi, /Scroll\s*链/g] },
+  { chain: "zkSync Era", family: "evm", patterns: [/\bzksync(?:\s+era)?\b/gi, /\bZKS\b/g, /\$zks\b/gi, /zkSync\s*链/gi] },
+  { chain: "Blast", family: "evm", patterns: [/\bblast\s+(?:chain|network|mainnet|l2)\b/gi, /\bon\s+blast\b/gi, /Blast\s*链/g] },
+  { chain: "Mantle", family: "evm", patterns: [/\bmantle\s+(?:chain|network|mainnet)\b/gi, /\bon\s+mantle\b/gi, /\bMNT\b/g, /\$mnt\b/gi, /Mantle\s*链/g] },
+  { chain: "opBNB", family: "evm", patterns: [/\bopbnb\b/gi, /opBNB\s*链/gi] },
+  { chain: "Cronos", family: "evm", patterns: [/\bcronos\b/gi, /\bCRO\b/g, /\$cro\b/gi, /Cronos\s*链/gi] },
+  { chain: "Gnosis", family: "evm", patterns: [/\bgnosis\s+chain\b/gi, /\bxdai\b/gi, /Gnosis\s*链/gi] },
+  { chain: "Celo", family: "evm", patterns: [/\bcelo\b/gi, /Celo\s*链/gi] },
+  { chain: "Moonbeam", family: "evm", patterns: [/\bmoonbeam\b/gi, /\bGLMR\b/g, /\$glmr\b/gi, /Moonbeam\s*链/gi] },
+  { chain: "Moonriver", family: "evm", patterns: [/\bmoonriver\b/gi, /\bMOVR\b/g, /\$movr\b/gi, /Moonriver\s*链/gi] },
+  { chain: "Aurora", family: "evm", patterns: [/\baurora\s+(?:chain|network|mainnet)\b/gi, /\bon\s+aurora\b/gi, /Aurora\s*链/g] },
+  { chain: "Harmony", family: "evm", patterns: [/\bharmony\s+(?:chain|network|mainnet)\b/gi, /\bon\s+harmony\b/gi, /Harmony\s*链/g] },
+  { chain: "HECO", family: "evm", patterns: [/\bheco\b/gi, /火币(?:生态)?链|火币智能链/g] },
+  { chain: "OKX Chain", family: "evm", patterns: [/\b(?:okx chain|oktc)\b/gi, /OKX\s*链|欧易链/gi] },
+  { chain: "X Layer", family: "evm", patterns: [/\bx\s*layer\b/gi, /X\s*Layer\s*链/gi] },
+  { chain: "Kava EVM", family: "evm", patterns: [/\bkava\s+(?:evm|chain|network)\b/gi, /Kava\s*链/g] },
+  { chain: "Metis", family: "evm", patterns: [/\bmetis\s+(?:chain|network|mainnet|andromeda)\b/gi, /\bon\s+metis\b/gi, /Metis\s*链/g] },
+  { chain: "Ronin", family: "evm", patterns: [/\bronin\s+(?:chain|network|mainnet)\b/gi, /\bon\s+ronin\b/gi, /Ronin\s*链/g] },
+  { chain: "Monad", family: "evm", patterns: [/\bmonad\b/gi, /Monad\s*链/g] },
+  { chain: "Berachain", family: "evm", patterns: [/\bberachain\b/gi, /\$bera\b/gi, /Bera\s*链/gi] },
+  { chain: "Sonic", family: "evm", patterns: [/\bsonic\s+(?:chain|network|mainnet)\b/gi, /\bon\s+sonic\b/gi, /Sonic\s*链/g] },
+  { chain: "HyperEVM", family: "evm", patterns: [/\b(?:hyperevm|hyperliquid\s+evm)\b/gi, /HyperEVM\s*链/gi] },
+  { chain: "World Chain", family: "evm", patterns: [/\bworld\s+chain\b/gi, /World\s*Chain\s*链/gi] },
+  { chain: "Zora", family: "evm", patterns: [/\bzora\s+(?:chain|network|mainnet)\b/gi, /\bon\s+zora\b/gi, /Zora\s*链/g] },
+  { chain: "Mode", family: "evm", patterns: [/\bmode\s+(?:chain|network|mainnet)\b/gi, /\bon\s+mode\b/gi, /Mode\s*链/g] },
+  { chain: "Taiko", family: "evm", patterns: [/\btaiko\b/gi, /Taiko\s*链/g] },
+  { chain: "Manta Pacific", family: "evm", patterns: [/\bmanta\s+pacific\b/gi, /Manta\s*链/g] },
+  { chain: "Rootstock", family: "evm", patterns: [/\brootstock\b/gi, /\brsk\s+(?:chain|network|mainnet)\b/gi, /Rootstock\s*链/g] },
+  { chain: "Bitlayer", family: "evm", patterns: [/\bbitlayer\b/gi, /Bitlayer\s*链/g] },
+  { chain: "Merlin Chain", family: "evm", patterns: [/\bmerlin\s+chain\b/gi, /Merlin\s*链/g] },
+  { chain: "Kaia", family: "evm", patterns: [/\bkaia\b/gi, /\bklaytn\b/gi, /Kaia\s*链/g] },
+  { chain: "Sei", family: "evm", patterns: [/\bsei\s+(?:chain|network|mainnet|evm)\b/gi, /\bSEI\b/g, /\$sei\b/gi, /Sei\s*链/g] },
+  { chain: "Sui", family: "move", patterns: [/\bsui\b/gi, /\$sui\b/gi, /Sui\s*链/g] },
+  { chain: "Aptos", family: "move", patterns: [/\baptos\b/gi, /\bAPT\b/g, /\$apt\b/gi, /Aptos\s*链/g] },
+  { chain: "Solana", family: "other", patterns: [/\bsolana\b/gi, /\bSOL\b/g, /\$sol\b/gi, /\bsol\s+(?:chain|network|mainnet)\b/gi, /pump\.fun|pumpfun|jup\.ag|raydium/gi, /Solana\s*链|索拉纳|索拉娜/g] },
+  { chain: "TON", family: "other", patterns: [/\bthe\s+open\s+network\b/gi, /\bTON\b/g, /\$ton\b/gi, /\bton\s+(?:chain|network|mainnet)\b/gi, /TON\s*链/g] },
+  { chain: "Tron", family: "other", patterns: [/\btron\b/gi, /\bTRX\b/g, /\$trx\b/gi, /\btrx\s+(?:chain|network|mainnet)\b/gi, /波场(?:链|网络)?/g] },
+  { chain: "Bitcoin", family: "other", patterns: [/\bbitcoin\b/gi, /\bBTC\b/g, /\$btc\b/gi, /比特币(?:链|网络)?/g] },
+  { chain: "Cardano", family: "other", patterns: [/\bcardano\b/gi, /\bADA\b/g, /\$ada\b/gi, /艾达币?|卡尔达诺/g] },
+  { chain: "Near", family: "other", patterns: [/\bnear\s+(?:protocol|chain|network|mainnet)\b/gi, /\bNEAR\b/g, /\$near\b/gi, /NEAR\s*链/g] },
+  { chain: "Injective", family: "other", patterns: [/\binjective\b/gi, /\bINJ\b/g, /\$inj\b/gi, /Injective\s*链/g] },
+  { chain: "Cosmos", family: "other", patterns: [/\bcosmos\s+(?:hub|chain|network|mainnet)\b/gi, /\bATOM\b/g, /\$atom\b/gi, /Cosmos\s*链/g] },
+  { chain: "Osmosis", family: "other", patterns: [/\bosmosis\b/gi, /\bOSMO\b/g, /\$osmo\b/gi, /Osmosis\s*链/g] },
+  { chain: "Polkadot", family: "other", patterns: [/\bpolkadot\b/gi, /\bDOT\b/g, /\$dot\b/gi, /波卡(?:链|网络)?/g] },
+  { chain: "Kusama", family: "other", patterns: [/\bkusama\b/gi, /\bKSM\b/g, /\$ksm\b/gi, /Kusama\s*链/g] },
+  { chain: "XRP Ledger", family: "other", patterns: [/\bxrp\s+ledger\b/gi, /\bXRP\b/g, /\$xrp\b/gi, /\bripple\b/gi, /瑞波(?:链|网络|币)?/g] },
+  { chain: "Dogecoin", family: "other", patterns: [/\bdogecoin\b/gi, /\bDOGE\b/g, /\$doge\b/gi, /狗狗币/g] },
+  { chain: "Litecoin", family: "other", patterns: [/\blitecoin\b/gi, /\bLTC\b/g, /\$ltc\b/gi, /莱特币/g] },
+];
+
+const EVM_TWEET_SIGNAL_CHAINS = new Set(
+  TWEET_CHAIN_RULES.filter((rule) => rule.family === "evm").map((rule) => rule.chain),
+);
+const MOVE_TWEET_SIGNAL_CHAINS = new Set(
+  TWEET_CHAIN_RULES.filter((rule) => rule.family === "move").map((rule) => rule.chain),
+);
 
 function normalizeTwitterHandle(value: string): string {
   return value.trim().replace(/^@+/, "").toLowerCase();
@@ -1529,21 +1669,81 @@ function isLikelySolanaTokenAddress(candidate: string, source: string, index: nu
   return true;
 }
 
+function detectMentionedTweetChain(
+  text: string,
+  anchors: number[],
+  allowedChains?: Set<TweetSignalChain>,
+): TweetSignalChain | undefined {
+  let best: { chain: TweetSignalChain; score: number } | undefined;
+
+  for (const rule of TWEET_CHAIN_RULES) {
+    if (allowedChains && !allowedChains.has(rule.chain)) continue;
+    for (const pattern of rule.patterns) {
+      const matcher = new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`);
+      for (const match of text.matchAll(matcher)) {
+        const start = match.index ?? 0;
+        // A cashtag identifies a token, not the network it is currently on.
+        if (match[0].startsWith("$") || text[start - 1] === "$") continue;
+        const end = start + match[0].length;
+        const distance = anchors.length > 0
+          ? Math.min(...anchors.map((anchor) => Math.min(Math.abs(anchor - start), Math.abs(anchor - end))))
+          : Math.max(0, text.length - end);
+        const before = text.slice(Math.max(0, start - 36), start);
+        const after = text.slice(end, Math.min(text.length, end + 36));
+        const nearby = text.slice(Math.max(0, start - 12), Math.min(text.length, end + 12));
+        let score = 2_000 - Math.min(distance, 2_000) + Math.min(match[0].length, 40);
+        if (/(?:chain|network|mainnet|生态|主网|公链|链|网络)/i.test(nearby)) score += 80;
+        if (/(?:now|current(?:ly)?|migrat(?:e|ed|ing)|launch(?:ed|ing)?|deploy(?:ed|ing)?|现在|当前|如今|迁移|部署|上线|发行)[^\n]{0,20}$/i.test(before)) score += 140;
+        if (/(?:formerly|previous(?:ly)?|used\s+to|old|before|曾经|此前|之前|原来|过去|旧)[^\n]{0,20}$/i.test(before)) score -= 140;
+        if (match[0] === "OP" && /(?:楼主|原推|原作者|original\s+poster|author|posted|said|says|reply|thread)/i.test(`${before} ${after}`)) continue;
+        if (anchors.some((anchor) => end <= anchor && anchor - end <= 24)) score += 20;
+        if (!best || score > best.score) best = { chain: rule.chain, score };
+      }
+    }
+  }
+  return best?.chain;
+}
+
 function detectTweetSignalChain(text: string, address: string): TweetSignalChain {
-  const lower = text.toLowerCase();
+  const addressIndex = Math.max(0, text.toLowerCase().indexOf(address.toLowerCase()));
+  if (/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(address)) return "Tron";
+  if (/^(?:EQ|UQ)[A-Za-z0-9_-]{46}$/.test(address)) return "TON";
   if (address.startsWith("0x") && address.length === 66) {
-    if (/\bsui\b/.test(lower)) return "Sui";
+    return detectMentionedTweetChain(text, [addressIndex], MOVE_TWEET_SIGNAL_CHAINS) || "Unknown";
   }
   if (address.startsWith("0x")) {
-    if (/\bbase\b/.test(lower)) return "Base";
-    if (/\bbsc\b|\bbnb\b|binance/.test(lower)) return "BSC";
-    if (/\bpolygon\b|\bmatic\b/.test(lower)) return "Polygon";
-    if (/\barb\b|arbitrum/.test(lower)) return "Arbitrum";
-    if (/\beth\b|ethereum|erc-20|erc20/.test(lower)) return "Ethereum";
-    return "Unknown EVM";
+    return detectMentionedTweetChain(text, [addressIndex], EVM_TWEET_SIGNAL_CHAINS) || "Unknown EVM";
   }
-  if (/\bsol\b|solana|pump\.fun|pumpfun|jup\.ag|raydium/i.test(text)) return "Solana";
   return "Solana";
+}
+
+function detectTweetCashtagChain(text: string): TweetSignalChain {
+  const anchors = Array.from(text.matchAll(TOKEN_CASHTAG_RE), (match) => match.index ?? 0);
+  return detectMentionedTweetChain(text, anchors) || "Unknown";
+}
+
+function normalizeTweetSignalText(value: string): string {
+  let text = value.replace(/\r\n?/g, "\n");
+  text = text.replace(/(https?:\/\/)(?:[ \t]*\n[ \t]*)+(?=[A-Za-z0-9])/gi, "$1");
+  text = text.replace(/https?:\/\/(?=https?:\/\/)/gi, "");
+  text = text.replace(/(@[A-Za-z0-9_]{1,15})\n(?=\S)/g, "$1 ");
+  text = text.replace(/([^\n。！？!?：:])\n[ \t]*(@[A-Za-z0-9_]{1,15})(?=[ \t]|$)/g, "$1 $2");
+  text = text.replace(/(\$[A-Za-z][A-Za-z0-9_]{0,14})\n[ \t]*(?=[：:，,。.!?）)\]}])/g, "$1");
+  text = text.replace(
+    /([：:])[ \t]*\n[ \t]*(?=(?:https?:\/\/|www\.|(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,24}(?:\/|\s|$)))/gi,
+    "$1 ",
+  );
+
+  // X can insert hard line breaks inside a displayed query value. Join only
+  // short URL continuations so ordinary paragraph breaks remain untouched.
+  const wrappedUrlContinuation = /(https?:\/\/[^\s\n]*[?&][^\s\n]*)\n([A-Za-z0-9%._~+-]{1,12})(?=\s|$)/gi;
+  let previous: string;
+  do {
+    previous = text;
+    text = text.replace(wrappedUrlContinuation, "$1$2");
+  } while (text !== previous);
+
+  return text.replace(/\n{3,}/g, "\n\n").trim();
 }
 
 function tweetSourceUrl(text: string): string | undefined {
@@ -1575,8 +1775,13 @@ function compactContractAddress(value: string): string {
   return `${value.slice(0, prefixLength)}...${value.slice(-7)}`;
 }
 
+function tweetSignalTokenLabel(signal: TweetTokenSignal): string {
+  return signal.contractAddress || signal.tokenSymbols?.join(" ") || "-";
+}
+
 interface TweetSignalInput {
   text: string;
+  links?: TweetSignalLink[];
   author?: string;
   authorName?: string;
   authorHandle?: string;
@@ -1597,25 +1802,38 @@ function parseTweetSignalInputs(
   const signals: TweetTokenSignal[] = [];
 
   for (const input of inputs) {
-    const text = input.text.trim();
+    const text = normalizeTweetSignalText(input.text);
     if (!text || !tweetMatchesWatchedHandles(text, watchedHandles, input.authorHandle)) continue;
-    const candidates: Array<{ address: string; chain: TweetSignalChain }> = [];
+    const tokenSymbols = Array.from(new Set(
+      Array.from(text.matchAll(TOKEN_CASHTAG_RE), (match) => match[0].toUpperCase()),
+    ));
+    const candidates: Array<{ address?: string; chain: TweetSignalChain }> = [];
     for (const match of text.matchAll(SUI_ADDRESS_RE)) {
       candidates.push({ address: match[0], chain: detectTweetSignalChain(text, match[0]) });
     }
     for (const match of text.matchAll(EVM_ADDRESS_RE)) {
-      if (candidates.some((item) => item.address.toLowerCase() === match[0].toLowerCase())) continue;
+      if (candidates.some((item) => item.address?.toLowerCase() === match[0].toLowerCase())) continue;
       candidates.push({ address: match[0], chain: detectTweetSignalChain(text, match[0]) });
+    }
+    for (const match of text.matchAll(TRON_ADDRESS_RE)) {
+      candidates.push({ address: match[0], chain: "Tron" });
+    }
+    for (const match of text.matchAll(TON_ADDRESS_RE)) {
+      candidates.push({ address: match[0], chain: "TON" });
     }
     for (const match of text.matchAll(SOLANA_ADDRESS_RE)) {
       const index = match.index ?? 0;
       if (!isLikelySolanaTokenAddress(match[0], text, index)) continue;
       candidates.push({ address: match[0], chain: "Solana" });
     }
+    if (candidates.length === 0 && tokenSymbols.length > 0) {
+      candidates.push({ chain: detectTweetCashtagChain(text) });
+    }
 
     const sourceIdentity = input.sourceUrl || input.tweetId || `${input.authorHandle ?? input.author ?? ""}:${text}`;
     for (const candidate of candidates) {
-      const key = `${candidate.chain}:${candidate.address.toLowerCase()}:${sourceIdentity}`;
+      const tokenIdentity = candidate.address?.toLowerCase() || `cashtag:${tokenSymbols.join(",")}`;
+      const key = `${candidate.chain}:${tokenIdentity}:${sourceIdentity}`;
       if (seen.has(key)) continue;
       seen.add(key);
       const normalizedHandle = normalizeTwitterHandle(input.authorHandle ?? "");
@@ -1623,12 +1841,14 @@ function parseTweetSignalInputs(
         id: shortSignalId(key),
         chain: candidate.chain,
         contractAddress: candidate.address,
+        tokenSymbols,
         author: normalizedHandle
           ? `@${normalizedHandle}`
           : input.author?.trim() || tweetAuthorFromText(text, watchedHandles),
         authorName: input.authorName?.trim() || undefined,
         avatarUrl: input.avatarUrl?.trim() || undefined,
         tweetText: text,
+        links: input.links,
         sourceUrl: input.sourceUrl || tweetSourceUrl(text),
         publishedAt: input.publishedAt,
         detectedAt,
@@ -1655,6 +1875,7 @@ function parseCapturedTweetTokenSignals(
   return parseTweetSignalInputs(
     tweets.map((tweet) => ({
       text: tweet.text,
+      links: tweet.links,
       author: tweet.author,
       authorName: tweet.author_name,
       authorHandle: tweet.author_handle,
@@ -1668,18 +1889,45 @@ function parseCapturedTweetTokenSignals(
   );
 }
 
+function normalizeTweetTokenSignal(signal: TweetTokenSignal): TweetTokenSignal {
+  const tweetText = normalizeTweetSignalText(signal.tweetText);
+  const chain = signal.contractAddress
+    ? detectTweetSignalChain(tweetText, signal.contractAddress)
+    : detectTweetCashtagChain(tweetText);
+  const links = Array.isArray(signal.links)
+    ? signal.links.filter((link) => {
+        try {
+          const target = new URL(link.target);
+          return /^(?:https?):$/.test(target.protocol) && Boolean(link.display.trim());
+        } catch {
+          return false;
+        }
+      })
+    : undefined;
+  return { ...signal, tweetText, chain, links };
+}
+
+function tweetSignalMergeKey(signal: TweetTokenSignal): string {
+  const tokenIdentity = signal.contractAddress?.toLowerCase()
+    || `cashtag:${(signal.tokenSymbols || []).join(",")}`;
+  const sourceIdentity = signal.sourceUrl
+    || `${normalizeTwitterHandle(signal.author)}:${normalizeTweetSignalText(signal.tweetText)}`;
+  return `${tokenIdentity}:${sourceIdentity}`;
+}
+
 function mergeTweetTokenSignals(
   existing: TweetTokenSignal[],
   incoming: TweetTokenSignal[],
 ): TweetTokenSignal[] {
-  const existingById = new Map(existing.map((signal) => [signal.id, signal]));
+  const existingByKey = new Map(existing.map((signal) => [tweetSignalMergeKey(signal), signal]));
   const merged = incoming.map((signal) => {
-    const previous = existingById.get(signal.id);
-    existingById.delete(signal.id);
-    return previous ? { ...signal, detectedAt: previous.detectedAt } : signal;
+    const key = tweetSignalMergeKey(signal);
+    const previous = existingByKey.get(key);
+    existingByKey.delete(key);
+    return previous ? { ...signal, id: previous.id, detectedAt: previous.detectedAt } : signal;
   });
   for (const signal of existing) {
-    if (existingById.has(signal.id)) merged.push(signal);
+    if (existingByKey.has(tweetSignalMergeKey(signal))) merged.push(signal);
   }
   return merged.slice(0, MAX_TWITTER_SIGNALS);
 }
@@ -1695,10 +1943,10 @@ function filterTweetTokenSignals(
   );
 }
 
-const TWEET_SIGNAL_TEXT_TOKEN_RE = /(https?:\/\/[^\s]+|@[A-Za-z0-9_]{1,15}|#[\p{L}\p{N}_]+|\$[A-Za-z][A-Za-z0-9_]*|0x[a-fA-F0-9]{40,64}|[1-9A-HJ-NP-Za-km-z]{32,44})/gu;
+const TWEET_SIGNAL_TEXT_TOKEN_RE = /(https?:\/\/[^\s，。！？；：）】》]+|(?:www\.)?(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?\.)+[A-Za-z]{2,24}(?:\/[^\s，。！？；：）】》]*)?|@[A-Za-z0-9_]{1,15}|#[\p{L}\p{N}_]+|\$[A-Za-z][A-Za-z0-9_]*|0x[a-fA-F0-9]{40,64}|(?:EQ|UQ)[A-Za-z0-9_-]{46}|T[1-9A-HJ-NP-Za-km-z]{33}|[1-9A-HJ-NP-Za-km-z]{32,44})/gu;
 
 function twitterTextTokenUrl(token: string): string | undefined {
-  const value = token.replace(/[.,!?;:)\]}]+$/g, "");
+  const value = token.replace(/[.,!?;:)\]}，。！？；：）】》]+$/g, "");
   if (/^@[A-Za-z0-9_]{1,15}$/.test(value)) return `https://x.com/${value.slice(1)}`;
   if (/^\$[A-Za-z][A-Za-z0-9_]*$/.test(value)) {
     return `https://x.com/search?q=${encodeURIComponent(value)}&src=cashtag_click`;
@@ -1707,6 +1955,9 @@ function twitterTextTokenUrl(token: string): string | undefined {
     return `https://x.com/search?q=${encodeURIComponent(value)}&src=hashtag_click`;
   }
   if (/^https?:\/\//i.test(value)) return value;
+  if (/^(?:www\.)?(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?\.)+[A-Za-z]{2,24}(?:\/[^\s]*)?$/i.test(value)) {
+    return `https://${value}`;
+  }
   return undefined;
 }
 
@@ -1734,11 +1985,12 @@ function SelectableTwitterLink({
   };
 
   return (
-    <span
-      role="link"
-      tabIndex={0}
-      className={`cursor-pointer select-text hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sky-300/60 ${className || ""}`}
+    <a
+      href={url}
+      title={url}
+      className={`cursor-pointer select-text decoration-current/60 underline-offset-2 hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#1d9bf0]/60 ${className || ""}`}
       onClick={(event) => {
+        event.preventDefault();
         if (event.detail > 1) {
           clearPendingOpen();
           return;
@@ -1760,38 +2012,106 @@ function SelectableTwitterLink({
       }}
     >
       {children}
-    </span>
+    </a>
   );
 }
 
 function renderTweetSignalText(
   text: string,
-  contractAddress: string,
+  contractAddress: string | undefined,
+  links: TweetSignalLink[] | undefined,
   onOpen: (url: string) => void,
 ): ReactNode[] {
-  const contract = contractAddress.toLowerCase();
+  const contract = contractAddress?.toLowerCase();
   return text.split(TWEET_SIGNAL_TEXT_TOKEN_RE).map((part, index) => {
     if (!part) return null;
     const normalized = part.replace(/[.,!?;:)\]}]+$/g, "").toLowerCase();
-    if (normalized === contract) {
+    if (contract && normalized === contract) {
       return <span key={`${index}-${part}`} className="font-medium text-emerald-300">{part}</span>;
     }
     const targetUrl = twitterTextTokenUrl(part);
     if (targetUrl) {
+      const linkEntity = links?.find((link) => link.target === targetUrl);
+      const suffix = part.match(/[.,!?;:)\]}，。！？；：）】》]+$/)?.[0] || "";
+      const linkText = suffix ? part.slice(0, -suffix.length) : part;
+      const displaySource = linkEntity?.display || linkText;
+      const displayText = /^https?:\/\//i.test(displaySource)
+        ? displaySource.replace(/^https?:\/\/(?:www\.)?/i, "")
+        : displaySource.replace(/^www\./i, "");
       return (
-        <SelectableTwitterLink key={`${index}-${part}`} url={targetUrl} onOpen={onOpen} className="text-sky-400">
-          {part}
-        </SelectableTwitterLink>
+        <span key={`${index}-${part}`}>
+          <SelectableTwitterLink url={linkEntity?.target || targetUrl} onOpen={onOpen} className="text-[#1d9bf0] [overflow-wrap:anywhere]">
+            {displayText}
+          </SelectableTwitterLink>
+          {suffix}
+        </span>
       );
     }
     return part;
   });
 }
 
+function TweetSignalBody({
+  signal,
+  expanded,
+  onToggle,
+  onOpen,
+  showMoreLabel,
+  showLessLabel,
+}: {
+  signal: TweetTokenSignal;
+  expanded: boolean;
+  onToggle: () => void;
+  onOpen: (url: string) => void;
+  showMoreLabel: string;
+  showLessLabel: string;
+}) {
+  const textRef = useRef<HTMLParagraphElement>(null);
+  const [canExpand, setCanExpand] = useState(false);
+
+  useEffect(() => {
+    const node = textRef.current;
+    if (!node) return;
+    const measure = () => {
+      const lineHeight = Number.parseFloat(window.getComputedStyle(node).lineHeight);
+      const collapsedHeight = Number.isFinite(lineHeight) ? lineHeight * 3 : node.clientHeight;
+      setCanExpand(node.scrollHeight > collapsedHeight + 1);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [signal.tweetText]);
+
+  return (
+    <>
+      <p
+        ref={textRef}
+        className={`mt-0.5 cursor-text select-text whitespace-pre-wrap break-words text-[15px] leading-5 text-[#e7e9ea] ${expanded ? "" : "line-clamp-3"}`}
+      >
+        {renderTweetSignalText(signal.tweetText, signal.contractAddress, signal.links, onOpen)}
+      </p>
+      {canExpand && (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={onToggle}
+          className="mt-0.5 inline-flex items-center gap-0.5 text-xs font-medium text-[#1d9bf0] hover:underline"
+        >
+          {expanded ? showLessLabel : showMoreLabel}
+          {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+        </button>
+      )}
+    </>
+  );
+}
+
 function tweetSignalChainClass(chain: TweetSignalChain): string {
   if (chain === "Solana") return "border-violet-300/25 bg-violet-300/10 text-violet-200";
   if (chain === "BSC") return "border-amber-300/25 bg-amber-300/10 text-amber-200";
   if (chain === "Sui") return "border-cyan-300/25 bg-cyan-300/10 text-cyan-200";
+  if (chain === "Robinhood") return "border-emerald-300/25 bg-emerald-300/10 text-emerald-200";
+  if (chain === "Unknown") return "border-zinc-400/25 bg-zinc-400/10 text-zinc-300";
   return "border-sky-300/25 bg-sky-300/10 text-sky-200";
 }
 
@@ -1811,7 +2131,7 @@ function TweetSignalAvatar({ signal }: { signal: TweetTokenSignal }) {
   const label = signal.authorName || signal.author || "X";
   const initial = label.replace(/^@/, "").slice(0, 1).toUpperCase() || "X";
   return (
-    <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-700 text-xs font-semibold text-white ring-1 ring-white/10">
+    <span className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-700 text-xs font-semibold text-white ring-1 ring-white/10">
       {signal.avatarUrl && !failed ? (
         // eslint-disable-next-line @next/next/no-img-element -- X profile images are dynamic remote assets with local fallback handling.
         <img
@@ -3064,6 +3384,7 @@ export default function Home() {
   const twitterSignalNotifyCaptureRef = useRef(false);
   const twitterSignalCaptureInFlightRef = useRef(false);
   const twitterSignalCaptureTimeoutRef = useRef<number | null>(null);
+  const twitterSignalCaptureRequestIdRef = useRef<string | null>(null);
   const programDeploymentWatchdogTrippedRef = useRef(false);
   lastProgramDeploymentIntentRef.current = lastProgramDeploymentIntent;
   programDeploymentJournalRef.current = programDeploymentJournal;
@@ -7062,8 +7383,8 @@ export default function Home() {
     setTwitterSignalCaptureError("");
     toast.success(
       visibleSignals.length > 0
-        ? tf("features.twitter-signals.scanSuccess", "已提取 {count} 条带合约地址的推文", { count: visibleSignals.length })
-        : tf("features.twitter-signals.scanEmpty", "没有找到带合约地址的推文"),
+        ? tf("features.twitter-signals.scanSuccess", "已提取 {count} 条代币线索推文", { count: visibleSignals.length })
+        : tf("features.twitter-signals.scanEmpty", "没有找到带合约地址或代币代码的推文"),
     );
   }, [tf, twitterSignalSource, twitterWatchedUsers]);
 
@@ -7082,6 +7403,8 @@ export default function Home() {
     }
     if (tab.loading || twitterSignalCaptureInFlightRef.current) return false;
     twitterSignalCaptureInFlightRef.current = true;
+    const requestId = `twitter-scan-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    twitterSignalCaptureRequestIdRef.current = requestId;
     setTwitterSignalCaptureBusy(true);
     setTwitterSignalCaptureStatus("scanning");
     setTwitterSignalCaptureError("");
@@ -7091,19 +7414,28 @@ export default function Home() {
         window.clearTimeout(twitterSignalCaptureTimeoutRef.current);
       }
       twitterSignalCaptureTimeoutRef.current = window.setTimeout(() => {
+        if (twitterSignalCaptureRequestIdRef.current !== requestId) return;
         twitterSignalCaptureTimeoutRef.current = null;
+        twitterSignalCaptureRequestIdRef.current = null;
         twitterSignalCaptureInFlightRef.current = false;
         twitterSignalNotifyCaptureRef.current = false;
         setTwitterSignalCaptureBusy(false);
         setTwitterSignalCaptureStatus("error");
         setTwitterSignalCaptureError(tf("features.twitter-signals.captureTimeout", "X 页面没有及时返回数据，请确认关注流已经加载完成。"));
-      }, 12_000);
-      await invoke("dapp_request_tab_text", { tabId: tab.id, advance: Boolean(options.advance) });
+      }, 30_000);
       if (options.notify) {
-        toast.message(tf("features.twitter-signals.captureRequested", "正在读取 X 页面中的推文..."));
+        toast.message(tf("features.twitter-signals.captureRequested", "正在向下遍历 X 时间线并读取推文..."));
       }
+      await invoke("dapp_request_tab_text", {
+        tabId: tab.id,
+        requestId,
+        advance: Boolean(options.advance),
+        background: activeTwitterBrowserTabId !== tab.id,
+      });
       return true;
     } catch (error) {
+      if (twitterSignalCaptureRequestIdRef.current !== requestId) return false;
+      twitterSignalCaptureRequestIdRef.current = null;
       twitterSignalCaptureInFlightRef.current = false;
       twitterSignalNotifyCaptureRef.current = false;
       if (twitterSignalCaptureTimeoutRef.current !== null) {
@@ -7119,7 +7451,7 @@ export default function Home() {
       }
       return false;
     }
-  }, [tf, twitterDappTab]);
+  }, [activeTwitterBrowserTabId, tf, twitterDappTab]);
 
   const openTwitterLoginInBrowser = () => {
     if (twitterDappTab) {
@@ -7132,6 +7464,10 @@ export default function Home() {
   };
 
   const openSignalBuy = (signal: TweetTokenSignal) => {
+    if (!signal.contractAddress) {
+      toast.error(tf("features.twitter-signals.buyRequiresContract", "仅有代币代码，需确认合约地址后才能购买。"));
+      return;
+    }
     if (signal.chain !== "Solana") {
       toast.error(tf("features.twitter-signals.solanaBuyOnly", "当前一键购买只支持 Solana 代币。"));
       return;
@@ -7165,7 +7501,9 @@ export default function Home() {
       const data = JSON.parse(raw) as Record<string, unknown>;
       if (typeof data.watchedUsers === "string") setTwitterWatchedUsers(data.watchedUsers);
       if (typeof data.source === "string") setTwitterSignalSource(data.source);
-      if (Array.isArray(data.signals)) setTwitterSignals(data.signals as TweetTokenSignal[]);
+      if (Array.isArray(data.signals)) {
+        setTwitterSignals((data.signals as TweetTokenSignal[]).map(normalizeTweetTokenSignal));
+      }
       if (typeof data.lastScanAt === "string") setTwitterSignalLastScanAt(data.lastScanAt);
       if (typeof data.intervalSec === "number" && Number.isFinite(data.intervalSec)) {
         setTwitterSignalIntervalSec(Math.min(3600, Math.max(15, Math.floor(data.intervalSec))));
@@ -7214,6 +7552,7 @@ export default function Home() {
   ]);
 
   useEffect(() => () => {
+    twitterSignalCaptureRequestIdRef.current = null;
     if (twitterSignalCaptureTimeoutRef.current !== null) {
       window.clearTimeout(twitterSignalCaptureTimeoutRef.current);
     }
@@ -7266,6 +7605,8 @@ export default function Home() {
         }
       }),
       listen<DappTabTextEvent>("dapp://tab-text", (event) => {
+        if (event.payload.request_id !== twitterSignalCaptureRequestIdRef.current) return;
+        twitterSignalCaptureRequestIdRef.current = null;
         const text = event.payload.text || "";
         const capturedTweets = Array.isArray(event.payload.tweets) ? event.payload.tweets : [];
         const notify = twitterSignalNotifyCaptureRef.current;
@@ -7290,8 +7631,8 @@ export default function Home() {
         if (notify) {
           toast.success(
             visibleSignals.length > 0
-              ? tf("features.twitter-signals.captureSuccess", "已从当前页面提取 {count} 条代币线索", { count: visibleSignals.length })
-              : tf("features.twitter-signals.captureEmpty", "当前页面没有提取到合约地址"),
+              ? tf("features.twitter-signals.captureSuccess", "本轮遍历提取了 {count} 条代币线索", { count: visibleSignals.length })
+              : tf("features.twitter-signals.captureEmpty", "本轮遍历没有提取到合约地址或代币代码"),
           );
         }
       }),
@@ -15837,8 +16178,9 @@ export default function Home() {
         return renderEvmWorkbench();
 
       case "twitter-signals": {
-        const solanaSignals = visibleTwitterSignals.filter((signal) => signal.chain === "Solana").length;
-        const evmSignals = visibleTwitterSignals.length - solanaSignals;
+        const solanaSignals = visibleTwitterSignals.filter((signal) => signal.contractAddress && signal.chain === "Solana").length;
+        const otherNetworkSignals = visibleTwitterSignals.filter((signal) => signal.contractAddress && signal.chain !== "Solana").length;
+        const cashtagSignals = visibleTwitterSignals.filter((signal) => !signal.contractAddress).length;
         const lastScanLabel = twitterSignalLastScanAt
           ? new Date(twitterSignalLastScanAt).toLocaleString()
           : tf("features.twitter-signals.neverScanned", "尚未扫描");
@@ -15848,15 +16190,15 @@ export default function Home() {
         const captureStatusLabel: Record<TwitterSignalCaptureStatus, string> = {
           idle: tf("features.twitter-signals.statusIdle", "等待开始扫描"),
           waiting: tf("features.twitter-signals.statusWaiting", "等待 X 关注流加载"),
-          scanning: tf("features.twitter-signals.statusScanning", "正在读取可见推文"),
+          scanning: tf("features.twitter-signals.statusScanning", "正在遍历 X 时间线"),
           success: tf(
             "features.twitter-signals.statusSuccess",
-            "最近一轮读取 {count} 条可见推文",
+            "最近一轮遍历 {count} 条推文",
             { count: twitterSignalLastTweetCount },
           ),
           empty: tf(
             "features.twitter-signals.statusEmpty",
-            "读取了 {count} 条可见推文，未发现匹配的合约地址",
+            "遍历了 {count} 条推文，未发现合约地址或代币代码",
             { count: twitterSignalLastTweetCount },
           ),
           error: tf("features.twitter-signals.statusError", "扫描失败"),
@@ -15971,7 +16313,12 @@ export default function Home() {
                   {tf("features.twitter-signals.detected", "已提取")} <strong className="font-semibold text-white">{visibleTwitterSignals.length}</strong>
                 </span>
                 <span className="text-xs text-violet-300">Solana {solanaSignals}</span>
-                <span className="text-xs text-sky-300">EVM / Sui {evmSignals}</span>
+                <span className="text-xs text-sky-300">
+                  {tf("features.twitter-signals.otherChains", "其它链")} {otherNetworkSignals}
+                </span>
+                <span className="text-xs text-zinc-400">
+                  {tf("features.twitter-signals.cashtags", "$代币代码")} {cashtagSignals}
+                </span>
                 <button
                   type="button"
                   onClick={openTwitterLoginInBrowser}
@@ -16130,29 +16477,29 @@ export default function Home() {
             <section className="overflow-hidden rounded-lg border border-white/10 bg-white/[0.025]">
               <div className="flex min-h-10 items-center justify-between gap-3 border-b border-white/10 px-3 py-2 md:px-4">
                 <h3 className="text-sm font-semibold text-gray-200">
-                  {tf("features.twitter-signals.resultTitle", "代币合约列表")}
+                  {tf("features.twitter-signals.resultTitle", "代币线索列表")}
                 </h3>
                 <span className="text-xs tabular-nums text-gray-500">{visibleTwitterSignals.length}</span>
               </div>
               {visibleTwitterSignals.length === 0 ? (
                 <p className="px-4 py-14 text-center text-sm text-gray-500">
-                  {tf("features.twitter-signals.empty", "还没有提取到合约地址。")}
+                  {tf("features.twitter-signals.empty", "还没有提取到合约地址或代币代码。")}
                 </p>
               ) : (
                 <div className="max-h-[calc(100vh-19rem)] min-h-40 divide-y divide-white/[0.08] overflow-y-auto">
                   {visibleTwitterSignals.map((signal) => {
                     const expanded = expandedTwitterSignalIds.has(signal.id);
-                    const canExpand = signal.tweetText.length > 180;
                     const displayTime = formatTweetSignalTime(signal.publishedAt || signal.detectedAt);
                     const authorProfileUrl = twitterTextTokenUrl(signal.author);
+                    const tokenLabel = tweetSignalTokenLabel(signal);
                     return (
                       <article
                         key={signal.id}
-                        className="group grid grid-cols-[36px_minmax(0,1fr)] gap-x-3 gap-y-2 px-3 py-2.5 transition-colors hover:bg-white/[0.035] md:px-4 lg:grid-cols-[36px_minmax(0,1fr)_max-content_auto] xl:grid-cols-[36px_minmax(320px,520px)_max-content_max-content] xl:justify-start 2xl:grid-cols-[36px_minmax(380px,680px)_max-content_max-content]"
+                        className="group grid grid-cols-[40px_minmax(0,1fr)] gap-x-3 gap-y-2 px-3 py-3 transition-colors hover:bg-white/[0.035] md:px-4 lg:grid-cols-[40px_minmax(0,1fr)_max-content_auto] xl:grid-cols-[40px_minmax(320px,520px)_max-content_max-content] xl:justify-start 2xl:grid-cols-[40px_minmax(380px,680px)_max-content_max-content]"
                       >
                         <TweetSignalAvatar key={signal.avatarUrl || signal.author} signal={signal} />
                         <div className="min-w-0">
-                          <div className="flex min-w-0 cursor-text select-text items-center gap-1 overflow-hidden text-[13px] leading-5">
+                          <div className="flex min-w-0 cursor-text select-text items-center gap-1 overflow-hidden text-[15px] leading-5">
                             {authorProfileUrl ? (
                               <SelectableTwitterLink url={authorProfileUrl} onOpen={openSignalTweet} className="truncate font-semibold text-gray-100">
                                 {signal.authorName || signal.author}
@@ -16178,43 +16525,32 @@ export default function Home() {
                               </>
                             )}
                           </div>
-                          <p className={`mt-0.5 cursor-text select-text whitespace-pre-wrap break-words text-sm leading-5 text-gray-200 ${expanded ? "" : "line-clamp-3"}`}>
-                            {renderTweetSignalText(
-                              signal.tweetText.replace(/\n{2,}/g, "\n"),
-                              signal.contractAddress,
-                              openSignalTweet,
-                            )}
-                          </p>
-                          {canExpand && (
-                            <button
-                              type="button"
-                              onClick={() => setExpandedTwitterSignalIds((current) => {
-                                const next = new Set(current);
-                                if (next.has(signal.id)) next.delete(signal.id);
-                                else next.add(signal.id);
-                                return next;
-                              })}
-                              className="mt-0.5 inline-flex items-center gap-0.5 text-xs font-medium text-sky-400 hover:text-sky-300"
-                            >
-                              {expanded
-                                ? tf("features.twitter-signals.showLess", "收起")
-                                : tf("features.twitter-signals.showMore", "显示更多")}
-                              {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-                            </button>
-                          )}
+                          <TweetSignalBody
+                            signal={signal}
+                            expanded={expanded}
+                            onOpen={openSignalTweet}
+                            showMoreLabel={tf("features.twitter-signals.showMore", "显示更多")}
+                            showLessLabel={tf("features.twitter-signals.showLess", "收起")}
+                            onToggle={() => setExpandedTwitterSignalIds((current) => {
+                              const next = new Set(current);
+                              if (next.has(signal.id)) next.delete(signal.id);
+                              else next.add(signal.id);
+                              return next;
+                            })}
+                          />
                         </div>
                         <div className="col-start-2 min-w-0 self-start lg:col-start-3 lg:row-start-1">
                           <p className="flex min-w-0 items-center gap-1.5 whitespace-nowrap text-[11px] leading-5 text-emerald-200/90">
                             <span className={`inline-flex shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold leading-4 ${tweetSignalChainClass(signal.chain)}`}>
                               {signal.chain}
                             </span>
-                            <code className="min-w-0 overflow-hidden text-ellipsis">{compactContractAddress(signal.contractAddress)}</code>
+                            <code className="min-w-0 overflow-hidden text-ellipsis">{compactContractAddress(tokenLabel)}</code>
                           </p>
                         </div>
                         <div className="col-start-2 flex shrink-0 items-center gap-1 self-start lg:col-start-4 lg:row-start-1">
                           <button
                             type="button"
-                            onClick={() => copyToClipboard(signal.contractAddress, `twitter-signal-${signal.id}`)}
+                            onClick={() => copyToClipboard(tokenLabel, `twitter-signal-${signal.id}`)}
                             className="inline-flex h-8 w-8 items-center justify-center rounded-full text-gray-400 transition-colors hover:bg-white/10 hover:text-white"
                             title={t("common.copy")}
                             aria-label={t("common.copy")}
@@ -16235,9 +16571,13 @@ export default function Home() {
                           <button
                             type="button"
                             onClick={() => openSignalBuy(signal)}
-                            disabled={signal.chain !== "Solana" || !effectiveWallet}
+                            disabled={!signal.contractAddress || signal.chain !== "Solana" || !effectiveWallet}
                             className="inline-flex h-8 items-center justify-center gap-1 rounded-md bg-emerald-300 px-2 text-[11px] font-semibold text-zinc-950 transition-colors hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-40"
-                            title={signal.chain === "Solana" ? undefined : tf("features.twitter-signals.solanaBuyOnly", "当前一键购买只支持 Solana 代币。")}
+                            title={!signal.contractAddress
+                              ? tf("features.twitter-signals.buyRequiresContract", "仅有代币代码，需确认合约地址后才能购买。")
+                              : signal.chain === "Solana"
+                                ? undefined
+                                : tf("features.twitter-signals.solanaBuyOnly", "当前一键购买只支持 Solana 代币。")}
                           >
                             <ShoppingCart className="h-3.5 w-3.5" />
                             {tf("features.twitter-signals.buy", "购买")}

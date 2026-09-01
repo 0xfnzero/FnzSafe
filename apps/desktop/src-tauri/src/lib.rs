@@ -430,10 +430,17 @@ struct DappNewWindowEvent {
 #[derive(Clone, Debug, Serialize)]
 struct DappTabTextEvent {
     tab_id: String,
+    request_id: String,
     url: String,
     text: String,
     tweets: Vec<DappCapturedTweet>,
     captured_at_ms: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct DappCapturedTweetLink {
+    target: String,
+    display: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -453,6 +460,8 @@ struct DappCapturedTweet {
     source_url: Option<String>,
     #[serde(default)]
     published_at: Option<String>,
+    #[serde(default)]
+    links: Vec<DappCapturedTweetLink>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -2557,27 +2566,54 @@ fn dapp_close_tab(
 }
 
 #[tauri::command]
-fn dapp_request_tab_text(
+async fn dapp_request_tab_text(
     app: DesktopAppHandle,
     tab_id: String,
+    request_id: String,
     advance: Option<bool>,
+    background: Option<bool>,
 ) -> Result<(), String> {
+    if request_id.is_empty()
+        || request_id.len() > 100
+        || !request_id
+            .chars()
+            .all(|value| value.is_ascii_alphanumeric() || value == '-' || value == '_')
+    {
+        return Err("invalid page text request id".to_string());
+    }
     let label = dapp_tab_label(&tab_id)?;
     let webview = app
         .get_webview(&label)
         .ok_or_else(|| "dapp tab is not open".to_string())?;
-    let advance = if advance.unwrap_or(false) {
-        "true"
-    } else {
-        "false"
-    };
-    let script = format!(
+    let run_in_background = background.unwrap_or(false);
+    let original_bounds = run_in_background.then(|| webview.bounds().ok()).flatten();
+    if run_in_background {
+        let staging_bounds = Rect {
+            position: Position::Logical(LogicalPosition::new(-20_000.0, -20_000.0)),
+            size: Size::Logical(LogicalSize::new(1_280.0, 900.0)),
+        };
+        webview
+            .set_bounds(staging_bounds)
+            .map_err(|error| format!("failed to stage background dapp page scan: {error}"))?;
+        if let Err(error) = webview.show() {
+            if let Some(bounds) = original_bounds {
+                let _ = webview.set_bounds(bounds);
+            }
+            return Err(format!("failed to show background dapp page scan: {error}"));
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+
+    let scan_result = async {
+    let should_advance = advance.unwrap_or(false);
+    let advance = if should_advance { "true" } else { "false" };
+    let request_id_json = serde_json::to_string(&request_id)
+        .map_err(|error| format!("failed to encode page text request id: {error}"))?;
+    let initialize_script = format!(
         r#"
 (function () {{
   try {{
-    const invoke = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
-    if (typeof invoke !== "function") return;
-
+    const requestId = {request_id_json};
     const isTwitter = /(^|\.)((x)|(twitter))\.com$/i.test(window.location.hostname);
     const clean = (value, limit) => String(value || "").trim().slice(0, limit);
     const absoluteTwitterStatusUrl = (href) => {{
@@ -2590,76 +2626,226 @@ fn dapp_request_tab_text(
         return "";
       }}
     }};
+    const serializeTweetText = (root) => {{
+      const links = [];
+      const readNode = (current) => {{
+        if (current.nodeType === Node.TEXT_NODE) return current.nodeValue || "";
+        if (!(current instanceof HTMLElement)) return "";
+        if (current.getAttribute("aria-hidden") === "true") return "";
+        if (current.tagName === "BR") return "\n";
+        if (current.tagName === "IMG") return current.getAttribute("alt") || "";
 
-    const tweetNodes = isTwitter
-      ? Array.from(document.querySelectorAll("article[data-testid='tweet'], [data-testid='tweet']"))
-      : [];
-    const tweets = tweetNodes.slice(0, 200).map((node) => {{
-      const time = node.querySelector("time[datetime]");
-      const statusAnchors = Array.from(node.querySelectorAll("a[href*='/status/']"));
-      const statusAnchor = time?.closest("a[href*='/status/']") ||
-        statusAnchors.find((anchor) => absoluteTwitterStatusUrl(anchor.getAttribute("href") || ""));
-      const sourceUrl = absoluteTwitterStatusUrl(statusAnchor?.getAttribute("href") || "");
-      const statusMatch = sourceUrl.match(/^https?:\/\/[^/]+\/([A-Za-z0-9_]{{1,15}})\/status\/(\d+)/i);
-      const textNodes = Array.from(node.querySelectorAll("[data-testid='tweetText']"));
-      const text = clean(
-        textNodes.length > 0
-          ? textNodes.map((item) => item.innerText || item.textContent || "").join("\n")
-          : node.innerText || node.textContent || "",
-        4000,
-      );
-      const userName = node.querySelector("[data-testid='User-Name']");
-      const author = clean(userName?.innerText || userName?.textContent || "", 160);
-      const authorName = clean(
-        author.split(/\n+/).find((line) => line.trim() && !line.trim().startsWith("@") && line.trim() !== "·") || "",
-        80,
-      );
-      const avatar = node.querySelector("[data-testid='Tweet-User-Avatar'] img[src]") ||
-        node.querySelector("img[src*='pbs.twimg.com/profile_images/']");
-      return {{
-        tweet_id: clean(statusMatch?.[2], 32),
-        author,
-        author_name: authorName,
-        author_handle: clean(statusMatch?.[1], 15).toLowerCase(),
-        avatar_url: clean(avatar?.currentSrc || avatar?.getAttribute("src"), 2048) || null,
-        text,
-        source_url: sourceUrl || null,
-        published_at: clean(time?.getAttribute("datetime"), 64) || null,
+        const childText = Array.from(current.childNodes).map(readNode).join("");
+        if (current.tagName !== "A") return childText;
+        const display = childText.trim();
+        if (!display || /^[@#$]/.test(display)) return childText;
+        const candidates = [
+          current.getAttribute("data-expanded-url"),
+          current.getAttribute("title"),
+          current.getAttribute("href"),
+        ];
+        for (const candidate of candidates) {{
+          if (!candidate) continue;
+          if (!/^(?:https?:\/\/|www\.|[A-Za-z0-9-]+\.[A-Za-z]{{2,}}(?:\/|$))/i.test(candidate)) continue;
+          try {{
+            const target = new URL(/^https?:\/\//i.test(candidate) ? candidate : `https://${{candidate}}`);
+            if (/^https?:$/.test(target.protocol)) {{
+              const displayUrl = display
+                .replace(/\s+/g, "")
+                .replace(/(?:\u2026|\.{{3}})$/u, "");
+              if (/^(?:https?:\/\/|www\.|[A-Za-z0-9-]+\.[A-Za-z]{{2,}}(?:\/|$))/i.test(displayUrl)) {{
+                links.push({{ target: target.href, display: displayUrl }});
+              }}
+              return target.href;
+            }}
+          }} catch (_) {{}}
+        }}
+        return childText;
       }};
-    }}).filter((tweet) => tweet.text);
+      const text = readNode(root)
+        .replace(/\u00a0/g, " ")
+        .replace(/[\u200b-\u200d\ufeff]/gi, "")
+        .replace(/[ \t]+\n/g, "\n")
+        .replace(/\n[ \t]+/g, "\n")
+        .replace(/\n{{3,}}/g, "\n\n")
+        .trim();
+      return {{ text, links }};
+    }};
 
-    const readableNodes = tweetNodes.length > 0
-      ? tweetNodes
-      : Array.from(document.querySelectorAll("main, body")).slice(0, 1);
-    const text = readableNodes
-      .map((node) => clean(node.innerText || node.textContent || "", 250000))
-      .filter(Boolean)
-      .join("\n\n")
-      .slice(0, 250000);
-    invoke("dapp_submit_page_text", {{ text, tweets, url: window.location.href }});
-
+    const scan = {{ requestId, isTwitter, collectedTweets: new Map(), latestNodes: [] }};
+    const expandTweetTexts = () => {{
+      if (!isTwitter) return;
+      const tweetNodes = Array.from(document.querySelectorAll("article[data-testid='tweet'], [data-testid='tweet']"));
+      for (const node of tweetNodes) {{
+        const control = node.querySelector("[data-testid='tweet-text-show-more-link']");
+        if (!(control instanceof HTMLElement)) continue;
+        if (control.closest("a[href]") || (control.tagName !== "BUTTON" && control.getAttribute("role") !== "button")) continue;
+        const bounds = control.getBoundingClientRect();
+        if (bounds.width > 0 && bounds.height > 0) control.click();
+      }}
+    }};
+    const collectTweets = () => {{
+      const tweetNodes = isTwitter
+        ? Array.from(document.querySelectorAll("article[data-testid='tweet'], [data-testid='tweet']"))
+        : [];
+      for (const node of tweetNodes) {{
+        if (scan.collectedTweets.size >= 200) break;
+        const time = node.querySelector("time[datetime]");
+        const statusAnchors = Array.from(node.querySelectorAll("a[href*='/status/']"));
+        const statusAnchor = time?.closest("a[href*='/status/']") ||
+          statusAnchors.find((anchor) => absoluteTwitterStatusUrl(anchor.getAttribute("href") || ""));
+        const sourceUrl = absoluteTwitterStatusUrl(statusAnchor?.getAttribute("href") || "");
+        const statusMatch = sourceUrl.match(/^https?:\/\/[^/]+\/([A-Za-z0-9_]{{1,15}})\/status\/(\d+)/i);
+        const textNode = node.querySelector("[data-testid='tweetText']");
+        const serialized = textNode ? serializeTweetText(textNode) : null;
+        const text = clean(
+          serialized
+            ? serialized.text
+            : node.innerText || node.textContent || "",
+          4000,
+        );
+        if (!text) continue;
+        const userName = node.querySelector("[data-testid='User-Name']");
+        const author = clean(userName?.innerText || userName?.textContent || "", 160);
+        const authorName = clean(
+          author.split(/\n+/).find((line) => line.trim() && !line.trim().startsWith("@") && line.trim() !== "·") || "",
+          80,
+        );
+        const avatar = node.querySelector("[data-testid='Tweet-User-Avatar'] img[src]") ||
+          node.querySelector("img[src*='pbs.twimg.com/profile_images/']");
+        const tweet = {{
+          tweet_id: clean(statusMatch?.[2], 32),
+          author,
+          author_name: authorName,
+          author_handle: clean(statusMatch?.[1], 15).toLowerCase(),
+          avatar_url: clean(avatar?.currentSrc || avatar?.getAttribute("src"), 2048) || null,
+          text,
+          links: serialized?.links || [],
+          source_url: sourceUrl || null,
+          published_at: clean(time?.getAttribute("datetime"), 64) || null,
+        }};
+        const key = tweet.source_url || tweet.tweet_id || `${{tweet.author_handle}}:${{tweet.text}}`;
+        const previous = scan.collectedTweets.get(key);
+        if (!previous || tweet.text.length > previous.text.length) scan.collectedTweets.set(key, tweet);
+      }}
+      scan.latestNodes = tweetNodes;
+    }};
+    scan.expandTweetTexts = expandTweetTexts;
+    scan.collectTweets = collectTweets;
+    window.__FNZERO_TWEET_SCAN__ = scan;
+    expandTweetTexts();
+    collectTweets();
     if ({advance} && isTwitter) {{
       const viewport = Math.max(window.innerHeight || 0, 600);
-      window.scrollBy({{ top: Math.floor(viewport * 0.8), left: 0, behavior: "auto" }});
+      window.scrollBy({{ top: Math.floor(viewport * 0.85), left: 0, behavior: "auto" }});
     }}
   }} catch (_) {{}}
 }})();
 "#,
     );
     webview
-        .eval(&script)
-        .map_err(|error| format!("failed to request dapp page text: {error}"))?;
-    Ok(())
+        .eval(&initialize_script)
+        .map_err(|error| format!("failed to initialize dapp page scan: {error}"))?;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    if should_advance {
+        // Hidden Chromium pages throttle JavaScript timers. Pace the traversal
+        // from Rust so scanning remains bounded while the monitor tab is shown.
+        for pass in 1..10 {
+            tokio::time::sleep(Duration::from_millis(650)).await;
+            let should_scroll = if pass < 9 { "true" } else { "false" };
+            let step_script = format!(
+                r#"
+(function () {{
+  try {{
+    const scan = window.__FNZERO_TWEET_SCAN__;
+    if (!scan || scan.requestId !== {request_id_json}) return;
+    scan.expandTweetTexts();
+    scan.collectTweets();
+    if ({should_scroll} && scan.isTwitter && scan.collectedTweets.size < 200) {{
+      const viewport = Math.max(window.innerHeight || 0, 600);
+      window.scrollBy({{ top: Math.floor(viewport * 0.85), left: 0, behavior: "auto" }});
+    }}
+  }} catch (_) {{}}
+}})();
+"#,
+            );
+            webview
+                .eval(&step_script)
+                .map_err(|error| format!("failed to advance dapp page scan: {error}"))?;
+        }
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let submit_script = format!(
+        r#"
+(async function () {{
+  try {{
+    const scan = window.__FNZERO_TWEET_SCAN__;
+    if (!scan || scan.requestId !== {request_id_json}) return;
+    const invoke = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
+    if (typeof invoke !== "function") return;
+    const clean = (value, limit) => String(value || "").trim().slice(0, limit);
+    scan.collectTweets();
+    const tweets = Array.from(scan.collectedTweets.values()).slice(0, 200);
+    const readableNodes = tweets.length > 0
+      ? []
+      : scan.latestNodes.length > 0
+        ? scan.latestNodes
+        : Array.from(document.querySelectorAll("main, body")).slice(0, 1);
+    const text = tweets.length > 0
+      ? tweets.map((tweet) => tweet.text).join("\n\n").slice(0, 250000)
+      : readableNodes
+        .map((node) => clean(node.innerText || node.textContent || "", 250000))
+        .filter(Boolean)
+        .join("\n\n")
+        .slice(0, 250000);
+    await invoke("dapp_submit_page_text", {{
+      requestId: scan.requestId,
+      text,
+      tweets,
+      url: window.location.href,
+    }});
+    if (window.__FNZERO_TWEET_SCAN__?.requestId === scan.requestId) {{
+      delete window.__FNZERO_TWEET_SCAN__;
+    }}
+  }} catch (_) {{}}
+}})();
+"#,
+    );
+    webview
+        .eval(&submit_script)
+        .map_err(|error| format!("failed to submit dapp page scan: {error}"))?;
+        Ok::<(), String>(())
+    }
+    .await;
+
+    if run_in_background {
+        let _ = webview.hide();
+        if let Some(bounds) = original_bounds {
+            let _ = webview.set_bounds(bounds);
+        }
+    }
+    scan_result
 }
 
 #[tauri::command]
 fn dapp_submit_page_text(
     webview: DesktopWebview,
     app: DesktopAppHandle,
+    request_id: String,
     text: String,
     tweets: Option<Vec<DappCapturedTweet>>,
     url: String,
 ) -> Result<(), String> {
+    if request_id.is_empty()
+        || request_id.len() > 100
+        || !request_id
+            .chars()
+            .all(|value| value.is_ascii_alphanumeric() || value == '-' || value == '_')
+    {
+        return Err("invalid page text request id".to_string());
+    }
     let webview_label = webview.label().to_string();
     let tab_id = dapp_tab_id_from_label(&webview_label)
         .ok_or_else(|| "page text can only be submitted from dapp tabs".to_string())?;
@@ -2706,6 +2892,23 @@ fn dapp_submit_page_text(
                     && (host == "pbs.twimg.com" || host.ends_with(".pbs.twimg.com"));
                 (is_x_image && parsed.as_str().len() <= 2_048).then(|| parsed.to_string())
             });
+            let links = tweet
+                .links
+                .into_iter()
+                .take(32)
+                .filter_map(|link| {
+                    let parsed = tauri::Url::parse(link.target.trim()).ok()?;
+                    if !matches!(parsed.scheme(), "http" | "https") || parsed.as_str().len() > 2_048
+                    {
+                        return None;
+                    }
+                    let display = link.display.trim().chars().take(512).collect::<String>();
+                    (!display.is_empty()).then(|| DappCapturedTweetLink {
+                        target: parsed.to_string(),
+                        display,
+                    })
+                })
+                .collect();
             Some(DappCapturedTweet {
                 tweet_id: tweet
                     .tweet_id
@@ -2724,6 +2927,7 @@ fn dapp_submit_page_text(
                     .published_at
                     .map(|value| value.trim().chars().take(64).collect())
                     .filter(|value: &String| !value.is_empty()),
+                links,
             })
         })
         .collect::<Vec<_>>();
@@ -2732,6 +2936,7 @@ fn dapp_submit_page_text(
         DAPP_TAB_TEXT_EVENT,
         DappTabTextEvent {
             tab_id,
+            request_id,
             url: parsed_url.as_str().to_string(),
             text: clipped_text,
             tweets: clipped_tweets,
@@ -3427,6 +3632,13 @@ pub fn run() {
     }
 
     let run_result = tauri::Builder::<DesktopRuntime>::default()
+        // CEF 151.3.12 crashes at address 0x10 when an Alloy-style webview
+        // reports an SPA soft navigation (chromiumembedded/cef#4234). Neither
+        // Chrome UI reading mode nor soft-navigation metrics are used here.
+        .command_line_args([(
+            "disable-features",
+            Some("ImmersiveReadAnything,SoftNavigationDetection"),
+        )])
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_single_instance::Builder::new().build())
         .manage(DappBridgeState::default())
@@ -3475,6 +3687,13 @@ pub fn run() {
                         .level(log::LevelFilter::Info)
                         .build(),
                 )?;
+                if let Some(main_webview) = app.get_webview("main") {
+                    if main_webview.url().is_err() {
+                        if let Some(dev_url) = app.config().build.dev_url.clone() {
+                            main_webview.navigate(dev_url)?;
+                        }
+                    }
+                }
             }
             if let Err(error) =
                 start_desktop_api_if_needed(app, app.state::<DesktopApiProcess>().inner())

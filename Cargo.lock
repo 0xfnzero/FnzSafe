@@ -3476,6 +3476,7 @@ dependencies = [
  "tauri-runtime-cef",
  "tempfile",
  "time",
+ "tokio",
  "windows-sys 0.59.0",
  "zeroize",
 ]
