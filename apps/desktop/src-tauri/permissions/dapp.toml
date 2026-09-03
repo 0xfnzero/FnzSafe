@@ -4,6 +4,11 @@ description = "Open an embedded Solana DApp browser tab."
 commands.allow = ["dapp_open_tab"]
 
 [[permission]]
+identifier = "allow-open-url-in-chrome"
+description = "Open a validated HTTPS URL in Google Chrome."
+commands.allow = ["open_url_in_chrome"]
+
+[[permission]]
 identifier = "allow-navigate-dapp-tab"
 description = "Navigate an embedded Solana DApp browser tab."
 commands.allow = ["dapp_navigate_tab"]
@@ -61,3 +66,13 @@ commands.allow = ["resolve_dapp_sign_request"]
 identifier = "allow-resolve-dapp-connect-request"
 description = "Allow the main FnzSafe window to approve or reject a pending DApp wallet connection request."
 commands.allow = ["resolve_dapp_connect_request"]
+
+[[permission]]
+identifier = "allow-read-pending-dapp-requests"
+description = "Allow the trusted main window to recover pending DApp connection and signing requests."
+commands.allow = ["dapp_pending_sign_request", "dapp_pending_connect_request"]
+
+[[permission]]
+identifier = "allow-pause-dapp-connections"
+description = "Pause all active DApp sessions when the application locks or disconnect one exact authorized session."
+commands.allow = ["dapp_pause_connections", "dapp_resume_connections", "dapp_disconnect_connection", "dapp_disconnect_wallet"]

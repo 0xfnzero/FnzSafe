@@ -1,0 +1,16 @@
+[[permission]]
+identifier = "allow-settings-store"
+description = "Allow the trusted main wallet window to manage settings, address book entries, DApp permissions, and sanitized diagnostics."
+commands.allow = [
+  "settings_get",
+  "settings_update",
+  "settings_import_legacy",
+  "address_book_list",
+  "address_book_upsert",
+  "address_book_delete",
+  "dapp_permissions_list",
+  "dapp_permission_grant",
+  "dapp_permission_revoke",
+  "settings_diagnostics",
+  "open_developer_tools"
+]

@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { useParams } from "next/navigation";
 import QRCode from "qrcode";
 import { toast } from "sonner";
 import { useTranslations } from '@/hooks/useTranslations';
@@ -60,13 +61,82 @@ import {
   ListFilter,
   Radio,
   ShoppingCart,
+  Users,
+  UserPlus,
+  MapPin,
+  Link as LinkIcon,
+  Sparkles,
+  Bot,
+  BookUser,
+  Cable,
+  Database,
+  Info,
+  Code2,
+  LogOut,
 } from "lucide-react";
 import LanguageSwitcher from '@/components/LanguageSwitcher';
+import { AiSkillMarket } from "@/components/AiSkillMarket";
 import { FieldHelp } from "@/components/FieldHelp";
 import { SavedWalletPicker } from "@/components/SavedWalletPicker";
-import { BrowserMenu } from "@/components/BrowserMenu";
+import { SettingsCenterLayout, type SettingsNavigationItem } from "@/components/SettingsCenterLayout";
+import {
+  UnifiedAssetList,
+  WalletAddressPopover,
+  WalletReceivePanel,
+  WalletSendAssetPicker,
+  type UnifiedWalletAsset,
+  type UnifiedWalletLabels,
+  type WalletChainAddress,
+} from "@/components/UnifiedWallet";
+import {
+  BrowserMenu,
+  CHROME_AUTH_IMPORT_EVENT,
+  CHROME_AUTH_IMPORT_STORAGE_KEY,
+} from "@/components/BrowserMenu";
 import { DEFAULT_API_PORT } from "@/lib/api";
 import { apiFetch } from "@/lib/apiFetch";
+import { persistJsonAfterHydration } from "@/lib/hydratedStorage";
+import {
+  AI_SKILL_CATALOG,
+  type AiSkillLocale,
+} from "@/lib/aiSkillCatalog";
+import {
+  isResearchAiProviderKind,
+  researchAiProviderPreset,
+  type ResearchAiProviderKind,
+} from "@/lib/researchAiProviders";
+import {
+  canonicalTweetSourceIdentity,
+  filterRecentTweetSignals,
+  groupTweetSignalsByTweet,
+  hasValidTweetSignalIdentity,
+  isTokenResolutionTarget,
+  mergeTweetTokenSignals,
+  normalizeTweetSignalText,
+  paginateTweetSignalGroups,
+  parseStoredTwitterSignals,
+  sortTweetSignalsNewestFirst,
+  tokenResolutionRetryDelayMs,
+  tokenSignalObservation,
+  TWITTER_SIGNAL_RECENT_DAYS,
+} from "@/lib/twitterSignals";
+import {
+  detectTweetTokenChain,
+  extractTweetTokenCandidates,
+  tweetTokenCandidateIdentity,
+  type TweetSignalChain as DetectedTweetSignalChain,
+} from "@/lib/twitterChainDetection";
+import {
+  appendTwitterKol,
+  createTwitterKolProfile,
+  mergeCapturedTwitterAuthors,
+  mergeCapturedTwitterProfile,
+  normalizeTwitterKolHandle,
+  parseStoredTwitterKols,
+  twitterKolProfileUrl,
+  type CapturedTwitterProfile,
+  type TwitterKolProfile,
+} from "@/lib/twitterKols";
 import {
   anchorIdlProgramId,
   defaultAccountAddress,
@@ -96,6 +166,9 @@ import {
   loadWorkspace,
   MAX_DOWNLOAD_HISTORY,
   mergeRpcProfiles,
+  normalizeStoredEvmChain,
+  parseDownloadHistory,
+  parsePersistedRpcProfiles,
   rpcProfileKey,
   rpcRequestValue,
   saveCurrentWalletId,
@@ -120,7 +193,36 @@ import {
   type WorkspaceProposal,
 } from "@/lib/appStorage";
 import { openExternalUrl } from "@/lib/openExternal";
-import { localTokenMetadata } from "@/lib/localTokenRegistry";
+import { normalizePublicWebUrl } from "@/lib/publicWebUrl";
+import {
+  beginAsyncRequestIntent,
+  createAsyncRequestIntent,
+  isCurrentAsyncRequest,
+} from "@/lib/requestIntent";
+import {
+  DEFAULT_APP_PREFERENCES,
+  addressBookDuplicate,
+  buildLegacySettingsImport,
+  createSerialTaskQueue,
+  dappPermissionMatchesWallet,
+  enabledChainFallback,
+  hasAutoLockExpired,
+  nextAutoLockDeadline,
+  normalizeAddress,
+  normalizeAddressNetwork,
+  persistPermissionBeforeApproval,
+  stripSensitiveFormFields,
+  toggleEnabledEvmChain,
+  visibleEvmChainIds,
+  type AddressBookEntry,
+  type AppPreferences,
+  type DappPermission,
+  type SanitizedDiagnostics,
+  type SettingsSection,
+  type SettingsSnapshot,
+} from "@/lib/settingsCenter";
+import { LOCAL_TOKEN_METADATA, localTokenMetadata } from "@/lib/localTokenRegistry";
+import { chainLogoUri, SOLANA_CHAIN_LOGO_URI } from "@/lib/chainMetadata";
 import {
   buildProgramDeploymentReceiptJson,
   compactProgramDeploymentReceiptJson,
@@ -157,6 +259,17 @@ import {
   validateWalletAuth,
   walletLabel,
 } from "@/lib/walletAuth";
+
+const enqueueSettingsStoreOperation = createSerialTaskQueue();
+const enqueueResearchStoreOperation = createSerialTaskQueue();
+const enqueueDappConnectionOperation = createSerialTaskQueue();
+
+interface SettingsStoreBootstrap {
+  snapshot: SettingsSnapshot;
+  entries: AddressBookEntry[];
+  permissions: DappPermission[];
+  diagnostics: SanitizedDiagnostics;
+}
 
 const MAX_KEYSTORE_FILE_BYTES = 128 * 1024;
 const FALLBACK_PROGRAM_WRITE_CHUNK_BYTES = 800;
@@ -1139,72 +1252,14 @@ interface DappTransactionPreview {
   warnings: string[];
 }
 
-type TweetSignalChain =
-  | "Solana"
-  | "Ethereum"
-  | "BSC"
-  | "Base"
-  | "Polygon"
-  | "Arbitrum"
-  | "Optimism"
-  | "Avalanche"
-  | "Fantom"
-  | "Linea"
-  | "Scroll"
-  | "zkSync Era"
-  | "Blast"
-  | "Mantle"
-  | "opBNB"
-  | "Cronos"
-  | "Gnosis"
-  | "Celo"
-  | "Moonbeam"
-  | "Moonriver"
-  | "Aurora"
-  | "Harmony"
-  | "HECO"
-  | "OKX Chain"
-  | "X Layer"
-  | "Kava EVM"
-  | "Metis"
-  | "Ronin"
-  | "Monad"
-  | "Berachain"
-  | "Sonic"
-  | "HyperEVM"
-  | "World Chain"
-  | "Zora"
-  | "Mode"
-  | "Taiko"
-  | "Manta Pacific"
-  | "Rootstock"
-  | "Bitlayer"
-  | "Merlin Chain"
-  | "Kaia"
-  | "Sei"
-  | "Sui"
-  | "Aptos"
-  | "TON"
-  | "Tron"
-  | "Bitcoin"
-  | "Cardano"
-  | "Near"
-  | "Injective"
-  | "Cosmos"
-  | "Osmosis"
-  | "Polkadot"
-  | "Kusama"
-  | "XRP Ledger"
-  | "Dogecoin"
-  | "Litecoin"
-  | "Robinhood"
-  | "Unknown EVM"
-  | "Unknown";
+type TweetSignalChain = DetectedTweetSignalChain;
 
 interface TweetTokenSignal {
   id: string;
   chain: TweetSignalChain;
   contractAddress?: string;
+  observedChain?: TweetSignalChain;
+  observedContractAddress?: string;
   tokenSymbols?: string[];
   author: string;
   authorName?: string;
@@ -1212,8 +1267,12 @@ interface TweetTokenSignal {
   tweetText: string;
   links?: TweetSignalLink[];
   sourceUrl?: string;
+  tweetId?: string;
   publishedAt?: string;
   detectedAt: string;
+  resolutionStatus?: "pending" | "resolved" | "conflicted";
+  resolutionConfidence?: number;
+  resolutionSource?: string;
 }
 
 interface TweetSignalLink {
@@ -1234,7 +1293,14 @@ interface CapturedTweet {
 }
 
 type TwitterSignalCaptureStatus = "idle" | "waiting" | "scanning" | "success" | "empty" | "error";
-
+type TwitterAuthStatus = "unknown" | "authenticated" | "unauthenticated";
+type TwitterCaptureIntent = "auto" | "manual";
+type TwitterMonitorView = "signals" | "kols" | "ai";
+interface TwitterCaptureTabState {
+  webviewOpen: boolean;
+  loading: boolean;
+  url: string;
+}
 const DAPP_CATEGORIES: DappCategoryId[] = ["trend", "defi", "trading", "nft", "staking"];
 const DAPP_CATALOG: DappCatalogItem[] = [
   {
@@ -1439,6 +1505,9 @@ const DAPP_HOME_TAB: DappBrowserTab = {
 };
 
 const TWITTER_BROWSER_HOME_TAB_ID = "twitter-signals-home";
+const TWITTER_CAPTURE_TAB_ID = "twitter-signal-capture";
+const TWITTER_CAPTURE_HOME_URL = "https://x.com/home";
+const TWITTER_LOGIN_URL = "https://x.com/i/flow/login";
 const TWITTER_BROWSER_HOME_TAB: DappBrowserTab = {
   id: TWITTER_BROWSER_HOME_TAB_ID,
   title: "推文监控",
@@ -1473,7 +1542,80 @@ interface DappTabTextEvent {
   url: string;
   text: string;
   tweets?: CapturedTweet[];
+  profile?: CapturedTwitterProfile | null;
+  authenticated?: boolean | null;
+  backfill_complete?: boolean;
   captured_at_ms: number;
+}
+
+interface ResearchEvidence {
+  author_handle: string;
+  text: string;
+  source_url?: string | null;
+  published_at?: string | null;
+  chain?: string | null;
+  token?: string | null;
+  opinion?: string | null;
+}
+
+interface ResearchTokenSummary {
+  token: string;
+  chain: string;
+  contract_address?: string | null;
+  mention_count: number;
+  kol_count: number;
+  score: number;
+  latest_at_ms: number;
+}
+
+interface ResearchScanCursor {
+  backfill_complete: boolean;
+}
+
+interface ResearchTokenResolutionResult {
+  signal_id: string;
+  symbol?: string | null;
+  chain?: string | null;
+  chain_id?: number | null;
+  contract_address?: string | null;
+  confidence: number;
+  status: "pending" | "resolved" | "conflicted";
+  source: string;
+  retryable: boolean;
+}
+
+interface ResearchTokenResolveResult {
+  resolutions: ResearchTokenResolutionResult[];
+}
+
+interface ResearchSignalRecord {
+  id: string;
+  chain: string;
+  contract_address?: string | null;
+  observed_chain: string;
+  observed_contract_address?: string | null;
+  token_symbols: string[];
+  author: string;
+  author_name?: string | null;
+  avatar_url?: string | null;
+  tweet_text: string;
+  source_url?: string | null;
+  tweet_id?: string | null;
+  published_at?: string | null;
+  detected_at_ms: number;
+  resolution_status?: "pending" | "resolved" | "conflicted" | null;
+  resolution_confidence?: number | null;
+  resolution_source?: string | null;
+}
+
+interface ResearchAiChatResult {
+  answer: string;
+  local_only: boolean;
+  evidence: ResearchEvidence[];
+  tokens: ResearchTokenSummary[];
+  runtime: "local" | "deepseek-harness";
+  session_id?: string | null;
+  tools_used?: string[];
 }
 
 function newDappTabId(): string {
@@ -1515,94 +1657,10 @@ function dappForUrl(url: string): DappCatalogItem | undefined {
 }
 
 const TWITTER_SIGNAL_STORAGE_KEY = "fnzero-safe.twitter-signals.v1";
+const TWITTER_RESEARCH_AI_STORAGE_KEY = "fnzero-safe.twitter-research-ai.v1";
 const DEFAULT_TWITTER_SIGNAL_INTERVAL_SEC = 60;
+const TWITTER_TOKEN_RESOLUTION_BATCH_SIZE = 24;
 const MAX_TWITTER_SIGNAL_SOURCE_CHARS = 250_000;
-const MAX_TWITTER_SIGNALS = 300;
-const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-
-const EVM_ADDRESS_RE = /0x[a-fA-F0-9]{40}\b/g;
-const SUI_ADDRESS_RE = /0x[a-fA-F0-9]{64}\b/g;
-const SOLANA_ADDRESS_RE = /[1-9A-HJ-NP-Za-km-z]{32,44}/g;
-const TRON_ADDRESS_RE = /T[1-9A-HJ-NP-Za-km-z]{33}\b/g;
-const TON_ADDRESS_RE = /\b(?:EQ|UQ)[A-Za-z0-9_-]{46}(?![A-Za-z0-9_-])/g;
-const TOKEN_CASHTAG_RE = /\$[A-Za-z][A-Za-z0-9_]{0,14}\b/g;
-
-type TweetChainFamily = "evm" | "move" | "other";
-
-interface TweetChainRule {
-  chain: TweetSignalChain;
-  family: TweetChainFamily;
-  patterns: RegExp[];
-}
-
-const TWEET_CHAIN_RULES: TweetChainRule[] = [
-  { chain: "Robinhood", family: "evm", patterns: [/\brobinhood(?:\s+chain)?\b/gi, /\bRBH\b/g, /\$rbh\b/gi, /Robinhood\s*链/g] },
-  { chain: "Ethereum", family: "evm", patterns: [/\bethereum\b/gi, /\beth\b/gi, /\$eth\b/gi, /\berc-?20\b/gi, /以太(?:坊|链|网络)?/g] },
-  { chain: "BSC", family: "evm", patterns: [/\bbsc\b/gi, /\bBNB\b/g, /\bbnb\s*(?:smart\s*)?chain\b/gi, /\$bnb\b/gi, /\bbep-?20\b/gi, /币安(?:智能|智慧)?链|币安链|BNB\s*链/gi] },
-  { chain: "Base", family: "evm", patterns: [/\bbase\s+(?:chain|network|mainnet)\b/gi, /\bon\s+base\b/gi, /\$base\b/gi, /Base\s*(?:链|网络|主网)/g] },
-  { chain: "Polygon", family: "evm", patterns: [/\bpolygon\b/gi, /\bmatic\b/gi, /\$matic\b/gi, /Polygon\s*链|马蹄链|多边形链/gi] },
-  { chain: "Arbitrum", family: "evm", patterns: [/\barbitrum(?:\s+one)?\b/gi, /\bARB\b/g, /\$arb\b/gi, /\barb\s+(?:chain|network|mainnet)\b/gi, /Arbitrum\s*链|ARB\s*链/gi] },
-  { chain: "Optimism", family: "evm", patterns: [/\boptimism\b/gi, /\bOP\b/g, /\bop\s+mainnet\b/gi, /\$op\b/gi, /Optimism\s*链|OP\s*链/gi] },
-  { chain: "Avalanche", family: "evm", patterns: [/\bavalanche\b/gi, /\bavax\b/gi, /\$avax\b/gi, /雪崩链|Avalanche\s*链/gi] },
-  { chain: "Fantom", family: "evm", patterns: [/\bfantom\b/gi, /\bFTM\b/g, /\$ftm\b/gi, /Fantom\s*链/gi] },
-  { chain: "Linea", family: "evm", patterns: [/\blinea\b/gi, /Linea\s*链/gi] },
-  { chain: "Scroll", family: "evm", patterns: [/\bscroll\s+(?:chain|network|mainnet)\b/gi, /\bon\s+scroll\b/gi, /Scroll\s*链/g] },
-  { chain: "zkSync Era", family: "evm", patterns: [/\bzksync(?:\s+era)?\b/gi, /\bZKS\b/g, /\$zks\b/gi, /zkSync\s*链/gi] },
-  { chain: "Blast", family: "evm", patterns: [/\bblast\s+(?:chain|network|mainnet|l2)\b/gi, /\bon\s+blast\b/gi, /Blast\s*链/g] },
-  { chain: "Mantle", family: "evm", patterns: [/\bmantle\s+(?:chain|network|mainnet)\b/gi, /\bon\s+mantle\b/gi, /\bMNT\b/g, /\$mnt\b/gi, /Mantle\s*链/g] },
-  { chain: "opBNB", family: "evm", patterns: [/\bopbnb\b/gi, /opBNB\s*链/gi] },
-  { chain: "Cronos", family: "evm", patterns: [/\bcronos\b/gi, /\bCRO\b/g, /\$cro\b/gi, /Cronos\s*链/gi] },
-  { chain: "Gnosis", family: "evm", patterns: [/\bgnosis\s+chain\b/gi, /\bxdai\b/gi, /Gnosis\s*链/gi] },
-  { chain: "Celo", family: "evm", patterns: [/\bcelo\b/gi, /Celo\s*链/gi] },
-  { chain: "Moonbeam", family: "evm", patterns: [/\bmoonbeam\b/gi, /\bGLMR\b/g, /\$glmr\b/gi, /Moonbeam\s*链/gi] },
-  { chain: "Moonriver", family: "evm", patterns: [/\bmoonriver\b/gi, /\bMOVR\b/g, /\$movr\b/gi, /Moonriver\s*链/gi] },
-  { chain: "Aurora", family: "evm", patterns: [/\baurora\s+(?:chain|network|mainnet)\b/gi, /\bon\s+aurora\b/gi, /Aurora\s*链/g] },
-  { chain: "Harmony", family: "evm", patterns: [/\bharmony\s+(?:chain|network|mainnet)\b/gi, /\bon\s+harmony\b/gi, /Harmony\s*链/g] },
-  { chain: "HECO", family: "evm", patterns: [/\bheco\b/gi, /火币(?:生态)?链|火币智能链/g] },
-  { chain: "OKX Chain", family: "evm", patterns: [/\b(?:okx chain|oktc)\b/gi, /OKX\s*链|欧易链/gi] },
-  { chain: "X Layer", family: "evm", patterns: [/\bx\s*layer\b/gi, /X\s*Layer\s*链/gi] },
-  { chain: "Kava EVM", family: "evm", patterns: [/\bkava\s+(?:evm|chain|network)\b/gi, /Kava\s*链/g] },
-  { chain: "Metis", family: "evm", patterns: [/\bmetis\s+(?:chain|network|mainnet|andromeda)\b/gi, /\bon\s+metis\b/gi, /Metis\s*链/g] },
-  { chain: "Ronin", family: "evm", patterns: [/\bronin\s+(?:chain|network|mainnet)\b/gi, /\bon\s+ronin\b/gi, /Ronin\s*链/g] },
-  { chain: "Monad", family: "evm", patterns: [/\bmonad\b/gi, /Monad\s*链/g] },
-  { chain: "Berachain", family: "evm", patterns: [/\bberachain\b/gi, /\$bera\b/gi, /Bera\s*链/gi] },
-  { chain: "Sonic", family: "evm", patterns: [/\bsonic\s+(?:chain|network|mainnet)\b/gi, /\bon\s+sonic\b/gi, /Sonic\s*链/g] },
-  { chain: "HyperEVM", family: "evm", patterns: [/\b(?:hyperevm|hyperliquid\s+evm)\b/gi, /HyperEVM\s*链/gi] },
-  { chain: "World Chain", family: "evm", patterns: [/\bworld\s+chain\b/gi, /World\s*Chain\s*链/gi] },
-  { chain: "Zora", family: "evm", patterns: [/\bzora\s+(?:chain|network|mainnet)\b/gi, /\bon\s+zora\b/gi, /Zora\s*链/g] },
-  { chain: "Mode", family: "evm", patterns: [/\bmode\s+(?:chain|network|mainnet)\b/gi, /\bon\s+mode\b/gi, /Mode\s*链/g] },
-  { chain: "Taiko", family: "evm", patterns: [/\btaiko\b/gi, /Taiko\s*链/g] },
-  { chain: "Manta Pacific", family: "evm", patterns: [/\bmanta\s+pacific\b/gi, /Manta\s*链/g] },
-  { chain: "Rootstock", family: "evm", patterns: [/\brootstock\b/gi, /\brsk\s+(?:chain|network|mainnet)\b/gi, /Rootstock\s*链/g] },
-  { chain: "Bitlayer", family: "evm", patterns: [/\bbitlayer\b/gi, /Bitlayer\s*链/g] },
-  { chain: "Merlin Chain", family: "evm", patterns: [/\bmerlin\s+chain\b/gi, /Merlin\s*链/g] },
-  { chain: "Kaia", family: "evm", patterns: [/\bkaia\b/gi, /\bklaytn\b/gi, /Kaia\s*链/g] },
-  { chain: "Sei", family: "evm", patterns: [/\bsei\s+(?:chain|network|mainnet|evm)\b/gi, /\bSEI\b/g, /\$sei\b/gi, /Sei\s*链/g] },
-  { chain: "Sui", family: "move", patterns: [/\bsui\b/gi, /\$sui\b/gi, /Sui\s*链/g] },
-  { chain: "Aptos", family: "move", patterns: [/\baptos\b/gi, /\bAPT\b/g, /\$apt\b/gi, /Aptos\s*链/g] },
-  { chain: "Solana", family: "other", patterns: [/\bsolana\b/gi, /\bSOL\b/g, /\$sol\b/gi, /\bsol\s+(?:chain|network|mainnet)\b/gi, /pump\.fun|pumpfun|jup\.ag|raydium/gi, /Solana\s*链|索拉纳|索拉娜/g] },
-  { chain: "TON", family: "other", patterns: [/\bthe\s+open\s+network\b/gi, /\bTON\b/g, /\$ton\b/gi, /\bton\s+(?:chain|network|mainnet)\b/gi, /TON\s*链/g] },
-  { chain: "Tron", family: "other", patterns: [/\btron\b/gi, /\bTRX\b/g, /\$trx\b/gi, /\btrx\s+(?:chain|network|mainnet)\b/gi, /波场(?:链|网络)?/g] },
-  { chain: "Bitcoin", family: "other", patterns: [/\bbitcoin\b/gi, /\bBTC\b/g, /\$btc\b/gi, /比特币(?:链|网络)?/g] },
-  { chain: "Cardano", family: "other", patterns: [/\bcardano\b/gi, /\bADA\b/g, /\$ada\b/gi, /艾达币?|卡尔达诺/g] },
-  { chain: "Near", family: "other", patterns: [/\bnear\s+(?:protocol|chain|network|mainnet)\b/gi, /\bNEAR\b/g, /\$near\b/gi, /NEAR\s*链/g] },
-  { chain: "Injective", family: "other", patterns: [/\binjective\b/gi, /\bINJ\b/g, /\$inj\b/gi, /Injective\s*链/g] },
-  { chain: "Cosmos", family: "other", patterns: [/\bcosmos\s+(?:hub|chain|network|mainnet)\b/gi, /\bATOM\b/g, /\$atom\b/gi, /Cosmos\s*链/g] },
-  { chain: "Osmosis", family: "other", patterns: [/\bosmosis\b/gi, /\bOSMO\b/g, /\$osmo\b/gi, /Osmosis\s*链/g] },
-  { chain: "Polkadot", family: "other", patterns: [/\bpolkadot\b/gi, /\bDOT\b/g, /\$dot\b/gi, /波卡(?:链|网络)?/g] },
-  { chain: "Kusama", family: "other", patterns: [/\bkusama\b/gi, /\bKSM\b/g, /\$ksm\b/gi, /Kusama\s*链/g] },
-  { chain: "XRP Ledger", family: "other", patterns: [/\bxrp\s+ledger\b/gi, /\bXRP\b/g, /\$xrp\b/gi, /\bripple\b/gi, /瑞波(?:链|网络|币)?/g] },
-  { chain: "Dogecoin", family: "other", patterns: [/\bdogecoin\b/gi, /\bDOGE\b/g, /\$doge\b/gi, /狗狗币/g] },
-  { chain: "Litecoin", family: "other", patterns: [/\blitecoin\b/gi, /\bLTC\b/g, /\$ltc\b/gi, /莱特币/g] },
-];
-
-const EVM_TWEET_SIGNAL_CHAINS = new Set(
-  TWEET_CHAIN_RULES.filter((rule) => rule.family === "evm").map((rule) => rule.chain),
-);
-const MOVE_TWEET_SIGNAL_CHAINS = new Set(
-  TWEET_CHAIN_RULES.filter((rule) => rule.family === "move").map((rule) => rule.chain),
-);
-
 function normalizeTwitterHandle(value: string): string {
   return value.trim().replace(/^@+/, "").toLowerCase();
 }
@@ -1636,116 +1694,6 @@ function tweetMatchesWatchedHandles(
   );
 }
 
-function decodedBase58ByteLength(value: string): number | null {
-  const bytes: number[] = [];
-  for (const character of value) {
-    const digit = BASE58_ALPHABET.indexOf(character);
-    if (digit < 0) return null;
-    let carry = digit;
-    for (let index = 0; index < bytes.length; index += 1) {
-      carry += bytes[index] * 58;
-      bytes[index] = carry & 0xff;
-      carry >>= 8;
-    }
-    while (carry > 0) {
-      bytes.push(carry & 0xff);
-      carry >>= 8;
-    }
-  }
-  let leadingZeroBytes = 0;
-  while (leadingZeroBytes < value.length && value[leadingZeroBytes] === "1") {
-    leadingZeroBytes += 1;
-  }
-  return bytes.length + leadingZeroBytes;
-}
-
-function isLikelySolanaTokenAddress(candidate: string, source: string, index: number): boolean {
-  if (candidate.length < 32 || candidate.length > 44) return false;
-  if (/^\d+$/.test(candidate)) return false;
-  if (decodedBase58ByteLength(candidate) !== 32) return false;
-  const before = source[index - 1] ?? "";
-  const after = source[index + candidate.length] ?? "";
-  if (/[A-Za-z0-9]/.test(before) || /[A-Za-z0-9]/.test(after)) return false;
-  return true;
-}
-
-function detectMentionedTweetChain(
-  text: string,
-  anchors: number[],
-  allowedChains?: Set<TweetSignalChain>,
-): TweetSignalChain | undefined {
-  let best: { chain: TweetSignalChain; score: number } | undefined;
-
-  for (const rule of TWEET_CHAIN_RULES) {
-    if (allowedChains && !allowedChains.has(rule.chain)) continue;
-    for (const pattern of rule.patterns) {
-      const matcher = new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`);
-      for (const match of text.matchAll(matcher)) {
-        const start = match.index ?? 0;
-        // A cashtag identifies a token, not the network it is currently on.
-        if (match[0].startsWith("$") || text[start - 1] === "$") continue;
-        const end = start + match[0].length;
-        const distance = anchors.length > 0
-          ? Math.min(...anchors.map((anchor) => Math.min(Math.abs(anchor - start), Math.abs(anchor - end))))
-          : Math.max(0, text.length - end);
-        const before = text.slice(Math.max(0, start - 36), start);
-        const after = text.slice(end, Math.min(text.length, end + 36));
-        const nearby = text.slice(Math.max(0, start - 12), Math.min(text.length, end + 12));
-        let score = 2_000 - Math.min(distance, 2_000) + Math.min(match[0].length, 40);
-        if (/(?:chain|network|mainnet|生态|主网|公链|链|网络)/i.test(nearby)) score += 80;
-        if (/(?:now|current(?:ly)?|migrat(?:e|ed|ing)|launch(?:ed|ing)?|deploy(?:ed|ing)?|现在|当前|如今|迁移|部署|上线|发行)[^\n]{0,20}$/i.test(before)) score += 140;
-        if (/(?:formerly|previous(?:ly)?|used\s+to|old|before|曾经|此前|之前|原来|过去|旧)[^\n]{0,20}$/i.test(before)) score -= 140;
-        if (match[0] === "OP" && /(?:楼主|原推|原作者|original\s+poster|author|posted|said|says|reply|thread)/i.test(`${before} ${after}`)) continue;
-        if (anchors.some((anchor) => end <= anchor && anchor - end <= 24)) score += 20;
-        if (!best || score > best.score) best = { chain: rule.chain, score };
-      }
-    }
-  }
-  return best?.chain;
-}
-
-function detectTweetSignalChain(text: string, address: string): TweetSignalChain {
-  const addressIndex = Math.max(0, text.toLowerCase().indexOf(address.toLowerCase()));
-  if (/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(address)) return "Tron";
-  if (/^(?:EQ|UQ)[A-Za-z0-9_-]{46}$/.test(address)) return "TON";
-  if (address.startsWith("0x") && address.length === 66) {
-    return detectMentionedTweetChain(text, [addressIndex], MOVE_TWEET_SIGNAL_CHAINS) || "Unknown";
-  }
-  if (address.startsWith("0x")) {
-    return detectMentionedTweetChain(text, [addressIndex], EVM_TWEET_SIGNAL_CHAINS) || "Unknown EVM";
-  }
-  return "Solana";
-}
-
-function detectTweetCashtagChain(text: string): TweetSignalChain {
-  const anchors = Array.from(text.matchAll(TOKEN_CASHTAG_RE), (match) => match.index ?? 0);
-  return detectMentionedTweetChain(text, anchors) || "Unknown";
-}
-
-function normalizeTweetSignalText(value: string): string {
-  let text = value.replace(/\r\n?/g, "\n");
-  text = text.replace(/(https?:\/\/)(?:[ \t]*\n[ \t]*)+(?=[A-Za-z0-9])/gi, "$1");
-  text = text.replace(/https?:\/\/(?=https?:\/\/)/gi, "");
-  text = text.replace(/(@[A-Za-z0-9_]{1,15})\n(?=\S)/g, "$1 ");
-  text = text.replace(/([^\n。！？!?：:])\n[ \t]*(@[A-Za-z0-9_]{1,15})(?=[ \t]|$)/g, "$1 $2");
-  text = text.replace(/(\$[A-Za-z][A-Za-z0-9_]{0,14})\n[ \t]*(?=[：:，,。.!?）)\]}])/g, "$1");
-  text = text.replace(
-    /([：:])[ \t]*\n[ \t]*(?=(?:https?:\/\/|www\.|(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,24}(?:\/|\s|$)))/gi,
-    "$1 ",
-  );
-
-  // X can insert hard line breaks inside a displayed query value. Join only
-  // short URL continuations so ordinary paragraph breaks remain untouched.
-  const wrappedUrlContinuation = /(https?:\/\/[^\s\n]*[?&][^\s\n]*)\n([A-Za-z0-9%._~+-]{1,12})(?=\s|$)/gi;
-  let previous: string;
-  do {
-    previous = text;
-    text = text.replace(wrappedUrlContinuation, "$1$2");
-  } while (text !== previous);
-
-  return text.replace(/\n{3,}/g, "\n\n").trim();
-}
-
 function tweetSourceUrl(text: string): string | undefined {
   const match = text.match(/https:\/\/(?:x\.com|twitter\.com)\/[A-Za-z0-9_]+\/status\/\d+/i);
   return match?.[0];
@@ -1755,6 +1703,17 @@ function isTwitterPageUrl(value: string): boolean {
   try {
     const host = new URL(value).hostname.toLowerCase();
     return host === "x.com" || host.endsWith(".x.com") || host === "twitter.com" || host.endsWith(".twitter.com");
+  } catch {
+    return false;
+  }
+}
+
+function isTwitterLoginUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (!isTwitterPageUrl(url.toString())) return false;
+    const path = url.pathname.toLowerCase();
+    return path === "/login" || path.startsWith("/i/flow/login");
   } catch {
     return false;
   }
@@ -1804,35 +1763,12 @@ function parseTweetSignalInputs(
   for (const input of inputs) {
     const text = normalizeTweetSignalText(input.text);
     if (!text || !tweetMatchesWatchedHandles(text, watchedHandles, input.authorHandle)) continue;
-    const tokenSymbols = Array.from(new Set(
-      Array.from(text.matchAll(TOKEN_CASHTAG_RE), (match) => match[0].toUpperCase()),
-    ));
-    const candidates: Array<{ address?: string; chain: TweetSignalChain }> = [];
-    for (const match of text.matchAll(SUI_ADDRESS_RE)) {
-      candidates.push({ address: match[0], chain: detectTweetSignalChain(text, match[0]) });
-    }
-    for (const match of text.matchAll(EVM_ADDRESS_RE)) {
-      if (candidates.some((item) => item.address?.toLowerCase() === match[0].toLowerCase())) continue;
-      candidates.push({ address: match[0], chain: detectTweetSignalChain(text, match[0]) });
-    }
-    for (const match of text.matchAll(TRON_ADDRESS_RE)) {
-      candidates.push({ address: match[0], chain: "Tron" });
-    }
-    for (const match of text.matchAll(TON_ADDRESS_RE)) {
-      candidates.push({ address: match[0], chain: "TON" });
-    }
-    for (const match of text.matchAll(SOLANA_ADDRESS_RE)) {
-      const index = match.index ?? 0;
-      if (!isLikelySolanaTokenAddress(match[0], text, index)) continue;
-      candidates.push({ address: match[0], chain: "Solana" });
-    }
-    if (candidates.length === 0 && tokenSymbols.length > 0) {
-      candidates.push({ chain: detectTweetCashtagChain(text) });
-    }
+    const { tokenSymbols, candidates } = extractTweetTokenCandidates(text);
 
-    const sourceIdentity = input.sourceUrl || input.tweetId || `${input.authorHandle ?? input.author ?? ""}:${text}`;
+    const sourceIdentity = canonicalTweetSourceIdentity(input.sourceUrl, input.tweetId)
+      || `${input.authorHandle ?? input.author ?? ""}:${text}`;
     for (const candidate of candidates) {
-      const tokenIdentity = candidate.address?.toLowerCase() || `cashtag:${tokenSymbols.join(",")}`;
+      const tokenIdentity = tweetTokenCandidateIdentity(candidate) || `cashtag:${tokenSymbols.join(",")}`;
       const key = `${candidate.chain}:${tokenIdentity}:${sourceIdentity}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -1841,7 +1777,7 @@ function parseTweetSignalInputs(
         id: shortSignalId(key),
         chain: candidate.chain,
         contractAddress: candidate.address,
-        tokenSymbols,
+        tokenSymbols: candidate.tokenSymbols ?? (candidate.address ? undefined : tokenSymbols),
         author: normalizedHandle
           ? `@${normalizedHandle}`
           : input.author?.trim() || tweetAuthorFromText(text, watchedHandles),
@@ -1850,6 +1786,7 @@ function parseTweetSignalInputs(
         tweetText: text,
         links: input.links,
         sourceUrl: input.sourceUrl || tweetSourceUrl(text),
+        tweetId: input.tweetId,
         publishedAt: input.publishedAt,
         detectedAt,
       });
@@ -1891,45 +1828,56 @@ function parseCapturedTweetTokenSignals(
 
 function normalizeTweetTokenSignal(signal: TweetTokenSignal): TweetTokenSignal {
   const tweetText = normalizeTweetSignalText(signal.tweetText);
-  const chain = signal.contractAddress
-    ? detectTweetSignalChain(tweetText, signal.contractAddress)
-    : detectTweetCashtagChain(tweetText);
+  const chain = signal.resolutionStatus === "resolved" && signal.resolutionSource
+    ? signal.chain
+    : detectTweetTokenChain(tweetText, signal.contractAddress);
   const links = Array.isArray(signal.links)
-    ? signal.links.filter((link) => {
-        try {
-          const target = new URL(link.target);
-          return /^(?:https?):$/.test(target.protocol) && Boolean(link.display.trim());
-        } catch {
-          return false;
-        }
+    ? signal.links.flatMap((link) => {
+        const target = normalizePublicWebUrl(link.target);
+        const display = link.display.trim();
+        return target && display ? [{ target, display }] : [];
       })
     : undefined;
-  return { ...signal, tweetText, chain, links };
+  return {
+    ...signal,
+    tweetText,
+    chain,
+    avatarUrl: normalizePublicWebUrl(signal.avatarUrl),
+    sourceUrl: normalizePublicWebUrl(signal.sourceUrl),
+    links,
+  };
 }
 
-function tweetSignalMergeKey(signal: TweetTokenSignal): string {
-  const tokenIdentity = signal.contractAddress?.toLowerCase()
-    || `cashtag:${(signal.tokenSymbols || []).join(",")}`;
-  const sourceIdentity = signal.sourceUrl
-    || `${normalizeTwitterHandle(signal.author)}:${normalizeTweetSignalText(signal.tweetText)}`;
-  return `${tokenIdentity}:${sourceIdentity}`;
+function twitterKolResearchInput(kol: TwitterKolProfile) {
+  return {
+    handle: kol.handle,
+    display_name: kol.displayName,
+    avatar_url: kol.avatarUrl,
+    bio: kol.bio,
+    followers_label: kol.followersLabel,
+    following_label: kol.followingLabel,
+    location: kol.location,
+    website: kol.website,
+    joined_label: kol.joinedLabel,
+    verified: Boolean(kol.verified),
+    added_at: kol.addedAt,
+    updated_at: kol.updatedAt,
+  };
 }
 
-function mergeTweetTokenSignals(
-  existing: TweetTokenSignal[],
-  incoming: TweetTokenSignal[],
-): TweetTokenSignal[] {
-  const existingByKey = new Map(existing.map((signal) => [tweetSignalMergeKey(signal), signal]));
-  const merged = incoming.map((signal) => {
-    const key = tweetSignalMergeKey(signal);
-    const previous = existingByKey.get(key);
-    existingByKey.delete(key);
-    return previous ? { ...signal, id: previous.id, detectedAt: previous.detectedAt } : signal;
-  });
-  for (const signal of existing) {
-    if (existingByKey.has(tweetSignalMergeKey(signal))) merged.push(signal);
-  }
-  return merged.slice(0, MAX_TWITTER_SIGNALS);
+function tweetSignalResearchInput(signal: TweetTokenSignal) {
+  const observation = tokenSignalObservation(signal);
+  return {
+    tweet_id: signal.tweetId,
+    author_handle: normalizeTwitterHandle(signal.author),
+    text: signal.tweetText,
+    chain: observation.chain,
+    contract_address: observation.contractAddress,
+    token_symbols: signal.tokenSymbols || [],
+    source_url: signal.sourceUrl,
+    published_at: signal.publishedAt,
+    detected_at_ms: Number.isFinite(Date.parse(signal.detectedAt)) ? Date.parse(signal.detectedAt) : undefined,
+  };
 }
 
 function filterTweetTokenSignals(
@@ -1965,11 +1913,13 @@ function SelectableTwitterLink({
   url,
   onOpen,
   className,
+  showUrlTitle = true,
   children,
 }: {
   url: string;
   onOpen: (url: string) => void;
   className?: string;
+  showUrlTitle?: boolean;
   children: ReactNode;
 }) {
   const clickTimerRef = useRef<number | null>(null);
@@ -1987,7 +1937,7 @@ function SelectableTwitterLink({
   return (
     <a
       href={url}
-      title={url}
+      title={showUrlTitle ? url : undefined}
       className={`cursor-pointer select-text decoration-current/60 underline-offset-2 hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#1d9bf0]/60 ${className || ""}`}
       onClick={(event) => {
         event.preventDefault();
@@ -2013,6 +1963,66 @@ function SelectableTwitterLink({
     >
       {children}
     </a>
+  );
+}
+
+function TweetAuthorMenu({
+  children,
+  className,
+  alreadyAdded,
+  onVisit,
+  onAdd,
+  menuLabel,
+  visitLabel,
+  addLabel,
+  addedLabel,
+}: {
+  children: ReactNode;
+  className?: string;
+  alreadyAdded: boolean;
+  onVisit: () => void;
+  onAdd: () => void;
+  menuLabel: string;
+  visitLabel: string;
+  addLabel: string;
+  addedLabel: string;
+}) {
+  return (
+    <span className={`group/tweet-author relative inline-flex ${className || ""}`}>
+      {children}
+      <span
+        role="menu"
+        aria-label={menuLabel}
+        className="pointer-events-none invisible absolute left-0 top-full z-50 w-48 pt-1 opacity-0 transition-opacity group-hover/tweet-author:pointer-events-auto group-hover/tweet-author:visible group-hover/tweet-author:opacity-100 group-focus-within/tweet-author:pointer-events-auto group-focus-within/tweet-author:visible group-focus-within/tweet-author:opacity-100"
+      >
+        <span className="app-twitter-author-menu-surface block overflow-hidden rounded-md border border-white/10 bg-[#101821] p-1 shadow-xl shadow-black/40">
+          <button
+            type="button"
+            role="menuitem"
+            onClick={onVisit}
+            className="flex h-9 w-full items-center gap-2 rounded px-2 text-left text-xs font-medium text-gray-200 hover:bg-white/[0.08] focus-visible:bg-white/[0.08] focus-visible:outline-none"
+          >
+            <ExternalLink className="h-3.5 w-3.5 shrink-0 text-sky-300" />
+            {visitLabel}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={onAdd}
+            disabled={alreadyAdded}
+            className="flex h-9 w-full items-center gap-2 rounded px-2 text-left text-xs font-medium text-gray-200 hover:bg-white/[0.08] focus-visible:bg-white/[0.08] focus-visible:outline-none disabled:cursor-default disabled:text-gray-500"
+          >
+            <UserPlus className={`h-3.5 w-3.5 shrink-0 ${alreadyAdded ? "text-gray-600" : "text-emerald-300"}`} />
+            <span>{addLabel}</span>
+            {alreadyAdded && (
+              <span className="ml-auto shrink-0 rounded border border-emerald-400/20 bg-emerald-400/10 px-1.5 py-0.5 text-[10px] leading-none text-emerald-300">
+                {addedLabel}
+              </span>
+            )}
+          </button>
+        </span>
+      </span>
+    </span>
   );
 }
 
@@ -2068,6 +2078,7 @@ function TweetSignalBody({
 }) {
   const textRef = useRef<HTMLParagraphElement>(null);
   const [canExpand, setCanExpand] = useState(false);
+  const normalizedText = normalizeTweetSignalText(signal.tweetText);
 
   useEffect(() => {
     const node = textRef.current;
@@ -2081,15 +2092,15 @@ function TweetSignalBody({
     const observer = new ResizeObserver(measure);
     observer.observe(node);
     return () => observer.disconnect();
-  }, [signal.tweetText]);
+  }, [normalizedText]);
 
   return (
     <>
       <p
         ref={textRef}
-        className={`mt-0.5 cursor-text select-text whitespace-pre-wrap break-words text-[15px] leading-5 text-[#e7e9ea] ${expanded ? "" : "line-clamp-3"}`}
+        className={`app-twitter-tweet-text mt-0.5 cursor-text select-text whitespace-pre-wrap break-words text-[15px] leading-5 text-[#e7e9ea] ${expanded ? "" : "line-clamp-3"}`}
       >
-        {renderTweetSignalText(signal.tweetText, signal.contractAddress, signal.links, onOpen)}
+        {renderTweetSignalText(normalizedText, signal.contractAddress, signal.links, onOpen)}
       </p>
       {canExpand && (
         <button
@@ -2115,15 +2126,39 @@ function tweetSignalChainClass(chain: TweetSignalChain): string {
   return "border-sky-300/25 bg-sky-300/10 text-sky-200";
 }
 
-function formatTweetSignalTime(value: string): string {
+function userTimeZone(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function formatTweetSignalTime(value: string, locale: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleString([], {
+  return new Intl.DateTimeFormat(locale, {
     month: "short",
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
-  });
+    timeZone: userTimeZone(),
+  }).format(date);
+}
+
+function formatTweetSignalTimeTitle(value: string, locale: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat(locale, {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    timeZoneName: "short",
+    timeZone: userTimeZone(),
+  }).format(date);
 }
 
 function TweetSignalAvatar({ signal }: { signal: TweetTokenSignal }) {
@@ -2147,12 +2182,25 @@ function TweetSignalAvatar({ signal }: { signal: TweetTokenSignal }) {
   );
 }
 
-function dappNativeWindowTopOffset(): number {
-  if (typeof window === "undefined" || !isTauriWebview()) return 0;
-  const measured = Math.round(window.outerHeight - window.innerHeight);
-  if (Number.isFinite(measured) && measured > 0 && measured <= 96) return measured;
-  const platform = window.navigator.platform.toLowerCase();
-  return platform.includes("mac") ? 32 : 0;
+function TwitterKolAvatar({ kol }: { kol: TwitterKolProfile }) {
+  const [failed, setFailed] = useState(false);
+  const label = kol.displayName || kol.handle;
+  const initial = label.slice(0, 1).toUpperCase() || "X";
+  return (
+    <span className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-700 text-sm font-semibold text-white ring-1 ring-white/10">
+      {kol.avatarUrl && !failed ? (
+        // eslint-disable-next-line @next/next/no-img-element -- X profile images are dynamic remote assets with local fallback handling.
+        <img
+          src={kol.avatarUrl}
+          alt=""
+          className="h-full w-full object-cover"
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          onError={() => setFailed(true)}
+        />
+      ) : initial}
+    </span>
+  );
 }
 
 interface WalletTokenAsset {
@@ -2228,11 +2276,6 @@ interface DesktopEvmWalletSummary {
   derivation_path?: string | null;
 }
 
-interface DesktopEvmWalletKeystore {
-  wallet: DesktopEvmWalletSummary;
-  keystore_json: string;
-}
-
 interface DesktopEvmTokenAsset {
   contract_address: string;
   symbol: string;
@@ -2256,6 +2299,27 @@ interface DesktopEvmAssetSnapshot {
   history_status: string;
   history_message?: string | null;
   refreshed_at_ms: number;
+}
+
+function mergeEvmAssetSnapshotTokens(
+  previous: DesktopEvmAssetSnapshot | undefined | null,
+  next: DesktopEvmAssetSnapshot,
+): DesktopEvmAssetSnapshot {
+  if (
+    !previous ||
+    previous.chain.chain_id !== next.chain.chain_id ||
+    previous.wallet_address.toLowerCase() !== next.wallet_address.toLowerCase()
+  ) return next;
+  const tokens = new Map(previous.tokens.map((token) => [token.contract_address.toLowerCase(), token]));
+  for (const token of next.tokens) tokens.set(token.contract_address.toLowerCase(), token);
+  const history = next.history_status === "not_requested"
+    ? {
+        recent_transactions: previous.recent_transactions,
+        history_status: previous.history_status,
+        history_message: previous.history_message,
+      }
+    : {};
+  return { ...next, ...history, tokens: Array.from(tokens.values()) };
 }
 
 interface DesktopEvmPaymentPreview {
@@ -2296,37 +2360,10 @@ interface DesktopEvmTransactionStatus {
 const DESKTOP_EVM_CUSTOM_CHAINS_STORAGE_KEY = "fnzero.desktop.evm.custom_chains.v1";
 const DESKTOP_EVM_SELECTED_CHAIN_STORAGE_KEY = "fnzero.desktop.evm.selected_chain.v1";
 const DESKTOP_EVM_TOKENS_STORAGE_PREFIX = "fnzero.desktop.evm.tokens.v1";
+const CURRENT_WALLET_NETWORK_STORAGE_KEY = "fnzero.desktop.wallet.current_network.v1";
 
 function isDesktopEvmAddress(value: string): boolean {
   return /^0x[0-9a-fA-F]{40}$/.test(value.trim());
-}
-
-function normalizeDesktopEvmChain(value: unknown): DesktopEvmChainConfig | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const record = value as Record<string, unknown>;
-  const chainId = Number(record.chain_id);
-  const name = String(record.name || "").trim();
-  const nativeSymbol = String(record.native_symbol || "").trim();
-  const rpcUrl = String(record.rpc_url || "").trim();
-  const explorerUrl = String(record.explorer_url || "").trim();
-  if (
-    !Number.isSafeInteger(chainId) ||
-    chainId <= 0 ||
-    !name ||
-    !nativeSymbol ||
-    !/^https?:\/\//.test(rpcUrl) ||
-    (explorerUrl && !/^https?:\/\//.test(explorerUrl))
-  ) {
-    return null;
-  }
-  return {
-    chain_id: chainId,
-    name,
-    native_symbol: nativeSymbol,
-    rpc_url: rpcUrl,
-    explorer_url: explorerUrl || null,
-    testnet: Boolean(record.testnet),
-  };
 }
 
 function loadStoredDesktopEvmChains(): DesktopEvmChainConfig[] {
@@ -2335,7 +2372,7 @@ function loadStoredDesktopEvmChains(): DesktopEvmChainConfig[] {
     const raw = window.localStorage.getItem(DESKTOP_EVM_CUSTOM_CHAINS_STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
     if (!Array.isArray(parsed)) return [];
-    return parsed.map(normalizeDesktopEvmChain).filter((item): item is DesktopEvmChainConfig => Boolean(item));
+    return parsed.map(normalizeStoredEvmChain).filter((item) => item !== null);
   } catch {
     return [];
   }
@@ -2359,6 +2396,23 @@ function saveStoredDesktopEvmChainId(chainId: string) {
   } else {
     window.localStorage.removeItem(DESKTOP_EVM_SELECTED_CHAIN_STORAGE_KEY);
   }
+}
+
+function normalizeCurrentWalletNetwork(value: string | null | undefined): string {
+  if (value === "solana") return value;
+  const match = value?.match(/^evm:([1-9]\d*)$/);
+  const chainId = Number(match?.[1]);
+  return Number.isSafeInteger(chainId) ? `evm:${chainId}` : "solana";
+}
+
+function loadCurrentWalletNetwork(): string {
+  if (typeof window === "undefined") return "solana";
+  return normalizeCurrentWalletNetwork(window.localStorage.getItem(CURRENT_WALLET_NETWORK_STORAGE_KEY));
+}
+
+function saveCurrentWalletNetwork(networkId: string) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(CURRENT_WALLET_NETWORK_STORAGE_KEY, normalizeCurrentWalletNetwork(networkId));
 }
 
 function desktopEvmTokenStorageKey(chainId: number, walletAddress: string): string {
@@ -2815,6 +2869,7 @@ function uniqueAddressList(items: Array<string | number | undefined>): string[] 
 function defaultBackTarget(formId: string): string | null {
   switch (formId) {
     case "create-encrypted":
+    case "create-wallet":
     case "create-keystore":
     case "import-keystore":
     case "import-mnemonic":
@@ -2829,6 +2884,8 @@ function defaultBackTarget(formId: string): string | null {
       return "wallet-list";
     case "transfer-sol":
     case "transfer-token":
+    case "wallet-send":
+    case "wallet-receive":
       return "wallet-list";
     case "create-wsol-ata":
     case "wrap-sol":
@@ -2850,7 +2907,7 @@ function defaultBackTarget(formId: string): string | null {
       return "contract-tools";
     case "dapp-store":
     case "twitter-signals":
-      return "browser-workbench";
+      return null;
     case "create-nonce":
       return "nonce-workbench";
     case "squads-proposals":
@@ -3132,6 +3189,9 @@ function parseAddressList(value: string | number | undefined): string[] {
 }
 
 export default function Home() {
+  const params = useParams();
+  const dateTimeLocale = params?.locale === "zh" ? "zh-CN" : "en-US";
+  const aiSkillLocale: AiSkillLocale = params?.locale === "zh" ? "zh" : "en";
   const t = useTranslations();
   const tf = useCallback((key: string, fallback: string, vars?: Record<string, string | number>) => {
     const value = t(key, vars);
@@ -3169,7 +3229,7 @@ export default function Home() {
         },
         {
           id: "evm-workbench",
-          label: tf("features.evm-workbench.title", "Multi-chain Wallet"),
+          label: tf("features.evm-workbench.title", "EVM Wallet"),
           icon: <ArrowRightLeft className="w-4 h-4" />,
         },
       ],
@@ -3201,24 +3261,16 @@ export default function Home() {
       ],
     },
     {
-      id: "browser-workbench",
-      label: tf("features.browser-workbench.title", "浏览器"),
+      id: "dapp-store",
+      label: tf("features.dapp-store.title", "DApp Store"),
       icon: <Compass className="w-5 h-5" />,
       network: true,
-      children: [
-        {
-          id: "dapp-store",
-          label: tf("features.dapp-store.title", "DApp Store"),
-          icon: <Compass className="w-4 h-4" />,
-          network: true,
-        },
-        {
-          id: "twitter-signals",
-          label: tf("features.twitter-signals.title", "推文线索"),
-          icon: <Radio className="w-4 h-4" />,
-          network: true,
-        },
-      ],
+    },
+    {
+      id: "twitter-signals",
+      label: tf("features.twitter-signals.title", "推文线索"),
+      icon: <Radio className="w-5 h-5" />,
+      network: true,
     },
     {
       id: "squads-workspace",
@@ -3237,6 +3289,7 @@ export default function Home() {
   const [formData, setFormData] = useState<FormState>({});
   const [externalSignInputMode, setExternalSignInputMode] = useState<ExternalSignInputMode>("json");
   const [copied, setCopied] = useState<string | null>(null);
+  const copiedResetTimerRef = useRef<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [authMethod, setAuthMethod] = useState<{ [key: string]: "keystore" | "private" | "encrypted" }>({});
   const [wallets, setWallets] = useState<SavedWallet[]>([]);
@@ -3249,7 +3302,30 @@ export default function Home() {
   const [rpcProfiles, setRpcProfiles] = useState<RpcProfile[]>(DEFAULT_RPC_PROFILES);
   const [selectedRpcId, setSelectedRpcId] = useState(defaultRpcProfileId(DEFAULT_NETWORK));
   const [settingsNetwork, setSettingsNetwork] = useState<AppNetwork>(DEFAULT_NETWORK);
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("root");
+  const [settingsSearch, setSettingsSearch] = useState("");
+  const [appPreferences, setAppPreferences] = useState<AppPreferences>(DEFAULT_APP_PREFERENCES);
+  const [settingsStoreLoaded, setSettingsStoreLoaded] = useState(false);
+  const settingsStoreLoadRef = useRef<Promise<SettingsStoreBootstrap> | null>(null);
+  const settingsStoreHydratedRef = useRef(false);
+  const [addressBookEntries, setAddressBookEntries] = useState<AddressBookEntry[]>([]);
+  const [addressBookSearch, setAddressBookSearch] = useState("");
+  const [addressBookEditor, setAddressBookEditor] = useState<{
+    id?: string;
+    label: string;
+    chain: "solana" | "evm";
+    network: string;
+    address: string;
+  } | null>(null);
+  const [dappPermissions, setDappPermissions] = useState<DappPermission[]>([]);
+  const [settingsDiagnostics, setSettingsDiagnostics] = useState<SanitizedDiagnostics | null>(null);
+  const [settingsBusy, setSettingsBusy] = useState(false);
+  const [applicationLocked, setApplicationLocked] = useState(false);
+  const [unlockPassword, setUnlockPassword] = useState("");
+  const [unlockBusy, setUnlockBusy] = useState(false);
+  const autoLockDeadlineRef = useRef<number | null>(null);
   const [currentWalletId, setCurrentWalletId] = useState("");
+  const [currentWalletNetwork, setCurrentWalletNetwork] = useState("solana");
   const [newRpcName, setNewRpcName] = useState("");
   const [newRpcUrl, setNewRpcUrl] = useState("");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -3287,17 +3363,50 @@ export default function Home() {
   const [dappPreviewDetailsOpen, setDappPreviewDetailsOpen] = useState(false);
   const [dappBrowserOverlayOpen, setDappBrowserOverlayOpen] = useState(false);
   const [twitterBrowserOverlayOpen, setTwitterBrowserOverlayOpen] = useState(false);
+  const [twitterMonitorView, setTwitterMonitorView] = useState<TwitterMonitorView>("signals");
+  const [twitterKols, setTwitterKols] = useState<TwitterKolProfile[]>([]);
+  const [twitterKolInput, setTwitterKolInput] = useState("");
+  const [twitterKolSearch, setTwitterKolSearch] = useState("");
+  const [twitterKolPendingSync, setTwitterKolPendingSync] = useState<{ handle: string; tabId: string } | null>(null);
+  const [twitterAiQuestion, setTwitterAiQuestion] = useState("");
+  const [twitterAiResult, setTwitterAiResult] = useState<ResearchAiChatResult | null>(null);
+  const [twitterAiSessionId, setTwitterAiSessionId] = useState<string | null>(null);
+  const [twitterAiBusy, setTwitterAiBusy] = useState(false);
+  const [twitterAiError, setTwitterAiError] = useState("");
+  const [twitterAiProviderKind, setTwitterAiProviderKind] = useState<ResearchAiProviderKind>("local");
+  const [twitterAiEndpoint, setTwitterAiEndpoint] = useState("");
+  const [twitterAiModel, setTwitterAiModel] = useState("");
+  const [twitterAiApiKey, setTwitterAiApiKey] = useState("");
+  const [twitterAiKeySaved, setTwitterAiKeySaved] = useState(false);
+  const [twitterAiKeyBusy, setTwitterAiKeyBusy] = useState(false);
+  const [twitterAiConfigOpen, setTwitterAiConfigOpen] = useState(false);
   const [twitterWatchedUsers, setTwitterWatchedUsers] = useState("");
   const [twitterSignalSource, setTwitterSignalSource] = useState("");
   const [twitterSignals, setTwitterSignals] = useState<TweetTokenSignal[]>([]);
+  const [twitterSignalPage, setTwitterSignalPage] = useState(1);
+  const [twitterCaptureTab, setTwitterCaptureTab] = useState<TwitterCaptureTabState>({
+    webviewOpen: false,
+    loading: false,
+    url: TWITTER_CAPTURE_HOME_URL,
+  });
   const [twitterSignalAutoScan, setTwitterSignalAutoScan] = useState(false);
   const [twitterSignalIntervalSec, setTwitterSignalIntervalSec] = useState(DEFAULT_TWITTER_SIGNAL_INTERVAL_SEC);
   const [twitterSignalLastScanAt, setTwitterSignalLastScanAt] = useState<string | null>(null);
   const [twitterSignalCaptureBusy, setTwitterSignalCaptureBusy] = useState(false);
-  const [twitterSignalCaptureStatus, setTwitterSignalCaptureStatus] = useState<TwitterSignalCaptureStatus>("idle");
+  const [, setTwitterSignalCaptureStatus] = useState<TwitterSignalCaptureStatus>("idle");
   const [twitterSignalCaptureError, setTwitterSignalCaptureError] = useState("");
-  const [twitterSignalLastTweetCount, setTwitterSignalLastTweetCount] = useState(0);
+  const [, setTwitterSignalLastTweetCount] = useState(0);
   const [twitterSignalManualImportOpen, setTwitterSignalManualImportOpen] = useState(false);
+  const [twitterSignalStorageHydrated, setTwitterSignalStorageHydrated] = useState(false);
+  const [twitterTokenResolutionRetryVersion, setTwitterTokenResolutionRetryVersion] = useState(0);
+  const [twitterScanCursorHydrated, setTwitterScanCursorHydrated] = useState(false);
+  const [twitterResearchAiStorageHydrated, setTwitterResearchAiStorageHydrated] = useState(false);
+  const [twitterAuthByTabId, setTwitterAuthByTabId] = useState<Record<string, TwitterAuthStatus>>({});
+  const [twitterLoginRequiredOpen, setTwitterLoginRequiredOpen] = useState(false);
+  const [twitterPendingCaptureIntent, setTwitterPendingCaptureIntent] = useState<TwitterCaptureIntent | null>(null);
+  const [twitterLoginPageOpenedByPrompt, setTwitterLoginPageOpenedByPrompt] = useState(false);
+  const [twitterChromeAuthImported, setTwitterChromeAuthImported] = useState<boolean | null>(null);
+  const [twitterChromeImportDialogRequest, setTwitterChromeImportDialogRequest] = useState(0);
   const [expandedTwitterSignalIds, setExpandedTwitterSignalIds] = useState<Set<string>>(() => new Set());
   const [biometricStatuses, setBiometricStatuses] = useState<Record<string, BiometricWalletStatus>>({});
   const [biometricBusyWalletId, setBiometricBusyWalletId] = useState<string | null>(null);
@@ -3305,6 +3414,7 @@ export default function Home() {
   const [backTarget, setBackTarget] = useState<string | null>(null);
   const [passwordPrompt, setPasswordPrompt] = useState<PasswordPromptRequest | null>(null);
   const [passwordPromptValue, setPasswordPromptValue] = useState("");
+  const [createWalletPassword, setCreateWalletPassword] = useState("");
   const [masterPasswordPromptValue, setMasterPasswordPromptValue] = useState("");
   const [passwordConfirmationBusy, setPasswordConfirmationBusy] = useState(false);
   const [migrationNewPassword, setMigrationNewPassword] = useState("");
@@ -3381,42 +3491,74 @@ export default function Home() {
   const twitterBrowserTabBarRef = useRef<HTMLDivElement | null>(null);
   const twitterBrowserAddressBarRef = useRef<HTMLDivElement | null>(null);
   const twitterBrowserViewportRef = useRef<HTMLDivElement | null>(null);
+  const twitterLoginViewportRef = useRef<HTMLDivElement | null>(null);
+  const twitterCaptureOpenInFlightRef = useRef(false);
   const twitterSignalNotifyCaptureRef = useRef(false);
+  const twitterSignalCaptureIntentRef = useRef<TwitterCaptureIntent | null>(null);
+  const twitterKolsRef = useRef<TwitterKolProfile[]>([]);
   const twitterSignalCaptureInFlightRef = useRef(false);
   const twitterSignalCaptureTimeoutRef = useRef<number | null>(null);
   const twitterSignalCaptureRequestIdRef = useRef<string | null>(null);
+  const twitterSignalBackfillCompleteRef = useRef(false);
+  const twitterSignalBackfillStartedRef = useRef(false);
+  const twitterTokenResolutionFingerprintRef = useRef("");
+  const twitterTokenResolutionRetryAtRef = useRef(new Map<string, number>());
+  const twitterWatchedUsersRef = useRef("");
+  const twitterTranslateRef = useRef(tf);
+  const openUrlInDappTabRef = useRef<(url: string) => void>(() => {});
+  const openUrlInTwitterBrowserTabRef = useRef<(url: string) => void>(() => {});
+  const twitterAiRequestIdRef = useRef(0);
+  const twitterAiBusyRef = useRef(false);
+  const twitterAiKeyRequestIdRef = useRef(0);
   const programDeploymentWatchdogTrippedRef = useRef(false);
   lastProgramDeploymentIntentRef.current = lastProgramDeploymentIntent;
   programDeploymentJournalRef.current = programDeploymentJournal;
+  twitterKolsRef.current = twitterKols;
+  twitterWatchedUsersRef.current = twitterWatchedUsers;
+  twitterTranslateRef.current = tf;
   const passwordConfirmationInFlightRef = useRef(false);
+  const applicationLockedRef = useRef(false);
   const biometricPasswordPromptAttemptRef = useRef("");
   const biometricDappAttemptRef = useRef("");
   const approveDappSignRequestRef = useRef<((passwordOverride?: string) => Promise<void>) | null>(null);
+  const approveDappConnectRequestRef = useRef<(() => Promise<void>) | null>(null);
+  const autoApprovedDappRequestIdRef = useRef<string | null>(null);
+  const dappConnectResolutionInFlightRef = useRef<string | null>(null);
   const confirmPasswordPromptRef = useRef<((passwordOverride?: string) => Promise<void>) | null>(null);
   const [walletAssets, setWalletAssets] = useState<WalletAssetsState | null>(null);
   const [walletSolBalanceCache, setWalletSolBalanceCache] = useState<Record<string, string>>({});
   const [walletTransactions, setWalletTransactions] = useState<WalletTransactionsState | null>(null);
   const [walletOverviewTab, setWalletOverviewTab] = useState<"assets" | "transactions">("assets");
-  const [walletChainView, setWalletChainView] = useState<"solana" | "evm">("solana");
+  const [walletChainView, setWalletChainView] = useState<"all" | "solana" | "evm">("all");
   const [visibleTokenCount, setVisibleTokenCount] = useState(TOKEN_ASSET_PAGE_SIZE);
   const clientSettingsLoadedRef = useRef(false);
   const walletAssetsRef = useRef<WalletAssetsState | null>(null);
   const walletTransactionsRef = useRef<WalletTransactionsState | null>(null);
   const walletAssetsInFlightRef = useRef<Map<string, Promise<WalletAssetsState | null>>>(new Map());
+  const walletAssetsIntentRef = useRef(createAsyncRequestIntent());
   const walletTransactionsInFlightRef = useRef<Map<string, Promise<void>>>(new Map());
+  const walletTransactionsIntentRef = useRef(createAsyncRequestIntent());
+  const evmPortfolioLoadedKeyRef = useRef("");
+  const evmPortfolioRequestIdRef = useRef(0);
+  const evmAssetRequestIdRef = useRef(0);
+  const evmTokenLookupRequestIdRef = useRef(0);
+  const evmPreviewRequestIdRef = useRef(0);
+  const walletListRequestIdRef = useRef(0);
   const [evmChains, setEvmChains] = useState<DesktopEvmChainConfig[]>([]);
   const [evmCustomChainIds, setEvmCustomChainIds] = useState<number[]>([]);
   const [evmChainId, setEvmChainId] = useState("");
   const [evmWallet, setEvmWallet] = useState<DesktopEvmWalletSummary | null>(null);
   const [evmKeystoreJson, setEvmKeystoreJson] = useState("");
   const [evmPassword, setEvmPassword] = useState("");
-  const [evmPrivateKey, setEvmPrivateKey] = useState("");
   const [evmRecipient, setEvmRecipient] = useState("");
   const [evmAmount, setEvmAmount] = useState("");
   const [evmTokenContract, setEvmTokenContract] = useState("");
   const [evmTokenContracts, setEvmTokenContracts] = useState<string[]>([]);
   const [evmNewTokenContract, setEvmNewTokenContract] = useState("");
   const [evmAssets, setEvmAssets] = useState<DesktopEvmAssetSnapshot | null>(null);
+  const [evmAssetsByChain, setEvmAssetsByChain] = useState<Record<number, DesktopEvmAssetSnapshot>>({});
+  const [evmPortfolioRefreshing, setEvmPortfolioRefreshing] = useState(false);
+  const [evmPortfolioError, setEvmPortfolioError] = useState<"all" | "partial" | null>(null);
   const [evmPreview, setEvmPreview] = useState<DesktopEvmPaymentPreview | null>(null);
   const [evmSubmitResult, setEvmSubmitResult] = useState<DesktopEvmTransactionSubmitResult | null>(null);
   const [evmTransactionStatus, setEvmTransactionStatus] = useState<DesktopEvmTransactionStatus | null>(null);
@@ -3432,6 +3574,7 @@ export default function Home() {
   });
   const [evmCustomChainEditorOpen, setEvmCustomChainEditorOpen] = useState(false);
   const nonceAccountsInFlightRef = useRef<Map<string, Promise<void>>>(new Map());
+  const nonceAccountsIntentRef = useRef(createAsyncRequestIntent());
   const pendingTokenBalanceAdjustmentRef = useRef<PendingTokenBalanceAdjustment | undefined>(undefined);
   const lastAssetRefreshRef = useRef<Map<string, number>>(new Map());
   const lastTransactionRefreshRef = useRef<Map<string, number>>(new Map());
@@ -3449,21 +3592,92 @@ export default function Home() {
   const [tokenMintInfo, setTokenMintInfo] = useState<TokenMintInfoState | null>(null);
   const walletAuth = (formId: string): WalletAuthTab =>
     normalizeWalletAuth((authMethod[formId] ?? "keystore") as WalletAuthTab);
+  const enabledEvmChainIds = visibleEvmChainIds(evmChains, appPreferences);
+  const visibleEvmChains = evmChains.filter((chain) => enabledEvmChainIds.includes(chain.chain_id));
   const activeEvmChain =
-    evmChains.find((chain) => String(chain.chain_id) === evmChainId) || evmChains[0];
+    visibleEvmChains.find((chain) => String(chain.chain_id) === evmChainId) || visibleEvmChains[0];
+  const activeEvmAssets =
+    evmAssets && activeEvmChain && evmWallet &&
+    evmAssets.chain.chain_id === activeEvmChain.chain_id &&
+    evmAssets.wallet_address.toLowerCase() === evmWallet.address.toLowerCase()
+      ? evmAssets
+      : null;
   const activeEvmChainIsCustom =
     Boolean(activeEvmChain && evmCustomChainIds.includes(activeEvmChain.chain_id));
 
   const resetEvmChainScopedState = useCallback(() => {
+    evmPreviewRequestIdRef.current += 1;
     setEvmAssets(null);
     setEvmPreview(null);
     setEvmSubmitResult(null);
     setEvmTransactionStatus(null);
   }, []);
 
-  const selectEvmChain = useCallback((chainId: string) => {
+  useEffect(() => {
+    if (!isTauriWebview()) return;
+    let cancelled = false;
+    void invoke<Array<{
+      handle: string;
+      display_name?: string | null;
+      avatar_url?: string | null;
+      bio?: string | null;
+      followers_label?: string | null;
+      following_label?: string | null;
+      location?: string | null;
+      website?: string | null;
+      joined_label?: string | null;
+      verified: boolean;
+      added_at: string;
+      updated_at?: string | null;
+    }>>("research_list_kols")
+      .then((records) => {
+        if (cancelled || records.length === 0) return;
+        setTwitterKols((current) => {
+          const byHandle = new Map(current.map((kol) => [kol.handle, kol]));
+          for (const record of records) {
+            const existing = byHandle.get(record.handle);
+            byHandle.set(record.handle, {
+              handle: record.handle,
+              displayName: record.display_name || existing?.displayName,
+              avatarUrl: record.avatar_url || existing?.avatarUrl,
+              bio: record.bio || existing?.bio,
+              followersLabel: record.followers_label || existing?.followersLabel,
+              followingLabel: record.following_label || existing?.followingLabel,
+              location: record.location || existing?.location,
+              website: record.website || existing?.website,
+              joinedLabel: record.joined_label || existing?.joinedLabel,
+              verified: record.verified || existing?.verified,
+              addedAt: record.added_at || existing?.addedAt || new Date().toISOString(),
+              updatedAt: record.updated_at || existing?.updatedAt,
+            });
+          }
+          return Array.from(byHandle.values());
+        });
+      })
+      .catch(() => {
+        // The localStorage cache remains available if the desktop knowledge base is unavailable.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const selectEvmChain = useCallback((chainId: string, options: { openChainView?: boolean } = {}) => {
+    const parsedChainId = Number(chainId);
+    evmAssetRequestIdRef.current += 1;
+    evmTokenLookupRequestIdRef.current += 1;
+    evmPreviewRequestIdRef.current += 1;
     setEvmChainId(chainId);
-    setWalletChainView("evm");
+    if (Number.isSafeInteger(parsedChainId) && parsedChainId > 0) {
+      setAppPreferences((previous) =>
+        previous.defaultEvmChainId === parsedChainId
+          ? previous
+          : { ...previous, defaultEvmChainId: parsedChainId },
+      );
+      setCurrentWalletNetwork(`evm:${parsedChainId}`);
+      saveCurrentWalletNetwork(`evm:${parsedChainId}`);
+    }
+    if (options.openChainView !== false) setWalletChainView("evm");
     saveStoredDesktopEvmChainId(chainId);
     resetEvmChainScopedState();
   }, [resetEvmChainScopedState]);
@@ -3526,6 +3740,7 @@ export default function Home() {
     try {
       await run();
     } catch (error) {
+      if (applicationLockedRef.current) return;
       const message = errorMessage(error, "Chain operation failed");
       setEvmError(message);
       toast.error(message);
@@ -3534,73 +3749,19 @@ export default function Home() {
     }
   }, []);
 
-  const createEvmWallet = () => withEvmBusy(async () => {
-    if (!evmPassword.trim()) throw new Error("Wallet password is required");
-    const response = await apiFetch("evm/wallet/create", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "Multi-chain Wallet", password: evmPassword }),
-    });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "Failed to create wallet");
-    const created = data as DesktopEvmWalletKeystore;
-    setEvmWallet(created.wallet);
-    setEvmKeystoreJson(created.keystore_json);
-    setEvmPreview(null);
-    setEvmSubmitResult(null);
-    setEvmPassword("");
-    toast.success("Wallet created");
-  });
-
-  const importEvmPrivateKey = () => withEvmBusy(async () => {
-    if (!evmPrivateKey.trim() || !evmPassword.trim()) {
-      throw new Error("Private key and password are required");
-    }
-    const response = await apiFetch("evm/wallet/import-private-key", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: "Imported Multi-chain Wallet",
-        private_key_hex: evmPrivateKey.trim(),
-        password: evmPassword,
-      }),
-    });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "Failed to import wallet");
-    const imported = data as DesktopEvmWalletKeystore;
-    setEvmWallet(imported.wallet);
-    setEvmKeystoreJson(imported.keystore_json);
-    setEvmPassword("");
-    setEvmPrivateKey("");
-    setEvmPreview(null);
-    setEvmSubmitResult(null);
-    toast.success("Wallet imported");
-  });
-
   const addDesktopEvmChain = () => {
-    const chainId = Number(evmNewChain.chainId);
-    const rpcUrl = evmNewChain.rpcUrl.trim();
-    if (!Number.isSafeInteger(chainId) || chainId <= 0 || !evmNewChain.name.trim() || !evmNewChain.nativeSymbol.trim()) {
-      setEvmError("Chain id, name, and native symbol are required");
-      return;
-    }
-    if (!/^https?:\/\//.test(rpcUrl)) {
-      setEvmError("RPC URL must start with http:// or https://");
-      return;
-    }
-    const explorerUrl = evmNewChain.explorerUrl.trim();
-    if (explorerUrl && !/^https?:\/\//.test(explorerUrl)) {
-      setEvmError("Explorer URL must start with http:// or https://");
-      return;
-    }
-    const nextChain: DesktopEvmChainConfig = {
-      chain_id: chainId,
-      name: evmNewChain.name.trim(),
-      native_symbol: evmNewChain.nativeSymbol.trim(),
-      rpc_url: rpcUrl,
-      explorer_url: explorerUrl || null,
+    const nextChain = normalizeStoredEvmChain({
+      chain_id: evmNewChain.chainId,
+      name: evmNewChain.name,
+      native_symbol: evmNewChain.nativeSymbol,
+      rpc_url: evmNewChain.rpcUrl,
+      explorer_url: evmNewChain.explorerUrl,
       testnet: evmNewChain.testnet,
-    };
+    });
+    if (!nextChain) {
+      setEvmError("Enter a valid chain id, name, symbol, RPC URL, and explorer URL");
+      return;
+    }
     const storedChains = new Map(loadStoredDesktopEvmChains().map((chain) => [chain.chain_id, chain]));
     storedChains.set(nextChain.chain_id, nextChain);
     const nextStoredChains = Array.from(storedChains.values()).sort((a, b) => a.chain_id - b.chain_id);
@@ -3633,28 +3794,47 @@ export default function Home() {
     });
   };
 
-  const addDesktopEvmToken = () => {
+  const addDesktopEvmToken = () => withEvmBusy(async () => {
     const contract = evmNewTokenContract.trim();
     if (!contract) return;
     if (!activeEvmChain || !evmWallet) {
-      setEvmError("Select a chain and wallet before adding a token");
-      return;
+      throw new Error(tf("features.evm-workbench.selectChainWallet", "Select a chain and wallet before adding a token"));
     }
     const next = Array.from(new Map([...evmTokenContracts, contract].map((item) => [item.toLowerCase(), item])).values());
     if (!isDesktopEvmAddress(contract)) {
-      setEvmError("ERC-20 contract must be a 20-byte 0x address");
-      return;
+      throw new Error(tf("features.evm-workbench.invalidContract", "ERC-20 contract must be a 20-byte 0x address"));
+    }
+    const requestId = evmTokenLookupRequestIdRef.current + 1;
+    evmTokenLookupRequestIdRef.current = requestId;
+    const chain = activeEvmChain;
+    const walletAddress = evmWallet.address;
+    const walletId = effectiveWalletId;
+    const snapshot = await loadEvmAssetSnapshot(chain, walletAddress, [contract], false);
+    if (
+      evmTokenLookupRequestIdRef.current !== requestId ||
+      activeWalletContextRef.current.walletId !== walletId
+    ) return;
+    const token = snapshot.tokens.find((item) => item.contract_address.toLowerCase() === contract.toLowerCase());
+    if (!token) {
+      throw new Error(tf("features.unified-wallet.assetLookupFailed", "Unable to query this token"));
     }
     setEvmTokenContracts(next);
-    saveStoredDesktopEvmTokens(activeEvmChain.chain_id, evmWallet.address, next);
+    saveStoredDesktopEvmTokens(chain.chain_id, walletAddress, next);
+    setEvmAssets((previous) => mergeEvmAssetSnapshotTokens(previous, snapshot));
+    setEvmAssetsByChain((previous) => ({
+      ...previous,
+      [chain.chain_id]: mergeEvmAssetSnapshotTokens(previous[chain.chain_id], snapshot),
+    }));
     setEvmNewTokenContract("");
-  };
+  });
 
   const removeDesktopEvmToken = (contract: string) => {
     if (!activeEvmChain || !evmWallet) return;
     const next = evmTokenContracts.filter((item) => item.toLowerCase() !== contract.toLowerCase());
     setEvmTokenContracts(next);
     saveStoredDesktopEvmTokens(activeEvmChain.chain_id, evmWallet.address, next);
+    evmAssetRequestIdRef.current += 1;
+    evmTokenLookupRequestIdRef.current += 1;
     setEvmAssets((previous) => previous
       ? {
           ...previous,
@@ -3662,26 +3842,121 @@ export default function Home() {
         }
       : previous,
     );
+    setEvmAssetsByChain((previous) => {
+      const snapshot = previous[activeEvmChain.chain_id];
+      if (!snapshot) return previous;
+      return {
+        ...previous,
+        [activeEvmChain.chain_id]: {
+          ...snapshot,
+          tokens: snapshot.tokens.filter((item) => item.contract_address.toLowerCase() !== contract.toLowerCase()),
+        },
+      };
+    });
   };
 
-  const refreshEvmAssets = () => withEvmBusy(async () => {
-    if (!activeEvmChain || !evmWallet) throw new Error("Select a chain and wallet first");
+  const loadEvmAssetSnapshot = useCallback(async (
+    chain: DesktopEvmChainConfig,
+    walletAddress: string,
+    tokenContracts: string[],
+    includeHistory = true,
+  ): Promise<DesktopEvmAssetSnapshot> => {
     const response = await apiFetch("evm/assets", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        chain: activeEvmChain,
-        wallet_address: evmWallet.address,
-        tokens: evmTokenContracts.map((contract_address) => ({ contract_address })),
+        chain,
+        wallet_address: walletAddress,
+        tokens: tokenContracts.map((contract_address) => ({ contract_address })),
+        include_history: includeHistory,
       }),
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Failed to refresh chain assets");
-    setEvmAssets(data as DesktopEvmAssetSnapshot);
+    const snapshot = data as DesktopEvmAssetSnapshot;
+    if (
+      snapshot.chain?.chain_id !== chain.chain_id ||
+      snapshot.wallet_address?.toLowerCase() !== walletAddress.toLowerCase()
+    ) {
+      throw new Error("EVM asset response does not match the requested wallet and network");
+    }
+    return snapshot;
+  }, []);
+
+  const refreshEvmAssets = () => withEvmBusy(async () => {
+    if (!activeEvmChain || !evmWallet) throw new Error("Select a chain and wallet first");
+    const requestId = evmAssetRequestIdRef.current + 1;
+    evmAssetRequestIdRef.current = requestId;
+    const chain = activeEvmChain;
+    const snapshot = await loadEvmAssetSnapshot(chain, evmWallet.address, evmTokenContracts);
+    if (evmAssetRequestIdRef.current !== requestId) return;
+    setEvmAssets(snapshot);
+    setEvmAssetsByChain((previous) => ({ ...previous, [chain.chain_id]: snapshot }));
   });
+
+  const refreshEvmPortfolio = useCallback(async () => {
+    if (!evmWallet) return;
+    const mainnetChains = evmChains.filter((chain) => !chain.testnet);
+    const chains = mainnetChains.length > 0 ? mainnetChains : evmChains;
+    if (chains.length === 0) return;
+    const requestId = evmPortfolioRequestIdRef.current + 1;
+    evmPortfolioRequestIdRef.current = requestId;
+    const walletAddress = evmWallet.address;
+    let cursor = 0;
+    let succeeded = 0;
+    let failed = 0;
+    setEvmPortfolioRefreshing(true);
+    setEvmPortfolioError(null);
+    const worker = async () => {
+      while (cursor < chains.length) {
+        const chain = chains[cursor];
+        cursor += 1;
+        try {
+          const contracts = loadStoredDesktopEvmTokens(chain.chain_id, walletAddress);
+          const loadedSnapshot = await loadEvmAssetSnapshot(chain, walletAddress, contracts, false);
+          if (evmPortfolioRequestIdRef.current !== requestId) return;
+          const trackedContracts = new Set(
+            loadStoredDesktopEvmTokens(chain.chain_id, walletAddress).map((contract) => contract.toLowerCase()),
+          );
+          const snapshot = {
+            ...loadedSnapshot,
+            tokens: loadedSnapshot.tokens.filter((token) => trackedContracts.has(token.contract_address.toLowerCase())),
+          };
+          succeeded += 1;
+          setEvmAssetsByChain((previous) => ({ ...previous, [chain.chain_id]: snapshot }));
+          if (String(chain.chain_id) === evmChainId) setEvmAssets(snapshot);
+        } catch {
+          failed += 1;
+          // A slow or unavailable public RPC must not block the rest of the portfolio.
+        }
+      }
+    };
+    try {
+      await Promise.all(Array.from({ length: Math.min(4, chains.length) }, worker));
+      if (evmPortfolioRequestIdRef.current === requestId) {
+        let portfolioError: "all" | "partial" | null = null;
+        if (succeeded === 0) portfolioError = "all";
+        else if (failed > 0) portfolioError = "partial";
+        setEvmPortfolioError(portfolioError);
+      }
+    } finally {
+      if (evmPortfolioRequestIdRef.current === requestId) setEvmPortfolioRefreshing(false);
+    }
+  }, [evmChainId, evmChains, evmWallet, loadEvmAssetSnapshot]);
 
   const previewEvmPayment = () => withEvmBusy(async () => {
     if (!activeEvmChain || !evmWallet) throw new Error("Select a chain and wallet first");
+    const unifiedSendDecimals = Number(formData.evm_asset_decimals);
+    const amount = Number(formData.unified_evm_send) === 1
+      ? uiTokenAmountToRaw(evmAmount, unifiedSendDecimals)
+      : evmAmount.trim();
+    if (!amount) {
+      throw new Error(tf("features.evm-workbench.invalidAmount", "Enter a valid amount with no more than the asset's supported decimal places"));
+    }
+    const requestId = evmPreviewRequestIdRef.current + 1;
+    evmPreviewRequestIdRef.current = requestId;
+    const chainId = activeEvmChain.chain_id;
+    const walletAddress = evmWallet.address;
     const response = await apiFetch("evm/payment/preview", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -3689,13 +3964,19 @@ export default function Home() {
         chain: activeEvmChain,
         wallet_address: evmWallet.address,
         recipient: evmRecipient.trim(),
-        amount_wei_or_units: evmAmount.trim(),
+        amount_wei_or_units: amount,
         token_contract: evmTokenContract.trim() || null,
       }),
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Failed to preview payment");
-    setEvmPreview(data as DesktopEvmPaymentPreview);
+    const preview = data as DesktopEvmPaymentPreview;
+    if (
+      evmPreviewRequestIdRef.current !== requestId ||
+      preview.chain?.chain_id !== chainId ||
+      preview.wallet_address?.toLowerCase() !== walletAddress.toLowerCase()
+    ) return;
+    setEvmPreview(preview);
     setEvmSubmitResult(null);
     setEvmTransactionStatus(null);
   });
@@ -3706,35 +3987,66 @@ export default function Home() {
       setEvmPreview(null);
       setEvmSubmitResult(null);
       setEvmTransactionStatus(null);
+      setEvmKeystoreJson("");
       setEvmPassword("");
-      toast.success("Transaction rejected");
+      toast.success(tf("features.evm-workbench.transactionRejected", "Transaction preview cancelled"));
       return;
     }
+    const requestId = evmPreviewRequestIdRef.current + 1;
+    evmPreviewRequestIdRef.current = requestId;
+    const preview = evmPreview;
+    const operationIsCurrent = () =>
+      !applicationLockedRef.current && evmPreviewRequestIdRef.current === requestId;
+    let keystoreJson = evmKeystoreJson;
+    if (!keystoreJson) {
+      const savedWallet = wallets.find((wallet) => wallet.id === (currentWalletId || wallets[0]?.id));
+      if (!savedWallet?.evm_address) {
+        throw new Error(tf("features.evm-workbench.savedWalletRequired", "Select a saved wallet with an EVM account"));
+      }
+      if (!evmPassword) {
+        throw new Error(tf("features.evm-workbench.passwordRequired", "Wallet password is required"));
+      }
+      const unlockResponse = await apiFetch(`wallets/${savedWallet.id}/evm-keystore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: evmPassword }),
+      });
+      const unlocked = await unlockResponse.json();
+      if (!unlockResponse.ok) {
+        throw new Error(unlocked.error || tf("features.evm-workbench.unlockFailed", "Failed to unlock EVM wallet"));
+      }
+      if (!operationIsCurrent()) return;
+      keystoreJson = String(unlocked.keystore_json || "");
+      setEvmWallet(unlocked.wallet as DesktopEvmWalletSummary);
+    }
+    if (!operationIsCurrent()) return;
     const response = await apiFetch("evm/payment/submit", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        preview_id: evmPreview.preview_id,
+        preview_id: preview.preview_id,
         approved: true,
-        chain: evmPreview.chain,
-        wallet_address: evmPreview.wallet_address,
-        keystore_json: evmKeystoreJson,
+        chain: preview.chain,
+        wallet_address: preview.wallet_address,
+        keystore_json: keystoreJson,
         password: evmPassword,
-        recipient: evmPreview.recipient,
-        amount_wei_or_units: evmPreview.amount_wei_or_units,
-        token_contract: evmPreview.token_contract,
-        gas_limit: evmPreview.gas_limit,
-        gas_price_wei: evmPreview.gas_price_wei,
-        max_fee_per_gas_wei: evmPreview.max_fee_per_gas_wei,
-        max_priority_fee_per_gas_wei: evmPreview.max_priority_fee_per_gas_wei,
-        nonce: evmPreview.nonce,
+        recipient: preview.recipient,
+        amount_wei_or_units: preview.amount_wei_or_units,
+        token_contract: preview.token_contract,
+        gas_limit: preview.gas_limit,
+        gas_price_wei: preview.gas_price_wei,
+        max_fee_per_gas_wei: preview.max_fee_per_gas_wei,
+        max_priority_fee_per_gas_wei: preview.max_priority_fee_per_gas_wei,
+        nonce: preview.nonce,
       }),
     });
     const data = await response.json();
+    if (!operationIsCurrent()) return;
     if (!response.ok) throw new Error(data.error || "Failed to submit payment");
     setEvmSubmitResult(data as DesktopEvmTransactionSubmitResult);
+    setEvmKeystoreJson("");
     setEvmPassword("");
-    toast.success("Transaction submitted");
+    toast.success(tf("features.evm-workbench.transactionSubmitted", "Transaction submitted"));
   });
 
   const refreshEvmTransactionStatus = () => withEvmBusy(async () => {
@@ -3756,6 +4068,119 @@ export default function Home() {
     setAppTheme(loadAppUiTheme());
   }, []);
 
+  useEffect(() => {
+    if (!isTauriWebview()) {
+      settingsStoreHydratedRef.current = true;
+      setSettingsStoreLoaded(true);
+      return;
+    }
+    let cancelled = false;
+    const loadSettingsStore = async () => {
+      try {
+        settingsStoreLoadRef.current ??= enqueueSettingsStoreOperation(async () => {
+          const snapshot = await invoke<SettingsSnapshot>("settings_import_legacy", {
+            legacy: buildLegacySettingsImport(window.localStorage),
+          });
+          const [entries, permissions, diagnostics] = await Promise.all([
+            invoke<AddressBookEntry[]>("address_book_list"),
+            invoke<DappPermission[]>("dapp_permissions_list"),
+            invoke<SanitizedDiagnostics>("settings_diagnostics"),
+          ]);
+          return { snapshot, entries, permissions, diagnostics };
+        });
+        const { snapshot, entries, permissions, diagnostics } = await settingsStoreLoadRef.current;
+        if (cancelled || settingsStoreHydratedRef.current) return;
+        settingsStoreHydratedRef.current = true;
+        setAppPreferences({ ...DEFAULT_APP_PREFERENCES, ...snapshot.preferences });
+        if (snapshot.preferences.defaultEvmChainId) {
+          const preferredChainId = String(snapshot.preferences.defaultEvmChainId);
+          setEvmChainId(preferredChainId);
+          saveStoredDesktopEvmChainId(preferredChainId);
+        }
+        if (snapshot.theme) {
+          setAppTheme(snapshot.theme);
+          saveAppUiTheme(snapshot.theme);
+        }
+        const storedRpcProfiles = parsePersistedRpcProfiles(snapshot.solanaRpcProfiles);
+        if (storedRpcProfiles) {
+          setRpcProfiles(storedRpcProfiles);
+          setSelectedRpcId((previous) =>
+            storedRpcProfiles.some((profile) => profile.id === previous)
+              ? previous
+              : defaultRpcProfileId(snapshot.preferences.defaultSolanaNetwork),
+          );
+          saveCustomRpcProfiles(storedRpcProfiles);
+        }
+        if (Array.isArray(snapshot.customEvmNetworks)) {
+          const previousCustomIds = new Set(loadStoredDesktopEvmChains().map((chain) => chain.chain_id));
+          const customChains = snapshot.customEvmNetworks
+            .map(normalizeStoredEvmChain)
+            .filter((chain) => chain !== null);
+          saveStoredDesktopEvmChains(customChains);
+          setEvmCustomChainIds(customChains.map((chain) => chain.chain_id));
+          setEvmChains((previous) => {
+            const merged = new Map(
+              previous
+                .filter((chain) => !previousCustomIds.has(chain.chain_id))
+                .map((chain) => [chain.chain_id, chain]),
+            );
+            customChains.forEach((chain) => merged.set(chain.chain_id, chain));
+            return Array.from(merged.values()).sort((a, b) => {
+              if (a.testnet !== b.testnet) return a.testnet ? 1 : -1;
+              return a.chain_id - b.chain_id;
+            });
+          });
+        }
+        const storedDownloads = parseDownloadHistory(snapshot.downloadHistory);
+        if (storedDownloads) {
+          setDownloadHistory(storedDownloads);
+          saveDownloadHistory(storedDownloads);
+        }
+        setAddressBookEntries(entries);
+        setDappPermissions(permissions);
+        setSettingsDiagnostics(diagnostics);
+        setSettingsStoreLoaded(true);
+      } catch (error) {
+        settingsStoreLoadRef.current = null;
+        if (!cancelled && !settingsStoreHydratedRef.current) {
+          toast.error(errorMessage(error, tf("features.settings.storeLoadFailed", "设置数据加载失败")));
+        }
+      }
+    };
+    void loadSettingsStore();
+    return () => {
+      cancelled = true;
+    };
+  }, [tf]);
+
+  useEffect(() => {
+    if (!settingsStoreLoaded || !isTauriWebview()) return;
+    const update = {
+      preferences: appPreferences,
+      theme: appTheme,
+      solanaRpcProfiles: rpcProfiles,
+      customEvmNetworks: evmChains.filter((chain) => evmCustomChainIds.includes(chain.chain_id)),
+      downloadHistory,
+    };
+    void enqueueSettingsStoreOperation(() => invoke<SettingsSnapshot>("settings_update", update)).catch((error) => {
+      toast.error(errorMessage(error, tf("features.settings.storeSaveFailed", "设置保存失败")));
+    });
+  }, [appPreferences, appTheme, downloadHistory, evmChains, evmCustomChainIds, rpcProfiles, settingsStoreLoaded, tf]);
+
+  useEffect(() => {
+    if (!settingsStoreLoaded || visibleEvmChains.length === 0) return;
+    const fallback = enabledChainFallback(Number(evmChainId) || null, enabledEvmChainIds);
+    if (fallback !== null && String(fallback) !== evmChainId) {
+      selectEvmChain(String(fallback));
+    }
+  }, [enabledEvmChainIds, evmChainId, selectEvmChain, settingsStoreLoaded, visibleEvmChains.length]);
+
+  useEffect(() => () => {
+    if (copiedResetTimerRef.current !== null) {
+      window.clearTimeout(copiedResetTimerRef.current);
+    }
+  }, []);
+
   const selectAppTheme = useCallback((theme: AppUiTheme) => {
     setAppTheme(theme);
     saveAppUiTheme(theme);
@@ -3770,6 +4195,210 @@ export default function Home() {
       Object.keys(prev.signerPasswords).length === 0 ? prev : { ...prev, signerPasswords: {} },
     );
   }, []);
+
+  const lockApplication = useCallback(() => {
+    if (wallets.length === 0) return;
+    applicationLockedRef.current = true;
+    clearPasswordPromptSecrets();
+    setPasswordPrompt(null);
+    setExportedPrivateKey(null);
+    setExportedMnemonic(null);
+    setPrivateKeyQrRevealed(false);
+    setDappConnectRequest(null);
+    setDappConnectWalletId("");
+    setDappSignRequest(null);
+    setDappPassword("");
+    setDappSaveBiometric(false);
+    setDappTransactionPreview(null);
+    setDappTransactionPreviewError(null);
+    setDappTransactionPreviewLoading(false);
+    setDappPreviewDetailsOpen(false);
+    setEvmPassword("");
+    setEvmKeystoreJson("");
+    evmPreviewRequestIdRef.current += 1;
+    setEvmPreview(null);
+    setEvmSubmitResult(null);
+    setEvmTransactionStatus(null);
+    setEvmBusy(false);
+    setUnlockPassword("");
+    setCreateWalletPassword("");
+    setTwitterAiApiKey("");
+    setSavePasswordToBiometric(false);
+    biometricPasswordPromptAttemptRef.current = "";
+    biometricDappAttemptRef.current = "";
+    autoApprovedDappRequestIdRef.current = null;
+    dappConnectResolutionInFlightRef.current = null;
+    programKeypairBytesRef.current?.fill(0);
+    programKeypairBytesRef.current = null;
+    setFormData((previous) => stripSensitiveFormFields(previous) as FormState);
+    setApplicationLocked(true);
+    if (isTauriWebview()) {
+      void enqueueDappConnectionOperation(() => invoke("dapp_pause_connections")).catch(() => undefined);
+    }
+  }, [clearPasswordPromptSecrets, wallets.length]);
+
+  useEffect(() => {
+    if (wallets.length === 0) {
+      applicationLockedRef.current = false;
+      setApplicationLocked(false);
+      autoLockDeadlineRef.current = null;
+      return;
+    }
+    const resetDeadline = () => {
+      if (applicationLocked) return;
+      autoLockDeadlineRef.current = nextAutoLockDeadline(Date.now(), appPreferences.autoLockMinutes);
+    };
+    const checkDeadline = () => {
+      if (!applicationLocked && hasAutoLockExpired(autoLockDeadlineRef.current, Date.now())) {
+        lockApplication();
+      }
+    };
+    resetDeadline();
+    const events: Array<keyof WindowEventMap> = ["pointerdown", "keydown", "scroll", "touchstart"];
+    events.forEach((event) => window.addEventListener(event, resetDeadline, { passive: true, capture: true }));
+    const interval = window.setInterval(checkDeadline, 1_000);
+    const visibility = () => {
+      if (document.visibilityState === "visible") checkDeadline();
+    };
+    document.addEventListener("visibilitychange", visibility);
+    return () => {
+      events.forEach((event) => window.removeEventListener(event, resetDeadline, true));
+      document.removeEventListener("visibilitychange", visibility);
+      window.clearInterval(interval);
+    };
+  }, [appPreferences.autoLockMinutes, applicationLocked, lockApplication, wallets.length]);
+
+  const unlockWithPassword = useCallback(async () => {
+    const wallet = wallets.find((item) => item.id === (currentWalletId || wallets[0]?.id));
+    if (!wallet || !unlockPassword) return;
+    setUnlockBusy(true);
+    try {
+      const response = await apiFetch(`wallets/${wallet.id}/verify-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: unlockPassword }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.verified || data.public_key !== wallet.public_key) {
+        throw new Error(data.error || tf("features.settings.unlockFailed", "钱包密码错误"));
+      }
+      if (isTauriWebview()) {
+        await enqueueDappConnectionOperation(() => invoke("dapp_resume_connections"));
+      }
+      setUnlockPassword("");
+      applicationLockedRef.current = false;
+      setApplicationLocked(false);
+      autoLockDeadlineRef.current = nextAutoLockDeadline(Date.now(), appPreferences.autoLockMinutes);
+    } catch (error) {
+      toast.error(errorMessage(error, tf("features.settings.unlockFailed", "钱包密码错误")));
+    } finally {
+      setUnlockBusy(false);
+    }
+  }, [appPreferences.autoLockMinutes, currentWalletId, tf, unlockPassword, wallets]);
+
+  const saveAddressBookEntry = useCallback(async () => {
+    if (!addressBookEditor) return;
+    const normalized = normalizeAddress(addressBookEditor.chain, addressBookEditor.address);
+    const normalizedNetwork = normalizeAddressNetwork(addressBookEditor.chain, addressBookEditor.network);
+    if (!addressBookEditor.label.trim() || !normalizedNetwork || !normalized) {
+      toast.error(tf("features.settings.addressInvalid", "请填写有效的标签、网络和地址"));
+      return;
+    }
+    if (addressBookDuplicate(addressBookEntries, addressBookEditor, addressBookEditor.id)) {
+      toast.error(tf("features.settings.addressDuplicate", "该网络中已存在这个地址"));
+      return;
+    }
+    setSettingsBusy(true);
+    try {
+      const normalizedEntry = {
+        ...addressBookEditor,
+        network: normalizedNetwork,
+        address: normalized,
+      };
+      const existing = addressBookEntries.find((entry) => entry.id === addressBookEditor.id);
+      const now = Date.now();
+      const saved = isTauriWebview()
+        ? await invoke<AddressBookEntry>("address_book_upsert", { entry: normalizedEntry })
+        : {
+            ...normalizedEntry,
+            id: addressBookEditor.id || `address-${Date.now()}`,
+            createdAtMs: existing?.createdAtMs ?? now,
+            updatedAtMs: now,
+          };
+      setAddressBookEntries((entries) => [saved, ...entries.filter((entry) => entry.id !== saved.id)]);
+      setAddressBookEditor(null);
+      toast.success(tf("features.settings.addressSaved", "地址已保存"));
+    } catch (error) {
+      toast.error(errorMessage(error, tf("features.settings.addressSaveFailed", "地址保存失败")));
+    } finally {
+      setSettingsBusy(false);
+    }
+  }, [addressBookEditor, addressBookEntries, tf]);
+
+  const deleteAddressBookEntry = useCallback(async (entry: AddressBookEntry) => {
+    setSettingsBusy(true);
+    try {
+      if (isTauriWebview()) {
+        const deleted = await invoke<boolean>("address_book_delete", { id: entry.id });
+        if (!deleted) throw new Error(tf("features.settings.addressMissing", "地址已不存在，请刷新后重试"));
+      }
+      setAddressBookEntries((entries) => entries.filter((item) => item.id !== entry.id));
+    } catch (error) {
+      toast.error(errorMessage(error, tf("features.settings.addressDeleteFailed", "地址删除失败")));
+    } finally {
+      setSettingsBusy(false);
+    }
+  }, [tf]);
+
+  const revokeDappPermission = useCallback(async (permission: DappPermission) => {
+    setSettingsBusy(true);
+    try {
+      if (isTauriWebview()) {
+        const wallet = wallets.find((item) => dappPermissionMatchesWallet(permission, item));
+        if (!wallet) throw new Error(tf("features.settings.connectionWalletMissing", "授权钱包已不存在"));
+        await invoke("dapp_disconnect_connection", {
+          origin: permission.origin,
+          walletPublicKey: wallet.public_key,
+          walletId: permission.walletId,
+          network: permission.network,
+        });
+      }
+      setDappPermissions((permissions) => permissions.filter((item) =>
+        !(item.origin === permission.origin && item.walletId === permission.walletId && item.network === permission.network),
+      ));
+      toast.success(tf("features.settings.connectionRevoked", "连接授权已撤销"));
+    } catch (error) {
+      toast.error(errorMessage(error, tf("features.settings.connectionRevokeFailed", "撤销授权失败")));
+    } finally {
+      setSettingsBusy(false);
+    }
+  }, [tf, wallets]);
+
+  const exportSanitizedDiagnostics = useCallback(async () => {
+    setSettingsBusy(true);
+    try {
+      const diagnostics = isTauriWebview()
+        ? await invoke<SanitizedDiagnostics>("settings_diagnostics")
+        : settingsDiagnostics;
+      if (!diagnostics) throw new Error("Diagnostics are unavailable");
+      setSettingsDiagnostics(diagnostics);
+      const content = JSON.stringify(diagnostics, null, 2);
+      if (isTauriWebview()) {
+        const path = await invoke<string>("save_download_file", {
+          filename: `fnzsafe-diagnostics-${Date.now()}.json`,
+          content,
+        });
+        toast.success(tf("features.settings.diagnosticsSaved", `诊断信息已保存到 ${path}`, { path }));
+      } else {
+        await navigator.clipboard.writeText(content);
+        toast.success(tf("features.settings.diagnosticsCopied", "诊断信息已复制"));
+      }
+    } catch (error) {
+      toast.error(errorMessage(error, tf("features.settings.diagnosticsFailed", "导出诊断信息失败")));
+    } finally {
+      setSettingsBusy(false);
+    }
+  }, [settingsDiagnostics, tf]);
 
   const clearProgramKeypairMaterial = useCallback(() => {
     programKeypairReadVersionRef.current += 1;
@@ -3822,6 +4451,55 @@ export default function Home() {
   const visibleRpcProfiles = rpcProfiles.filter((profile) => profile.network === settingsNetwork);
   const effectiveWalletId = currentWalletId || wallets[0]?.id || "";
   const effectiveWallet = wallets.find((wallet) => wallet.id === effectiveWalletId);
+
+  useEffect(() => {
+    const wallet = effectiveWallet;
+    const address = wallet?.evm_address?.trim();
+    evmAssetRequestIdRef.current += 1;
+    evmTokenLookupRequestIdRef.current += 1;
+    if (!wallet || !address) {
+      setEvmWallet(null);
+      setEvmKeystoreJson("");
+      resetEvmChainScopedState();
+      return;
+    }
+    if (evmWallet?.address.toLowerCase() === address.toLowerCase()) return;
+    setEvmWallet({
+      id: wallet.evm_wallet_id || `evm-${wallet.id}`,
+      name: wallet.name,
+      address,
+      derivation_path: wallet.evm_derivation_path || "m/44'/60'/0'/0/0",
+    });
+    setEvmKeystoreJson("");
+    resetEvmChainScopedState();
+  }, [effectiveWallet, evmWallet?.address, resetEvmChainScopedState]);
+
+  useEffect(() => {
+    if (selectedForm === "evm-workbench") return;
+    setEvmPassword("");
+    setEvmKeystoreJson("");
+  }, [selectedForm]);
+
+  useEffect(() => {
+    if (!evmWallet || evmChains.length === 0) {
+      evmPortfolioRequestIdRef.current += 1;
+      evmPortfolioLoadedKeyRef.current = "";
+      setEvmPortfolioRefreshing(false);
+      setEvmPortfolioError(null);
+      setEvmAssetsByChain({});
+      return;
+    }
+    const mainnetChainIds = evmChains
+      .filter((chain) => !chain.testnet)
+      .map((chain) => chain.chain_id)
+      .join(",");
+    const portfolioKey = `${evmWallet.address.toLowerCase()}:${mainnetChainIds}`;
+    if (evmPortfolioLoadedKeyRef.current === portfolioKey) return;
+    evmPortfolioLoadedKeyRef.current = portfolioKey;
+    setEvmAssetsByChain({});
+    void refreshEvmPortfolio();
+  }, [evmChains, evmWallet, refreshEvmPortfolio]);
+
   const effectiveProgramWorkspaceOwner = effectiveWallet?.public_key || "";
   const effectiveProgramWorkspaceOwnerLabel = effectiveWallet?.name || undefined;
   const effectiveWalletActor: WorkspaceActor = {
@@ -3965,6 +4643,34 @@ export default function Home() {
     }
   }, [biometricStatusFor, refreshBiometricWalletStatus, supportsBiometricWallet, t]);
 
+  const unlockWithBiometric = useCallback(async () => {
+    if (!effectiveWallet) return;
+    setUnlockBusy(true);
+    try {
+      const password = await getBiometricWalletPassword(effectiveWallet);
+      if (!password) return;
+      const response = await apiFetch(`wallets/${effectiveWallet.id}/verify-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.verified || data.public_key !== effectiveWallet.public_key) {
+        throw new Error(data.error || tf("features.settings.unlockFailed", "Touch ID 解锁失败"));
+      }
+      if (isTauriWebview()) {
+        await enqueueDappConnectionOperation(() => invoke("dapp_resume_connections"));
+      }
+      setApplicationLocked(false);
+      applicationLockedRef.current = false;
+      autoLockDeadlineRef.current = nextAutoLockDeadline(Date.now(), appPreferences.autoLockMinutes);
+    } catch (error) {
+      toast.error(errorMessage(error, tf("features.settings.unlockFailed", "Touch ID 解锁失败")));
+    } finally {
+      setUnlockBusy(false);
+    }
+  }, [appPreferences.autoLockMinutes, effectiveWallet, getBiometricWalletPassword, tf]);
+
   const deleteBiometricWalletPassword = useCallback(async (wallet: SavedWallet, options: { quiet?: boolean } = {}) => {
     if (!isTauriWebview()) return;
     setBiometricBusyWalletId(wallet.id);
@@ -4022,6 +4728,7 @@ export default function Home() {
     let unlisten: UnlistenFn | undefined;
     let unlistenConnect: UnlistenFn | undefined;
     const showConnectRequest = (request: DappConnectRequestEvent) => {
+      if (applicationLockedRef.current) return;
       void invoke("dapp_set_active_tab", {
         tabId: null,
         x: 0,
@@ -4034,6 +4741,7 @@ export default function Home() {
       toast.message(tf("features.dapp-store.connectRequestToast", "DApp 请求连接钱包"));
     };
     const showSignRequest = (request: DappSignRequestEvent) => {
+      if (applicationLockedRef.current) return;
       void invoke("dapp_set_active_tab", {
         tabId: null,
         x: 0,
@@ -4558,6 +5266,10 @@ export default function Home() {
   };
 
   const setCurrentWallet = useCallback((walletId: string) => {
+    evmAssetRequestIdRef.current += 1;
+    evmPortfolioRequestIdRef.current += 1;
+    evmTokenLookupRequestIdRef.current += 1;
+    evmPreviewRequestIdRef.current += 1;
     setCurrentWalletId(walletId);
     saveCurrentWalletId(walletId);
     setFormData((prev) => {
@@ -4571,6 +5283,8 @@ export default function Home() {
     if (!profile) return;
     setSelectedRpcId(profileId);
     setSettingsNetwork(profile.network);
+    setCurrentWalletNetwork("solana");
+    saveCurrentWalletNetwork("solana");
     saveSelectedRpcProfileId(profileId);
     setFormData((prev) => ({ ...prev, network: profile.network }));
   }, [rpcProfiles]);
@@ -4582,6 +5296,8 @@ export default function Home() {
       || DEFAULT_RPC_PROFILES.find((profile) => profile.network === network)
       || DEFAULT_RPC_PROFILES[0];
     setSelectedRpcId(nextProfile.id);
+    setCurrentWalletNetwork("solana");
+    saveCurrentWalletNetwork("solana");
     saveSelectedRpcProfileId(nextProfile.id);
     setFormData((prev) => ({ ...prev, network }));
   }, [rpcProfiles, selectedRpcId]);
@@ -4637,6 +5353,8 @@ export default function Home() {
   };
 
   const loadWallets = useCallback(async () => {
+    const requestId = walletListRequestIdRef.current + 1;
+    walletListRequestIdRef.current = requestId;
     setWalletsLoading(true);
     setWalletsLoadError(null);
     try {
@@ -4656,6 +5374,7 @@ export default function Home() {
       if (!loadedWallets) {
         throw lastError ?? new Error(t("features.walletContext.walletsLoadFailed"));
       }
+      if (walletListRequestIdRef.current !== requestId) return;
       setWalletsLoadError(null);
       setWallets(loadedWallets);
       const storedWalletId = loadStoredWalletId();
@@ -4683,6 +5402,7 @@ export default function Home() {
         return { ...prev, wallet_id: nextWalletId };
       });
     } catch (err) {
+      if (walletListRequestIdRef.current !== requestId) return;
       const rawMessage = err instanceof Error ? err.message : "";
       const message = rawMessage
         ? t("features.walletContext.walletsLoadFailedWithDetail", { message: rawMessage })
@@ -4690,9 +5410,69 @@ export default function Home() {
       setWalletsLoadError(message);
       toast.error(message);
     } finally {
-      setWalletsLoading(false);
+      if (walletListRequestIdRef.current === requestId) setWalletsLoading(false);
     }
   }, [selectedForm, setCurrentWallet, t]);
+
+  const createUniversalWallet = async () => {
+    const name = String(formData.name || "").trim();
+    const password = createWalletPassword;
+    if (!name) {
+      toast.error(t("formUi.walletNameRequired"));
+      return;
+    }
+    if (password.length < 10 || new TextEncoder().encode(password).byteLength > 1024) {
+      toast.error(t("features.create-keystore.passwordError"));
+      return;
+    }
+    setLoading(true);
+    try {
+      const response = await apiFetch("wallets/create-universal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, password }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || tf("features.create-wallet.failed", "Failed to create wallet"));
+      }
+      const createdWallet = data.wallet as SavedWallet;
+      const createdEvm = data.evm_wallet as DesktopEvmWalletSummary;
+      setWallets((previous) => [createdWallet, ...previous.filter((wallet) => wallet.id !== createdWallet.id)]);
+      setWalletsLoadError(null);
+      setEvmWallet(createdEvm);
+      setEvmKeystoreJson("");
+      setEvmPreview(null);
+      setEvmSubmitResult(null);
+      setCurrentWallet(createdWallet.id);
+      setWalletChainView("all");
+      if (!applicationLockedRef.current) {
+        setPrivateKeyExportMode("simple");
+        setPrivateKeySegmentCount(DEFAULT_PRIVATE_KEY_SEGMENTS);
+        setPrivateKeyQrRevealed(false);
+        setExportedPrivateKey(null);
+        setExportedMnemonic({
+          walletName: name,
+          publicKey: String(data.wallet.public_key),
+          mnemonic: String(data.mnemonic),
+        });
+      }
+      setCreateWalletPassword("");
+      setFormData((previous) => ({
+        ...previous,
+        wallet_id: createdWallet.id,
+        publicKey: createdWallet.public_key,
+        evmAddress: createdEvm.address,
+      }));
+      toast.success(tf("features.create-wallet.success", "Wallet created for Solana and all EVM networks"));
+      void loadWallets();
+    } catch (error) {
+      const message = errorMessage(error, tf("features.create-wallet.failed", "Failed to create wallet"));
+      toast.error(message);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const selectedSavedWallet = (): SavedWallet | undefined => {
     const walletId = String(formData.wallet_id ?? effectiveWalletId).trim();
@@ -4709,6 +5489,7 @@ export default function Home() {
     options: { refresh?: boolean; background?: boolean; force?: boolean } = {},
   ): Promise<WalletAssetsState | null> => {
     if (!wallet) {
+      beginAsyncRequestIntent(walletAssetsIntentRef.current, "");
       setWalletAssets(null);
       return null;
     }
@@ -4716,6 +5497,7 @@ export default function Home() {
     const background = options.background === true;
     const requestKey = `${wallet.public_key}:${effectiveRpcRequest}:${refresh ? "refresh" : "cache"}`;
     const walletKey = `${wallet.public_key}:${effectiveRpcRequest}`;
+    const intentGeneration = beginAsyncRequestIntent(walletAssetsIntentRef.current, walletKey);
     if (refresh && !options.force) {
       const lastRefresh = lastAssetRefreshRef.current.get(walletKey) ?? 0;
       if (Date.now() - lastRefresh < ASSET_AUTO_REFRESH_TTL_MS) {
@@ -4756,6 +5538,7 @@ export default function Home() {
         throw new Error(data.error || t("features.wallet-list.assetLoadFailed"));
       }
       if (!refresh && !data.updated_at) {
+        if (!isCurrentAsyncRequest(walletAssetsIntentRef.current, walletKey, intentGeneration)) return null;
         setWalletAssets((prev) => ({
           address: wallet.public_key,
           network: effectiveNetwork,
@@ -4782,6 +5565,9 @@ export default function Home() {
         updatedAt: typeof data.updated_at === "number" ? data.updated_at : undefined,
         error: undefined,
       };
+      if (!isCurrentAsyncRequest(walletAssetsIntentRef.current, walletKey, intentGeneration)) {
+        return nextAssetsBase;
+      }
       const pendingAdjustment = pendingTokenBalanceAdjustmentRef.current;
       if (!pendingTokenBalanceAdjustmentStillNeeded(nextAssetsBase, pendingAdjustment)) {
         pendingTokenBalanceAdjustmentRef.current = undefined;
@@ -4804,6 +5590,7 @@ export default function Home() {
     try {
       return await request;
     } catch (err) {
+      if (!isCurrentAsyncRequest(walletAssetsIntentRef.current, walletKey, intentGeneration)) return null;
       setWalletAssets((prev) => ({
         address: wallet.public_key,
         network: effectiveNetwork,
@@ -4908,6 +5695,7 @@ export default function Home() {
     options: { force?: boolean } = {},
   ) => {
     if (!wallet) {
+      beginAsyncRequestIntent(walletTransactionsIntentRef.current, "");
       setWalletTransactions(null);
       return;
     }
@@ -4922,6 +5710,7 @@ export default function Home() {
     }
     const before = appendState?.nextBefore;
     const walletKey = `${wallet.public_key}:${effectiveRpcRequest}`;
+    const intentGeneration = beginAsyncRequestIntent(walletTransactionsIntentRef.current, walletKey);
     const requestKey = `${walletKey}:${mode}:${before || ""}`;
     if (mode === "replace" && !options.force) {
       const lastRefresh = lastTransactionRefreshRef.current.get(walletKey) ?? 0;
@@ -4976,6 +5765,7 @@ export default function Home() {
         ...previous,
         ...nextPage.filter((item: WalletTransactionRecord) => !seen.has(item.signature)),
       ].slice(0, MAX_TRANSACTION_HISTORY);
+      if (!isCurrentAsyncRequest(walletTransactionsIntentRef.current, walletKey, intentGeneration)) return;
       setWalletTransactions({
         address: data.address || wallet.public_key,
         network: currentNetwork(data.network),
@@ -4994,6 +5784,7 @@ export default function Home() {
     try {
       return await request;
     } catch (err) {
+      if (!isCurrentAsyncRequest(walletTransactionsIntentRef.current, walletKey, intentGeneration)) return;
       setWalletTransactions((prev) => ({
         address: wallet.public_key,
         network: effectiveNetwork,
@@ -5014,10 +5805,12 @@ export default function Home() {
     options: { force?: boolean } = {},
   ) => {
     if (!wallet) {
+      beginAsyncRequestIntent(nonceAccountsIntentRef.current, "");
       setNonceAccounts(null);
       return;
     }
     const requestKey = `${wallet.public_key}:${effectiveRpcRequest}`;
+    const intentGeneration = beginAsyncRequestIntent(nonceAccountsIntentRef.current, requestKey);
     if (!options.force) {
       const lastRefresh = lastNonceRefreshRef.current.get(requestKey) ?? 0;
       if (Date.now() - lastRefresh < NONCE_AUTO_REFRESH_TTL_MS) {
@@ -5048,6 +5841,7 @@ export default function Home() {
       if (!response.ok) {
         throw new Error(data.error || t("features.create-nonce.error"));
       }
+      if (!isCurrentAsyncRequest(nonceAccountsIntentRef.current, requestKey, intentGeneration)) return;
       setNonceAccounts({
         owner: data.owner || wallet.public_key,
         network: currentNetwork(data.network),
@@ -5061,6 +5855,7 @@ export default function Home() {
     try {
       return await request;
     } catch (err) {
+      if (!isCurrentAsyncRequest(nonceAccountsIntentRef.current, requestKey, intentGeneration)) return;
       setNonceAccounts((prev) => ({
         owner: wallet.public_key,
         network: effectiveNetwork,
@@ -5151,6 +5946,7 @@ export default function Home() {
       setSelectedRpcId(initialRpcProfile.id);
       setSettingsNetwork(initialRpcProfile.network || DEFAULT_NETWORK);
       setCurrentWalletId(loadStoredWalletId());
+      setCurrentWalletNetwork(loadCurrentWalletNetwork());
       setDownloadHistory(loadDownloadHistory());
     }
     void loadWallets();
@@ -6357,6 +7153,7 @@ export default function Home() {
     setLoading(true);
     try {
       const privateKey = await exportPrivateKeyWithPassword(wallet, password);
+      if (applicationLockedRef.current) return;
       resetSensitiveExportDisplay("private-key");
       setExportedMnemonic(null);
       setExportedPrivateKey(privateKey);
@@ -6378,6 +7175,7 @@ export default function Home() {
     setLoading(true);
     try {
       const mnemonic = await exportMnemonicWithPassword(wallet, password);
+      if (applicationLockedRef.current) return;
       resetSensitiveExportDisplay("mnemonic");
       setExportedPrivateKey(null);
       setExportedMnemonic(mnemonic);
@@ -6418,6 +7216,8 @@ export default function Home() {
         mnemonicPreview = await exportMnemonicWithPassword(wallet, password);
       }
 
+      if (applicationLockedRef.current) return;
+
       setExportedPrivateKey(privateKeyPreview);
       setExportedMnemonic(mnemonicPreview);
       if (privateKeyPreview || mnemonicPreview) {
@@ -6425,6 +7225,7 @@ export default function Home() {
       }
       toast.success(t("features.settings.exportBundleSuccess"));
     } catch (err) {
+      if (applicationLockedRef.current) return;
       setExportedPrivateKey(privateKeyPreview);
       setExportedMnemonic(mnemonicPreview);
       if (privateKeyPreview || mnemonicPreview) {
@@ -6450,14 +7251,14 @@ export default function Home() {
     wallet: SavedWallet,
     currentPassword: string,
     newPassword: string,
-  ) => {
+  ): Promise<boolean> => {
     if (!currentPassword || !newPassword) {
       toast.error(t("features.settings.migratePasswordRequired"));
-      return;
+      return false;
     }
     setLoading(true);
     try {
-      const response = await apiFetch(`wallets/${wallet.id}/migrate-keystore`, {
+      const response = await apiFetch(`wallets/${wallet.id}/change-password`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -6469,10 +7270,26 @@ export default function Home() {
       if (!response.ok) {
         throw new Error(data.error || t("features.settings.migrateFailed"));
       }
+      if (biometricConfiguredFor(wallet)) {
+        const stored = await storeBiometricWalletPassword(wallet, newPassword);
+        if (!stored) {
+          await deleteBiometricWalletPassword(wallet, { quiet: true });
+          setBiometricStatuses((previous) => ({
+            ...previous,
+            [wallet.id]: {
+              ...(previous[wallet.id] ?? { supported: true }),
+              configured: false,
+            },
+          }));
+          toast.error(tf("features.settings.biometricResyncFailed", "密码已修改，请重新启用 Touch ID"));
+        }
+      }
       await loadWallets();
       toast.success(t("features.settings.migrateSuccess"));
+      return true;
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("features.settings.migrateFailed"));
+      return false;
     } finally {
       setLoading(false);
     }
@@ -6498,6 +7315,15 @@ export default function Home() {
 
     setLoading(true);
     try {
+      if (isTauriWebview()) {
+        await invoke("dapp_disconnect_wallet", {
+          walletId: wallet.id,
+          walletPublicKey: wallet.public_key,
+        });
+        setDappPermissions((permissions) => permissions.filter((permission) =>
+          !dappPermissionMatchesWallet(permission, wallet),
+        ));
+      }
       const response = await apiFetch(`wallets/${wallet.id}/delete`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -6603,6 +7429,10 @@ export default function Home() {
       return next;
     });
   };
+
+  useEffect(() => {
+    if (selectedForm !== "create-wallet") setCreateWalletPassword("");
+  }, [selectedForm]);
 
   const hydrateExternalSignFormDataFromJson = (source: FormState): FormState => {
     const raw = String(source.externalSignRequestJson || "").trim();
@@ -6915,7 +7745,13 @@ export default function Home() {
   const twitterDappTab = activeTwitterBrowserTab.webviewOpen && isTwitterPageUrl(activeTwitterBrowserTab.url)
     ? activeTwitterBrowserTab
     : [...twitterBrowserTabs].reverse().find((tab) => tab.webviewOpen && isTwitterPageUrl(tab.url));
-  const visibleTwitterSignals = filterTweetTokenSignals(twitterSignals, twitterWatchedUsers);
+  const visibleTwitterSignals = sortTweetSignalsNewestFirst(filterRecentTweetSignals(
+    filterTweetTokenSignals(twitterSignals, twitterWatchedUsers),
+  ));
+  const twitterSignalGroups = groupTweetSignalsByTweet(visibleTwitterSignals);
+  const twitterSignalPagination = paginateTweetSignalGroups(twitterSignalGroups, twitterSignalPage);
+  const twitterSignalPageCount = twitterSignalPagination.pageCount;
+  const pagedTwitterSignalGroups = twitterSignalPagination.groups;
   const dappSearchTerm = dappSearch.trim().toLowerCase();
   const dappStoreVisibleDapps = SOLANA_DAPP_CATALOG.filter((dapp) => {
     const matchesCategory = dappCategory === "trend" || dapp.category === dappCategory;
@@ -6928,6 +7764,10 @@ export default function Home() {
   });
   const dappStoreFeaturedDapps = SOLANA_DAPP_CATALOG.slice(0, 3);
 
+  useEffect(() => {
+    setTwitterSignalPage((page) => Math.min(Math.max(1, page), twitterSignalPageCount));
+  }, [twitterSignalPageCount]);
+
   const dappBrowserBounds = useCallback(() => {
     const shell = dappBrowserShellRef.current;
     if (!shell) return null;
@@ -6937,13 +7777,12 @@ export default function Home() {
     const tabBarHeight = Math.max(measuredTabBarHeight, 40);
     const addressBarHeight = activeDappTab.showAddressBar ? Math.max(measuredAddressBarHeight, 56) : 0;
     const chromeHeight = tabBarHeight + addressBarHeight;
-    const nativeTopOffset = dappNativeWindowTopOffset();
     const width = Math.max(0, Math.floor(rect.width));
     const height = Math.max(0, Math.floor(rect.height - chromeHeight));
     if (width < 40 || height < 40) return null;
     return {
       x: Math.round(rect.left),
-      y: Math.round(rect.top + chromeHeight + nativeTopOffset),
+      y: Math.round(rect.top + chromeHeight),
       width,
       height,
     };
@@ -6953,39 +7792,63 @@ export default function Home() {
     const viewport = twitterBrowserViewportRef.current;
     if (!viewport) return null;
     const rect = viewport.getBoundingClientRect();
-    const nativeTopOffset = dappNativeWindowTopOffset();
     const width = Math.max(0, Math.floor(rect.width));
     const height = Math.max(0, Math.floor(rect.height));
     // Ignore transient measurements while the full-height workspace is still settling.
     if (width < 40 || height < 160) return null;
     return {
       x: Math.round(rect.left),
-      y: Math.round(rect.top + nativeTopOffset),
+      y: Math.round(rect.top),
       width,
       height,
     };
   }, []);
 
+  const twitterLoginBounds = useCallback(() => {
+    const viewport = twitterLoginViewportRef.current;
+    if (!viewport) return null;
+    const rect = viewport.getBoundingClientRect();
+    if (rect.width < 320 || rect.height < 320) return null;
+    return {
+      x: Math.round(rect.left),
+      y: Math.round(rect.top),
+      width: Math.floor(rect.width),
+      height: Math.floor(rect.height),
+    };
+  }, []);
+
   const setActiveNativeDappTab = useCallback(async () => {
     if (!isTauriWebview()) return;
+    const loginBounds = twitterLoginRequiredOpen && twitterLoginPageOpenedByPrompt
+      ? twitterLoginBounds()
+      : null;
+    const showTwitterLogin = Boolean(loginBounds && twitterCaptureTab.webviewOpen);
     const isDappWorkspace = selectedForm === "dapp-store";
     const isTwitterWorkspace = selectedForm === "twitter-signals";
-    const tab = isDappWorkspace
+    const tab = showTwitterLogin
+      ? { id: TWITTER_CAPTURE_TAB_ID, ...twitterCaptureTab }
+      : isDappWorkspace
       ? dappTabs.find((item) => item.id === activeDappTabId)
       : isTwitterWorkspace
         ? twitterBrowserTabs.find((item) => item.id === activeTwitterBrowserTabId)
         : undefined;
-    const bounds = isDappWorkspace
+    const bounds = showTwitterLogin
+      ? loginBounds
+      : isDappWorkspace
       ? dappBrowserBounds()
       : isTwitterWorkspace
         ? twitterBrowserBounds()
         : null;
-    const overlayOpen = isDappWorkspace ? dappBrowserOverlayOpen : twitterBrowserOverlayOpen;
-    const activeTabId = isDappWorkspace ? activeDappTabId : activeTwitterBrowserTabId;
+    const overlayOpen = isDappWorkspace
+      ? dappBrowserOverlayOpen
+      : twitterBrowserOverlayOpen || twitterLoginRequiredOpen;
+    const activeTabId = showTwitterLogin
+      ? TWITTER_CAPTURE_TAB_ID
+      : isDappWorkspace ? activeDappTabId : activeTwitterBrowserTabId;
     const shouldShowNativeTab =
-      (isDappWorkspace || isTwitterWorkspace) &&
+      (showTwitterLogin || isDappWorkspace || isTwitterWorkspace) &&
       !dappSignRequest &&
-      !overlayOpen &&
+      (showTwitterLogin || !overlayOpen) &&
       Boolean(tab?.webviewOpen) &&
       Boolean(bounds);
     try {
@@ -7011,6 +7874,10 @@ export default function Home() {
     twitterBrowserBounds,
     twitterBrowserOverlayOpen,
     twitterBrowserTabs,
+    twitterCaptureTab,
+    twitterLoginBounds,
+    twitterLoginPageOpenedByPrompt,
+    twitterLoginRequiredOpen,
   ]);
 
   const createDappWebview = useCallback(async (
@@ -7048,6 +7915,7 @@ export default function Home() {
         y: bounds.y,
         width: bounds.width,
         height: bounds.height,
+        hidden: false,
       });
       await invoke("dapp_set_active_tab", {
         tabId,
@@ -7153,6 +8021,7 @@ export default function Home() {
         y: bounds.y,
         width: bounds.width,
         height: bounds.height,
+        hidden: false,
       });
       await invoke("dapp_set_active_tab", {
         tabId,
@@ -7180,6 +8049,38 @@ export default function Home() {
       toast.error(errorMessage(error, tf("features.dapp-store.openFailed", "打开页面失败")));
     }
   }, [effectiveRpcRequest, effectiveWallet, tf, twitterBrowserBounds]);
+
+  const ensureTwitterCaptureWebview = useCallback(async (
+    initialUrl = TWITTER_CAPTURE_HOME_URL,
+  ) => {
+    if (twitterCaptureTab.webviewOpen || twitterCaptureOpenInFlightRef.current) return;
+    if (!isTauriWebview()) return;
+    twitterCaptureOpenInFlightRef.current = true;
+    twitterSignalBackfillStartedRef.current = false;
+    setTwitterCaptureTab((current) => ({ ...current, url: initialUrl, loading: true }));
+    try {
+      await invoke("dapp_open_tab", {
+        tabId: TWITTER_CAPTURE_TAB_ID,
+        url: initialUrl,
+        appId: null,
+        walletPublicKey: null,
+        network: effectiveRpcRequest,
+        x: -20_000,
+        y: -20_000,
+        width: 1_280,
+        height: 900,
+        hidden: true,
+      });
+      setTwitterCaptureTab((current) => ({ ...current, url: initialUrl, webviewOpen: true }));
+    } catch (error) {
+      setTwitterCaptureTab((current) => ({ ...current, webviewOpen: false, loading: false }));
+      setTwitterPendingCaptureIntent(null);
+      setTwitterSignalCaptureStatus("error");
+      setTwitterSignalCaptureError(errorMessage(error, tf("features.twitter-signals.openCaptureFailed", "无法启动后台 X 采集页")));
+    } finally {
+      twitterCaptureOpenInFlightRef.current = false;
+    }
+  }, [effectiveRpcRequest, tf, twitterCaptureTab.webviewOpen]);
 
   const openUrlInTwitterBrowserTab = useCallback((
     rawUrl: string,
@@ -7224,7 +8125,10 @@ export default function Home() {
     requestAnimationFrame(() => {
       void createTwitterBrowserWebview(tabId, url, matchedDapp);
     });
+    return tabId;
   }, [createTwitterBrowserWebview, effectiveWallet]);
+  openUrlInDappTabRef.current = openUrlInDappTab;
+  openUrlInTwitterBrowserTabRef.current = openUrlInTwitterBrowserTab;
 
   const openDapp = async (dapp: DappCatalogItem) => {
     const wallet = effectiveWallet;
@@ -7377,25 +8281,31 @@ export default function Home() {
   const scanTwitterSignals = useCallback(() => {
     const signals = parseTweetTokenSignals(twitterSignalSource, "");
     const visibleSignals = filterTweetTokenSignals(signals, twitterWatchedUsers);
-    setTwitterSignals(signals);
+    const visibleTweetCount = groupTweetSignalsByTweet(visibleSignals).length;
+    setTwitterSignals(mergeTweetTokenSignals([], signals));
+    setTwitterSignalPage(1);
     setTwitterSignalLastScanAt(new Date().toISOString());
     setTwitterSignalCaptureStatus(visibleSignals.length > 0 ? "success" : "empty");
     setTwitterSignalCaptureError("");
     toast.success(
       visibleSignals.length > 0
-        ? tf("features.twitter-signals.scanSuccess", "已提取 {count} 条代币线索推文", { count: visibleSignals.length })
+        ? tf("features.twitter-signals.scanSuccess", "已提取 {count} 条代币线索推文", { count: visibleTweetCount })
         : tf("features.twitter-signals.scanEmpty", "没有找到带合约地址或代币代码的推文"),
     );
   }, [tf, twitterSignalSource, twitterWatchedUsers]);
 
   const captureTwitterSignalsFromActiveTab = useCallback(async (
-    options: { notify?: boolean; advance?: boolean } = {},
+    options: { notify?: boolean; advance?: boolean; tabId?: string; intent?: TwitterCaptureIntent } = {},
   ) => {
     if (!isTauriWebview()) {
       if (options.notify) toast.error(tf("features.twitter-signals.captureTauriOnly", "抓取页面需要在桌面客户端中使用。"));
       return false;
     }
-    const tab = twitterDappTab;
+    const tab = options.tabId === TWITTER_CAPTURE_TAB_ID || !options.tabId
+      ? (twitterCaptureTab.webviewOpen && isTwitterPageUrl(twitterCaptureTab.url)
+        ? { id: TWITTER_CAPTURE_TAB_ID, ...twitterCaptureTab }
+        : undefined)
+      : twitterBrowserTabs.find((candidate) => candidate.id === options.tabId && isTwitterPageUrl(candidate.url));
     if (!tab) {
       setTwitterSignalCaptureStatus("waiting");
       if (options.notify) toast.error(tf("features.twitter-signals.noBrowserTab", "请先在内置浏览器打开 X/Twitter 页面。"));
@@ -7403,6 +8313,7 @@ export default function Home() {
     }
     if (tab.loading || twitterSignalCaptureInFlightRef.current) return false;
     twitterSignalCaptureInFlightRef.current = true;
+    twitterSignalCaptureIntentRef.current = options.intent ?? null;
     const requestId = `twitter-scan-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     twitterSignalCaptureRequestIdRef.current = requestId;
     setTwitterSignalCaptureBusy(true);
@@ -7419,6 +8330,7 @@ export default function Home() {
         twitterSignalCaptureRequestIdRef.current = null;
         twitterSignalCaptureInFlightRef.current = false;
         twitterSignalNotifyCaptureRef.current = false;
+        twitterSignalCaptureIntentRef.current = null;
         setTwitterSignalCaptureBusy(false);
         setTwitterSignalCaptureStatus("error");
         setTwitterSignalCaptureError(tf("features.twitter-signals.captureTimeout", "X 页面没有及时返回数据，请确认关注流已经加载完成。"));
@@ -7426,11 +8338,17 @@ export default function Home() {
       if (options.notify) {
         toast.message(tf("features.twitter-signals.captureRequested", "正在向下遍历 X 时间线并读取推文..."));
       }
+      const isCaptureTab = tab.id === TWITTER_CAPTURE_TAB_ID;
+      const latestOnly = isCaptureTab && twitterSignalBackfillCompleteRef.current;
+      const resumeBackfill = isCaptureTab && !latestOnly && twitterSignalBackfillStartedRef.current;
+      if (isCaptureTab && !latestOnly) twitterSignalBackfillStartedRef.current = true;
       await invoke("dapp_request_tab_text", {
         tabId: tab.id,
         requestId,
         advance: Boolean(options.advance),
-        background: activeTwitterBrowserTabId !== tab.id,
+        background: isCaptureTab || activeTwitterBrowserTabId !== tab.id,
+        latestOnly,
+        resumeBackfill,
       });
       return true;
     } catch (error) {
@@ -7438,6 +8356,7 @@ export default function Home() {
       twitterSignalCaptureRequestIdRef.current = null;
       twitterSignalCaptureInFlightRef.current = false;
       twitterSignalNotifyCaptureRef.current = false;
+      twitterSignalCaptureIntentRef.current = null;
       if (twitterSignalCaptureTimeoutRef.current !== null) {
         window.clearTimeout(twitterSignalCaptureTimeoutRef.current);
         twitterSignalCaptureTimeoutRef.current = null;
@@ -7451,9 +8370,9 @@ export default function Home() {
       }
       return false;
     }
-  }, [activeTwitterBrowserTabId, tf, twitterDappTab]);
+  }, [activeTwitterBrowserTabId, tf, twitterBrowserTabs, twitterCaptureTab]);
 
-  const openTwitterLoginInBrowser = () => {
+  const openTwitterLoginInBrowser = useCallback(() => {
     if (twitterDappTab) {
       setActiveTwitterBrowserTabId(twitterDappTab.id);
       return;
@@ -7461,6 +8380,80 @@ export default function Home() {
     requestAnimationFrame(() => {
       openUrlInTwitterBrowserTab("https://x.com/home", { showAddressBar: true });
     });
+  }, [openUrlInTwitterBrowserTab, twitterDappTab]);
+
+  const requestTwitterLogin = useCallback((intent: TwitterCaptureIntent) => {
+    setTwitterSignalAutoScan(false);
+    setTwitterPendingCaptureIntent(intent);
+    setTwitterLoginPageOpenedByPrompt(true);
+    setTwitterSignalCaptureStatus("waiting");
+    setTwitterSignalCaptureError("");
+    setTwitterLoginRequiredOpen(true);
+    if (!twitterCaptureTab.webviewOpen) {
+      void ensureTwitterCaptureWebview(TWITTER_LOGIN_URL);
+      return;
+    }
+    setTwitterCaptureTab((current) => ({ ...current, url: TWITTER_LOGIN_URL, loading: true }));
+    setTwitterAuthByTabId((current) => ({ ...current, [TWITTER_CAPTURE_TAB_ID]: "unknown" }));
+    void invoke("dapp_navigate_tab", { tabId: TWITTER_CAPTURE_TAB_ID, url: TWITTER_LOGIN_URL }).catch((error) => {
+      setTwitterCaptureTab((current) => ({ ...current, loading: false }));
+      setTwitterSignalCaptureError(errorMessage(error, tf("features.twitter-signals.openLoginFailed", "无法打开 X 登录页面")));
+    });
+  }, [ensureTwitterCaptureWebview, tf, twitterCaptureTab.webviewOpen]);
+
+  const openTwitterLoginFlow = () => {
+    setTwitterLoginRequiredOpen(true);
+    setTwitterLoginPageOpenedByPrompt(true);
+    if (!twitterCaptureTab.webviewOpen) {
+      void ensureTwitterCaptureWebview(TWITTER_LOGIN_URL);
+      return;
+    }
+    setTwitterCaptureTab((current) => ({ ...current, url: TWITTER_LOGIN_URL, loading: true }));
+    setTwitterAuthByTabId((current) => ({ ...current, [TWITTER_CAPTURE_TAB_ID]: "unknown" }));
+    void invoke("dapp_navigate_tab", { tabId: TWITTER_CAPTURE_TAB_ID, url: TWITTER_LOGIN_URL }).catch((error) => {
+      setTwitterCaptureTab((current) => ({ ...current, loading: false }));
+      toast.error(errorMessage(error, tf("features.twitter-signals.openLoginFailed", "无法打开 X 登录页面")));
+    });
+  };
+
+  const beginTwitterCapture = (intent: TwitterCaptureIntent) => {
+    if (!isTauriWebview()) {
+      toast.error(tf("features.twitter-signals.captureTauriOnly", "抓取页面需要在桌面客户端中使用。"));
+      return;
+    }
+    if (!twitterCaptureTab.webviewOpen) {
+      setTwitterPendingCaptureIntent(intent);
+      setTwitterSignalCaptureStatus("waiting");
+      void ensureTwitterCaptureWebview();
+      return;
+    }
+    if (!twitterScanCursorHydrated) {
+      setTwitterPendingCaptureIntent(intent);
+      setTwitterSignalCaptureStatus("waiting");
+      return;
+    }
+    if (twitterCaptureTab.loading) {
+      setTwitterPendingCaptureIntent(intent);
+      setTwitterSignalCaptureStatus("waiting");
+      return;
+    }
+    const authStatus = twitterAuthByTabId[TWITTER_CAPTURE_TAB_ID] ?? "unknown";
+    if (authStatus === "unauthenticated" || isTwitterLoginUrl(twitterCaptureTab.url)) {
+      requestTwitterLogin(intent);
+      return;
+    }
+    if (intent === "auto") {
+      setTwitterSignalAutoScan(true);
+      return;
+    }
+    void captureTwitterSignalsFromActiveTab({ advance: true, notify: true, intent, tabId: TWITTER_CAPTURE_TAB_ID });
+  };
+
+  const closeTwitterLoginDialog = () => {
+    setTwitterLoginRequiredOpen(false);
+    setTwitterPendingCaptureIntent(null);
+    setTwitterLoginPageOpenedByPrompt(false);
+    setTwitterSignalCaptureStatus("idle");
   };
 
   const openSignalBuy = (signal: TweetTokenSignal) => {
@@ -7488,10 +8481,244 @@ export default function Home() {
     });
   };
 
+  const syncTwitterKolProfile = (kol: TwitterKolProfile) => {
+    const profileUrl = twitterKolProfileUrl(kol.handle);
+    const existingTab = twitterBrowserTabs.find((tab) => {
+      try {
+        return tab.webviewOpen && new URL(tab.url).pathname.replace(/\/$/, "").toLowerCase() === `/${kol.handle}`;
+      } catch {
+        return false;
+      }
+    });
+    const tabId = existingTab?.id || openUrlInTwitterBrowserTab(profileUrl, { showAddressBar: true });
+    if (!tabId) return;
+    setActiveTwitterBrowserTabId(tabId);
+    setTwitterKolPendingSync({ handle: kol.handle, tabId });
+  };
+
+  const addTwitterKol = () => {
+    const kol = createTwitterKolProfile(twitterKolInput);
+    if (!kol) {
+      toast.error(tf("features.twitter-signals.kolInvalid", "请输入有效的 X 用户名或主页地址"));
+      return;
+    }
+    const result = appendTwitterKol(twitterKolsRef.current, kol);
+    if (result.status === "duplicate") {
+      toast.message(tf("features.twitter-signals.kolExists", "该 KOL 已在列表中"));
+      setTwitterKolInput("");
+      return;
+    }
+    if (result.status === "full") {
+      toast.error(tf("features.twitter-signals.kolLimit", "最多可监控 500 个 KOL"));
+      return;
+    }
+    twitterKolsRef.current = result.profiles;
+    setTwitterKols(result.profiles);
+    setTwitterKolInput("");
+    requestAnimationFrame(() => syncTwitterKolProfile(kol));
+  };
+
+  const addSignalAuthorToTwitterKols = (signal: TweetTokenSignal) => {
+    const kol = createTwitterKolProfile(signal.author);
+    if (!kol) {
+      toast.error(tf("features.twitter-signals.kolInvalid", "请输入有效的 X 用户名或主页地址"));
+      return;
+    }
+    const enrichedKol = {
+      ...kol,
+      displayName: signal.authorName?.trim() || undefined,
+      avatarUrl: signal.avatarUrl?.trim() || undefined,
+    };
+    const result = appendTwitterKol(twitterKolsRef.current, enrichedKol);
+    if (result.status === "duplicate") {
+      toast.message(tf("features.twitter-signals.kolExists", "该 KOL 已在列表中"));
+      return;
+    }
+    if (result.status === "full") {
+      toast.error(tf("features.twitter-signals.kolLimit", "最多可监控 500 个 KOL"));
+      return;
+    }
+    twitterKolsRef.current = result.profiles;
+    setTwitterKols(result.profiles);
+    toast.success(tf("features.twitter-signals.kolAdded", "已添加到 KOL 清单"));
+  };
+
+  const removeTwitterKol = (handle: string) => {
+    const removed = twitterKols.find((kol) => kol.handle === handle);
+    if (!removed) return;
+    setTwitterKols((current) => current.filter((kol) => kol.handle !== handle));
+    if (isTauriWebview()) {
+      void enqueueResearchStoreOperation(() => invoke("research_remove_kol", { handle })).catch((error) => {
+        setTwitterKols((current) => current.some((kol) => kol.handle === handle) ? current : [...current, removed]);
+        toast.error(errorMessage(error, tf("features.twitter-signals.removeKolFailed", "移除 KOL 失败")));
+      });
+    }
+  };
+
   const copyTwitterSignalJson = () => {
     const payload = JSON.stringify(visibleTwitterSignals, null, 2);
     void copyToClipboard(payload, "twitter-signals-json");
   };
+
+  const clearTwitterSignals = async () => {
+    setTwitterSignalAutoScan(false);
+    setTwitterPendingCaptureIntent(null);
+    twitterSignalCaptureRequestIdRef.current = null;
+    twitterSignalCaptureIntentRef.current = null;
+    twitterSignalCaptureInFlightRef.current = false;
+    twitterSignalNotifyCaptureRef.current = false;
+    twitterSignalBackfillStartedRef.current = false;
+    if (twitterSignalCaptureTimeoutRef.current !== null) {
+      window.clearTimeout(twitterSignalCaptureTimeoutRef.current);
+      twitterSignalCaptureTimeoutRef.current = null;
+    }
+    try {
+      if (isTauriWebview()) {
+        await enqueueResearchStoreOperation(() => invoke("research_clear_signals"));
+      }
+      setTwitterSignalSource("");
+      setTwitterSignals([]);
+      setTwitterSignalPage(1);
+      setExpandedTwitterSignalIds(new Set());
+      setTwitterSignalLastScanAt(null);
+      setTwitterSignalLastTweetCount(0);
+      setTwitterSignalCaptureBusy(false);
+      setTwitterSignalCaptureStatus("idle");
+      setTwitterSignalCaptureError("");
+      twitterSignalBackfillCompleteRef.current = false;
+      twitterSignalBackfillStartedRef.current = false;
+    } catch (error) {
+      const message = errorMessage(error, tf("features.twitter-signals.clearFailed", "无法清空本地推文数据"));
+      setTwitterSignalCaptureError(message);
+      toast.error(message);
+    }
+  };
+
+  const askTwitterResearchAi = async (questionOverride?: string) => {
+    const question = (questionOverride ?? twitterAiQuestion).trim();
+    if (!question || twitterAiBusyRef.current) return;
+    if (!isTauriWebview()) {
+      setTwitterAiError(tf("features.twitter-signals.aiDesktopOnly", "AI 知识库需要在桌面客户端中使用"));
+      return;
+    }
+    setTwitterAiQuestion(question);
+    twitterAiBusyRef.current = true;
+    setTwitterAiBusy(true);
+    setTwitterAiError("");
+    const requestId = twitterAiRequestIdRef.current + 1;
+    twitterAiRequestIdRef.current = requestId;
+    try {
+      const providerPreset = researchAiProviderPreset(twitterAiProviderKind);
+      const result = await invoke<ResearchAiChatResult>("research_ai_chat", {
+        request: {
+          question,
+          time_range_hours: 24 * TWITTER_SIGNAL_RECENT_DAYS,
+          session_id: twitterAiProviderKind === "local" ? null : twitterAiSessionId,
+          provider: twitterAiProviderKind === "local" ? null : {
+            kind: twitterAiProviderKind,
+            endpoint: twitterAiEndpoint.trim() || providerPreset.endpoint,
+            model: twitterAiModel.trim() || providerPreset.model,
+            api_key: twitterAiApiKey,
+          },
+        },
+      });
+      if (twitterAiRequestIdRef.current !== requestId) return;
+      setTwitterAiResult(result);
+      setTwitterAiSessionId(result.session_id || null);
+    } catch (error) {
+      if (twitterAiRequestIdRef.current !== requestId) return;
+      setTwitterAiError(errorMessage(error, tf("features.twitter-signals.aiFailed", "AI 查询失败")));
+    } finally {
+      if (twitterAiRequestIdRef.current === requestId) {
+        twitterAiBusyRef.current = false;
+        setTwitterAiBusy(false);
+      }
+    }
+  };
+
+  const refreshTwitterAiKeyStatus = useCallback(async () => {
+    const requestId = twitterAiKeyRequestIdRef.current + 1;
+    twitterAiKeyRequestIdRef.current = requestId;
+    if (!isTauriWebview() || !researchAiProviderPreset(twitterAiProviderKind).requiresApiKey) {
+      setTwitterAiKeySaved(false);
+      return;
+    }
+    try {
+      const status = await invoke<{ saved: boolean }>("research_ai_key_status", {
+        provider: twitterAiProviderKind,
+      });
+      if (twitterAiKeyRequestIdRef.current === requestId) setTwitterAiKeySaved(status.saved);
+    } catch {
+      if (twitterAiKeyRequestIdRef.current === requestId) setTwitterAiKeySaved(false);
+    }
+  }, [twitterAiProviderKind]);
+
+  const saveTwitterAiApiKey = async () => {
+    if (!twitterAiApiKey.trim() || !researchAiProviderPreset(twitterAiProviderKind).requiresApiKey) return;
+    const requestId = twitterAiKeyRequestIdRef.current + 1;
+    twitterAiKeyRequestIdRef.current = requestId;
+    const providerKind = twitterAiProviderKind;
+    setTwitterAiKeyBusy(true);
+    try {
+      const status = await invoke<{ saved: boolean }>("research_ai_key_store", {
+        provider: providerKind,
+        apiKey: twitterAiApiKey,
+      });
+      if (twitterAiKeyRequestIdRef.current !== requestId) return;
+      setTwitterAiKeySaved(status.saved);
+      setTwitterAiApiKey("");
+      toast.success(tf("features.twitter-signals.keySaved", "API Key 已安全保存"));
+    } catch (error) {
+      if (twitterAiKeyRequestIdRef.current !== requestId) return;
+      toast.error(errorMessage(error, tf("features.twitter-signals.keySaveFailed", "保存 API Key 失败")));
+    } finally {
+      if (twitterAiKeyRequestIdRef.current === requestId) setTwitterAiKeyBusy(false);
+    }
+  };
+
+  const deleteTwitterAiApiKey = async () => {
+    if (!researchAiProviderPreset(twitterAiProviderKind).requiresApiKey) return;
+    const requestId = twitterAiKeyRequestIdRef.current + 1;
+    twitterAiKeyRequestIdRef.current = requestId;
+    const providerKind = twitterAiProviderKind;
+    setTwitterAiKeyBusy(true);
+    try {
+      const status = await invoke<{ saved: boolean }>("research_ai_key_delete", {
+        provider: providerKind,
+      });
+      if (twitterAiKeyRequestIdRef.current !== requestId) return;
+      setTwitterAiKeySaved(status.saved);
+      setTwitterAiApiKey("");
+      toast.success(tf("features.twitter-signals.keyRemoved", "已移除保存的 API Key"));
+    } catch (error) {
+      if (twitterAiKeyRequestIdRef.current !== requestId) return;
+      toast.error(errorMessage(error, tf("features.twitter-signals.keyRemoveFailed", "移除 API Key 失败")));
+    } finally {
+      if (twitterAiKeyRequestIdRef.current === requestId) setTwitterAiKeyBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!isTauriWebview()) {
+      setTwitterScanCursorHydrated(true);
+      return;
+    }
+    void invoke<ResearchScanCursor | null>("research_scan_cursor", {
+      sourceUrl: TWITTER_CAPTURE_HOME_URL,
+    }).then((cursor) => {
+      if (!cancelled && cursor?.backfill_complete) {
+        twitterSignalBackfillCompleteRef.current = true;
+      }
+    }).catch(() => {
+      // A missing or unreadable cursor safely falls back to a full three-day scan.
+    }).finally(() => {
+      if (!cancelled) setTwitterScanCursorHydrated(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -7499,10 +8726,29 @@ export default function Home() {
       const raw = window.localStorage.getItem(TWITTER_SIGNAL_STORAGE_KEY);
       if (!raw) return;
       const data = JSON.parse(raw) as Record<string, unknown>;
-      if (typeof data.watchedUsers === "string") setTwitterWatchedUsers(data.watchedUsers);
-      if (typeof data.source === "string") setTwitterSignalSource(data.source);
+      let loadedKols: TwitterKolProfile[] = [];
+      if (Array.isArray(data.kols)) {
+        loadedKols = parseStoredTwitterKols(data.kols);
+      } else if (typeof data.watchedUsers === "string") {
+        loadedKols = Array.from(twitterWatchedHandleSet(data.watchedUsers))
+          .map((handle) => createTwitterKolProfile(handle))
+          .filter((kol): kol is TwitterKolProfile => Boolean(kol));
+      }
+      setTwitterKols(loadedKols);
+      if (typeof data.kolFilter === "string") {
+        const selectedHandle = normalizeTwitterKolHandle(data.kolFilter);
+        if (selectedHandle && loadedKols.some((kol) => kol.handle === selectedHandle)) {
+          setTwitterWatchedUsers(`@${selectedHandle}`);
+        }
+      }
+      if (typeof data.source === "string") {
+        setTwitterSignalSource(data.source.slice(0, MAX_TWITTER_SIGNAL_SOURCE_CHARS));
+      }
       if (Array.isArray(data.signals)) {
-        setTwitterSignals((data.signals as TweetTokenSignal[]).map(normalizeTweetTokenSignal));
+        setTwitterSignals(sortTweetSignalsNewestFirst(filterRecentTweetSignals(
+          parseStoredTwitterSignals(data.signals)
+            .map((signal) => normalizeTweetTokenSignal(signal as TweetTokenSignal)),
+        )));
       }
       if (typeof data.lastScanAt === "string") setTwitterSignalLastScanAt(data.lastScanAt);
       if (typeof data.intervalSec === "number" && Number.isFinite(data.intervalSec)) {
@@ -7510,49 +8756,378 @@ export default function Home() {
       }
     } catch {
       // Ignore corrupt local signal cache; users can paste fresh source text.
+    } finally {
+      setTwitterSignalStorageHydrated(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!twitterSignalStorageHydrated || !isTauriWebview()) return;
+    let cancelled = false;
+    void invoke<ResearchSignalRecord[]>("research_list_signals")
+      .then((records) => {
+        if (cancelled || records.length === 0) return;
+        const signals = records.map((record): TweetTokenSignal => normalizeTweetTokenSignal({
+          id: record.id,
+          chain: record.chain as TweetSignalChain,
+          contractAddress: record.contract_address || undefined,
+          observedChain: record.observed_chain as TweetSignalChain,
+          observedContractAddress: record.observed_contract_address || undefined,
+          tokenSymbols: record.token_symbols,
+          author: record.author,
+          authorName: record.author_name || undefined,
+          avatarUrl: record.avatar_url || undefined,
+          tweetText: record.tweet_text,
+          sourceUrl: record.source_url || undefined,
+          tweetId: record.tweet_id || undefined,
+          publishedAt: record.published_at || undefined,
+          detectedAt: new Date(record.detected_at_ms).toISOString(),
+          resolutionStatus: record.resolution_status || undefined,
+          resolutionConfidence: record.resolution_confidence ?? undefined,
+          resolutionSource: record.resolution_source || undefined,
+        }));
+        setTwitterSignals((current) => mergeTweetTokenSignals(current, signals));
+      })
+      .catch(() => {
+        // The localStorage cache remains available if the SQLite store cannot be read.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [twitterSignalStorageHydrated]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage.getItem(TWITTER_RESEARCH_AI_STORAGE_KEY);
+      if (!raw) return;
+      const value = JSON.parse(raw) as Record<string, unknown>;
+      if (isResearchAiProviderKind(value.kind)) {
+        setTwitterAiProviderKind(value.kind);
+      }
+      if (typeof value.endpoint === "string") setTwitterAiEndpoint(value.endpoint);
+      if (typeof value.model === "string") setTwitterAiModel(value.model);
+    } catch {
+      // Ignore invalid non-secret AI preferences.
+    } finally {
+      setTwitterResearchAiStorageHydrated(true);
     }
   }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    persistJsonAfterHydration(window.localStorage, TWITTER_RESEARCH_AI_STORAGE_KEY, {
+      kind: twitterAiProviderKind,
+      endpoint: twitterAiEndpoint,
+      model: twitterAiModel,
+    }, twitterResearchAiStorageHydrated);
+  }, [twitterAiEndpoint, twitterAiModel, twitterAiProviderKind, twitterResearchAiStorageHydrated]);
+
+  useEffect(() => {
+    const refreshChromeImportStatus = () => {
+      setTwitterChromeAuthImported(Boolean(window.localStorage.getItem(CHROME_AUTH_IMPORT_STORAGE_KEY)));
+    };
+    refreshChromeImportStatus();
+    window.addEventListener(CHROME_AUTH_IMPORT_EVENT, refreshChromeImportStatus);
+    window.addEventListener("storage", refreshChromeImportStatus);
+    return () => {
+      window.removeEventListener(CHROME_AUTH_IMPORT_EVENT, refreshChromeImportStatus);
+      window.removeEventListener("storage", refreshChromeImportStatus);
+    };
+  }, []);
+
+  useEffect(() => {
+    void refreshTwitterAiKeyStatus();
+  }, [refreshTwitterAiKeyStatus]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
     const payload = {
-      watchedUsers: twitterWatchedUsers,
+      kolFilter: twitterWatchedUsers,
+      kols: twitterKols,
       source: twitterSignalSource,
       signals: twitterSignals,
       lastScanAt: twitterSignalLastScanAt,
       intervalSec: twitterSignalIntervalSec,
     };
-    window.localStorage.setItem(TWITTER_SIGNAL_STORAGE_KEY, JSON.stringify(payload));
+    persistJsonAfterHydration(
+      window.localStorage,
+      TWITTER_SIGNAL_STORAGE_KEY,
+      payload,
+      twitterSignalStorageHydrated,
+    );
   }, [
     twitterSignalIntervalSec,
     twitterSignalLastScanAt,
     twitterSignalSource,
     twitterSignals,
+    twitterKols,
+    twitterSignalStorageHydrated,
     twitterWatchedUsers,
   ]);
+
+  useEffect(() => {
+    const selectedHandles = twitterWatchedHandleSet(twitterWatchedUsers);
+    if (selectedHandles.size === 0) return;
+    if (!twitterKols.some((kol) => selectedHandles.has(kol.handle))) {
+      setTwitterWatchedUsers("");
+    }
+  }, [twitterKols, twitterWatchedUsers]);
+
+  useEffect(() => {
+    if (!isTauriWebview() || (twitterKols.length === 0 && twitterSignals.length === 0)) return;
+    const timer = window.setTimeout(() => {
+      void enqueueResearchStoreOperation(() => invoke("research_ingest", {
+        request: {
+          source_url: "",
+          captured_at_ms: Date.now(),
+          kols: twitterKols.map(twitterKolResearchInput),
+          tweets: [],
+          signals: twitterSignals.filter(hasValidTweetSignalIdentity).map(tweetSignalResearchInput),
+        },
+      })).catch(() => {
+        // KOL data is also retained in localStorage and will be retried on the next update.
+      });
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [twitterKols, twitterSignals]);
+
+  useEffect(() => {
+    if (!twitterSignalStorageHydrated || !isTauriWebview()) return;
+    const now = Date.now();
+    const liveSignalIds = new Set(twitterSignals.map((signal) => signal.id));
+    for (const signalId of twitterTokenResolutionRetryAtRef.current.keys()) {
+      if (!liveSignalIds.has(signalId)) twitterTokenResolutionRetryAtRef.current.delete(signalId);
+    }
+    let retryTimer: number | null = null;
+    const nextRetryAt = Math.min(
+      ...Array.from(twitterTokenResolutionRetryAtRef.current.values()).filter((retryAt) => retryAt > now),
+    );
+    if (Number.isFinite(nextRetryAt)) {
+      retryTimer = window.setTimeout(() => {
+        setTwitterTokenResolutionRetryVersion((version) => version + 1);
+      }, Math.max(0, nextRetryAt - now));
+    }
+    const targets = twitterSignals
+      .filter((signal) => {
+        if ((twitterTokenResolutionRetryAtRef.current.get(signal.id) || 0) > now) return false;
+        return isTokenResolutionTarget(signal);
+      })
+      .sort((left, right) => Number(Boolean(left.resolutionSource)) - Number(Boolean(right.resolutionSource)))
+      .slice(0, TWITTER_TOKEN_RESOLUTION_BATCH_SIZE);
+    if (targets.length === 0) {
+      return () => {
+        if (retryTimer !== null) window.clearTimeout(retryTimer);
+      };
+    }
+    const targetSymbols = new Set(targets.flatMap((signal) =>
+      (signal.tokenSymbols || []).map((symbol) => symbol.trim().replace(/^\$/u, "").toUpperCase()),
+    ));
+    const targetAddresses = new Set(targets.flatMap((signal) => {
+      const address = tokenSignalObservation(signal).contractAddress;
+      return address ? [address.toLowerCase()] : [];
+    }));
+    const explicitEvidence = twitterSignals
+      .filter((signal) => signal.contractAddress
+        && !signal.resolutionSource
+        && (targetAddresses.has(signal.contractAddress.toLowerCase())
+          || (signal.tokenSymbols || []).some((symbol) =>
+            targetSymbols.has(symbol.trim().replace(/^\$/u, "").toUpperCase()),
+          )))
+      .map((signal) => [signal.id, signal.chain, signal.contractAddress, signal.tokenSymbols])
+      .sort((left, right) => String(left[0]).localeCompare(String(right[0])));
+    const fingerprint = JSON.stringify({
+      retryVersion: twitterTokenResolutionRetryVersion,
+      targets: targets.map((signal) => {
+        const observation = tokenSignalObservation(signal);
+        return [signal.id, signal.tokenSymbols, observation.contractAddress, observation.chain];
+      }),
+      explicitEvidence,
+    });
+    if (twitterTokenResolutionFingerprintRef.current === fingerprint) {
+      return () => {
+        if (retryTimer !== null) window.clearTimeout(retryTimer);
+      };
+    }
+    twitterTokenResolutionFingerprintRef.current = fingerprint;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void enqueueResearchStoreOperation(() => invoke<ResearchTokenResolveResult>("research_resolve_tokens", {
+        request: {
+          signals: targets.map((signal) => {
+            const observation = tokenSignalObservation(signal);
+            return {
+              signal_id: signal.id,
+              chain: observation.chain,
+              contract_address: observation.contractAddress,
+              token_symbols: signal.tokenSymbols || [],
+              author_handle: normalizeTwitterHandle(signal.author),
+              text: signal.tweetText,
+              tweet_id: signal.tweetId,
+              source_url: signal.sourceUrl,
+              detected_at_ms: Number.isFinite(Date.parse(signal.detectedAt))
+                ? Date.parse(signal.detectedAt)
+                : undefined,
+            };
+          }),
+        },
+      })).then((result) => {
+        if (cancelled || result.resolutions.length === 0) return;
+        for (const resolution of result.resolutions) {
+          if (resolution.retryable) {
+            twitterTokenResolutionRetryAtRef.current.set(
+              resolution.signal_id,
+              Date.now() + tokenResolutionRetryDelayMs(resolution.source),
+            );
+          } else {
+            twitterTokenResolutionRetryAtRef.current.delete(resolution.signal_id);
+          }
+        }
+        const byId = new Map(result.resolutions.map((resolution) => [resolution.signal_id, resolution]));
+        setTwitterSignals((current) => current.map((signal) => {
+          const resolution = byId.get(signal.id);
+          if (!resolution) return signal;
+          if (resolution.retryable) return signal;
+          if (resolution.status === "resolved" && resolution.chain && resolution.contract_address) {
+            const observation = tokenSignalObservation(signal);
+            return {
+              ...signal,
+              chain: resolution.chain as TweetSignalChain,
+              contractAddress: resolution.contract_address,
+              observedChain: observation.chain as TweetSignalChain,
+              observedContractAddress: observation.contractAddress,
+              tokenSymbols: resolution.symbol ? [`$${resolution.symbol.replace(/^\$/u, "")}`] : signal.tokenSymbols,
+              resolutionStatus: "resolved",
+              resolutionConfidence: resolution.confidence,
+              resolutionSource: resolution.source,
+            };
+          }
+          if (resolution.status === "conflicted") {
+            const observation = tokenSignalObservation(signal);
+            return {
+              ...signal,
+              chain: observation.chain as TweetSignalChain,
+              contractAddress: observation.contractAddress,
+              resolutionStatus: "conflicted",
+              resolutionConfidence: resolution.confidence,
+              resolutionSource: resolution.source,
+            };
+          }
+          if (signal.resolutionStatus === "resolved" && signal.contractAddress) return signal;
+          return {
+            ...signal,
+            resolutionStatus: "pending",
+            resolutionConfidence: resolution.confidence,
+            resolutionSource: resolution.source,
+          };
+        }));
+      }).catch(() => {
+        if (!cancelled && twitterTokenResolutionFingerprintRef.current === fingerprint) {
+          twitterTokenResolutionFingerprintRef.current = "";
+          const retryAt = Date.now() + tokenResolutionRetryDelayMs();
+          for (const signal of targets) {
+            twitterTokenResolutionRetryAtRef.current.set(signal.id, retryAt);
+          }
+          if (retryTimer !== null) window.clearTimeout(retryTimer);
+          retryTimer = window.setTimeout(() => {
+            setTwitterTokenResolutionRetryVersion((version) => version + 1);
+          }, tokenResolutionRetryDelayMs());
+        }
+      });
+    }, 450);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
+    };
+  }, [twitterSignalStorageHydrated, twitterSignals, twitterTokenResolutionRetryVersion]);
+
+  useEffect(() => {
+    if (!twitterKolPendingSync) return;
+    const tab = twitterBrowserTabs.find((candidate) => candidate.id === twitterKolPendingSync.tabId);
+    if (!tab?.webviewOpen || tab.loading) return;
+    const timer = window.setTimeout(() => {
+      setTwitterKolPendingSync(null);
+      void captureTwitterSignalsFromActiveTab({
+        tabId: twitterKolPendingSync.tabId,
+        advance: false,
+      });
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [captureTwitterSignalsFromActiveTab, twitterBrowserTabs, twitterKolPendingSync]);
 
   useEffect(() => {
     if (!twitterSignalAutoScan) return;
     const intervalMs = Math.min(3600, Math.max(15, twitterSignalIntervalSec)) * 1000;
     const capture = () => {
-      if (!twitterDappTab || twitterDappTab.loading) {
+      if (!twitterCaptureTab.webviewOpen || twitterCaptureTab.loading) {
         setTwitterSignalCaptureStatus("waiting");
+        void ensureTwitterCaptureWebview();
         return;
       }
-      void captureTwitterSignalsFromActiveTab({ advance: true });
+      void captureTwitterSignalsFromActiveTab({
+        advance: true,
+        intent: "auto",
+        tabId: TWITTER_CAPTURE_TAB_ID,
+      });
     };
     capture();
     const timer = window.setInterval(capture, intervalMs);
     return () => window.clearInterval(timer);
   }, [
     captureTwitterSignalsFromActiveTab,
+    ensureTwitterCaptureWebview,
     twitterSignalAutoScan,
     twitterSignalIntervalSec,
-    twitterDappTab,
+    twitterCaptureTab,
+  ]);
+
+  useEffect(() => {
+    if (!twitterPendingCaptureIntent || twitterLoginRequiredOpen || !twitterScanCursorHydrated) return;
+    if (!twitterCaptureTab.webviewOpen) {
+      void ensureTwitterCaptureWebview();
+      return;
+    }
+    if (twitterCaptureTab.loading) return;
+    if (isTwitterLoginUrl(twitterCaptureTab.url)) {
+      if (!twitterLoginPageOpenedByPrompt) {
+        setTwitterLoginRequiredOpen(true);
+      }
+      return;
+    }
+    if ((twitterAuthByTabId[TWITTER_CAPTURE_TAB_ID] ?? "unknown") === "unauthenticated") {
+      requestTwitterLogin(twitterPendingCaptureIntent);
+      return;
+    }
+    if (twitterPendingCaptureIntent === "auto") {
+      setTwitterPendingCaptureIntent(null);
+      setTwitterSignalAutoScan(true);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void captureTwitterSignalsFromActiveTab({
+        advance: true,
+        notify: true,
+        intent: twitterPendingCaptureIntent,
+        tabId: TWITTER_CAPTURE_TAB_ID,
+      });
+    }, 900);
+    return () => window.clearTimeout(timer);
+  }, [
+    captureTwitterSignalsFromActiveTab,
+    ensureTwitterCaptureWebview,
+    requestTwitterLogin,
+    twitterAuthByTabId,
+    twitterCaptureTab,
+    twitterLoginRequiredOpen,
+    twitterLoginPageOpenedByPrompt,
+    twitterPendingCaptureIntent,
+    twitterScanCursorHydrated,
   ]);
 
   useEffect(() => () => {
     twitterSignalCaptureRequestIdRef.current = null;
+    twitterSignalCaptureIntentRef.current = null;
     if (twitterSignalCaptureTimeoutRef.current !== null) {
       window.clearTimeout(twitterSignalCaptureTimeoutRef.current);
     }
@@ -7564,6 +9139,22 @@ export default function Home() {
     let cancelled = false;
     Promise.all([
       listen<DappTabUrlEvent>("dapp://tab-url", (event) => {
+        if (event.payload.tab_id === TWITTER_CAPTURE_TAB_ID) {
+          setTwitterCaptureTab({
+            webviewOpen: true,
+            loading: !event.payload.loaded,
+            url: event.payload.url,
+          });
+          if (event.payload.loaded) {
+            const onLoginPage = isTwitterLoginUrl(event.payload.url);
+            setTwitterAuthByTabId((current) => ({
+              ...current,
+              [TWITTER_CAPTURE_TAB_ID]: onLoginPage ? "unauthenticated" : "unknown",
+            }));
+            if (!onLoginPage) setTwitterLoginRequiredOpen(false);
+          }
+          return;
+        }
         setDappTabs((tabs) => tabs.map((tab) =>
           tab.id === event.payload.tab_id
             ? {
@@ -7584,6 +9175,17 @@ export default function Home() {
             }
             : tab,
         ));
+        if (event.payload.loaded && event.payload.tab_id.startsWith("twitter-") && isTwitterPageUrl(event.payload.url)) {
+          setTwitterAuthByTabId((current) => {
+            const previous = current[event.payload.tab_id] ?? "unknown";
+            const next = isTwitterLoginUrl(event.payload.url)
+              ? "unauthenticated"
+              : previous === "unauthenticated"
+                ? "unknown"
+                : previous;
+            return next === previous ? current : { ...current, [event.payload.tab_id]: next };
+          });
+        }
       }),
       listen<DappTabTitleEvent>("dapp://tab-title", (event) => {
         setDappTabs((tabs) => tabs.map((tab) =>
@@ -7599,14 +9201,16 @@ export default function Home() {
       }),
       listen<DappNewWindowEvent>("dapp://new-window", (event) => {
         if (event.payload.source_tab_id.startsWith("twitter-")) {
-          openUrlInTwitterBrowserTab(event.payload.url);
+          openUrlInTwitterBrowserTabRef.current(event.payload.url);
         } else {
-          openUrlInDappTab(event.payload.url);
+          openUrlInDappTabRef.current(event.payload.url);
         }
       }),
       listen<DappTabTextEvent>("dapp://tab-text", (event) => {
         if (event.payload.request_id !== twitterSignalCaptureRequestIdRef.current) return;
+        const captureIntent = twitterSignalCaptureIntentRef.current;
         twitterSignalCaptureRequestIdRef.current = null;
+        twitterSignalCaptureIntentRef.current = null;
         const text = event.payload.text || "";
         const capturedTweets = Array.isArray(event.payload.tweets) ? event.payload.tweets : [];
         const notify = twitterSignalNotifyCaptureRef.current;
@@ -7617,22 +9221,78 @@ export default function Home() {
           twitterSignalCaptureTimeoutRef.current = null;
         }
         setTwitterSignalCaptureBusy(false);
+        if (typeof event.payload.authenticated === "boolean") {
+          setTwitterAuthByTabId((current) => ({
+            ...current,
+            [event.payload.tab_id]: event.payload.authenticated ? "authenticated" : "unauthenticated",
+          }));
+        }
+        if (event.payload.authenticated === false && captureIntent) {
+          setTwitterSignalAutoScan(false);
+          setTwitterPendingCaptureIntent(captureIntent);
+          setTwitterLoginPageOpenedByPrompt(true);
+          setTwitterLoginRequiredOpen(true);
+          setTwitterSignalCaptureStatus("waiting");
+          setTwitterSignalCaptureError("");
+          setTwitterCaptureTab((current) => ({ ...current, url: TWITTER_LOGIN_URL, loading: true }));
+          void invoke("dapp_navigate_tab", { tabId: TWITTER_CAPTURE_TAB_ID, url: TWITTER_LOGIN_URL }).catch((error) => {
+            setTwitterCaptureTab((current) => ({ ...current, loading: false }));
+            setTwitterSignalCaptureError(errorMessage(error, twitterTranslateRef.current("features.twitter-signals.openLoginFailed", "无法打开 X 登录页面")));
+          });
+          return;
+        }
+        if (captureIntent) {
+          setTwitterPendingCaptureIntent(null);
+          setTwitterLoginPageOpenedByPrompt(false);
+          setTwitterLoginRequiredOpen(false);
+          if (captureIntent === "auto") setTwitterSignalAutoScan(true);
+        }
         setTwitterSignalSource(text);
         const capturedAt = new Date(event.payload.captured_at_ms);
-        const signals = event.payload.tweets
+        const hasStructuredTweets = capturedTweets.length > 0;
+        const signals = hasStructuredTweets
           ? parseCapturedTweetTokenSignals(capturedTweets, "", capturedAt)
           : parseTweetTokenSignals(text, "", capturedAt);
-        const visibleSignals = filterTweetTokenSignals(signals, twitterWatchedUsers);
+        const visibleSignals = filterTweetTokenSignals(signals, twitterWatchedUsersRef.current);
+        const visibleTweetCount = groupTweetSignalsByTweet(visibleSignals).length;
+        const capturedTweetCount = hasStructuredTweets
+          ? capturedTweets.length
+          : groupTweetSignalsByTweet(signals).length;
         setTwitterSignals((existing) => mergeTweetTokenSignals(existing, signals));
+        setTwitterSignalPage(1);
+        setTwitterKols((existing) => {
+          const withAuthors = mergeCapturedTwitterAuthors(existing, capturedTweets, capturedAt);
+          return event.payload.profile
+            ? mergeCapturedTwitterProfile(withAuthors, event.payload.profile, capturedAt)
+            : withAuthors;
+        });
+        void enqueueResearchStoreOperation(() => invoke("research_ingest", {
+          request: {
+            source_url: event.payload.tab_id === TWITTER_CAPTURE_TAB_ID
+              ? TWITTER_CAPTURE_HOME_URL
+              : event.payload.url,
+            captured_at_ms: event.payload.captured_at_ms,
+            kols: twitterKolsRef.current.map(twitterKolResearchInput),
+            tweets: capturedTweets,
+            signals: signals.filter(hasValidTweetSignalIdentity).map(tweetSignalResearchInput),
+            backfill_complete: Boolean(event.payload.backfill_complete),
+          },
+        })).then(() => {
+          if (event.payload.tab_id === TWITTER_CAPTURE_TAB_ID && event.payload.backfill_complete) {
+            twitterSignalBackfillCompleteRef.current = true;
+          }
+        }).catch((error) => {
+          setTwitterSignalCaptureError(errorMessage(error, twitterTranslateRef.current("features.twitter-signals.knowledgeSaveFailed", "推文已显示，但写入本地知识库失败")));
+        });
         setTwitterSignalLastScanAt(new Date(event.payload.captured_at_ms).toISOString());
-        setTwitterSignalLastTweetCount(capturedTweets.length);
+        setTwitterSignalLastTweetCount(capturedTweetCount);
         setTwitterSignalCaptureStatus(visibleSignals.length > 0 ? "success" : "empty");
         setTwitterSignalCaptureError("");
         if (notify) {
           toast.success(
             visibleSignals.length > 0
-              ? tf("features.twitter-signals.captureSuccess", "本轮遍历提取了 {count} 条代币线索", { count: visibleSignals.length })
-              : tf("features.twitter-signals.captureEmpty", "本轮遍历没有提取到合约地址或代币代码"),
+              ? twitterTranslateRef.current("features.twitter-signals.captureSuccess", "本轮遍历提取了 {count} 条代币线索", { count: visibleTweetCount })
+              : twitterTranslateRef.current("features.twitter-signals.captureEmpty", "本轮遍历没有提取到合约地址或代币代码"),
           );
         }
       }),
@@ -7649,7 +9309,7 @@ export default function Home() {
       cancelled = true;
       unlisteners.forEach((cleanup) => cleanup());
     };
-  }, [openUrlInDappTab, openUrlInTwitterBrowserTab, tf, twitterWatchedUsers]);
+  }, []);
 
   useEffect(() => {
     void setActiveNativeDappTab();
@@ -7688,6 +9348,7 @@ export default function Home() {
       twitterBrowserTabBarRef.current,
       twitterBrowserAddressBarRef.current,
       twitterBrowserViewportRef.current,
+      twitterLoginViewportRef.current,
     ].filter((element): element is HTMLDivElement => Boolean(element));
     const observer = typeof ResizeObserver !== "undefined" && observedElements.length > 0
       ? new ResizeObserver(sync)
@@ -7721,6 +9382,8 @@ export default function Home() {
   const rejectDappConnectRequest = async () => {
     const request = dappConnectRequest;
     if (!request) return;
+    if (dappConnectResolutionInFlightRef.current) return;
+    dappConnectResolutionInFlightRef.current = request.request_id;
     setDappSignBusy(true);
     try {
       await resolveDappConnectRequest(request, {
@@ -7732,6 +9395,9 @@ export default function Home() {
     } catch (error) {
       toast.error(errorMessage(error, "拒绝 DApp 连接失败"));
     } finally {
+      if (dappConnectResolutionInFlightRef.current === request.request_id) {
+        dappConnectResolutionInFlightRef.current = null;
+      }
       setDappSignBusy(false);
     }
   };
@@ -7744,22 +9410,102 @@ export default function Home() {
       toast.error(tf("features.dapp-store.noWallet", "Select a wallet first."));
       return;
     }
+    if (dappConnectResolutionInFlightRef.current) return;
+    dappConnectResolutionInFlightRef.current = request.request_id;
     setDappSignBusy(true);
     try {
       setCurrentWallet(wallet.id);
-      await resolveDappConnectRequest(request, {
-        approved: true,
-        public_key: wallet.public_key,
-      });
+      if (isTauriWebview()) {
+        const origin = new URL(request.app_url).origin.toLowerCase();
+        const network = request.network.toLowerCase();
+        const permissionAlreadyExisted = dappPermissions.some((item) =>
+          item.origin.toLowerCase() === origin
+          && item.walletId === wallet.id
+          && item.network === network,
+        );
+        const permission = await persistPermissionBeforeApproval({
+          permissionAlreadyExisted,
+          grant: () => invoke<DappPermission>("dapp_permission_grant", {
+            permission: {
+              origin: request.app_url,
+              walletId: wallet.id,
+              walletPublicKey: wallet.public_key,
+              network: request.network,
+              appName: request.app_name,
+            },
+          }),
+          approve: () => resolveDappConnectRequest(request, {
+            approved: !applicationLockedRef.current,
+            public_key: applicationLockedRef.current ? undefined : wallet.public_key,
+            error: applicationLockedRef.current ? "APPLICATION_LOCKED" : undefined,
+          }).then(() => {
+            if (applicationLockedRef.current) throw new Error("APPLICATION_LOCKED");
+          }),
+          revoke: (created) => invoke("dapp_permission_revoke", {
+            origin: created.origin,
+            walletId: created.walletId,
+            network: created.network,
+          }),
+        });
+        const legacyPermission = dappPermissions.find((item) =>
+          item.origin === permission.origin
+          && item.walletId === wallet.public_key
+          && item.network === permission.network,
+        );
+        if (legacyPermission) {
+          void invoke("dapp_permission_revoke", {
+            origin: legacyPermission.origin,
+            walletId: legacyPermission.walletId,
+            network: legacyPermission.network,
+          }).catch(() => undefined);
+        }
+        setDappPermissions((permissions) => [permission, ...permissions.filter((item) =>
+          !(
+            item.origin === permission.origin
+            && item.network === permission.network
+            && (item.walletId === wallet.id || item.walletId === wallet.public_key)
+          ),
+        )]);
+      } else {
+        await resolveDappConnectRequest(request, {
+          approved: true,
+          public_key: wallet.public_key,
+        });
+      }
       toast.success(tf("features.dapp-store.connectSuccess", "DApp 已连接钱包"));
       setDappConnectRequest(null);
       setDappConnectWalletId("");
     } catch (error) {
       toast.error(errorMessage(error, "DApp 连接失败"));
     } finally {
+      if (dappConnectResolutionInFlightRef.current === request.request_id) {
+        dappConnectResolutionInFlightRef.current = null;
+      }
       setDappSignBusy(false);
     }
   };
+  approveDappConnectRequestRef.current = approveDappConnectRequest;
+
+  useEffect(() => {
+    if (!dappConnectRequest || applicationLocked || dappSignBusy) return;
+    const wallet = wallets.find((item) => item.id === (dappConnectWalletId || effectiveWalletId)) || wallets[0];
+    if (!wallet) return;
+    let origin = "";
+    try {
+      origin = new URL(dappConnectRequest.app_url).origin.toLowerCase();
+    } catch {
+      return;
+    }
+    const permitted = dappPermissions.some((permission) =>
+      permission.origin.toLowerCase() === origin
+      && dappPermissionMatchesWallet(permission, wallet)
+      && permission.network === dappConnectRequest.network.toLowerCase(),
+    );
+    if (permitted && autoApprovedDappRequestIdRef.current !== dappConnectRequest.request_id) {
+      autoApprovedDappRequestIdRef.current = dappConnectRequest.request_id;
+      void approveDappConnectRequestRef.current?.();
+    }
+  }, [applicationLocked, dappConnectRequest, dappConnectWalletId, dappPermissions, dappSignBusy, effectiveWalletId, wallets]);
 
   const rejectDappSignRequest = async () => {
     const request = dappSignRequest;
@@ -7838,6 +9584,9 @@ export default function Home() {
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.error || tf("features.dapp-store.signFailed", "DApp 交易签名失败"));
+      }
+      if (applicationLockedRef.current) {
+        throw new Error(tf("features.settings.applicationLocked", "应用已锁定，请解锁后重试"));
       }
       const result: DappSignResult = {
         approved: true,
@@ -8042,6 +9791,10 @@ export default function Home() {
   const handleSelectForm = (formId: string) => {
     setMobileMenuOpen(false);
     clearForm();
+    if (formId === "settings") {
+      setSettingsSection("root");
+      setSettingsSearch("");
+    }
     if (formId === "program-deploy") {
       resetProgramDeploySession();
     }
@@ -8090,6 +9843,12 @@ export default function Home() {
     }
   };
 
+  const openChromeImportFromSettings = () => {
+    handleSelectForm("twitter-signals");
+    openTwitterLoginInBrowser();
+    window.setTimeout(() => setTwitterChromeImportDialogRequest((request) => request + 1), 120);
+  };
+
   const handleOpenForm = (formId: string, preset: FormState = {}, sourceForm?: string | null) => {
     if (formId === "program-deploy") {
       resetProgramDeploySession();
@@ -8134,6 +9893,291 @@ export default function Home() {
     });
     if (authFormsWithWallets.has(formId)) {
       setAuthMethod((prev) => ({ ...prev, [formId]: "keystore" }));
+    }
+  };
+
+  const portfolioEvmChains = useMemo(() => {
+    const enabledIds = new Set(visibleEvmChainIds(evmChains, appPreferences));
+    const enabledChains = evmChains.filter((chain) => enabledIds.has(chain.chain_id));
+    const mainnetChains = enabledChains.filter((chain) => !chain.testnet);
+    return mainnetChains.length > 0 ? mainnetChains : enabledChains;
+  }, [appPreferences, evmChains]);
+
+  const unifiedWalletLabels = useMemo<UnifiedWalletLabels>(() => ({
+    accountAddresses: tf("features.unified-wallet.accountAddresses", "Wallet addresses"),
+    allAssets: tf("features.unified-wallet.allAssets", "Assets across networks"),
+    addAndContinue: tf("features.unified-wallet.addAndContinue", "Add and continue"),
+    addingAsset: tf("features.unified-wallet.addingAsset", "Checking asset..."),
+    address: tf("features.unified-wallet.address", "Address"),
+    back: t("common.back"),
+    close: tf("features.unified-wallet.close", "Close"),
+    contractHint: tf("features.unified-wallet.contractHint", "Add this ERC-20 contract on a network"),
+    copy: t("common.copy"),
+    copied: t("common.copied"),
+    current: tf("features.unified-wallet.current", "Current"),
+    network: tf("features.unified-wallet.network", "Network"),
+    noEvmNetworks: tf("features.unified-wallet.noEvmNetworks", "No EVM networks are available"),
+    noAssets: tf("features.unified-wallet.noAssets", "No assets available"),
+    noAddresses: tf("features.unified-wallet.noAddresses", "No receiving addresses available"),
+    qrCode: tf("features.unified-wallet.qrCode", "QR code"),
+    qrFailed: tf("features.unified-wallet.qrFailed", "Unable to generate the QR code. Copy the address instead."),
+    receiveAddress: tf("features.unified-wallet.receiveAddress", "Receive address"),
+    receiveNetworkWarning: tf("features.unified-wallet.receiveNetworkWarning", "Make sure the sender uses this exact network."),
+    refresh: t("features.wallet-list.refreshAssets"),
+    searchAssets: tf("features.unified-wallet.searchAssets", "Search assets, networks, mint, or contract"),
+    searchEmpty: tf("features.unified-wallet.searchEmpty", "No matching assets"),
+    selectAsset: tf("features.unified-wallet.selectAsset", "Select an asset"),
+    send: t("features.wallet-list.send"),
+    testnet: tf("features.unified-wallet.testnet", "testnet"),
+    tracked: tf("features.unified-wallet.tracked", "Tracked"),
+    untracked: tf("features.unified-wallet.untracked", "Not added"),
+  }), [t, tf]);
+
+  const walletChainAddresses = useMemo<WalletChainAddress[]>(() => (
+    effectiveWallet
+      ? [
+        {
+          id: `solana:${effectiveNetwork}`,
+          family: "solana" as const,
+          chainName: effectiveNetwork === "mainnet" ? "Solana" : `Solana ${effectiveNetwork}`,
+          symbol: "SOL",
+          address: effectiveWallet.public_key,
+          logoUri: SOLANA_CHAIN_LOGO_URI,
+          testnet: effectiveNetwork !== "mainnet",
+        },
+        ...(effectiveWallet.evm_address
+          ? portfolioEvmChains.map((chain) => ({
+              id: `evm:${chain.chain_id}`,
+              family: "evm" as const,
+              chainId: chain.chain_id,
+              chainName: chain.name,
+              symbol: chain.native_symbol,
+              address: effectiveWallet.evm_address || "",
+              logoUri: chainLogoUri(chain.chain_id),
+              testnet: chain.testnet,
+            }))
+          : []),
+        ]
+      : []
+  ), [effectiveNetwork, effectiveWallet, portfolioEvmChains]);
+
+  const selectedWalletChainId = currentWalletNetwork === "solana"
+    ? `solana:${effectiveNetwork}`
+    : currentWalletNetwork;
+  const selectedWalletChain = walletChainAddresses.find((item) => item.id === selectedWalletChainId)
+    ?? walletChainAddresses[0];
+  const selectWalletChain = (item: WalletChainAddress) => {
+    if (!effectiveWallet) return;
+    setCurrentWallet(effectiveWallet.id);
+    if (item.family === "evm" && item.chainId) {
+      selectEvmChain(String(item.chainId), { openChainView: false });
+      return;
+    }
+    setCurrentWalletNetwork("solana");
+    saveCurrentWalletNetwork("solana");
+  };
+
+  const unifiedOwnedAssets = useMemo<UnifiedWalletAsset[]>(() => {
+    if (!effectiveWallet) return [];
+    const result: UnifiedWalletAsset[] = [];
+    const currentSolAssets =
+      walletAssets?.address === effectiveWallet.public_key && walletAssets.network === effectiveNetwork
+        ? walletAssets
+        : null;
+    const solBalance = currentSolAssets?.solBalance && currentSolAssets.solBalance !== "--"
+      ? currentSolAssets.solBalance
+      : "--";
+    result.push({
+      id: `solana:${effectiveNetwork}:native`,
+      family: "solana",
+      chainName: effectiveNetwork === "mainnet" ? "Solana" : `Solana ${effectiveNetwork}`,
+      chainSymbol: "SOL",
+      symbol: "SOL",
+      name: "Solana",
+      balance: solBalance,
+      rawBalance: solBalance === "--" ? "" : solBalance,
+      decimals: 9,
+      logoUri: SOLANA_TOKEN_LOGO_URI,
+      tracked: true,
+      loading: Boolean(currentSolAssets?.loading || currentSolAssets?.refreshing || !currentSolAssets),
+      testnet: effectiveNetwork !== "mainnet",
+    });
+    const solTokens = currentSolAssets?.tokens ?? [];
+    const solMints = Array.from(new Set(solTokens.map((token) => token.mint)));
+    for (const mint of solMints) {
+      const token = solTokens.find((item) => item.mint === mint);
+      const balance = aggregateTokenBalance(solTokens, mint);
+      if (!token || !balance) continue;
+      result.push({
+        id: `solana:${effectiveNetwork}:${mint}`,
+        family: "solana",
+        chainName: effectiveNetwork === "mainnet" ? "Solana" : `Solana ${effectiveNetwork}`,
+        chainSymbol: "SOL",
+        symbol: tokenDisplaySymbol(token),
+        name: tokenDisplayName(token),
+        balance: balance.amount,
+        rawBalance: balance.rawAmount,
+        decimals: balance.decimals,
+        tokenAddress: mint,
+        logoUri: tokenLogoUri(token),
+        tracked: true,
+        testnet: effectiveNetwork !== "mainnet",
+      });
+    }
+    if (effectiveWallet.evm_address) {
+      for (const chain of portfolioEvmChains) {
+        const snapshot = evmAssetsByChain[chain.chain_id];
+        const rawNativeBalance = snapshot?.native_balance_wei ?? "";
+        result.push({
+          id: `evm:${chain.chain_id}:native`,
+          family: "evm",
+          chainId: chain.chain_id,
+          chainName: chain.name,
+          chainSymbol: chain.native_symbol,
+          symbol: chain.native_symbol,
+          name: chain.name,
+          balance: rawNativeBalance ? rawTokenAmountToUi(rawNativeBalance, 18) : "--",
+          rawBalance: rawNativeBalance,
+          decimals: 18,
+          logoUri: chainLogoUri(chain.chain_id),
+          tracked: true,
+          loading: !snapshot && evmPortfolioRefreshing,
+          testnet: chain.testnet,
+        });
+        for (const token of snapshot?.tokens ?? []) {
+          result.push({
+            id: `evm:${chain.chain_id}:${token.contract_address.toLowerCase()}`,
+            family: "evm",
+            chainId: chain.chain_id,
+            chainName: chain.name,
+            chainSymbol: chain.native_symbol,
+            symbol: token.symbol,
+            name: token.name,
+            balance: rawTokenAmountToUi(token.balance, token.decimals),
+            rawBalance: token.balance,
+            decimals: token.decimals,
+            tokenAddress: token.contract_address,
+            tracked: true,
+            testnet: chain.testnet,
+          });
+        }
+      }
+    }
+    return result;
+  }, [effectiveNetwork, effectiveWallet, evmAssetsByChain, evmPortfolioRefreshing, portfolioEvmChains, walletAssets]);
+
+  const unifiedSearchAssets = useMemo<UnifiedWalletAsset[]>(() => {
+    const assets = [...unifiedOwnedAssets];
+    const knownIds = new Set(assets.map((asset) => asset.id));
+    const devnetUsdcMint = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+    const searchableSolanaTokens = LOCAL_TOKEN_METADATA.filter((token) => {
+      if (effectiveNetwork === "mainnet") return token.mint !== devnetUsdcMint;
+      if (effectiveNetwork === "devnet") {
+        return token.mint === devnetUsdcMint || token.mint === "So11111111111111111111111111111111111111112";
+      }
+      return token.mint === "So11111111111111111111111111111111111111112";
+    });
+    for (const token of searchableSolanaTokens) {
+      const id = `solana:${effectiveNetwork}:${token.mint}`;
+      if (knownIds.has(id)) continue;
+      assets.push({
+        id,
+        family: "solana",
+        chainName: effectiveNetwork === "mainnet" ? "Solana" : `Solana ${effectiveNetwork}`,
+        chainSymbol: "SOL",
+        symbol: token.symbol,
+        name: token.name,
+        balance: "0",
+        rawBalance: "0",
+        decimals: 0,
+        tokenAddress: token.mint,
+        logoUri: token.logoUri,
+        tracked: false,
+        testnet: effectiveNetwork !== "mainnet",
+      });
+    }
+    return assets;
+  }, [effectiveNetwork, unifiedOwnedAssets]);
+
+  const openUnifiedAssetForSend = (asset: UnifiedWalletAsset) => {
+    if (!effectiveWallet) return;
+    if (asset.family === "solana") {
+      if (asset.tokenAddress) {
+        handleOpenForm("transfer-token", {
+          wallet_id: effectiveWallet.id,
+          network: effectiveNetwork,
+          mint: asset.tokenAddress,
+          decimals: asset.decimals,
+          token_balance: asset.balance,
+          token_raw_amount: asset.rawBalance,
+        }, "wallet-send");
+      } else {
+        handleOpenForm("transfer-sol", {
+          wallet_id: effectiveWallet.id,
+          network: effectiveNetwork,
+        }, "wallet-send");
+      }
+      return;
+    }
+    const chain = portfolioEvmChains.find((item) => item.chain_id === asset.chainId);
+    if (!chain) return;
+    selectEvmChain(String(chain.chain_id));
+    setEvmRecipient("");
+    setEvmAmount("");
+    setEvmTokenContract(asset.tokenAddress || "");
+    setEvmPreview(null);
+    setEvmSubmitResult(null);
+    setEvmTransactionStatus(null);
+    handleOpenForm("evm-workbench", {
+      unified_evm_send: 1,
+      evm_asset_decimals: asset.decimals,
+      evm_asset_symbol: asset.symbol,
+      evm_asset_chain: chain.name,
+    }, "wallet-send");
+  };
+
+  const addEvmContractFromUnifiedSend = async (chainId: number, contract: string) => {
+    if (!effectiveWallet?.evm_address) throw new Error("This wallet has no EVM account");
+    const requestId = evmTokenLookupRequestIdRef.current + 1;
+    evmTokenLookupRequestIdRef.current = requestId;
+    const walletId = effectiveWallet.id;
+    const chain = portfolioEvmChains.find((item) => item.chain_id === chainId);
+    if (!chain) throw new Error("Select an EVM network");
+    const stored = loadStoredDesktopEvmTokens(chainId, effectiveWallet.evm_address);
+    const contracts = Array.from(new Map([...stored, contract].map((item) => [item.toLowerCase(), item])).values());
+    try {
+      const snapshot = await loadEvmAssetSnapshot(chain, effectiveWallet.evm_address, [contract], false);
+      if (
+        evmTokenLookupRequestIdRef.current !== requestId ||
+        activeWalletContextRef.current.walletId !== walletId
+      ) return;
+      const token = snapshot.tokens.find((item) => item.contract_address.toLowerCase() === contract.toLowerCase());
+      if (!token) {
+        throw new Error(tf("features.unified-wallet.assetLookupFailed", "Unable to query this token"));
+      }
+      saveStoredDesktopEvmTokens(chainId, effectiveWallet.evm_address, contracts);
+      selectEvmChain(String(chainId));
+      setEvmAssetsByChain((previous) => ({
+        ...previous,
+        [chainId]: mergeEvmAssetSnapshotTokens(previous[chainId], snapshot),
+      }));
+      setEvmAssets((previous) => mergeEvmAssetSnapshotTokens(previous, snapshot));
+      setEvmTokenContracts(contracts);
+      setEvmRecipient("");
+      setEvmAmount("");
+      setEvmTokenContract(contract);
+      setEvmPreview(null);
+      setEvmSubmitResult(null);
+      setEvmTransactionStatus(null);
+      handleOpenForm("evm-workbench", {
+        unified_evm_send: 1,
+        evm_asset_decimals: token.decimals,
+        evm_asset_symbol: token.symbol,
+        evm_asset_chain: chain.name,
+      }, "wallet-send");
+    } catch (error) {
+      toast.error(errorMessage(error, tf("features.unified-wallet.assetLookupFailed", "Unable to query this token")));
+      throw error;
     }
   };
 
@@ -9943,7 +11987,8 @@ export default function Home() {
       } else if (passwordPrompt.kind === "export-mnemonic") {
         await handleExportMnemonic(passwordPrompt.wallet, password);
       } else {
-        await handleMigrateKeystore(passwordPrompt.wallet, password, migrationNewPassword);
+        const changed = await handleMigrateKeystore(passwordPrompt.wallet, password, migrationNewPassword);
+        if (!changed) return;
       }
 
       setPasswordPrompt(null);
@@ -10005,6 +12050,7 @@ export default function Home() {
     clearProgramKeypairMaterial();
     if (target === "wallet-list") {
       setTokenActionContext(null);
+      setWalletChainView("all");
     }
     setSelectedForm(target);
     setBackTarget(defaultBackTarget(target));
@@ -10039,9 +12085,15 @@ export default function Home() {
           throw new Error("copy failed");
         }
       }
+      if (copiedResetTimerRef.current !== null) {
+        window.clearTimeout(copiedResetTimerRef.current);
+      }
       setCopied(id);
       toast.success(t("common.copiedToClipboard"));
-      setTimeout(() => setCopied(null), 2000);
+      copiedResetTimerRef.current = window.setTimeout(() => {
+        setCopied((current) => current === id ? null : current);
+        copiedResetTimerRef.current = null;
+      }, 2000);
     } catch {
       toast.error(t("errors.copyFailed"));
     }
@@ -10842,7 +12894,7 @@ export default function Home() {
               await loadWallets();
               toast.success(t("features.create-keystore.success"));
               const mnemonic = String(data.mnemonic || "").trim();
-              if (mnemonic) {
+              if (mnemonic && !applicationLockedRef.current) {
                 setPrivateKeyExportMode("simple");
                 setPrivateKeySegmentCount(DEFAULT_PRIVATE_KEY_SEGMENTS);
                 setPrivateKeyQrRevealed(false);
@@ -13263,8 +15315,7 @@ export default function Home() {
                               <Pencil className="h-3.5 w-3.5" />
                               {t("formUi.editWalletMetadata")}
                             </button>
-                            {wallet.keystore_version === "legacy_v1" && (
-                              <button
+                            <button
                                 type="button"
                                 onClick={(event) => {
                                   event.stopPropagation();
@@ -13277,7 +15328,6 @@ export default function Home() {
                                 <ShieldCheck className="h-3.5 w-3.5" />
                                 {t("features.settings.migrateKeystore")}
                               </button>
-                            )}
                             <button
                               type="button"
                               onClick={(event) => {
@@ -13382,8 +15432,9 @@ export default function Home() {
       const renderChainViewTabs = () => (
         <div className="inline-flex rounded-lg border border-white/10 bg-white/5 p-1">
           {[
+            { id: "all" as const, label: tf("features.wallet-list.chainViewAll", "All assets") },
             { id: "solana" as const, label: t("features.wallet-list.chainViewSolana") },
-            { id: "evm" as const, label: activeEvmChain?.name || t("features.wallet-list.chainViewOtherChains") },
+            { id: "evm" as const, label: t("features.wallet-list.chainViewOtherChains") },
           ].map((item) => (
             <button
               key={item.id}
@@ -13437,7 +15488,7 @@ export default function Home() {
                   type="button"
                   onClick={() => {
                     setEvmCustomChainEditorOpen(false);
-                    handleSelectForm("evm-workbench");
+                    handleOpenForm("create-wallet", {}, "wallet-list");
                   }}
                   className="mt-6 inline-flex items-center justify-center gap-2 rounded-xl bg-white px-4 py-3 text-sm font-semibold text-black hover:bg-gray-200"
                 >
@@ -13626,7 +15677,7 @@ export default function Home() {
                         void loadWallets();
                         return;
                       }
-                      handleOpenForm("create-keystore", {}, "wallet-list");
+                      handleOpenForm("create-wallet", {}, "wallet-list");
                     }}
                     className="rounded-xl bg-white px-4 py-3 text-sm font-semibold text-black hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-50"
                   >
@@ -13643,6 +15694,86 @@ export default function Home() {
                 </div>
               )}
             </div>
+          </div>
+        );
+      }
+
+      if (walletChainView === "all") {
+        const unifiedAssetsRefreshing = Boolean(
+          walletAssets?.loading || walletAssets?.refreshing || evmPortfolioRefreshing,
+        );
+        const refreshUnifiedAssets = () => {
+          refreshCurrentWalletAssets(effectiveWallet);
+          void refreshEvmPortfolio();
+        };
+        let unifiedPortfolioError: string | null = null;
+        if (evmPortfolioError === "all") {
+          unifiedPortfolioError = tf("features.unified-wallet.portfolioFailed", "EVM assets could not be refreshed. Try again later.");
+        } else if (evmPortfolioError === "partial") {
+          unifiedPortfolioError = tf("features.unified-wallet.portfolioPartial", "Some EVM networks did not respond. Available balances are still shown.");
+        }
+        return (
+          <div className="space-y-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              {renderChainViewTabs()}
+            </div>
+
+            <section className="overflow-visible border-white/10 bg-transparent lg:rounded-lg lg:border lg:bg-black/50">
+              <div className="rounded-lg border border-white/10 bg-zinc-900 p-5 lg:rounded-none lg:border-0 lg:p-4">
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white text-sm font-bold text-black">
+                    {walletAvatarText(effectiveWallet)}
+                  </span>
+                  <WalletAddressPopover
+                    addresses={walletChainAddresses}
+                    copiedId={copied}
+                    labels={unifiedWalletLabels}
+                    onCopy={copyToClipboard}
+                    onSelect={selectWalletChain}
+                    selectedId={selectedWalletChain?.id ?? ""}
+                    trigger={(
+                      <div className="min-w-0">
+                        <div className="flex min-w-0 flex-wrap items-center gap-2">
+                          <h3 className="max-w-full truncate text-lg font-semibold text-white">{effectiveWallet.name}</h3>
+                          <span className="rounded bg-white/10 px-2 py-0.5 text-xs text-gray-300">
+                            {unifiedWalletLabels.current} · {selectedWalletChain?.chainName ?? "Solana"}
+                          </span>
+                        </div>
+                        <p className="mt-1 truncate font-mono text-xs text-gray-400">
+                          {shortAddress(selectedWalletChain?.address ?? effectiveWallet.public_key)}
+                        </p>
+                      </div>
+                    )}
+                  />
+                </div>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-3 lg:mt-0 lg:gap-0 lg:border-t lg:border-white/10 lg:bg-white/[0.03]">
+                <button
+                  type="button"
+                  onClick={() => handleOpenForm("wallet-send", {}, "wallet-list")}
+                  className="flex h-16 min-w-0 items-center justify-center gap-2 rounded-lg bg-white/10 px-3 text-sm font-semibold text-gray-100 hover:bg-white/15 lg:rounded-none lg:border-r lg:border-white/10 lg:bg-transparent lg:hover:bg-white/10"
+                >
+                  <Send className="h-5 w-5" />
+                  {unifiedWalletLabels.send}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleOpenForm("wallet-receive", {}, "wallet-list")}
+                  className="flex h-16 min-w-0 items-center justify-center gap-2 rounded-lg bg-white/10 px-3 text-sm font-semibold text-gray-100 hover:bg-white/15 lg:rounded-none lg:bg-transparent lg:hover:bg-white/10"
+                >
+                  <Download className="h-5 w-5" />
+                  {t("features.wallet-list.receive")}
+                </button>
+              </div>
+            </section>
+
+            <UnifiedAssetList
+              assets={unifiedOwnedAssets}
+              error={unifiedPortfolioError}
+              labels={unifiedWalletLabels}
+              refreshing={unifiedAssetsRefreshing}
+              onRefresh={refreshUnifiedAssets}
+            />
           </div>
         );
       }
@@ -15959,121 +18090,80 @@ export default function Home() {
 
     const renderEvmWorkbench = () => (
       <div className="space-y-5">
-        <section className="space-y-3 rounded-lg border border-white/10 bg-white/[0.03] p-4">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <p className="text-xs font-semibold uppercase text-emerald-300">{activeEvmChain?.name || t("features.wallet-list.currentPublicChain")}</p>
-              <h2 className="text-2xl font-semibold text-white">{tf("features.evm-workbench.title", "Multi-chain Wallet")}</h2>
-              <p className="mt-1 text-sm text-gray-400">
-                {tf("features.evm-workbench.subtitle", "Ethereum, BNB Smart Chain, Polygon, Base, Arbitrum, and other supported public chains.")}
-              </p>
-            </div>
-            <button type="button" onClick={() => void loadEvmChains()} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-200 hover:bg-white/10">
-              <RefreshCw className="h-4 w-4" />
-              Refresh chains
-            </button>
-          </div>
-          {evmError && <div className="rounded-lg border border-red-400/30 bg-red-500/10 p-3 text-sm text-red-100">{evmError}</div>}
-          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-            <label className="space-y-1 text-sm text-gray-300">
-              Chain
-              <select
-                value={evmChainId}
-                onChange={(event) => selectEvmChain(event.target.value)}
-                className="h-10 w-full rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none"
-              >
-                {evmChains.map((chain) => (
-                  <option key={chain.chain_id} value={chain.chain_id}>
-                    {chain.name} ({chain.chain_id}) {chain.testnet ? "testnet" : "mainnet"}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-sm text-gray-300">
-              <p className="font-medium text-white">{activeEvmChain?.native_symbol || t("features.wallet-list.currentPublicChain")}</p>
-              <p className="mt-1 break-all text-xs text-gray-500">{activeEvmChain?.rpc_url || "No RPC selected"}</p>
-              <p className="mt-1 break-all text-xs text-gray-500">{activeEvmChain?.explorer_url || "No explorer configured"}</p>
-            </div>
-          </div>
+        <section className="px-1 pt-1">
+          <p className="text-xs font-semibold uppercase text-emerald-300">
+            {tf("features.evm-workbench.eyebrow", "One wallet for every EVM network")}
+          </p>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-400">
+            {tf("features.evm-workbench.subtitle", "Create one wallet once. The same address works across every EVM-compatible network, with no chain selection required during creation.")}
+          </p>
         </section>
 
-        <section className="grid gap-4 lg:grid-cols-2">
-          <div className="space-y-3 rounded-lg border border-white/10 bg-white/[0.03] p-4">
-            <h3 className="text-lg font-semibold text-white">Wallet</h3>
-            <input value={evmPassword} onChange={(event) => setEvmPassword(event.target.value)} type="password" placeholder="Wallet password" className="h-10 w-full rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
-            <textarea value={evmPrivateKey} onChange={(event) => setEvmPrivateKey(event.target.value)} placeholder="Private key hex for import" rows={3} className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none" />
-            <div className="flex flex-wrap gap-2">
-              <button type="button" onClick={createEvmWallet} disabled={evmBusy} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-white px-3 text-sm font-semibold text-black disabled:opacity-50">
-                <Wallet className="h-4 w-4" />
-                Create
-              </button>
-              <button type="button" onClick={importEvmPrivateKey} disabled={evmBusy} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-100 hover:bg-white/10 disabled:opacity-50">
-                <Upload className="h-4 w-4" />
-                Import
-              </button>
-            </div>
-            {evmWallet && (
-              <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-sm">
-                <p className="font-medium text-white">{evmWallet.name}</p>
-                <p className="mt-1 break-all text-gray-400">{evmWallet.address}</p>
-              </div>
-            )}
-          </div>
+        {evmError && <div className="rounded-lg border border-red-400/30 bg-red-500/10 p-3 text-sm text-red-100">{evmError}</div>}
 
-          <div className="space-y-3 rounded-lg border border-white/10 bg-white/[0.03] p-4">
+        {!evmWallet ? (
+          <section className="max-w-2xl space-y-4 border-t border-white/10 px-1 pt-5">
+            <div>
+              <h3 className="text-lg font-semibold text-white">
+                {tf("features.evm-workbench.createTitle", "Create your wallet")}
+              </h3>
+              <p className="mt-1 text-sm text-gray-400">
+                {tf("features.evm-workbench.createHint", "Create once to get a Solana account and an EVM account for every supported EVM network.")}
+              </p>
+            </div>
             <button
               type="button"
-              onClick={() => setEvmCustomChainEditorOpen((open) => !open)}
-              className="flex w-full items-center justify-between gap-3 text-left text-lg font-semibold text-white"
-              aria-expanded={evmCustomChainEditorOpen}
+              onClick={() => handleOpenForm("create-wallet", {}, "evm-workbench")}
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-white px-4 text-sm font-semibold text-black hover:bg-gray-200 disabled:opacity-50"
             >
-              <span>Custom chain</span>
-              {evmCustomChainEditorOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+              <Wallet className="h-4 w-4" />
+              {tf("features.create-wallet.createButton", "Create wallet")}
             </button>
-            {evmCustomChainEditorOpen && (
-              <div className="grid gap-2 lg:grid-cols-2">
-                <input value={evmNewChain.chainId} onChange={(event) => setEvmNewChain((prev) => ({ ...prev, chainId: event.target.value }))} placeholder="Chain ID" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
-                <input value={evmNewChain.name} onChange={(event) => setEvmNewChain((prev) => ({ ...prev, name: event.target.value }))} placeholder="Name" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
-                <input value={evmNewChain.nativeSymbol} onChange={(event) => setEvmNewChain((prev) => ({ ...prev, nativeSymbol: event.target.value }))} placeholder="Symbol" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
-                <input value={evmNewChain.rpcUrl} onChange={(event) => setEvmNewChain((prev) => ({ ...prev, rpcUrl: event.target.value }))} placeholder="RPC URL" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
-                <input value={evmNewChain.explorerUrl} onChange={(event) => setEvmNewChain((prev) => ({ ...prev, explorerUrl: event.target.value }))} placeholder="Explorer URL optional" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
-                <label className="flex h-10 items-center gap-2 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-gray-200">
-                  <input
-                    type="checkbox"
-                    checked={evmNewChain.testnet}
-                    onChange={(event) => setEvmNewChain((prev) => ({ ...prev, testnet: event.target.checked }))}
-                  />
-                  Testnet
-                </label>
-                <button type="button" onClick={addDesktopEvmChain} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-500 px-3 text-sm font-semibold text-black hover:bg-emerald-400">
-                  <Plus className="h-4 w-4" />
-                  Add
-                </button>
-                <button
-                  type="button"
-                  onClick={removeDesktopEvmChain}
-                  disabled={!activeEvmChainIsCustom}
-                  className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-100 hover:bg-white/10 disabled:opacity-50"
-                >
-                  <Trash2 className="h-4 w-4" />
-                  Delete custom
-                </button>
+          </section>
+        ) : (
+          <>
+            <section className="grid gap-4 rounded-lg border border-white/10 bg-white/[0.03] p-5 lg:grid-cols-[minmax(0,1fr)_minmax(16rem,0.55fr)] lg:items-end">
+              <div className="min-w-0">
+                <p className="text-xs font-medium text-gray-400">
+                  {tf("features.evm-workbench.walletAddress", "Wallet address")}
+                </p>
+                <p className="mt-1 break-all font-mono text-sm text-white">{evmWallet.address}</p>
+                <p className="mt-2 text-xs text-emerald-200">
+                  {tf("features.evm-workbench.allChainsNote", "This one wallet supports all EVM-compatible networks.")}
+                </p>
               </div>
-            )}
-          </div>
+              <label className="space-y-1.5 text-sm text-gray-300">
+                {tf("features.evm-workbench.networkLabel", "Network for assets and transfers")}
+                <select
+                  value={evmChainId}
+                  onChange={(event) => selectEvmChain(event.target.value)}
+                  disabled={visibleEvmChains.length === 0 || Number(formData.unified_evm_send) === 1}
+                  className="h-11 w-full rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none focus:ring-2 focus:ring-emerald-400/40 disabled:opacity-50"
+                >
+                  {visibleEvmChains.map((chain) => (
+                    <option key={chain.chain_id} value={chain.chain_id}>
+                      {chain.name} ({chain.chain_id}) {chain.testnet
+                        ? tf("features.evm-workbench.testnet", "testnet")
+                        : tf("features.evm-workbench.mainnet", "mainnet")}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </section>
 
-          <div className="space-y-3 rounded-lg border border-white/10 bg-white/[0.03] p-4">
+            <section className="max-w-3xl">
+              <div className="space-y-3 rounded-lg border border-white/10 bg-white/[0.03] p-4">
             <div className="flex items-center justify-between gap-3">
-              <h3 className="text-lg font-semibold text-white">Assets</h3>
+              <h3 className="text-lg font-semibold text-white">{tf("features.evm-workbench.assets", "Assets")}</h3>
               <button type="button" onClick={refreshEvmAssets} disabled={evmBusy || !evmWallet} className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-100 hover:bg-white/10 disabled:opacity-50">
                 <RefreshCw className="h-4 w-4" />
-                Refresh
+                {tf("features.evm-workbench.refresh", "Refresh")}
               </button>
             </div>
             <div className="flex gap-2">
-              <input value={evmNewTokenContract} onChange={(event) => setEvmNewTokenContract(event.target.value)} placeholder="ERC-20 contract" className="h-10 min-w-0 flex-1 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
-              <button type="button" onClick={addDesktopEvmToken} className="inline-flex h-10 items-center justify-center rounded-lg bg-emerald-500 px-3 text-sm font-semibold text-black hover:bg-emerald-400">
-                Add token
+              <input value={evmNewTokenContract} onChange={(event) => setEvmNewTokenContract(event.target.value)} placeholder={tf("features.evm-workbench.contractPlaceholder", "ERC-20 contract address")} className="h-10 min-w-0 flex-1 rounded-lg border border-white/10 bg-black/40 px-3 font-mono text-sm text-white outline-none" />
+              <button type="button" onClick={() => void addDesktopEvmToken()} disabled={evmBusy || !evmNewTokenContract.trim()} className="inline-flex h-10 items-center justify-center rounded-lg bg-emerald-500 px-3 text-sm font-semibold text-black hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50">
+                {tf("features.evm-workbench.addToken", "Add token")}
               </button>
             </div>
             {evmTokenContracts.length > 0 && (
@@ -16085,7 +18175,7 @@ export default function Home() {
                       type="button"
                       onClick={() => removeDesktopEvmToken(contract)}
                       className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/10 text-gray-300 hover:bg-white/10 hover:text-white"
-                      aria-label="Remove token"
+                      aria-label={tf("features.evm-workbench.removeToken", "Remove token")}
                     >
                       <Trash2 className="h-4 w-4" />
                     </button>
@@ -16094,17 +18184,23 @@ export default function Home() {
               </div>
             )}
             <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-sm text-gray-300">
-              <p>{activeEvmChain?.native_symbol || "Native"} balance: {evmAssets?.native_balance_wei ?? "-"} wei</p>
-              <p className="mt-1 text-xs text-gray-500">History: {evmAssets?.history_status ?? "not loaded"} {evmAssets?.history_message ? `- ${evmAssets.history_message}` : ""}</p>
+              <p>
+                {tf("features.evm-workbench.nativeBalance", "{symbol} balance", { symbol: activeEvmChain?.native_symbol || "Native" })}: {activeEvmAssets?.native_balance_wei
+                  ? rawTokenAmountToUi(activeEvmAssets.native_balance_wei, 18)
+                  : "-"} {activeEvmChain?.native_symbol || ""}
+              </p>
+              <p className="mt-1 text-xs text-gray-500">
+                {tf("features.evm-workbench.history", "History")}: {activeEvmAssets?.history_status ?? tf("features.evm-workbench.historyNotLoaded", "not loaded")} {activeEvmAssets?.history_message ? `- ${activeEvmAssets.history_message}` : ""}
+              </p>
             </div>
             <div className="space-y-2">
-              {(evmAssets?.tokens || []).map((token) => (
+              {(activeEvmAssets?.tokens || []).map((token) => (
                 <div key={token.contract_address} className="rounded-lg border border-white/10 bg-black/20 p-3 text-sm">
-                  <p className="font-medium text-white">{token.symbol} {token.balance}</p>
+                  <p className="font-medium text-white">{token.symbol} {rawTokenAmountToUi(token.balance, token.decimals)}</p>
                   <p className="break-all text-xs text-gray-500">{token.name} · {token.contract_address}</p>
                 </div>
               ))}
-              {(evmAssets?.recent_transactions || []).map((entry) => (
+              {(activeEvmAssets?.recent_transactions || []).map((entry) => (
                 <div key={entry.hash} className="rounded-lg border border-white/10 bg-black/20 p-3 text-sm">
                   <p className="text-white">{entry.status} · block {entry.block_number ?? "-"}</p>
                   <p className="break-all text-xs text-gray-500">{entry.hash}</p>
@@ -16115,57 +18211,126 @@ export default function Home() {
         </section>
 
         <section className="space-y-3 rounded-lg border border-white/10 bg-white/[0.03] p-4">
-          <h3 className="text-lg font-semibold text-white">Transfer Preview</h3>
-          <div className="grid gap-3 lg:grid-cols-3">
-            <input value={evmRecipient} onChange={(event) => setEvmRecipient(event.target.value)} placeholder="Recipient" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
-            <input value={evmAmount} onChange={(event) => setEvmAmount(event.target.value)} placeholder="Amount in wei or token units" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
-            <input value={evmTokenContract} onChange={(event) => setEvmTokenContract(event.target.value)} placeholder="ERC-20 contract optional" className="h-10 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none" />
+          <h3 className="text-lg font-semibold text-white">
+            {tf("features.evm-workbench.transferTitle", "Send asset")}
+          </h3>
+          {Number(formData.unified_evm_send) === 1 && (
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-emerald-300/20 bg-emerald-300/[0.06] px-3 py-2 text-sm">
+              <span className="font-semibold text-emerald-100">{String(formData.evm_asset_symbol || activeEvmChain?.native_symbol || "")}</span>
+              <span className="text-gray-400">{String(formData.evm_asset_chain || activeEvmChain?.name || "")}</span>
+            </div>
+          )}
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="space-y-1.5 text-sm text-gray-300">
+              {tf("features.evm-workbench.recipient", "Recipient")}
+              <input
+                value={evmRecipient}
+                list="evm-address-book-recipients"
+                onChange={(event) => {
+                  evmPreviewRequestIdRef.current += 1;
+                  setEvmRecipient(event.target.value);
+                  setEvmPreview(null);
+                }}
+                placeholder={tf("features.evm-workbench.recipientPlaceholder", "0x recipient address")}
+                className="h-10 w-full rounded-lg border border-white/10 bg-black/40 px-3 font-mono text-sm text-white outline-none"
+              />
+              <datalist id="evm-address-book-recipients">
+                {addressBookEntries.filter((entry) => entry.chain === "evm" && (!activeEvmChain || entry.network === String(activeEvmChain.chain_id))).map((entry) => (
+                  <option key={entry.id} value={entry.address}>{entry.label}</option>
+                ))}
+              </datalist>
+            </label>
+            <label className="space-y-1.5 text-sm text-gray-300">
+              {tf("features.evm-workbench.amount", "Amount")}
+              <input
+                value={evmAmount}
+                onChange={(event) => {
+                  evmPreviewRequestIdRef.current += 1;
+                  setEvmAmount(event.target.value);
+                  setEvmPreview(null);
+                }}
+                inputMode={Number(formData.unified_evm_send) === 1 ? "decimal" : "numeric"}
+                placeholder={Number(formData.unified_evm_send) === 1
+                  ? tf("features.evm-workbench.amountPlaceholder", "Enter asset amount")
+                  : tf("features.evm-workbench.rawAmountPlaceholder", "Amount in wei or token units")}
+                className="h-10 w-full rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none"
+              />
+            </label>
+            <label className="space-y-1.5 text-sm text-gray-300">
+              {tf("features.evm-workbench.tokenContract", "Token contract")}
+              <input
+                value={evmTokenContract}
+                onChange={(event) => {
+                  evmPreviewRequestIdRef.current += 1;
+                  setEvmTokenContract(event.target.value);
+                  setEvmPreview(null);
+                }}
+                readOnly={Number(formData.unified_evm_send) === 1}
+                placeholder={tf("features.evm-workbench.tokenContractPlaceholder", "Optional for native asset")}
+                className="h-10 w-full rounded-lg border border-white/10 bg-black/40 px-3 font-mono text-sm text-white outline-none read-only:cursor-not-allowed read-only:text-gray-500"
+              />
+            </label>
+            <label className="space-y-1.5 text-sm text-gray-300">
+              {tf("features.evm-workbench.signingPassword", "Wallet password")}
+              <input
+                type="password"
+                value={evmPassword}
+                onChange={(event) => setEvmPassword(event.target.value)}
+                autoComplete="current-password"
+                placeholder={tf("features.evm-workbench.signingPasswordPlaceholder", "Required only when submitting")}
+                className="h-10 w-full rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none"
+              />
+            </label>
           </div>
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={previewEvmPayment} disabled={evmBusy || !evmWallet} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-white px-3 text-sm font-semibold text-black disabled:opacity-50">
               <ShieldCheck className="h-4 w-4" />
-              Preview
+              {tf("features.evm-workbench.preview", "Preview transaction")}
             </button>
-            <button type="button" onClick={() => void submitEvmPayment(true)} disabled={evmBusy || !evmPreview} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-500 px-3 text-sm font-semibold text-black hover:bg-emerald-400 disabled:opacity-50">
+            <button type="button" onClick={() => void submitEvmPayment(true)} disabled={evmBusy || !evmPreview || !evmPassword} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-500 px-3 text-sm font-semibold text-black hover:bg-emerald-400 disabled:opacity-50">
               <Send className="h-4 w-4" />
-              Confirm submit
+              {tf("features.evm-workbench.confirmSubmit", "Confirm send")}
             </button>
             <button type="button" onClick={() => void submitEvmPayment(false)} disabled={evmBusy || !evmPreview} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-100 hover:bg-white/10 disabled:opacity-50">
               <X className="h-4 w-4" />
-              Reject
+              {tf("features.evm-workbench.reject", "Cancel preview")}
             </button>
           </div>
           {evmPreview && (
             <div className="grid gap-2 rounded-lg border border-emerald-300/20 bg-emerald-300/10 p-3 text-sm text-emerald-50 lg:grid-cols-2">
-              <p>Chain ID: {evmPreview.chain.chain_id}</p>
-              <p>Nonce: {evmPreview.nonce}</p>
-              <p>Gas limit: {evmPreview.gas_limit}</p>
-              <p>Fee model: {evmPreview.fee_model}</p>
-              <p>Gas price: {evmPreview.gas_price_wei} wei</p>
-              <p>Estimated fee: {evmPreview.estimated_fee_wei} wei</p>
-              <p className="break-all lg:col-span-2">Recipient: {evmPreview.recipient}</p>
-              {evmPreview.token_contract && <p className="break-all lg:col-span-2">Token: {evmPreview.token_contract}</p>}
+              <p>{tf("features.evm-workbench.chainId", "Chain ID")}: {evmPreview.chain.chain_id}</p>
+              <p>{tf("features.evm-workbench.nonce", "Nonce")}: {evmPreview.nonce}</p>
+              <p>{tf("features.evm-workbench.gasLimit", "Gas limit")}: {evmPreview.gas_limit}</p>
+              <p>{tf("features.evm-workbench.feeModel", "Fee model")}: {evmPreview.fee_model}</p>
+              <p>{tf("features.evm-workbench.gasPrice", "Gas price")}: {evmPreview.gas_price_wei} wei</p>
+              <p title={`${evmPreview.estimated_fee_wei} wei`}>
+                {tf("features.evm-workbench.estimatedFee", "Estimated fee")}: {rawTokenAmountToUi(evmPreview.estimated_fee_wei, 18)} {evmPreview.chain.native_symbol}
+              </p>
+              <p className="break-all lg:col-span-2">{tf("features.evm-workbench.transactionRecipient", "Recipient")}: {evmPreview.recipient}</p>
+              {evmPreview.token_contract && <p className="break-all lg:col-span-2">{tf("features.evm-workbench.transactionToken", "Token")}: {evmPreview.token_contract}</p>}
             </div>
           )}
           {evmSubmitResult && (
             <div className="space-y-3 rounded-lg border border-white/10 bg-black/20 p-3 text-sm text-gray-300">
-              <p>Status: {evmSubmitResult.status}</p>
-              <p className="break-all">Hash: {evmSubmitResult.transaction_hash}</p>
+              <p>{tf("features.evm-workbench.status", "Status")}: {evmSubmitResult.status}</p>
+              <p className="break-all">{tf("features.evm-workbench.transactionHash", "Transaction hash")}: {evmSubmitResult.transaction_hash}</p>
               <button type="button" onClick={refreshEvmTransactionStatus} disabled={evmBusy} className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-100 hover:bg-white/10 disabled:opacity-50">
                 <RefreshCw className="h-4 w-4" />
-                Check receipt
+                {tf("features.evm-workbench.checkReceipt", "Check transaction status")}
               </button>
               {evmTransactionStatus && (
                 <div className="grid gap-1 text-xs text-gray-400 lg:grid-cols-2">
-                  <p>Status: {evmTransactionStatus.status}</p>
-                  <p>Block: {evmTransactionStatus.block_number ?? "-"}</p>
-                  <p>Gas used: {evmTransactionStatus.gas_used ?? "-"}</p>
-                  <p>Effective gas: {evmTransactionStatus.effective_gas_price_wei ?? "-"}</p>
+                  <p>{tf("features.evm-workbench.status", "Status")}: {evmTransactionStatus.status}</p>
+                  <p>{tf("features.evm-workbench.block", "Block")}: {evmTransactionStatus.block_number ?? "-"}</p>
+                  <p>{tf("features.evm-workbench.gasUsed", "Gas used")}: {evmTransactionStatus.gas_used ?? "-"}</p>
+                  <p>{tf("features.evm-workbench.effectiveGas", "Effective gas price")}: {evmTransactionStatus.effective_gas_price_wei ?? "-"}</p>
                 </div>
               )}
             </div>
           )}
         </section>
+          </>
+        )}
       </div>
     );
 
@@ -16174,35 +18339,132 @@ export default function Home() {
       case "wallet-list":
         return renderWalletListPanel();
 
+      case "wallet-receive":
+        return (
+          <WalletReceivePanel
+            addresses={walletChainAddresses}
+            copiedId={copied}
+            labels={unifiedWalletLabels}
+            onCopy={copyToClipboard}
+          />
+        );
+
+      case "wallet-send":
+        return (
+          <WalletSendAssetPicker
+            assets={unifiedSearchAssets}
+            evmChains={portfolioEvmChains.map((chain) => ({
+              chainId: chain.chain_id,
+              name: chain.name,
+            }))}
+            labels={unifiedWalletLabels}
+            onAddEvmContract={addEvmContractFromUnifiedSend}
+            onSelect={openUnifiedAssetForSend}
+          />
+        );
+
+      case "create-wallet":
+        return (
+          <div className="max-w-2xl space-y-5">
+            <div>
+              <p className="text-xs font-semibold uppercase text-emerald-300">
+                {tf("features.create-wallet.eyebrow", "One wallet, multiple networks")}
+              </p>
+              <h3 className="mt-2 text-lg font-semibold text-white">
+                {tf("features.create-wallet.heading", "Create once. Your network accounts are ready automatically.")}
+              </h3>
+              <p className="mt-2 text-sm leading-6 text-gray-400">
+                {tf("features.create-wallet.hint", "A single recovery phrase derives an independent Solana address and one EVM address shared by every EVM-compatible network.")}
+              </p>
+            </div>
+
+            <div className="divide-y divide-white/10 border-y border-white/10">
+              <div className="flex items-start gap-3 py-3">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-violet-400/10 text-xs font-bold text-violet-200">SOL</span>
+                <div>
+                  <p className="text-sm font-semibold text-white">Solana</p>
+                  <p className="mt-1 text-xs text-gray-500">
+                    {tf("features.create-wallet.solanaAccount", "An independent Solana account is derived automatically.")}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-start gap-3 py-3">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-400/10 text-xs font-bold text-emerald-200">EVM</span>
+                <div>
+                  <p className="text-sm font-semibold text-white">EVM</p>
+                  <p className="mt-1 text-xs text-gray-500">
+                    {tf("features.create-wallet.evmAccount", "One address works on Ethereum, BSC, Polygon, Base, Arbitrum, and every EVM-compatible network.")}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <label className="block space-y-1.5 text-sm text-gray-300">
+              {t("formUi.walletNameRequiredLabel")}
+              <input
+                type="text"
+                value={formData.name || ""}
+                onChange={(event) => handleFormChange("name", event.target.value)}
+                placeholder={t("formUi.walletNamePlaceholder")}
+                className="h-11 w-full rounded-lg border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:ring-2 focus:ring-emerald-400/40"
+              />
+            </label>
+            <label className="block space-y-1.5 text-sm text-gray-300">
+              {tf("features.create-wallet.password", "Password (at least 10 characters)")}
+              <input
+                type="password"
+                data-sensitive-field="password"
+                value={createWalletPassword}
+                onChange={(event) => setCreateWalletPassword(event.target.value)}
+                placeholder={tf("features.create-wallet.passwordPlaceholder", "Enter one password for the wallet")}
+                autoComplete="new-password"
+                className="h-11 w-full rounded-lg border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:ring-2 focus:ring-emerald-400/40"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => void createUniversalWallet()}
+              disabled={loading}
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-white px-4 text-sm font-semibold text-black hover:bg-gray-200 disabled:opacity-50"
+            >
+              <Wallet className="h-4 w-4" />
+              {loading
+                ? tf("features.create-wallet.creating", "Creating accounts...")
+                : tf("features.create-wallet.createButton", "Create wallet")}
+            </button>
+
+            {formData.publicKey && formData.evmAddress && (
+              <div className="space-y-3 border-t border-white/10 pt-4 text-sm">
+                <div>
+                  <p className="text-xs text-gray-500">Solana</p>
+                  <p className="mt-1 break-all font-mono text-gray-200">{String(formData.publicKey)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-500">EVM</p>
+                  <p className="mt-1 break-all font-mono text-gray-200">{String(formData.evmAddress)}</p>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+
       case "evm-workbench":
         return renderEvmWorkbench();
 
       case "twitter-signals": {
-        const solanaSignals = visibleTwitterSignals.filter((signal) => signal.contractAddress && signal.chain === "Solana").length;
-        const otherNetworkSignals = visibleTwitterSignals.filter((signal) => signal.contractAddress && signal.chain !== "Solana").length;
-        const cashtagSignals = visibleTwitterSignals.filter((signal) => !signal.contractAddress).length;
-        const lastScanLabel = twitterSignalLastScanAt
-          ? new Date(twitterSignalLastScanAt).toLocaleString()
-          : tf("features.twitter-signals.neverScanned", "尚未扫描");
-        const twitterSourceLabel = twitterDappTab
-          ? twitterDappTab.title || twitterDappTab.url
-          : tf("features.twitter-signals.sourceDisconnected", "尚未连接 X 关注流");
-        const captureStatusLabel: Record<TwitterSignalCaptureStatus, string> = {
-          idle: tf("features.twitter-signals.statusIdle", "等待开始扫描"),
-          waiting: tf("features.twitter-signals.statusWaiting", "等待 X 关注流加载"),
-          scanning: tf("features.twitter-signals.statusScanning", "正在遍历 X 时间线"),
-          success: tf(
-            "features.twitter-signals.statusSuccess",
-            "最近一轮遍历 {count} 条推文",
-            { count: twitterSignalLastTweetCount },
-          ),
-          empty: tf(
-            "features.twitter-signals.statusEmpty",
-            "遍历了 {count} 条推文，未发现合约地址或代币代码",
-            { count: twitterSignalLastTweetCount },
-          ),
-          error: tf("features.twitter-signals.statusError", "扫描失败"),
+        const authorMenuLabels = {
+          menu: tf("features.twitter-signals.authorMenu", "用户操作"),
+          visit: tf("features.twitter-signals.visitUserTwitter", "访问用户推特"),
+          add: tf("features.twitter-signals.addToKolList", "添加到 KOL 清单"),
+          added: tf("features.twitter-signals.alreadyInKolList", "已添加"),
         };
+        const kolSearchTerm = twitterKolSearch.trim().toLowerCase().replace(/^@/, "");
+        const visibleTwitterKols = twitterKols.filter((kol) => !kolSearchTerm || [
+          kol.handle,
+          kol.displayName,
+          kol.bio,
+          kol.location,
+        ].some((value) => value?.toLowerCase().includes(kolSearchTerm)));
         return (
           <div ref={twitterBrowserShellRef} className="app-dapp-browser flex h-full min-h-0 flex-col overflow-hidden bg-zinc-950">
             <div ref={twitterBrowserTabBarRef} className="flex h-10 shrink-0 items-end gap-1 overflow-x-auto border-b border-white/10 bg-black/35 px-2 pt-1">
@@ -16268,8 +18530,12 @@ export default function Home() {
               <div ref={twitterBrowserAddressBarRef} className="shrink-0 border-b border-white/10 bg-zinc-950 px-2 py-2">
                 <BrowserMenu
                   activeTabId={activeTwitterBrowserTab.id}
+                  currentUrl={activeTwitterBrowserTab.url}
                   tabOpen={activeTwitterBrowserTab.id !== TWITTER_BROWSER_HOME_TAB_ID && activeTwitterBrowserTab.webviewOpen}
                   onOverlayChange={setTwitterBrowserOverlayOpen}
+                  importDialogRequest={twitterChromeImportDialogRequest}
+                  onImportDialogRequestHandled={() => setTwitterChromeImportDialogRequest(0)}
+                  onChromeAuthImportCompleted={() => setTwitterChromeAuthImported(true)}
                   onNavigate={(url) => openUrlInTwitterBrowserTab(url, {
                     tabId: activeTwitterBrowserTab.id === TWITTER_BROWSER_HOME_TAB_ID ? undefined : activeTwitterBrowserTab.id,
                     showAddressBar: true,
@@ -16298,52 +18564,93 @@ export default function Home() {
               </div>
             )}
 
-            <div ref={twitterBrowserViewportRef} className="relative min-h-0 flex-1 overflow-hidden bg-black">
-              {activeTwitterBrowserTab.id === TWITTER_BROWSER_HOME_TAB_ID ? (
-                <div className="h-full overflow-y-auto bg-[#081019] p-3 text-gray-100 sm:p-4">
-                  <div className="mx-auto max-w-[1900px] space-y-3">
-            <section className="border-b border-white/10 pb-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="inline-flex h-7 items-center gap-1.5 rounded-md border border-sky-300/25 bg-sky-300/10 px-2 text-xs font-semibold text-sky-100">
-                  <Radio className="h-3.5 w-3.5" />
-                  {tf("features.twitter-signals.badge", "Twitter / X")}
-                </span>
-                <span className="mr-auto" />
-                <span className="text-xs text-gray-500">
-                  {tf("features.twitter-signals.detected", "已提取")} <strong className="font-semibold text-white">{visibleTwitterSignals.length}</strong>
-                </span>
-                <span className="text-xs text-violet-300">Solana {solanaSignals}</span>
-                <span className="text-xs text-sky-300">
-                  {tf("features.twitter-signals.otherChains", "其它链")} {otherNetworkSignals}
-                </span>
-                <span className="text-xs text-zinc-400">
-                  {tf("features.twitter-signals.cashtags", "$代币代码")} {cashtagSignals}
+            {activeTwitterBrowserTab.webviewOpen
+              && isTwitterPageUrl(activeTwitterBrowserTab.url)
+              && twitterChromeAuthImported === false && (
+              <div className="app-twitter-chrome-import flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-sky-300/15 bg-sky-300/[0.08] px-3 py-2 text-xs text-sky-50">
+                <Download className="h-4 w-4 shrink-0 text-sky-300" />
+                <span className="min-w-0 flex-1">
+                  {tf("features.twitter-signals.chromeImportHint", "可从 Chrome 导入 Cookie 和密码，已登录过 X 时可直接复用登录状态。")}
                 </span>
                 <button
                   type="button"
-                  onClick={openTwitterLoginInBrowser}
-                  className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md border border-white/10 bg-white/[0.06] px-2.5 text-xs font-semibold text-gray-200 transition-colors hover:bg-white/10"
+                  onClick={() => setTwitterChromeImportDialogRequest((request) => request + 1)}
+                  className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-sky-300/25 bg-sky-300/10 px-2.5 font-semibold text-sky-100 hover:bg-sky-300/20"
                 >
-                  <Compass className="h-3.5 w-3.5" />
-                  {tf("features.twitter-signals.openTwitter", "打开 X")}
+                  <Download className="h-3.5 w-3.5" />
+                  {tf("features.twitter-signals.importChromeData", "导入 Chrome 数据")}
                 </button>
               </div>
+            )}
 
-              <div className="mt-3 flex flex-wrap items-end gap-2">
-                <label className="min-w-[220px] flex-1 md:max-w-sm">
-                  <span className="mb-1 block text-[11px] font-medium text-gray-500">
-                    {tf("features.twitter-signals.watchedUsers", "关注用户")}
+            <div ref={twitterBrowserViewportRef} className="relative min-h-0 flex-1 overflow-hidden bg-black">
+              {activeTwitterBrowserTab.id === TWITTER_BROWSER_HOME_TAB_ID ? (
+                <div className="app-twitter-monitor-home h-full overflow-y-auto bg-[#081019] p-2 text-gray-100 sm:p-3">
+                  <div className="mx-auto max-w-[1900px] space-y-2">
+            <div className="app-twitter-monitor-tabs flex items-center gap-1 border-b border-white/10 pb-2">
+              {([
+                ["signals", tf("features.twitter-signals.signalsView", "代币线索"), Radio],
+                ["kols", tf("features.twitter-signals.kolView", "KOL"), Users],
+                ["ai", tf("features.twitter-signals.aiView", "AI 研究"), Sparkles],
+              ] as const).map(([view, label, Icon]) => (
+                <button
+                  key={view}
+                  type="button"
+                  onClick={() => setTwitterMonitorView(view)}
+                  aria-pressed={twitterMonitorView === view}
+                  className={`app-twitter-monitor-tab inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-semibold transition-colors ${
+                    twitterMonitorView === view
+                      ? "bg-white text-zinc-950"
+                      : "text-gray-400 hover:bg-white/[0.07] hover:text-white"
+                  }`}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  {label}
+                </button>
+              ))}
+            </div>
+            {twitterMonitorView === "signals" ? (
+              <>
+            <section className="app-twitter-monitor-toolbar border-b border-white/10 pb-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="min-w-[220px] flex-1 md:max-w-sm">
+                  <span className="sr-only">
+                    {tf("features.twitter-signals.kolFilter", "数据范围")}
                   </span>
-                  <input
-                    value={twitterWatchedUsers}
-                    onChange={(event) => setTwitterWatchedUsers(event.target.value)}
-                    className="h-9 w-full rounded-md border border-white/10 bg-black/25 px-2.5 text-sm text-gray-100 outline-none placeholder:text-gray-600 focus:border-sky-300/30"
-                    placeholder={tf("features.twitter-signals.watchedUsersPlaceholder", "@user1, @user2，可留空")}
-                    spellCheck={false}
-                  />
-                </label>
+                  <div className="flex gap-1.5">
+                    <span className="relative flex min-w-0 flex-1 items-center">
+                      <Users className="pointer-events-none absolute left-2.5 h-3.5 w-3.5 text-sky-300" />
+                      <select
+                        value={twitterWatchedUsers}
+                        onChange={(event) => {
+                          setTwitterWatchedUsers(event.target.value);
+                          setTwitterSignalPage(1);
+                        }}
+                        aria-label={tf("features.twitter-signals.kolFilter", "数据范围")}
+                        className="h-9 w-full appearance-none rounded-md border border-white/10 bg-black/25 pl-8 pr-8 text-sm text-gray-300 outline-none hover:border-sky-300/25 focus:border-sky-300/30"
+                      >
+                        <option value="">{tf("features.twitter-signals.allUsers", "全部用户")}</option>
+                        {twitterKols.map((kol) => (
+                          <option key={kol.handle} value={`@${kol.handle}`}>
+                            {kol.displayName ? `${kol.displayName} (@${kol.handle})` : `@${kol.handle}`}
+                          </option>
+                        ))}
+                      </select>
+                      <ChevronDown className="pointer-events-none absolute right-2.5 h-3.5 w-3.5 text-gray-500" />
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setTwitterMonitorView("kols")}
+                      className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-white/10 bg-black/25 text-gray-400 hover:border-sky-300/25 hover:bg-white/[0.04] hover:text-white"
+                      title={tf("features.twitter-signals.manageKols", "管理 KOL")}
+                      aria-label={tf("features.twitter-signals.manageKols", "管理 KOL")}
+                    >
+                      <Settings className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
                 <label>
-                  <span className="mb-1 block text-[11px] font-medium text-gray-500">
+                  <span className="sr-only">
                     {tf("features.twitter-signals.scanSchedule", "定时扫描")}
                   </span>
                   <span className="flex h-9 items-center rounded-md border border-white/10 bg-black/25">
@@ -16371,11 +18678,7 @@ export default function Home() {
                       setTwitterSignalCaptureStatus("idle");
                       return;
                     }
-                    setTwitterSignalAutoScan(true);
-                    if (!twitterDappTab) {
-                      setTwitterSignalCaptureStatus("waiting");
-                      openTwitterLoginInBrowser();
-                    }
+                    beginTwitterCapture("auto");
                   }}
                   className={`inline-flex h-9 items-center justify-center gap-1.5 rounded-md px-2.5 text-xs font-semibold transition-colors ${
                     twitterSignalAutoScan
@@ -16390,65 +18693,80 @@ export default function Home() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => void captureTwitterSignalsFromActiveTab({ advance: true, notify: true })}
+                  onClick={() => beginTwitterCapture("manual")}
                   disabled={twitterSignalCaptureBusy}
                   className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-sky-300/25 bg-sky-300/10 px-2.5 text-xs font-semibold text-sky-100 transition-colors hover:bg-sky-300/15 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {twitterSignalCaptureBusy ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Compass className="h-3.5 w-3.5" />}
                   {tf("features.twitter-signals.capturePage", "立即扫描")}
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setTwitterSignalManualImportOpen((open) => !open)}
-                  className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-white/10 bg-white/[0.06] px-2.5 text-xs font-semibold text-gray-200 transition-colors hover:bg-white/10"
-                  aria-expanded={twitterSignalManualImportOpen}
-                >
-                  <Upload className="h-3.5 w-3.5" />
-                  {twitterSignalManualImportOpen
-                    ? tf("features.twitter-signals.hideManualImport", "收起导入")
-                    : tf("features.twitter-signals.manualImport", "手工导入")}
-                  {twitterSignalManualImportOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setTwitterSignalSource("");
-                    setTwitterSignals([]);
-                    setExpandedTwitterSignalIds(new Set());
-                    setTwitterSignalLastScanAt(null);
-                    setTwitterSignalLastTweetCount(0);
-                    setTwitterSignalCaptureStatus("idle");
-                    setTwitterSignalCaptureError("");
-                  }}
-                  className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-white/10 bg-white/[0.06] text-gray-300 transition-colors hover:bg-white/10 hover:text-white"
-                  title={tf("features.twitter-signals.clear", "清空")}
-                  aria-label={tf("features.twitter-signals.clear", "清空")}
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={copyTwitterSignalJson}
-                  disabled={visibleTwitterSignals.length === 0}
-                  className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-white/10 bg-white/[0.06] text-gray-300 transition-colors hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
-                  title={tf("features.twitter-signals.copyJson", "复制 JSON")}
-                  aria-label={tf("features.twitter-signals.copyJson", "复制 JSON")}
-                >
-                  {copied === "twitter-signals-json" ? <Check className="h-3.5 w-3.5" /> : <FileText className="h-3.5 w-3.5" />}
-                </button>
+                <details data-close-on-outside className="relative ml-auto shrink-0">
+                  <summary
+                    className="inline-flex h-9 w-9 cursor-pointer list-none items-center justify-center rounded-md border border-white/10 bg-white/[0.06] text-gray-300 transition-colors hover:bg-white/10 hover:text-white"
+                    title={tf("features.twitter-signals.moreActions", "更多操作")}
+                    aria-label={tf("features.twitter-signals.moreActions", "更多操作")}
+                  >
+                    <Menu className="h-4 w-4" />
+                  </summary>
+                  <div role="menu" className="absolute right-0 z-50 mt-1 w-48 overflow-hidden rounded-md border border-white/10 bg-zinc-950 p-1 shadow-xl">
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={(event) => {
+                        openTwitterLoginInBrowser();
+                        event.currentTarget.closest("details")?.removeAttribute("open");
+                      }}
+                      className="flex h-9 w-full items-center gap-2 rounded px-2 text-left text-xs font-medium text-gray-200 hover:bg-white/[0.08]"
+                    >
+                      <Compass className="h-3.5 w-3.5 text-sky-300" />
+                      {tf("features.twitter-signals.openTwitter", "打开 X")}
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={(event) => {
+                        setTwitterSignalManualImportOpen((open) => !open);
+                        event.currentTarget.closest("details")?.removeAttribute("open");
+                      }}
+                      className="flex h-9 w-full items-center gap-2 rounded px-2 text-left text-xs font-medium text-gray-200 hover:bg-white/[0.08]"
+                    >
+                      <Upload className="h-3.5 w-3.5 text-gray-400" />
+                      {twitterSignalManualImportOpen
+                        ? tf("features.twitter-signals.hideManualImport", "收起导入")
+                        : tf("features.twitter-signals.manualImport", "手工导入")}
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={(event) => {
+                        copyTwitterSignalJson();
+                        event.currentTarget.closest("details")?.removeAttribute("open");
+                      }}
+                      disabled={visibleTwitterSignals.length === 0}
+                      className="flex h-9 w-full items-center gap-2 rounded px-2 text-left text-xs font-medium text-gray-200 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {copied === "twitter-signals-json" ? <Check className="h-3.5 w-3.5" /> : <FileText className="h-3.5 w-3.5" />}
+                      {tf("features.twitter-signals.copyJson", "复制 JSON")}
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={(event) => {
+                        void clearTwitterSignals();
+                        event.currentTarget.closest("details")?.removeAttribute("open");
+                      }}
+                      className="flex h-9 w-full items-center gap-2 rounded px-2 text-left text-xs font-medium text-red-300 hover:bg-red-400/10"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      {tf("features.twitter-signals.clear", "清空")}
+                    </button>
+                  </div>
+                </details>
               </div>
 
-              <div className="mt-2 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
-                <span className="max-w-full truncate text-gray-400" title={twitterDappTab?.url}>
-                  {tf("features.twitter-signals.dataSource", "数据源：{source}", { source: twitterSourceLabel })}
-                </span>
-                <span className={twitterSignalCaptureStatus === "error" ? "text-red-300" : "text-gray-500"}>
-                  {twitterSignalCaptureError || captureStatusLabel[twitterSignalCaptureStatus]}
-                </span>
-                <span className="text-gray-600">
-                  {tf("features.twitter-signals.lastScan", "上次扫描：{time}", { time: lastScanLabel })}
-                </span>
-              </div>
+              {twitterSignalCaptureError && (
+                <p className="mt-1 text-xs text-red-300">{twitterSignalCaptureError}</p>
+              )}
 
               {twitterSignalManualImportOpen && (
                 <div className="mt-3 border-t border-white/10 pt-3">
@@ -16465,7 +18783,7 @@ export default function Home() {
                   <button
                     type="button"
                     onClick={scanTwitterSignals}
-                    className="mt-2 inline-flex h-9 items-center justify-center gap-1.5 rounded-md bg-white px-3 text-xs font-semibold text-black transition-colors hover:bg-gray-200"
+                    className="app-twitter-primary-action mt-2 inline-flex h-9 items-center justify-center gap-1.5 rounded-md bg-white px-3 text-xs font-semibold text-black transition-colors hover:bg-gray-200"
                   >
                     <ListFilter className="h-3.5 w-3.5" />
                     {tf("features.twitter-signals.scanNow", "扫描并结构化")}
@@ -16474,52 +18792,118 @@ export default function Home() {
               )}
             </section>
 
-            <section className="overflow-hidden rounded-lg border border-white/10 bg-white/[0.025]">
-              <div className="flex min-h-10 items-center justify-between gap-3 border-b border-white/10 px-3 py-2 md:px-4">
+            <section className="app-twitter-monitor-panel overflow-hidden rounded-lg border border-white/10 bg-white/[0.025]">
+              <div className="flex min-h-9 items-center justify-between gap-3 border-b border-white/10 px-3 py-1.5 md:px-4">
                 <h3 className="text-sm font-semibold text-gray-200">
                   {tf("features.twitter-signals.resultTitle", "代币线索列表")}
                 </h3>
-                <span className="text-xs tabular-nums text-gray-500">{visibleTwitterSignals.length}</span>
+                <span className="text-xs tabular-nums text-gray-500">
+                  {twitterSignalGroups.length > 0
+                    ? tf("features.twitter-signals.pageSummary", "{start}-{end} / {total}", {
+                      start: (twitterSignalPagination.page - 1) * twitterSignalPagination.pageSize + 1,
+                      end: Math.min(
+                        twitterSignalPagination.page * twitterSignalPagination.pageSize,
+                        twitterSignalGroups.length,
+                      ),
+                      total: twitterSignalGroups.length,
+                    })
+                    : "0"}
+                </span>
               </div>
               {visibleTwitterSignals.length === 0 ? (
                 <p className="px-4 py-14 text-center text-sm text-gray-500">
                   {tf("features.twitter-signals.empty", "还没有提取到合约地址或代币代码。")}
                 </p>
               ) : (
-                <div className="max-h-[calc(100vh-19rem)] min-h-40 divide-y divide-white/[0.08] overflow-y-auto">
-                  {visibleTwitterSignals.map((signal) => {
-                    const expanded = expandedTwitterSignalIds.has(signal.id);
-                    const displayTime = formatTweetSignalTime(signal.publishedAt || signal.detectedAt);
-                    const authorProfileUrl = twitterTextTokenUrl(signal.author);
-                    const tokenLabel = tweetSignalTokenLabel(signal);
+                <>
+                <div className="max-h-[calc(100vh-15rem)] min-h-40 divide-y divide-white/[0.08] overflow-y-auto">
+                  {pagedTwitterSignalGroups.map((signalGroup) => {
+                    const signal = signalGroup.primary;
+                    const expanded = expandedTwitterSignalIds.has(signalGroup.key);
+                    const signalTime = signal.publishedAt || signal.detectedAt;
+                    const displayTime = formatTweetSignalTime(signalTime, dateTimeLocale);
+                    const authorHandle = normalizeTwitterKolHandle(signal.author);
+                    const authorProfileUrl = authorHandle ? twitterKolProfileUrl(authorHandle) : undefined;
+                    const authorKol = authorHandle ? twitterKols.find((kol) => kol.handle === authorHandle) : undefined;
+                    const authorAlreadyAdded = Boolean(authorKol);
+                    const authorFollowersLabel = authorKol?.followersLabel?.trim() || undefined;
                     return (
                       <article
-                        key={signal.id}
-                        className="group grid grid-cols-[40px_minmax(0,1fr)] gap-x-3 gap-y-2 px-3 py-3 transition-colors hover:bg-white/[0.035] md:px-4 lg:grid-cols-[40px_minmax(0,1fr)_max-content_auto] xl:grid-cols-[40px_minmax(320px,520px)_max-content_max-content] xl:justify-start 2xl:grid-cols-[40px_minmax(380px,680px)_max-content_max-content]"
+                        key={signalGroup.key}
+                        className="app-twitter-signal-row group grid grid-cols-[40px_minmax(0,1fr)] gap-x-3 gap-y-2 px-3 py-3 transition-colors hover:bg-white/[0.035] md:px-4 lg:grid-cols-[40px_minmax(320px,1fr)_minmax(300px,max-content)] xl:grid-cols-[40px_minmax(360px,680px)_minmax(360px,1fr)]"
                       >
-                        <TweetSignalAvatar key={signal.avatarUrl || signal.author} signal={signal} />
+                        {authorProfileUrl ? (
+                          <SelectableTwitterLink
+                            url={authorProfileUrl}
+                            onOpen={openSignalTweet}
+                            showUrlTitle={false}
+                            className="h-10 w-10 rounded-full focus-visible:ring-2"
+                          >
+                            <TweetSignalAvatar key={signal.avatarUrl || signal.author} signal={signal} />
+                          </SelectableTwitterLink>
+                        ) : (
+                          <TweetSignalAvatar key={signal.avatarUrl || signal.author} signal={signal} />
+                        )}
                         <div className="min-w-0">
-                          <div className="flex min-w-0 cursor-text select-text items-center gap-1 overflow-hidden text-[15px] leading-5">
-                            {authorProfileUrl ? (
-                              <SelectableTwitterLink url={authorProfileUrl} onOpen={openSignalTweet} className="truncate font-semibold text-gray-100">
-                                {signal.authorName || signal.author}
-                              </SelectableTwitterLink>
+                          <div className="flex min-w-0 flex-wrap cursor-text select-text items-center gap-x-1 overflow-visible text-[15px] leading-5">
+                            {authorProfileUrl && signal.authorName ? (
+                              <TweetAuthorMenu
+                                className="min-w-0 max-w-full items-center"
+                                alreadyAdded={authorAlreadyAdded}
+                                onVisit={() => openSignalTweet(authorProfileUrl)}
+                                onAdd={() => addSignalAuthorToTwitterKols(signal)}
+                                menuLabel={authorMenuLabels.menu}
+                                visitLabel={authorMenuLabels.visit}
+                                addLabel={authorMenuLabels.add}
+                                addedLabel={authorMenuLabels.added}
+                              >
+                                <SelectableTwitterLink
+                                  url={authorProfileUrl}
+                                  onOpen={openSignalTweet}
+                                  showUrlTitle={false}
+                                  className="truncate font-semibold text-gray-100"
+                                >
+                                  {signal.authorName}
+                                </SelectableTwitterLink>
+                              </TweetAuthorMenu>
                             ) : signal.authorName ? (
                               <span className="truncate font-semibold text-gray-100">{signal.authorName}</span>
+                            ) : null}
+                            {authorProfileUrl ? (
+                              <SelectableTwitterLink
+                                url={authorProfileUrl}
+                                onOpen={openSignalTweet}
+                                showUrlTitle={false}
+                                className={signal.authorName
+                                  ? "shrink-0 text-gray-500"
+                                  : "shrink-0 font-semibold text-gray-100"}
+                              >
+                                {signal.author}
+                              </SelectableTwitterLink>
                             ) : (
-                              <span className="truncate font-semibold text-gray-100">{signal.author}</span>
+                              <span className={`shrink-0 ${signal.authorName ? "text-gray-500" : "font-semibold text-gray-100"}`}>
+                                {signal.author}
+                              </span>
                             )}
-                            {signal.authorName && (
-                              authorProfileUrl ? (
-                                <SelectableTwitterLink url={authorProfileUrl} onOpen={openSignalTweet} className="shrink-0 text-gray-500">
-                                  {signal.author}
-                                </SelectableTwitterLink>
-                              ) : <span className="shrink-0 text-gray-500">{signal.author}</span>
+                            {authorFollowersLabel && (
+                              <>
+                                <span className="shrink-0 text-gray-600" aria-hidden="true">·</span>
+                                <span
+                                  className="shrink-0 text-xs text-gray-500"
+                                  title={tf("features.twitter-signals.followersSynced", "已同步的粉丝数")}
+                                >
+                                  {authorFollowersLabel}
+                                </span>
+                              </>
                             )}
                             {displayTime && (
                               <>
                                 <span className="shrink-0 text-gray-600" aria-hidden="true">·</span>
-                                <time className="shrink-0 text-gray-500" title={new Date(signal.publishedAt || signal.detectedAt).toLocaleString()}>
+                              <time
+                                className="shrink-0 text-gray-500"
+                                dateTime={signalTime}
+                                title={formatTweetSignalTimeTitle(signalTime, dateTimeLocale)}
+                              >
                                   {displayTime}
                                 </time>
                               </>
@@ -16533,62 +18917,494 @@ export default function Home() {
                             showLessLabel={tf("features.twitter-signals.showLess", "收起")}
                             onToggle={() => setExpandedTwitterSignalIds((current) => {
                               const next = new Set(current);
-                              if (next.has(signal.id)) next.delete(signal.id);
-                              else next.add(signal.id);
+                              if (next.has(signalGroup.key)) next.delete(signalGroup.key);
+                              else next.add(signalGroup.key);
                               return next;
                             })}
                           />
                         </div>
-                        <div className="col-start-2 min-w-0 self-start lg:col-start-3 lg:row-start-1">
-                          <p className="flex min-w-0 items-center gap-1.5 whitespace-nowrap text-[11px] leading-5 text-emerald-200/90">
-                            <span className={`inline-flex shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold leading-4 ${tweetSignalChainClass(signal.chain)}`}>
-                              {signal.chain}
-                            </span>
-                            <code className="min-w-0 overflow-hidden text-ellipsis">{compactContractAddress(tokenLabel)}</code>
-                          </p>
-                        </div>
-                        <div className="col-start-2 flex shrink-0 items-center gap-1 self-start lg:col-start-4 lg:row-start-1">
-                          <button
-                            type="button"
-                            onClick={() => copyToClipboard(tokenLabel, `twitter-signal-${signal.id}`)}
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-full text-gray-400 transition-colors hover:bg-white/10 hover:text-white"
-                            title={t("common.copy")}
-                            aria-label={t("common.copy")}
-                          >
-                            {copied === `twitter-signal-${signal.id}` ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                          </button>
-                          {signal.sourceUrl && (
-                            <button
-                              type="button"
-                              onClick={() => openSignalTweet(signal.sourceUrl || "")}
-                              className="inline-flex h-8 w-8 items-center justify-center rounded-full text-gray-400 transition-colors hover:bg-white/10 hover:text-white"
-                              title={tf("features.twitter-signals.openTweet", "打开推文")}
-                              aria-label={tf("features.twitter-signals.openTweet", "打开推文")}
-                            >
-                              <ExternalLink className="h-3.5 w-3.5" />
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => openSignalBuy(signal)}
-                            disabled={!signal.contractAddress || signal.chain !== "Solana" || !effectiveWallet}
-                            className="inline-flex h-8 items-center justify-center gap-1 rounded-md bg-emerald-300 px-2 text-[11px] font-semibold text-zinc-950 transition-colors hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-40"
-                            title={!signal.contractAddress
-                              ? tf("features.twitter-signals.buyRequiresContract", "仅有代币代码，需确认合约地址后才能购买。")
-                              : signal.chain === "Solana"
-                                ? undefined
-                                : tf("features.twitter-signals.solanaBuyOnly", "当前一键购买只支持 Solana 代币。")}
-                          >
-                            <ShoppingCart className="h-3.5 w-3.5" />
-                            {tf("features.twitter-signals.buy", "购买")}
-                          </button>
+                        <div className="col-start-2 ml-auto w-full min-w-0 max-w-[480px] space-y-1 self-start lg:col-start-3 lg:row-start-1 lg:justify-self-end">
+                          {signalGroup.signals.map((tokenSignal, tokenIndex) => {
+                            const tokenLabel = tweetSignalTokenLabel(tokenSignal);
+                            return (
+                              <div
+                                key={tokenSignal.id}
+                                className="app-twitter-token-row flex w-full min-w-0 items-center gap-1 rounded-md border border-white/[0.06] bg-black/15 py-0.5 pl-1.5 pr-1"
+                              >
+                                <p className="flex min-w-0 flex-1 items-center gap-1.5 whitespace-nowrap text-[11px] leading-5 text-emerald-200/90">
+                                  <span className={`inline-flex shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold leading-4 ${tweetSignalChainClass(tokenSignal.chain)}`}>
+                                    {tokenSignal.chain}
+                                  </span>
+                                  {tokenSignal.resolutionStatus && (
+                                    <span
+                                      className={`shrink-0 text-[10px] ${tokenSignal.resolutionStatus === "conflicted" ? "text-amber-300" : "text-gray-500"}`}
+                                      title={tokenSignal.resolutionSource}
+                                    >
+                                      {tokenSignal.resolutionStatus === "conflicted"
+                                        ? tf("features.twitter-signals.resolutionConflicted", "候选冲突")
+                                        : tokenSignal.resolutionStatus === "resolved"
+                                          ? tf("features.twitter-signals.resolutionConfidence", "自动 {confidence}%", {
+                                            confidence: Math.round((tokenSignal.resolutionConfidence || 0) * 100),
+                                          })
+                                          : tf("features.twitter-signals.resolutionPending", "待确认")}
+                                    </span>
+                                  )}
+                                  <code className="min-w-0 overflow-hidden text-ellipsis">{compactContractAddress(tokenLabel)}</code>
+                                </p>
+                                <button
+                                  type="button"
+                                  onClick={() => copyToClipboard(tokenLabel, `twitter-signal-${tokenSignal.id}`)}
+                                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-gray-400 transition-colors hover:bg-white/10 hover:text-white"
+                                  title={t("common.copy")}
+                                  aria-label={t("common.copy")}
+                                >
+                                  {copied === `twitter-signal-${tokenSignal.id}` ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                                </button>
+                                {tokenIndex === 0 && signal.sourceUrl && (
+                                  <button
+                                    type="button"
+                                    onClick={() => openSignalTweet(signal.sourceUrl || "")}
+                                    className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-gray-400 transition-colors hover:bg-white/10 hover:text-white"
+                                    title={tf("features.twitter-signals.openTweet", "打开推文")}
+                                    aria-label={tf("features.twitter-signals.openTweet", "打开推文")}
+                                  >
+                                    <ExternalLink className="h-3.5 w-3.5" />
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => openSignalBuy(tokenSignal)}
+                                  disabled={!tokenSignal.contractAddress || tokenSignal.chain !== "Solana" || !effectiveWallet}
+                                  className="inline-flex h-7 shrink-0 items-center justify-center gap-1 rounded-md bg-emerald-300 px-2 text-[11px] font-semibold text-zinc-950 transition-colors hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-40"
+                                  title={!tokenSignal.contractAddress
+                                    ? tf("features.twitter-signals.buyRequiresContract", "仅有代币代码，需确认合约地址后才能购买。")
+                                    : tokenSignal.chain === "Solana"
+                                      ? undefined
+                                      : tf("features.twitter-signals.solanaBuyOnly", "当前一键购买只支持 Solana 代币。")}
+                                >
+                                  <ShoppingCart className="h-3.5 w-3.5" />
+                                  {tf("features.twitter-signals.buy", "购买")}
+                                </button>
+                              </div>
+                            );
+                          })}
                         </div>
                       </article>
                     );
                   })}
                 </div>
+                {twitterSignalPageCount > 1 && (
+                  <div className="flex h-11 items-center justify-end gap-2 border-t border-white/10 px-3 md:px-4">
+                    <button
+                      type="button"
+                      onClick={() => setTwitterSignalPage((page) => Math.max(1, page - 1))}
+                      disabled={twitterSignalPagination.page <= 1}
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-white/10 text-gray-300 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-35"
+                      title={tf("features.twitter-signals.previousPage", "上一页")}
+                      aria-label={tf("features.twitter-signals.previousPage", "上一页")}
+                    >
+                      <ChevronRight className="h-4 w-4 rotate-180" />
+                    </button>
+                    <span className="min-w-16 text-center text-xs tabular-nums text-gray-400">
+                      {twitterSignalPagination.page} / {twitterSignalPageCount}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setTwitterSignalPage((page) => Math.min(twitterSignalPageCount, page + 1))}
+                      disabled={twitterSignalPagination.page >= twitterSignalPageCount}
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-white/10 text-gray-300 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-35"
+                      title={tf("features.twitter-signals.nextPage", "下一页")}
+                      aria-label={tf("features.twitter-signals.nextPage", "下一页")}
+                    >
+                      <ChevronRight className="h-4 w-4" />
+                    </button>
+                  </div>
+                )}
+                </>
               )}
             </section>
+              </>
+            ) : twitterMonitorView === "kols" ? (
+              <section className="app-twitter-monitor-panel overflow-hidden rounded-lg border border-white/10 bg-white/[0.025]">
+                <div className="flex flex-wrap items-end gap-2 border-b border-white/10 px-3 py-3 md:px-4">
+                  <label className="min-w-[240px] flex-1 md:max-w-md">
+                    <span className="mb-1 block text-[11px] font-medium text-gray-500">
+                      {tf("features.twitter-signals.addKol", "添加 KOL")}
+                    </span>
+                    <span className="flex h-9 items-center rounded-md border border-white/10 bg-black/25 focus-within:border-sky-300/30">
+                      <span className="pl-2.5 text-sm text-gray-500">@</span>
+                      <input
+                        value={twitterKolInput}
+                        onChange={(event) => setTwitterKolInput(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") addTwitterKol();
+                        }}
+                        className="h-full min-w-0 flex-1 bg-transparent px-1.5 text-sm text-gray-100 outline-none placeholder:text-gray-600"
+                        placeholder={tf("features.twitter-signals.kolPlaceholder", "用户名或 X 主页地址")}
+                        spellCheck={false}
+                        autoCapitalize="none"
+                      />
+                    </span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={addTwitterKol}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-md bg-sky-300 px-3 text-xs font-semibold text-zinc-950 hover:bg-sky-200"
+                  >
+                    <UserPlus className="h-3.5 w-3.5" />
+                    {tf("features.twitter-signals.add", "添加")}
+                  </button>
+                  <label className="relative min-w-[190px] flex-1 md:ml-auto md:max-w-xs">
+                    <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-gray-600" />
+                    <input
+                      value={twitterKolSearch}
+                      onChange={(event) => setTwitterKolSearch(event.target.value)}
+                      className="h-9 w-full rounded-md border border-white/10 bg-black/25 pl-8 pr-2.5 text-sm text-gray-100 outline-none placeholder:text-gray-600 focus:border-sky-300/30"
+                      placeholder={tf("features.twitter-signals.searchKols", "搜索 KOL")}
+                    />
+                  </label>
+                  <span className="pb-2 text-xs tabular-nums text-gray-500">{visibleTwitterKols.length}</span>
+                </div>
+                {visibleTwitterKols.length === 0 ? (
+                  <div className="flex min-h-56 flex-col items-center justify-center gap-2 px-4 py-12 text-center text-gray-500">
+                    <Users className="h-8 w-8 text-gray-700" />
+                    <p className="text-sm">
+                      {twitterKols.length === 0
+                        ? tf("features.twitter-signals.noKols", "还没有 KOL，添加后会自动打开其 X 主页同步公开资料。")
+                        : tf("features.twitter-signals.noKolMatches", "没有匹配的 KOL")}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="max-h-[calc(100vh-13rem)] divide-y divide-white/[0.08] overflow-y-auto">
+                    {visibleTwitterKols.map((kol) => (
+                      <article
+                        key={kol.handle}
+                        className="grid grid-cols-[44px_minmax(0,1fr)_auto] gap-3 px-3 py-3 transition-colors hover:bg-white/[0.035] md:px-4"
+                      >
+                        <TwitterKolAvatar key={kol.avatarUrl || kol.handle} kol={kol} />
+                        <div className="min-w-0">
+                          <div className="flex min-w-0 items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => openSignalTweet(twitterKolProfileUrl(kol.handle))}
+                              className="truncate text-left text-sm font-semibold text-gray-100 hover:underline"
+                            >
+                              {kol.displayName || `@${kol.handle}`}
+                            </button>
+                            {kol.verified && <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-sky-400" />}
+                            {kol.displayName && <span className="shrink-0 text-xs text-gray-500">@{kol.handle}</span>}
+                          </div>
+                          {kol.bio && <p className="mt-0.5 line-clamp-2 cursor-text select-text text-xs leading-5 text-gray-300">{kol.bio}</p>}
+                          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-500">
+                            <span><strong className="font-semibold text-gray-200">{kol.followersLabel || "--"}</strong></span>
+                            <span>{kol.followingLabel || tf("features.twitter-signals.followingUnknown", "关注 --")}</span>
+                            {kol.location && <span className="inline-flex items-center gap-1"><MapPin className="h-3 w-3" />{kol.location}</span>}
+                            {kol.website && <span className="inline-flex max-w-48 items-center gap-1 truncate"><LinkIcon className="h-3 w-3 shrink-0" />{kol.website}</span>}
+                            {kol.updatedAt && (
+                              <span title={formatTweetSignalTimeTitle(kol.updatedAt, dateTimeLocale)}>
+                                {tf("features.twitter-signals.syncedAt", "同步于 {time}", { time: formatTweetSignalTime(kol.updatedAt, dateTimeLocale) })}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-start gap-1">
+                          <button
+                            type="button"
+                            onClick={() => syncTwitterKolProfile(kol)}
+                            disabled={twitterSignalCaptureBusy || twitterKolPendingSync?.handle === kol.handle}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-full text-gray-400 hover:bg-white/10 hover:text-white disabled:opacity-40"
+                            title={tf("features.twitter-signals.syncKol", "同步公开资料")}
+                            aria-label={tf("features.twitter-signals.syncKol", "同步公开资料")}
+                          >
+                            <RefreshCw className={`h-3.5 w-3.5 ${twitterKolPendingSync?.handle === kol.handle ? "animate-spin" : ""}`} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => openSignalTweet(twitterKolProfileUrl(kol.handle))}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-full text-gray-400 hover:bg-white/10 hover:text-white"
+                            title={tf("features.twitter-signals.openKol", "打开 KOL 主页")}
+                            aria-label={tf("features.twitter-signals.openKol", "打开 KOL 主页")}
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => removeTwitterKol(kol.handle)}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-full text-gray-500 hover:bg-red-400/10 hover:text-red-300"
+                            title={tf("features.twitter-signals.removeKol", "移除 KOL")}
+                            aria-label={tf("features.twitter-signals.removeKol", "移除 KOL")}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </section>
+            ) : (
+              <section className="app-twitter-monitor-panel overflow-hidden rounded-lg border border-white/10 bg-white/[0.025]">
+                <div className="flex flex-wrap items-center gap-2 border-b border-white/10 px-3 py-2.5 md:px-4">
+                  <Bot className="h-4 w-4 text-sky-300" />
+                  <h3 className="text-sm font-semibold text-gray-100">{tf("features.twitter-signals.aiTitle", "AI 研究助手")}</h3>
+                  <span className="rounded border border-white/10 bg-black/20 px-1.5 py-0.5 text-[10px] text-gray-500">
+                    {twitterAiProviderKind === "local"
+                      ? tf("features.twitter-signals.localResearch", "本地检索")
+                      : `DSH · ${researchAiProviderPreset(twitterAiProviderKind).label
+                        || tf("features.twitter-signals.openAiCompatible", "OpenAI 兼容")}`}
+                  </span>
+                  <span className="mr-auto" />
+                  <button
+                    type="button"
+                    onClick={() => setTwitterAiConfigOpen((open) => !open)}
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md text-gray-400 hover:bg-white/10 hover:text-white"
+                    title={tf("features.twitter-signals.aiSettings", "模型设置")}
+                    aria-label={tf("features.twitter-signals.aiSettings", "模型设置")}
+                  >
+                    <Settings className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+
+                {twitterAiConfigOpen && (
+                  <div className="grid gap-2 border-b border-white/10 bg-black/15 px-3 py-3 md:grid-cols-[160px_minmax(220px,1fr)_minmax(160px,280px)_minmax(180px,320px)] md:px-4">
+                    <label>
+                      <span className="mb-1 block text-[11px] text-gray-500">{tf("features.twitter-signals.provider", "提供方")}</span>
+                      <select
+                        value={twitterAiProviderKind}
+                        onChange={(event) => {
+                          const kind = event.target.value as ResearchAiProviderKind;
+                          const preset = researchAiProviderPreset(kind);
+                          twitterAiRequestIdRef.current += 1;
+                          twitterAiKeyRequestIdRef.current += 1;
+                          twitterAiBusyRef.current = false;
+                          setTwitterAiProviderKind(kind);
+                          setTwitterAiBusy(false);
+                          setTwitterAiKeyBusy(false);
+                          setTwitterAiSessionId(null);
+                          setTwitterAiResult(null);
+                          setTwitterAiError("");
+                          setTwitterAiKeySaved(false);
+                          setTwitterAiEndpoint(preset.endpoint);
+                          setTwitterAiModel(preset.model);
+                          setTwitterAiApiKey("");
+                        }}
+                        className="h-9 w-full rounded-md border border-white/10 bg-zinc-950 px-2 text-sm text-gray-200 outline-none focus:border-sky-300/30"
+                      >
+                        <option value="local">{tf("features.twitter-signals.localResearch", "本地检索")}</option>
+                        <option value="deepseek">DeepSeek</option>
+                        <option value="gpt">GPT / OpenAI</option>
+                        <option value="grok">Grok / xAI</option>
+                        <option value="kimi">Kimi / Moonshot</option>
+                        <option value="glm">GLM / 智谱</option>
+                        <option value="minimax">MiniMax</option>
+                        <option value="openai">{tf("features.twitter-signals.openAiCompatible", "OpenAI 兼容")}</option>
+                        <option value="ollama">Ollama</option>
+                      </select>
+                    </label>
+                    {twitterAiProviderKind !== "local" && (
+                      <>
+                        <label>
+                          <span className="mb-1 block text-[11px] text-gray-500">Endpoint</span>
+                          <input
+                            value={twitterAiEndpoint}
+                            onChange={(event) => setTwitterAiEndpoint(event.target.value)}
+                            className="h-9 w-full rounded-md border border-white/10 bg-zinc-950 px-2.5 text-sm text-gray-200 outline-none placeholder:text-gray-700 focus:border-sky-300/30"
+                            placeholder={researchAiProviderPreset(twitterAiProviderKind).endpoint}
+                            spellCheck={false}
+                          />
+                        </label>
+                        <label>
+                          <span className="mb-1 block text-[11px] text-gray-500">{tf("features.twitter-signals.model", "模型")}</span>
+                          <input
+                            value={twitterAiModel}
+                            onChange={(event) => setTwitterAiModel(event.target.value)}
+                            className="h-9 w-full rounded-md border border-white/10 bg-zinc-950 px-2.5 text-sm text-gray-200 outline-none placeholder:text-gray-700 focus:border-sky-300/30"
+                            placeholder={researchAiProviderPreset(twitterAiProviderKind).model
+                              || tf("features.twitter-signals.modelPlaceholder", "输入模型名称")}
+                            spellCheck={false}
+                          />
+                        </label>
+                        {researchAiProviderPreset(twitterAiProviderKind).requiresApiKey && (
+                          <div>
+                            <div className="mb-1 flex min-h-4 items-center justify-between gap-2">
+                              <span className="text-[11px] text-gray-500">API Key</span>
+                              {twitterAiKeySaved && (
+                                <span className="inline-flex items-center gap-1 text-[10px] text-emerald-400">
+                                  <ShieldCheck className="h-3 w-3" />
+                                  {tf("features.twitter-signals.keyStored", "已安全保存")}
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex gap-1.5">
+                              <input
+                                type="password"
+                                value={twitterAiApiKey}
+                                onChange={(event) => setTwitterAiApiKey(event.target.value)}
+                                className="h-9 min-w-0 flex-1 rounded-md border border-white/10 bg-zinc-950 px-2.5 text-sm text-gray-200 outline-none placeholder:text-gray-700 focus:border-sky-300/30"
+                                placeholder={twitterAiKeySaved
+                                  ? tf("features.twitter-signals.keyStoredPlaceholder", "输入新 Key 可替换")
+                                  : tf("features.twitter-signals.keySecurePlaceholder", "输入后保存到系统安全存储")}
+                                autoComplete="new-password"
+                                spellCheck={false}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => void saveTwitterAiApiKey()}
+                                disabled={twitterAiKeyBusy || twitterAiApiKey.trim().length < 8}
+                                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-sky-400/20 bg-sky-400/10 text-sky-300 hover:bg-sky-400/20 disabled:cursor-not-allowed disabled:opacity-35"
+                                title={tf("features.twitter-signals.saveKey", "安全保存 API Key")}
+                                aria-label={tf("features.twitter-signals.saveKey", "安全保存 API Key")}
+                              >
+                                {twitterAiKeyBusy && !twitterAiKeySaved
+                                  ? <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                                  : <Save className="h-3.5 w-3.5" />}
+                              </button>
+                              {twitterAiKeySaved && (
+                                <button
+                                  type="button"
+                                  onClick={() => void deleteTwitterAiApiKey()}
+                                  disabled={twitterAiKeyBusy}
+                                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-red-400/15 bg-red-400/[0.06] text-red-300 hover:bg-red-400/15 disabled:cursor-not-allowed disabled:opacity-35"
+                                  title={tf("features.twitter-signals.removeKey", "移除保存的 API Key")}
+                                  aria-label={tf("features.twitter-signals.removeKey", "移除保存的 API Key")}
+                                >
+                                  {twitterAiKeyBusy
+                                    ? <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                                    : <Trash2 className="h-3.5 w-3.5" />}
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+
+                <div className="border-b border-white/10 px-3 py-3 md:px-4">
+                  <div className="mb-2 flex flex-wrap gap-1.5">
+                    {[
+                      tf("features.twitter-signals.promptHot", "最近最热门的代币有哪些？"),
+                      tf("features.twitter-signals.promptKol", "@0xSun 最近推荐了哪些代币？"),
+                      tf("features.twitter-signals.promptRisk", "这些代币有哪些需要注意的风险？"),
+                    ].map((prompt) => (
+                      <button
+                        key={prompt}
+                        type="button"
+                        onClick={() => void askTwitterResearchAi(prompt)}
+                        disabled={twitterAiBusy}
+                        className="rounded-md border border-white/10 bg-white/[0.04] px-2 py-1 text-[11px] text-gray-400 hover:bg-white/[0.08] hover:text-gray-100 disabled:opacity-40"
+                      >
+                        {prompt}
+                      </button>
+                    ))}
+                  </div>
+                  <form
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void askTwitterResearchAi();
+                    }}
+                    className="flex items-end gap-2"
+                  >
+                    <textarea
+                      value={twitterAiQuestion}
+                      onChange={(event) => setTwitterAiQuestion(event.target.value.slice(0, 2_000))}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && !event.shiftKey) {
+                          event.preventDefault();
+                          void askTwitterResearchAi();
+                        }
+                      }}
+                      className="min-h-20 min-w-0 flex-1 resize-y rounded-md border border-white/10 bg-black/25 px-3 py-2 text-sm leading-5 text-gray-100 outline-none placeholder:text-gray-600 focus:border-sky-300/30"
+                      placeholder={tf("features.twitter-signals.askAnything", "询问热门代币、KOL 观点、推文内容或一般问题...")}
+                    />
+                    <button
+                      type="submit"
+                      disabled={twitterAiBusy || !twitterAiQuestion.trim()}
+                      className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md bg-sky-300 px-3 text-xs font-semibold text-zinc-950 hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {twitterAiBusy ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                      {tf("features.twitter-signals.ask", "提问")}
+                    </button>
+                  </form>
+                  {twitterAiError && <p className="mt-2 text-xs text-red-300">{twitterAiError}</p>}
+                </div>
+
+                {!twitterAiResult ? (
+                  <div className="flex min-h-56 flex-col items-center justify-center px-6 text-center text-gray-600">
+                    <Sparkles className="h-7 w-7" />
+                    <p className="mt-2 text-sm">{tf("features.twitter-signals.aiEmpty", "问题会先检索本地知识库，再由所选模型组织答案。")}</p>
+                  </div>
+                ) : (
+                  <div className="max-h-[calc(100vh-18rem)] overflow-y-auto">
+                    <div className="border-b border-white/10 px-3 py-4 md:px-4">
+                      <div className="mb-2 flex items-center gap-2 text-[11px] text-gray-500">
+                        <Bot className="h-3.5 w-3.5 text-sky-300" />
+                        {twitterAiResult.local_only
+                          ? tf("features.twitter-signals.localAnswer", "本地确定性回答")
+                          : `DSH Agent · ${tf("features.twitter-signals.modelAnswer", "模型回答，已注入本地证据")}`}
+                      </div>
+                      <p className="whitespace-pre-wrap cursor-text select-text text-sm leading-6 text-gray-200">{twitterAiResult.answer}</p>
+                    </div>
+                    {twitterAiResult.tokens.length > 0 && (
+                      <div className="border-b border-white/10">
+                        <h4 className="px-3 py-2 text-xs font-semibold text-gray-400 md:px-4">{tf("features.twitter-signals.tokenRanking", "代币热度")}</h4>
+                        <div className="divide-y divide-white/[0.06]">
+                          {twitterAiResult.tokens.map((token) => (
+                            <div key={`${token.chain}:${token.contract_address || token.token}`} className="grid grid-cols-[minmax(100px,1fr)_auto_auto_auto] items-center gap-3 px-3 py-2 text-xs md:px-4">
+                              <div className="min-w-0">
+                                <span className="font-semibold text-gray-100">{token.token}</span>
+                                <span className="ml-2 text-gray-500">{token.chain}</span>
+                                {token.contract_address && <code className="ml-2 text-emerald-200/80">{compactContractAddress(token.contract_address)}</code>}
+                              </div>
+                              <span className="text-gray-500">{tf("features.twitter-signals.mentions", "提及 {count}", { count: token.mention_count })}</span>
+                              <span className="text-gray-500">KOL {token.kol_count}</span>
+                              <span className="font-semibold tabular-nums text-sky-300">{token.score.toFixed(1)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <div>
+                      <h4 className="px-3 py-2 text-xs font-semibold text-gray-400 md:px-4">
+                        {tf("features.twitter-signals.evidence", "来源证据")} · {twitterAiResult.evidence.length}
+                      </h4>
+                      {twitterAiResult.evidence.length === 0 ? (
+                        <p className="px-4 py-8 text-center text-sm text-gray-600">{tf("features.twitter-signals.noEvidence", "本地知识库没有相关来源")}</p>
+                      ) : (
+                        <div className="divide-y divide-white/[0.06]">
+                          {twitterAiResult.evidence.map((item, index) => (
+                            <article key={`${item.source_url || item.author_handle}:${index}`} className="grid grid-cols-[28px_minmax(0,1fr)_auto] gap-2 px-3 py-3 md:px-4">
+                              <span className="flex h-6 w-6 items-center justify-center rounded bg-white/[0.06] text-[10px] text-gray-500">{index + 1}</span>
+                              <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-gray-500">
+                                  <span className="font-semibold text-gray-300">@{item.author_handle}</span>
+                                  {item.chain && <span>{item.chain}</span>}
+                                  {item.token && <span className="text-emerald-200/80">{item.token}</span>}
+                                  {item.opinion && <span>{item.opinion}</span>}
+                                </div>
+                                <p className="mt-0.5 line-clamp-3 cursor-text select-text whitespace-pre-wrap text-xs leading-5 text-gray-300">{item.text}</p>
+                              </div>
+                              {item.source_url && (
+                                <button
+                                  type="button"
+                                  onClick={() => openSignalTweet(item.source_url || "")}
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-full text-gray-500 hover:bg-white/10 hover:text-white"
+                                  title={tf("features.twitter-signals.openTweet", "打开推文")}
+                                  aria-label={tf("features.twitter-signals.openTweet", "打开推文")}
+                                >
+                                  <ExternalLink className="h-3.5 w-3.5" />
+                                </button>
+                              )}
+                            </article>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </section>
+            )}
                   </div>
                 </div>
               ) : activeTwitterBrowserTab.webviewOpen ? (
@@ -16605,6 +19421,59 @@ export default function Home() {
                 </div>
               )}
             </div>
+            {twitterLoginRequiredOpen && typeof document !== "undefined" && createPortal(
+              <div
+                className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+                onMouseDown={closeTwitterLoginDialog}
+              >
+                <section
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="twitter-login-required-title"
+                  className="flex h-[min(760px,calc(100vh-2rem))] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-white/15 bg-[#15191f] text-gray-100 shadow-2xl"
+                  onMouseDown={(event) => event.stopPropagation()}
+                >
+                  <div className="flex shrink-0 items-start gap-3 px-5 pb-4 pt-5">
+                    <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-sky-300/10 text-sky-300">
+                      <Lock className="h-5 w-5" />
+                    </span>
+                    <div className="min-w-0">
+                      <h2 id="twitter-login-required-title" className="text-base font-semibold text-white">
+                        {tf("features.twitter-signals.loginRequiredTitle", "需要登录 X")}
+                      </h2>
+                      <p className="mt-1 text-sm leading-6 text-gray-400">
+                        {tf("features.twitter-signals.loginRequiredHint", "采集推文需要先在内置浏览器登录 X。登录完成后会自动继续刚才的采集。")}
+                      </p>
+                    </div>
+                  </div>
+                  <div ref={twitterLoginViewportRef} className="relative min-h-[360px] flex-1 bg-black">
+                    {twitterCaptureTab.loading && (
+                      <div className="flex h-full items-center justify-center text-gray-500">
+                        <RefreshCw className="h-5 w-5 animate-spin" />
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex shrink-0 justify-end gap-2 border-t border-white/10 px-5 py-3">
+                    <button
+                      type="button"
+                      onClick={closeTwitterLoginDialog}
+                      className="h-10 rounded-md border border-white/10 px-4 text-sm font-medium text-gray-300 hover:bg-white/10 hover:text-white"
+                    >
+                      {tf("features.twitter-signals.closeLoginPrompt", "关闭")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={openTwitterLoginFlow}
+                      className="inline-flex h-10 items-center gap-2 rounded-md bg-white px-4 text-sm font-semibold text-black hover:bg-gray-200"
+                    >
+                      <RefreshCw className="h-4 w-4" />
+                      {tf("features.twitter-signals.reloadLogin", "重新加载登录页")}
+                    </button>
+                  </div>
+                </section>
+              </div>,
+              document.body,
+            )}
           </div>
         );
       }
@@ -16667,6 +19536,7 @@ export default function Home() {
               <div ref={dappBrowserAddressBarRef} className="shrink-0 border-b border-white/10 bg-zinc-950 px-2 py-2">
                 <BrowserMenu
                   activeTabId={activeDappTab.id}
+                  currentUrl={activeDappTab.url}
                   tabOpen={activeDappTab.id !== DAPP_HOME_TAB_ID && activeDappTab.webviewOpen}
                   onOverlayChange={setDappBrowserOverlayOpen}
                   onNavigate={(url) => openUrlInDappTab(url, {
@@ -16904,10 +19774,281 @@ export default function Home() {
           </div>
         );
 
-      case "settings":
+      case "settings": {
+        const settingsItems: SettingsNavigationItem[] = [
+          {
+            id: "accounts",
+            group: "account",
+            title: t("features.settings.walletTitle"),
+            description: t("features.settings.walletHint"),
+            summary: t("features.settings.itemCount", { count: wallets.length }),
+            keywords: ["wallet", "account", "rename", "export", "钱包", "账户", "重命名", "导出"],
+            icon: <Wallet className="h-4 w-4" />,
+          },
+          {
+            id: "preferences",
+            group: "preferences",
+            title: tf("features.settings.preferencesTitle", "偏好设置"),
+            description: tf("features.settings.preferencesHint", "主题、语言和默认网络"),
+            summary: themeOptions.find((item) => item.id === appTheme)?.label,
+            keywords: ["preferences", "theme", "language", "default network", "偏好", "语言", "主题", "默认网络"],
+            icon: <Settings className="h-4 w-4" />,
+          },
+          {
+            id: "networks",
+            group: "preferences",
+            title: t("features.settings.networksListTitle"),
+            description: t("features.settings.networksListHint"),
+            summary: activeEvmChain
+              ? `${networkLabel(t, settingsNetwork)} · ${activeEvmChain.name}`
+              : networkLabel(t, settingsNetwork),
+            keywords: ["network", "rpc", "solana", "evm", "testnet", "网络", "节点", "测试网"],
+            icon: <Radio className="h-4 w-4" />,
+          },
+          {
+            id: "security",
+            group: "security",
+            title: t("features.settings.securityTitle"),
+            description: t("features.settings.securityHint"),
+            summary: appPreferences.autoLockMinutes === null
+              ? tf("features.settings.autoLockNever", "从不")
+              : tf("features.settings.autoLockMinutes", `${appPreferences.autoLockMinutes} 分钟`, { minutes: appPreferences.autoLockMinutes }),
+            keywords: ["security", "password", "auto lock", "touch id", "biometric", "安全", "密码", "自动锁定", "生物识别"],
+            icon: <ShieldCheck className="h-4 w-4" />,
+          },
+          {
+            id: "address-book",
+            group: "data",
+            title: tf("features.settings.addressBookTitle", "地址簿"),
+            description: tf("features.settings.addressBookHint", "管理 Solana 和 EVM 收款地址"),
+            summary: t("features.settings.itemCount", { count: addressBookEntries.length }),
+            keywords: ["address book", "contacts", "recipient", "solana", "evm", "地址簿", "联系人", "收款人"],
+            icon: <BookUser className="h-4 w-4" />,
+          },
+          {
+            id: "connections",
+            group: "data",
+            title: tf("features.settings.connectionsTitle", "已连接应用"),
+            description: tf("features.settings.connectionsHint", "查看和撤销 DApp 授权"),
+            summary: t("features.settings.itemCount", { count: dappPermissions.length }),
+            keywords: ["connected apps", "dapp", "permissions", "revoke", "已连接应用", "授权", "撤销", "连接"],
+            icon: <Cable className="h-4 w-4" />,
+          },
+          {
+            id: "browser-data",
+            group: "data",
+            title: tf("features.settings.browserDataTitle", "浏览器与数据"),
+            description: tf("features.settings.browserDataHint", "Chrome 数据、下载和诊断"),
+            summary: t("features.settings.itemCount", { count: downloadHistory.length }),
+            keywords: ["browser data", "chrome", "cookie", "password", "history", "download", "浏览器数据", "密码", "历史记录", "导入", "下载"],
+            icon: <Database className="h-4 w-4" />,
+          },
+          {
+            id: "skills",
+            group: "ai",
+            title: aiSkillLocale === "zh" ? "内置技能市场" : "Built-in Skill Market",
+            description: aiSkillLocale === "zh" ? "查看 AI 已内置的 Web3 技能和专业角色" : "Browse built-in Web3 skills and specialist roles",
+            summary: aiSkillLocale === "zh" ? `${AI_SKILL_CATALOG.length} 个可用` : `${AI_SKILL_CATALOG.length} available`,
+            keywords: ["AI", "skill", "skills", "role", "market", "Web3", "技能", "角色卡", "市场", "内置"],
+            icon: <Sparkles className="h-4 w-4" />,
+          },
+          {
+            id: "developer",
+            group: "info",
+            title: tf("features.settings.developerTitle", "开发者设置"),
+            description: tf("features.settings.developerHint", "测试网、交易调试和开发者工具"),
+            keywords: ["developer", "debug", "devtools", "testnet", "开发者", "调试", "测试网"],
+            icon: <Code2 className="h-4 w-4" />,
+          },
+          {
+            id: "about",
+            group: "info",
+            title: tf("features.settings.aboutTitle", "关于 FnzSafe"),
+            description: tf("features.settings.aboutHint", "版本、运行环境和本地数据"),
+            summary: appVersion,
+            keywords: ["about", "version", "runtime", "diagnostics", "关于", "版本", "运行环境", "诊断"],
+            icon: <Info className="h-4 w-4" />,
+          },
+        ];
+        const settingsGroups = [
+          { id: "account" as const, title: t("features.settings.accountsGroup") },
+          { id: "preferences" as const, title: tf("features.settings.preferencesGroup", "偏好与网络") },
+          { id: "security" as const, title: tf("features.settings.securityGroup", "安全与隐私") },
+          { id: "data" as const, title: tf("features.settings.dataGroup", "数据与连接") },
+          { id: "ai" as const, title: aiSkillLocale === "zh" ? "AI 能力" : "AI capabilities" },
+          { id: "info" as const, title: tf("features.settings.infoGroup", "高级与关于") },
+        ];
+        const normalizedAddressBookSearch = addressBookSearch.trim().toLocaleLowerCase();
+        const filteredAddressBookEntries = addressBookEntries.filter((entry) =>
+          `${entry.label} ${entry.address} ${entry.network} ${entry.chain}`
+            .toLocaleLowerCase()
+            .includes(normalizedAddressBookSearch),
+        );
         return (
-          <div className="space-y-6">
-            <section className="space-y-3 rounded-2xl border border-white/10 bg-white/5 p-4">
+          <SettingsCenterLayout
+            section={settingsSection}
+            items={settingsItems}
+            groups={settingsGroups}
+            search={settingsSearch}
+            onSearchChange={setSettingsSearch}
+            onSectionChange={setSettingsSection}
+            title={t("features.settings.title")}
+            searchPlaceholder={t("features.settings.searchPlaceholder")}
+            noResultsLabel={t("features.settings.searchNoResults")}
+            backLabel={t("features.settings.backToSettings")}
+          >
+
+                {settingsSection === "preferences" && (
+                  <div className="space-y-4">
+                    <section className="space-y-4 rounded-lg border border-white/10 bg-white/[0.035] p-4">
+                      <div>
+                        <h3 className="text-sm font-semibold text-gray-100">{tf("features.settings.appearanceTitle", "外观与语言")}</h3>
+                        <p className="mt-1 text-xs text-gray-500">{tf("features.settings.appearanceHint", "这些选项不会影响钱包、地址簿或授权数据。")}</p>
+                      </div>
+                      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-3">
+                        <span className="text-sm text-gray-300">{t("app.themeStyle")}</span>
+                        {renderThemeSwitcher(true)}
+                      </div>
+                      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-3">
+                        <span className="text-sm text-gray-300">{tf("features.settings.language", "语言")}</span>
+                        <LanguageSwitcher />
+                      </div>
+                    </section>
+                    <section className="space-y-3 rounded-lg border border-white/10 bg-white/[0.035] p-4">
+                      <label className="block text-sm text-gray-300">
+                        <span className="mb-1.5 block">{tf("features.settings.defaultNetwork", "默认 Solana 网络")}</span>
+                        <select
+                          value={appPreferences.defaultSolanaNetwork}
+                          onChange={(event) => setAppPreferences((previous) => ({
+                            ...previous,
+                            defaultSolanaNetwork: event.target.value as AppNetwork,
+                          }))}
+                          className="h-10 w-full rounded-lg border border-white/10 bg-black/20 px-3 text-sm text-gray-100"
+                        >
+                          {(["mainnet", "devnet", "testnet"] as AppNetwork[]).map((network) => (
+                            <option key={network} value={network}>{networkLabel(t, network)}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="flex items-center justify-between gap-4 border-t border-white/10 pt-3 text-sm text-gray-300">
+                        <span>{tf("features.settings.showTestnets", "显示测试网")}</span>
+                        <input
+                          type="checkbox"
+                          checked={appPreferences.showTestnets}
+                          onChange={(event) => setAppPreferences((previous) => ({ ...previous, showTestnets: event.target.checked }))}
+                          className="h-4 w-4 accent-violet-500"
+                        />
+                      </label>
+                    </section>
+                  </div>
+                )}
+
+                {settingsSection === "address-book" && (
+                  <div className="space-y-4">
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <label className="relative min-w-0 flex-1">
+                        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" />
+                        <input
+                          value={addressBookSearch}
+                          onChange={(event) => setAddressBookSearch(event.target.value)}
+                          placeholder={tf("features.settings.addressSearch", "搜索标签、地址或网络")}
+                          className="h-10 w-full rounded-lg border border-white/10 bg-white/[0.035] pl-9 pr-3 text-sm text-gray-100 outline-none"
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setAddressBookEditor({
+                          label: "",
+                          chain: "solana",
+                          network: effectiveNetwork,
+                          address: "",
+                        })}
+                        className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-white px-3 text-sm font-semibold text-black hover:bg-gray-200"
+                      >
+                        <Plus className="h-4 w-4" />
+                        {tf("features.settings.addressAdd", "新增地址")}
+                      </button>
+                    </div>
+                    {addressBookEditor && (
+                      <section className="space-y-3 rounded-lg border border-violet-300/25 bg-violet-400/[0.06] p-4">
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          <input value={addressBookEditor.label} onChange={(event) => setAddressBookEditor((previous) => previous && ({ ...previous, label: event.target.value }))} placeholder={tf("features.settings.addressLabel", "标签")} className="h-10 rounded-lg border border-white/10 bg-black/20 px-3 text-sm text-gray-100" />
+                          <select value={addressBookEditor.chain} onChange={(event) => setAddressBookEditor((previous) => previous && ({ ...previous, chain: event.target.value as "solana" | "evm", network: event.target.value === "solana" ? effectiveNetwork : String(activeEvmChain?.chain_id || "1") }))} className="h-10 rounded-lg border border-white/10 bg-black/20 px-3 text-sm text-gray-100">
+                            <option value="solana">Solana</option>
+                            <option value="evm">EVM</option>
+                          </select>
+                          <input value={addressBookEditor.network} onChange={(event) => setAddressBookEditor((previous) => previous && ({ ...previous, network: event.target.value }))} placeholder={tf("features.settings.addressNetwork", "网络 / Chain ID")} className="h-10 rounded-lg border border-white/10 bg-black/20 px-3 text-sm text-gray-100" />
+                          <input value={addressBookEditor.address} onChange={(event) => setAddressBookEditor((previous) => previous && ({ ...previous, address: event.target.value }))} placeholder={tf("features.settings.addressValue", "地址")} className="h-10 min-w-0 rounded-lg border border-white/10 bg-black/20 px-3 font-mono text-sm text-gray-100" />
+                        </div>
+                        <div className="flex justify-end gap-2">
+                          <button type="button" onClick={() => setAddressBookEditor(null)} className="h-9 rounded-lg border border-white/10 px-3 text-sm text-gray-300">{t("common.cancel")}</button>
+                          <button type="button" onClick={() => void saveAddressBookEntry()} disabled={settingsBusy} className="inline-flex h-9 items-center gap-2 rounded-lg bg-white px-3 text-sm font-semibold text-black disabled:opacity-50"><Save className="h-4 w-4" />{tf("features.settings.addressSave", "保存")}</button>
+                        </div>
+                      </section>
+                    )}
+                    <section className="overflow-hidden rounded-lg border border-white/10 bg-white/[0.035] divide-y divide-white/[0.08]">
+                      {filteredAddressBookEntries.map((entry) => (
+                        <div key={entry.id} className="flex items-center gap-3 p-3">
+                          <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-white/[0.06] text-gray-300"><BookUser className="h-4 w-4" /></span>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2"><span className="text-sm font-medium text-gray-100">{entry.label}</span><span className="text-[11px] text-gray-500">{entry.chain === "evm" ? `EVM ${entry.network}` : `Solana ${entry.network}`}</span></div>
+                            <code className="mt-1 block truncate text-xs text-gray-500" title={entry.address}>{entry.address}</code>
+                          </div>
+                          <button type="button" onClick={() => setAddressBookEditor({ id: entry.id, label: entry.label, chain: entry.chain, network: entry.network, address: entry.address })} className="inline-flex h-8 w-8 items-center justify-center rounded-md text-gray-400 hover:bg-white/10" title={tf("features.settings.addressEdit", "编辑")}><Pencil className="h-3.5 w-3.5" /></button>
+                          <button type="button" onClick={() => void deleteAddressBookEntry(entry)} disabled={settingsBusy} className="inline-flex h-8 w-8 items-center justify-center rounded-md text-red-300 hover:bg-red-500/10 disabled:opacity-50" title={tf("features.settings.addressDelete", "删除")}><Trash2 className="h-3.5 w-3.5" /></button>
+                        </div>
+                      ))}
+                      {filteredAddressBookEntries.length === 0 && (
+                        <p className="p-6 text-center text-sm text-gray-500">
+                          {addressBookEntries.length === 0
+                            ? tf("features.settings.addressEmpty", "还没有保存地址")
+                            : tf("features.settings.addressNoResults", "没有匹配的地址")}
+                        </p>
+                      )}
+                    </section>
+                  </div>
+                )}
+
+                {settingsSection === "connections" && (
+                  <section className="overflow-hidden rounded-lg border border-white/10 bg-white/[0.035] divide-y divide-white/[0.08]">
+                    {dappPermissions.map((permission) => (
+                      <div key={`${permission.origin}:${permission.walletId}:${permission.network}`} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center">
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-medium text-gray-100">{permission.appName}</p>
+                          <p className="mt-1 truncate text-xs text-gray-500" title={permission.origin}>{permission.origin}</p>
+                          <p className="mt-1 text-[11px] text-gray-600">{permission.network} · {shortAddress(permission.walletId)} · {new Date(permission.lastUsedAtMs).toLocaleString(dateTimeLocale)}</p>
+                        </div>
+                        <button type="button" onClick={() => void revokeDappPermission(permission)} disabled={settingsBusy} className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-red-300/20 px-3 text-xs text-red-200 hover:bg-red-500/10 disabled:opacity-50"><LogOut className="h-3.5 w-3.5" />{tf("features.settings.disconnect", "断开连接")}</button>
+                      </div>
+                    ))}
+                    {dappPermissions.length === 0 && <p className="p-6 text-center text-sm text-gray-500">{tf("features.settings.connectionsEmpty", "没有已授权的应用")}</p>}
+                  </section>
+                )}
+
+                {settingsSection === "skills" && (
+                  <AiSkillMarket locale={aiSkillLocale} />
+                )}
+
+                {settingsSection === "developer" && (
+                  <section className="space-y-4 rounded-lg border border-white/10 bg-white/[0.035] p-4">
+                    <label className="flex items-center justify-between gap-4 text-sm text-gray-300"><span>{tf("features.settings.showTestnets", "显示测试网")}</span><input type="checkbox" checked={appPreferences.showTestnets} onChange={(event) => setAppPreferences((previous) => ({ ...previous, showTestnets: event.target.checked }))} className="h-4 w-4 accent-violet-500" /></label>
+                    <label className="flex items-center justify-between gap-4 border-t border-white/10 pt-4 text-sm text-gray-300"><span>{tf("features.settings.transactionDebug", "显示交易调试详情")}</span><input type="checkbox" checked={appPreferences.transactionDebugDetails} onChange={(event) => setAppPreferences((previous) => ({ ...previous, transactionDebugDetails: event.target.checked }))} className="h-4 w-4 accent-violet-500" /></label>
+                    <div className="border-t border-white/10 pt-4"><button type="button" onClick={() => void invoke("open_developer_tools").catch((error) => toast.error(errorMessage(error, "Developer tools unavailable")))} disabled={!isTauriWebview()} className="inline-flex h-10 items-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-200 hover:bg-white/10 disabled:opacity-40"><Code2 className="h-4 w-4" />{tf("features.settings.openDevtools", "打开开发者工具")}</button></div>
+                  </section>
+                )}
+
+                {settingsSection === "about" && (
+                  <section className="space-y-3 rounded-lg border border-white/10 bg-white/[0.035] p-4 text-sm">
+                    <div className="flex justify-between gap-4"><span className="text-gray-500">{tf("features.settings.versionLabel", "版本")}</span><span className="text-gray-200">{settingsDiagnostics?.appVersion || appVersion}</span></div>
+                    <div className="flex justify-between gap-4 border-t border-white/10 pt-3"><span className="text-gray-500">{tf("features.settings.runtimeLabel", "运行环境")}</span><span className="text-gray-200">{settingsDiagnostics?.runtime || (isTauriWebview() ? "Tauri CEF" : "Web")}</span></div>
+                    {settingsDiagnostics?.databasePath && <div className="border-t border-white/10 pt-3"><span className="text-gray-500">{tf("features.settings.dataPathLabel", "数据目录")}</span><code className="mt-1 block break-all text-xs text-gray-300">{settingsDiagnostics.databasePath}</code></div>}
+                    <div className="border-t border-white/10 pt-3"><button type="button" onClick={() => void exportSanitizedDiagnostics()} disabled={settingsBusy} className="inline-flex h-10 items-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-200 hover:bg-white/10 disabled:opacity-50"><Download className="h-4 w-4" />{tf("features.settings.exportDiagnostics", "导出脱敏诊断信息")}</button></div>
+                  </section>
+                )}
+
+                {settingsSection === "networks" && (
+                  <div className="space-y-4">
+            <section className="space-y-3 rounded-lg border border-white/10 bg-white/[0.035] p-4">
               <div>
                 <h3 className="text-sm font-semibold text-gray-200">{t("features.settings.networkTitle")}</h3>
                 <p className="mt-1 text-xs text-gray-500">{t("features.settings.networkHint")}</p>
@@ -17023,16 +20164,40 @@ export default function Home() {
                   {t("features.settings.evmChainRefresh")}
                 </button>
               </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {evmChains.filter((chain) => appPreferences.showTestnets || !chain.testnet).map((chain) => {
+                  const enabled = enabledEvmChainIds.includes(chain.chain_id);
+                  return (
+                    <label key={chain.chain_id} className="flex min-w-0 items-center gap-2 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-gray-300">
+                      <input
+                        type="checkbox"
+                        checked={enabled}
+                        onChange={(event) => setAppPreferences((previous) => {
+                          const next = toggleEnabledEvmChain(
+                            evmChains,
+                            previous,
+                            chain.chain_id,
+                            event.target.checked,
+                          );
+                          return { ...previous, enabledEvmChainIds: next };
+                        })}
+                      />
+                      <span className="min-w-0 flex-1 truncate">{chain.name}</span>
+                      <span className="text-[11px] text-gray-600">{chain.chain_id}</span>
+                    </label>
+                  );
+                })}
+              </div>
               <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
                 <label className="space-y-1 text-sm text-gray-300">
                   {t("features.settings.evmChainSelect")}
                   <select
                     value={evmChainId}
                     onChange={(event) => selectEvmChain(event.target.value)}
-                    disabled={evmChains.length === 0}
+                    disabled={visibleEvmChains.length === 0}
                     className="h-10 w-full rounded-lg border border-white/10 bg-black/20 px-3 text-sm text-white outline-none focus:ring-2 focus:ring-white/20 disabled:opacity-50"
                   >
-                    {evmChains.map((chain) => (
+                    {visibleEvmChains.map((chain) => (
                       <option key={chain.chain_id} value={chain.chain_id}>
                         {chain.name} ({chain.chain_id}) {chain.testnet ? t("features.settings.evmChainTestnet") : t("features.settings.evmChainMainnet")}
                       </option>
@@ -17061,25 +20226,123 @@ export default function Home() {
                 </div>
                 <p className="mt-2 break-all">{activeEvmChain?.rpc_url || t("features.settings.evmChainNoRpc")}</p>
               </div>
-            </section>
-
-            <section className="rounded-2xl border border-white/10 bg-white/5 p-4">
-              {renderWalletAccountManager()}
-            </section>
-
-            <section className="space-y-3 rounded-2xl border border-white/10 bg-white/5 p-4">
-              <div>
-                <h3 className="text-sm font-semibold text-gray-200">{t("features.settings.walletToolsTitle")}</h3>
-                <p className="mt-1 text-xs text-gray-500">{t("features.settings.walletToolsHint")}</p>
+              <div className="border-t border-white/10 pt-3">
+                <button
+                  type="button"
+                  onClick={() => setEvmCustomChainEditorOpen((open) => !open)}
+                  className="flex w-full items-center justify-between gap-3 text-left text-sm font-semibold text-gray-200"
+                  aria-expanded={evmCustomChainEditorOpen}
+                >
+                  <span>{t("features.settings.evmCustomNetwork")}</span>
+                  {evmCustomChainEditorOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                </button>
+                {evmCustomChainEditorOpen && (
+                  <div className="mt-3 space-y-3">
+                    <p className="text-xs text-gray-500">{t("features.settings.evmCustomNetworkHint")}</p>
+                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                      <input
+                        value={evmNewChain.chainId}
+                        onChange={(event) => setEvmNewChain((previous) => ({ ...previous, chainId: event.target.value }))}
+                        placeholder={t("features.settings.evmCustomChainId")}
+                        className="h-10 rounded-lg border border-white/10 bg-black/20 px-3 text-sm text-white outline-none focus:ring-2 focus:ring-white/20"
+                      />
+                      <input
+                        value={evmNewChain.name}
+                        onChange={(event) => setEvmNewChain((previous) => ({ ...previous, name: event.target.value }))}
+                        placeholder={t("features.settings.evmCustomName")}
+                        className="h-10 rounded-lg border border-white/10 bg-black/20 px-3 text-sm text-white outline-none focus:ring-2 focus:ring-white/20"
+                      />
+                      <input
+                        value={evmNewChain.nativeSymbol}
+                        onChange={(event) => setEvmNewChain((previous) => ({ ...previous, nativeSymbol: event.target.value }))}
+                        placeholder={t("features.settings.evmCustomSymbol")}
+                        className="h-10 rounded-lg border border-white/10 bg-black/20 px-3 text-sm text-white outline-none focus:ring-2 focus:ring-white/20"
+                      />
+                      <input
+                        type="url"
+                        value={evmNewChain.rpcUrl}
+                        onChange={(event) => setEvmNewChain((previous) => ({ ...previous, rpcUrl: event.target.value }))}
+                        placeholder={t("features.settings.evmCustomRpc")}
+                        className="h-10 rounded-lg border border-white/10 bg-black/20 px-3 text-sm text-white outline-none focus:ring-2 focus:ring-white/20"
+                      />
+                      <input
+                        type="url"
+                        value={evmNewChain.explorerUrl}
+                        onChange={(event) => setEvmNewChain((previous) => ({ ...previous, explorerUrl: event.target.value }))}
+                        placeholder={t("features.settings.evmCustomExplorer")}
+                        className="h-10 rounded-lg border border-white/10 bg-black/20 px-3 text-sm text-white outline-none focus:ring-2 focus:ring-white/20"
+                      />
+                      <label className="flex h-10 items-center gap-2 rounded-lg border border-white/10 bg-black/20 px-3 text-sm text-gray-200">
+                        <input
+                          type="checkbox"
+                          checked={evmNewChain.testnet}
+                          onChange={(event) => setEvmNewChain((previous) => ({ ...previous, testnet: event.target.checked }))}
+                        />
+                        {t("features.settings.evmCustomTestnet")}
+                      </label>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={addDesktopEvmChain}
+                        className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-white px-3 text-sm font-semibold text-black hover:bg-gray-200"
+                      >
+                        <Plus className="h-4 w-4" />
+                        {t("features.settings.evmCustomAdd")}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={removeDesktopEvmChain}
+                        disabled={!activeEvmChainIsCustom}
+                        className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-200 hover:bg-white/10 disabled:opacity-50"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                        {t("features.settings.evmCustomDelete")}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
-              {renderActionGrid([
-                { id: "create-keystore", title: t("features.create-keystore.title"), icon: <Key className="w-4 h-4" /> },
-                { id: "import-keystore", title: t("features.import-keystore.title"), icon: <Upload className="w-4 h-4" /> },
-                { id: "import-mnemonic", title: t("features.import-mnemonic.title"), icon: <Hash className="w-4 h-4" /> },
-              ])}
             </section>
+                  </div>
+                )}
 
-            <section className="space-y-3 rounded-2xl border border-white/10 bg-white/5 p-4">
+                {settingsSection === "accounts" && (
+                  <section className="rounded-lg border border-white/10 bg-white/[0.035] p-4">
+                    {renderWalletAccountManager()}
+                  </section>
+                )}
+
+                {settingsSection === "accounts" && (
+                  <section className="space-y-3 rounded-lg border border-white/10 bg-white/[0.035] p-4">
+                    <div>
+                      <h3 className="text-sm font-semibold text-gray-200">{t("features.settings.walletToolsTitle")}</h3>
+                      <p className="mt-1 text-xs text-gray-500">{t("features.settings.walletToolsHint")}</p>
+                    </div>
+                    {renderActionGrid([
+                      { id: "create-wallet", title: tf("features.create-wallet.title", "Create Wallet"), icon: <Wallet className="w-4 h-4" /> },
+                      { id: "import-keystore", title: t("features.import-keystore.title"), icon: <Upload className="w-4 h-4" /> },
+                      { id: "import-mnemonic", title: t("features.import-mnemonic.title"), icon: <Hash className="w-4 h-4" /> },
+                    ])}
+                  </section>
+                )}
+
+                {settingsSection === "browser-data" && (
+            <section className="space-y-3 rounded-lg border border-white/10 bg-white/[0.035] p-4">
+              <div className="flex flex-col gap-3 rounded-lg border border-white/10 bg-black/20 p-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-100">{tf("features.settings.chromeImportTitle", "导入 Chrome 数据")}</p>
+                  <p className="mt-1 text-xs text-gray-500">{tf("features.settings.chromeImportHint", "复用现有导入窗口选择 Cookie、密码和历史记录。")}</p>
+                </div>
+                <button type="button" onClick={openChromeImportFromSettings} className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-xs text-gray-200 hover:bg-white/10"><Upload className="h-3.5 w-3.5" />{tf("features.settings.chromeImportButton", "导入 Chrome 数据")}</button>
+              </div>
+              <div className="flex flex-col gap-3 rounded-lg border border-white/10 bg-black/20 p-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-100">{tf("features.settings.diagnosticsTitle", "本地诊断")}</p>
+                  <p className="mt-1 text-xs text-gray-500">{tf("features.settings.diagnosticsHint", "仅包含版本、运行环境、数据路径和记录数量，不包含密码或秘密。")}</p>
+                </div>
+                <button type="button" onClick={() => void exportSanitizedDiagnostics()} disabled={settingsBusy} className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-xs text-gray-200 hover:bg-white/10 disabled:opacity-50"><Download className="h-3.5 w-3.5" />{tf("features.settings.exportDiagnostics", "导出诊断")}</button>
+              </div>
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div>
                   <h3 className="text-sm font-semibold text-gray-200">{t("features.settings.downloadsTitle")}</h3>
@@ -17143,11 +20406,30 @@ export default function Home() {
                 </div>
               )}
             </section>
+                )}
 
-            <section className="space-y-3 rounded-2xl border border-white/10 bg-white/5 p-4">
+                {settingsSection === "security" && (
+            <section className="space-y-3 rounded-lg border border-white/10 bg-white/[0.035] p-4">
               <div>
                 <h3 className="text-sm font-semibold text-gray-200">{t("features.settings.securityTitle")}</h3>
                 <p className="mt-1 text-xs text-gray-500">{t("features.settings.securityHint")}</p>
+              </div>
+              <div className="grid gap-3 border-t border-white/10 pt-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+                <label className="text-sm text-gray-300">
+                  <span className="mb-1.5 block">{tf("features.settings.autoLockTitle", "自动锁定")}</span>
+                  <select
+                    value={appPreferences.autoLockMinutes ?? "never"}
+                    onChange={(event) => setAppPreferences((previous) => ({
+                      ...previous,
+                      autoLockMinutes: event.target.value === "never" ? null : Number(event.target.value) as 1 | 5 | 15 | 30 | 60,
+                    }))}
+                    className="h-10 w-full rounded-lg border border-white/10 bg-black/20 px-3 text-sm text-gray-100"
+                  >
+                    <option value="never">{tf("features.settings.autoLockNever", "从不")}</option>
+                    {[1, 5, 15, 30, 60].map((minutes) => <option key={minutes} value={minutes}>{tf("features.settings.autoLockMinutes", `${minutes} 分钟`, { minutes })}</option>)}
+                  </select>
+                </label>
+                <button type="button" onClick={lockApplication} disabled={wallets.length === 0} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-200 hover:bg-white/10 disabled:opacity-40"><Lock className="h-4 w-4" />{tf("features.settings.lockNow", "立即锁定")}</button>
               </div>
               {renderActionGrid([
                 { id: "setup-2fa", title: t("features.setup-2fa.title"), icon: <Lock className="w-4 h-4" /> },
@@ -17155,8 +20437,10 @@ export default function Home() {
                 { id: "unlock-tfa", title: t("features.unlock-tfa.title"), icon: <Unlock className="w-4 h-4" /> },
               ])}
             </section>
-          </div>
+                )}
+          </SettingsCenterLayout>
         );
+      }
 
       case "wsol-workbench":
         return (
@@ -20838,10 +24122,16 @@ export default function Home() {
                     <label className="block text-sm font-medium mb-2">{t("formUi.recipientAddress")}</label>
                     <input
                       value={formData.recipient || ""}
+                      list="solana-address-book-recipients"
                       onChange={(e) => handleFormChange("recipient", e.target.value)}
                       className="w-full px-4 py-2 bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-white/20 text-white"
                       placeholder={t("formUi.placeholderRecipient")}
                     />
+                    <datalist id="solana-address-book-recipients">
+                      {addressBookEntries.filter((entry) => entry.chain === "solana" && entry.network === effectiveNetwork).map((entry) => (
+                        <option key={entry.id} value={entry.address}>{entry.label}</option>
+                      ))}
+                    </datalist>
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div>
@@ -22419,15 +25709,17 @@ export default function Home() {
         .find((c) => c?.id === selectedForm)?.label ||
       ({
         "wallet-list": t("features.wallet-list.title"),
+        "wallet-send": tf("features.unified-wallet.selectAsset", "Select an asset"),
+        "wallet-receive": tf("features.unified-wallet.receiveAddress", "Receive address"),
         "wsol-workbench": t("features.wsol-workbench.title"),
         "pump-workbench": t("features.pump-workbench.title"),
-        "browser-workbench": tf("features.browser-workbench.title", "浏览器"),
         "dapp-store": tf("features.dapp-store.title", "DApp Store"),
         "twitter-signals": tf("features.twitter-signals.title", "推文线索"),
         "contract-tools": tf("features.contract-tools.title", "合约工具"),
         "program-workbench": t("features.program-workbench.title"),
         "nonce-workbench": t("features.nonce-workbench.title"),
         "settings": t("features.settings.title"),
+        "create-wallet": tf("features.create-wallet.title", "Create Wallet"),
         "create-encrypted": t("features.create-encrypted.title"),
         "create-keystore": t("features.create-keystore.title"),
         "import-keystore": t("features.import-keystore.title"),
@@ -22531,6 +25823,38 @@ export default function Home() {
       className="app-shell flex min-h-screen flex-col bg-black text-white lg:h-screen lg:flex-row"
       data-app-theme={appTheme}
     >
+      {applicationLocked && effectiveWallet && (
+        <div className="fixed inset-0 z-[400] flex items-center justify-center bg-zinc-950 px-4 text-white">
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void unlockWithPassword();
+            }}
+            className="w-full max-w-sm space-y-5"
+          >
+            <div className="text-center">
+              <div className="mx-auto inline-flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-white/[0.06]"><Lock className="h-5 w-5" /></div>
+              <h2 className="mt-4 text-xl font-semibold">{tf("features.settings.lockedTitle", "FnzSafe 已锁定")}</h2>
+              <p className="mt-1 text-sm text-gray-500">{effectiveWallet.name}</p>
+            </div>
+            <label className="block text-sm text-gray-300">
+              <span className="mb-1.5 block">{tf("features.settings.unlockPassword", "钱包密码")}</span>
+              <input
+                type="password"
+                value={unlockPassword}
+                onChange={(event) => setUnlockPassword(event.target.value)}
+                autoComplete="current-password"
+                autoFocus
+                className="h-11 w-full rounded-lg border border-white/10 bg-white/[0.05] px-3 text-white outline-none focus:border-violet-300/40"
+              />
+            </label>
+            <button type="submit" disabled={unlockBusy || !unlockPassword} className="h-11 w-full rounded-lg bg-white text-sm font-semibold text-black hover:bg-gray-200 disabled:opacity-40">{unlockBusy ? t("common.loading") : tf("features.settings.unlock", "解锁")}</button>
+            {biometricConfiguredFor(effectiveWallet) && (
+              <button type="button" onClick={() => void unlockWithBiometric()} disabled={unlockBusy} className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg border border-white/10 text-sm text-gray-200 hover:bg-white/10 disabled:opacity-40"><Fingerprint className="h-4 w-4" />Touch ID</button>
+            )}
+          </form>
+        </div>
+      )}
       {/* Left Sidebar */}
       <div className={`app-sidebar w-full bg-black/40 backdrop-blur-xl border-b border-white/10 flex flex-col transition-[width] duration-200 lg:h-screen lg:border-b-0 lg:border-r ${
         desktopSidebarCollapsed ? "lg:w-20" : "lg:w-80"

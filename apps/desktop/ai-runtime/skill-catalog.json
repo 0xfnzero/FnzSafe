@@ -1,0 +1,181 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "web3-market-research",
+      "kind": "skill",
+      "category": "research",
+      "icon": "search",
+      "name": { "zh": "Web3 市场研究", "en": "Web3 Market Research" },
+      "description": { "zh": "跨市场、链生态和协议执行多来源研究，区分事实、推断与高风险情景。", "en": "Research assets, chain ecosystems, and protocols across multiple sources while separating facts, inference, and speculative scenarios." },
+      "useCases": { "zh": ["项目与代币尽调", "链生态机会比较"], "en": ["Project and token due diligence", "Chain ecosystem comparison"] },
+      "sources": ["CoinGecko", "DeFiLlama", "DexScreener", "Web"],
+      "tools": ["market_search", "global_market_snapshot", "defi_chain_overview", "dex_pair_search"]
+    },
+    {
+      "id": "coingecko-market-intelligence",
+      "kind": "skill",
+      "category": "market",
+      "icon": "chart",
+      "name": { "zh": "CoinGecko 市场情报", "en": "CoinGecko Market Intelligence" },
+      "description": { "zh": "读取全局行情、市场排行、赛道分类和历史价格，形成可复核的市场比较。", "en": "Use global metrics, rankings, categories, and price history to build verifiable market comparisons." },
+      "useCases": { "zh": ["币种排行与趋势", "赛道轮动与历史表现"], "en": ["Token rankings and trends", "Category rotation and historical performance"] },
+      "sources": ["CoinGecko"],
+      "tools": ["market_search", "trending_tokens", "global_market_snapshot", "market_leaders", "market_categories", "token_market_chart"]
+    },
+    {
+      "id": "dex-liquidity-analysis",
+      "kind": "skill",
+      "category": "market",
+      "icon": "activity",
+      "name": { "zh": "DEX 流动性分析", "en": "DEX Liquidity Analysis" },
+      "description": { "zh": "检查交易对流动性、成交量、FDV、价格变化和新池年龄，识别不可交易或易操纵市场。", "en": "Inspect pair liquidity, volume, FDV, price changes, and pool age to identify thin or manipulable markets." },
+      "useCases": { "zh": ["合约地址行情核验", "新币交易深度筛查"], "en": ["Contract-address market checks", "New-token depth screening"] },
+      "sources": ["DexScreener"],
+      "tools": ["dex_pair_search", "token_risk_snapshot", "latest_token_profiles"]
+    },
+    {
+      "id": "defi-protocol-analysis",
+      "kind": "skill",
+      "category": "defi",
+      "icon": "layers",
+      "name": { "zh": "DeFi 协议分析", "en": "DeFi Protocol Analysis" },
+      "description": { "zh": "按链、类别和 TVL 比较协议，辨别激励增长、集中度和协议采用情况。", "en": "Compare protocols by chain, category, and TVL while examining incentives, concentration, and adoption." },
+      "useCases": { "zh": ["协议与竞品比较", "链上生态头部项目"], "en": ["Protocol and competitor comparison", "Leading projects by chain"] },
+      "sources": ["DeFiLlama"],
+      "tools": ["defi_chain_overview", "defi_protocol_search"]
+    },
+    {
+      "id": "defi-yield-screening",
+      "kind": "skill",
+      "category": "defi",
+      "icon": "trending",
+      "name": { "zh": "DeFi 收益池筛查", "en": "DeFi Yield Screening" },
+      "description": { "zh": "按链、币种、APY、TVL 和稳定币属性筛选收益池，并显式分析无常损失与激励衰减。", "en": "Filter yield pools by chain, symbol, APY, TVL, and stablecoin status with explicit IL and incentive-decay analysis." },
+      "useCases": { "zh": ["稳定币收益比较", "高收益池风险初筛"], "en": ["Stablecoin yield comparison", "High-yield pool risk triage"] },
+      "sources": ["DeFiLlama Yields"],
+      "tools": ["defi_yield_search"]
+    },
+    {
+      "id": "stablecoin-market-analysis",
+      "kind": "skill",
+      "category": "defi",
+      "icon": "coins",
+      "name": { "zh": "稳定币流动性分析", "en": "Stablecoin Liquidity Analysis" },
+      "description": { "zh": "比较各链稳定币流通规模和变化，将稳定币流动性作为生态采用与资金迁移信号。", "en": "Compare chain-level stablecoin supply and changes as signals of ecosystem adoption and capital migration." },
+      "useCases": { "zh": ["跨链资金流比较", "生态流动性健康度"], "en": ["Cross-chain capital comparison", "Ecosystem liquidity health"] },
+      "sources": ["DeFiLlama Stablecoins"],
+      "tools": ["stablecoin_chain_overview"]
+    },
+    {
+      "id": "protocol-revenue-analysis",
+      "kind": "skill",
+      "category": "defi",
+      "icon": "database",
+      "name": { "zh": "协议费用与收入分析", "en": "Protocol Fees and Revenue" },
+      "description": { "zh": "比较协议费用、收入及变化趋势，避免只用 TVL 或代币价格判断真实使用。", "en": "Compare protocol fees, revenue, and trend changes instead of treating TVL or token price as usage." },
+      "useCases": { "zh": ["协议基本面排名", "收入与估值交叉验证"], "en": ["Protocol fundamental ranking", "Revenue and valuation cross-checks"] },
+      "sources": ["DeFiLlama Fees"],
+      "tools": ["protocol_fees_overview"]
+    },
+    {
+      "id": "crypto-news-intelligence",
+      "kind": "skill",
+      "category": "intelligence",
+      "icon": "news",
+      "name": { "zh": "加密新闻情报", "en": "Crypto News Intelligence" },
+      "description": { "zh": "聚合公开加密新闻源，按主题筛选并要求打开原文验证影响市场的事实。", "en": "Aggregate public crypto news feeds, filter by topic, and require source-page verification for market-moving claims." },
+      "useCases": { "zh": ["项目与监管快讯", "代币事件时间线"], "en": ["Project and regulatory updates", "Token event timelines"] },
+      "sources": ["CoinDesk", "Cointelegraph", "Decrypt"],
+      "tools": ["crypto_news"]
+    },
+    {
+      "id": "market-sentiment-analysis",
+      "kind": "skill",
+      "category": "market",
+      "icon": "flame",
+      "name": { "zh": "市场情绪分析", "en": "Market Sentiment Analysis" },
+      "description": { "zh": "结合恐惧贪婪指数、趋势币和市场广度评估情绪，但不把情绪指标当作买卖信号。", "en": "Combine fear-and-greed history, trending assets, and market breadth without treating sentiment as a trading signal." },
+      "useCases": { "zh": ["风险偏好判断", "市场过热或恐慌检查"], "en": ["Risk-appetite assessment", "Euphoria or panic checks"] },
+      "sources": ["Alternative.me", "CoinGecko"],
+      "tools": ["market_sentiment", "global_market_snapshot", "trending_tokens"]
+    },
+    {
+      "id": "kol-signal-analysis",
+      "kind": "skill",
+      "category": "intelligence",
+      "icon": "radio",
+      "name": { "zh": "KOL 信号分析", "en": "KOL Signal Analysis" },
+      "description": { "zh": "分析钱包本地采集的 KOL 帖子，区分推荐、中性提及、批评和转发语境。", "en": "Analyze locally captured KOL posts while distinguishing endorsements, neutral mentions, criticism, and repost context." },
+      "useCases": { "zh": ["近期代币提及", "多 KOL 信号交叉验证"], "en": ["Recent token mentions", "Cross-KOL signal verification"] },
+      "sources": ["FnzSafe local KOL evidence"],
+      "tools": []
+    },
+    {
+      "id": "token-risk-screening",
+      "kind": "skill",
+      "category": "risk",
+      "icon": "shield",
+      "name": { "zh": "代币风险筛查", "en": "Token Risk Screening" },
+      "description": { "zh": "结合合约安全、持仓特征、流动性、FDV 和池龄进行只读风险初筛。", "en": "Combine contract security, holder signals, liquidity, FDV, and pool age for read-only risk triage." },
+      "useCases": { "zh": ["EVM 与 Solana 合约检查", "高潜力候选风险过滤"], "en": ["EVM and Solana contract checks", "Risk filtering for speculative candidates"] },
+      "sources": ["GoPlus", "Rugcheck", "DexScreener"],
+      "tools": ["token_security_scan", "token_risk_snapshot"]
+    },
+    {
+      "id": "source-verification",
+      "kind": "skill",
+      "category": "research",
+      "icon": "check",
+      "name": { "zh": "来源验证", "en": "Source Verification" },
+      "description": { "zh": "优先核验一手来源、日期和合约身份，并清楚标记来源冲突、过期和不可访问。", "en": "Verify primary sources, dates, and contract identity while clearly marking conflicts, staleness, and access limits." },
+      "useCases": { "zh": ["上市与合作核验", "传闻和公告交叉验证"], "en": ["Listing and partnership verification", "Rumor and announcement cross-checks"] },
+      "sources": ["Primary sources", "Web"],
+      "tools": []
+    },
+    {
+      "id": "rolecard-web3-crypto-researcher",
+      "kind": "role",
+      "category": "role",
+      "icon": "bot",
+      "name": { "zh": "Web3 加密研究员", "en": "Web3 Crypto Researcher" },
+      "description": { "zh": "负责代币经济、DeFi、链上采用、融资背景和市场情报的证据型研究角色。", "en": "Evidence-led research role for token economics, DeFi, adoption, funding, and market intelligence." },
+      "useCases": { "zh": ["完整投资论点", "项目多维尽调"], "en": ["Full investment theses", "Multi-factor project due diligence"] },
+      "sources": ["All read-only Web3 sources"],
+      "tools": []
+    },
+    {
+      "id": "rolecard-blockchain-security-auditor",
+      "kind": "role",
+      "category": "role",
+      "icon": "shield",
+      "name": { "zh": "区块链安全审计师", "en": "Blockchain Security Auditor" },
+      "description": { "zh": "面向合约、桥、预言机、治理、授权和签名风险的防御性分析角色。", "en": "Defensive analysis role for contract, bridge, oracle, governance, approval, and signature risk." },
+      "useCases": { "zh": ["协议交互风险", "漏洞影响与缓解建议"], "en": ["Protocol interaction risk", "Vulnerability impact and mitigation"] },
+      "sources": ["Security APIs", "Primary technical sources"],
+      "tools": ["token_security_scan"]
+    },
+    {
+      "id": "rolecard-defi-risk-analyst",
+      "kind": "role",
+      "category": "role",
+      "icon": "activity",
+      "name": { "zh": "DeFi 风险分析师", "en": "DeFi Risk Analyst" },
+      "description": { "zh": "评估收益来源、流动性、智能合约、预言机、脱锚和清算风险的专业角色。", "en": "Specialist role for yield-source, liquidity, contract, oracle, depeg, and liquidation risk." },
+      "useCases": { "zh": ["收益池风险报告", "协议偿付与挤兑情景"], "en": ["Yield-pool risk reports", "Solvency and run scenarios"] },
+      "sources": ["DeFiLlama", "DexScreener", "Security APIs"],
+      "tools": ["defi_yield_search", "defi_protocol_search", "stablecoin_chain_overview", "token_security_scan"]
+    },
+    {
+      "id": "rolecard-web3-intelligence-analyst",
+      "kind": "role",
+      "category": "role",
+      "icon": "brain",
+      "name": { "zh": "Web3 情报分析师", "en": "Web3 Intelligence Analyst" },
+      "description": { "zh": "融合新闻、KOL、市场和协议数据，建立带时间线、可信度和反证条件的情报判断。", "en": "Fuse news, KOL, market, and protocol data into assessments with timelines, confidence, and disconfirming evidence." },
+      "useCases": { "zh": ["叙事与催化剂追踪", "突发事件影响分析"], "en": ["Narrative and catalyst tracking", "Breaking-event impact analysis"] },
+      "sources": ["Crypto news", "Local KOL evidence", "Market APIs"],
+      "tools": ["crypto_news", "market_search", "defi_protocol_search"]
+    }
+  ]
+}

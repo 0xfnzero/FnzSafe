@@ -24,6 +24,7 @@ use std::{
 use tauri::webview::Cookie;
 use tauri::{Manager, WebviewUrl};
 use tempfile::TempDir;
+use zeroize::{Zeroize, Zeroizing};
 
 const BROWSER_CREDENTIAL_SERVICE: &str = "dev.fnzero-safe.browser.credentials.v1";
 const BROWSER_CREDENTIALS_FILE: &str = "browser-credentials.json";
@@ -121,12 +122,24 @@ struct ImportedCookie {
     same_site: i64,
 }
 
+impl Drop for ImportedCookie {
+    fn drop(&mut self) {
+        self.value.zeroize();
+    }
+}
+
 #[derive(Debug)]
 struct ImportedPassword {
     origin: String,
     username: String,
     password: String,
     updated_at_ms: u64,
+}
+
+impl Drop for ImportedPassword {
+    fn drop(&mut self) {
+        self.password.zeroize();
+    }
 }
 
 fn now_ms() -> u64 {
@@ -140,13 +153,13 @@ fn chrome_root() -> Result<PathBuf, String> {
     #[cfg(target_os = "macos")]
     {
         let home = std::env::var_os("HOME").ok_or_else(|| "HOME is unavailable".to_string())?;
-        return Ok(PathBuf::from(home).join("Library/Application Support/Google/Chrome"));
+        Ok(PathBuf::from(home).join("Library/Application Support/Google/Chrome"))
     }
     #[cfg(target_os = "windows")]
     {
         let local_app_data = std::env::var_os("LOCALAPPDATA")
             .ok_or_else(|| "LOCALAPPDATA is unavailable".to_string())?;
-        return Ok(PathBuf::from(local_app_data).join("Google/Chrome/User Data"));
+        Ok(PathBuf::from(local_app_data).join("Google/Chrome/User Data"))
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
@@ -361,7 +374,7 @@ fn chrome_secret() -> Result<Vec<u8>, String> {
 }
 
 #[cfg(target_os = "windows")]
-fn dpapi_unprotect(value: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn dpapi_unprotect(value: &[u8]) -> Result<Vec<u8>, String> {
     use std::ptr;
     use windows_sys::Win32::{
         Foundation::LocalFree,
@@ -403,7 +416,7 @@ fn dpapi_unprotect(value: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(target_os = "windows")]
-fn dpapi_protect(value: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn dpapi_protect(value: &[u8]) -> Result<Vec<u8>, String> {
     use std::ptr;
     use windows_sys::Win32::{
         Foundation::LocalFree,
@@ -788,7 +801,14 @@ fn credential_id(origin: &str, username: &str) -> String {
 #[cfg(target_os = "macos")]
 fn store_password(id: &str, password: &str) -> Result<Option<String>, String> {
     use security_framework::passwords::{delete_generic_password, set_generic_password};
-    let _ = delete_generic_password(BROWSER_CREDENTIAL_SERVICE, id);
+    const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
+    if let Err(error) = delete_generic_password(BROWSER_CREDENTIAL_SERVICE, id) {
+        if error.code() != ERR_SEC_ITEM_NOT_FOUND {
+            return Err(format!(
+                "failed to replace browser password in Keychain: {error}"
+            ));
+        }
+    }
     set_generic_password(BROWSER_CREDENTIAL_SERVICE, id, password.as_bytes())
         .map_err(|error| format!("failed to save browser password in Keychain: {error}"))?;
     Ok(None)
@@ -808,8 +828,14 @@ fn load_password(credential: &StoredBrowserCredential) -> Result<String, String>
 #[cfg(target_os = "macos")]
 fn delete_password(credential: &StoredBrowserCredential) -> Result<(), String> {
     use security_framework::passwords::delete_generic_password;
-    let _ = delete_generic_password(BROWSER_CREDENTIAL_SERVICE, &credential.id);
-    Ok(())
+    const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
+    match delete_generic_password(BROWSER_CREDENTIAL_SERVICE, &credential.id) {
+        Ok(()) => Ok(()),
+        Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(()),
+        Err(error) => Err(format!(
+            "failed to delete browser password from Keychain: {error}"
+        )),
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -848,19 +874,79 @@ fn delete_password(_credential: &StoredBrowserCredential) -> Result<(), String> 
     Ok(())
 }
 
+struct PasswordSecretBackup {
+    credential: StoredBrowserCredential,
+    password: Option<Zeroizing<String>>,
+}
+
+fn backup_password_secret(
+    credential: Option<&StoredBrowserCredential>,
+    id: &str,
+) -> Result<PasswordSecretBackup, String> {
+    let credential = credential
+        .cloned()
+        .unwrap_or_else(|| StoredBrowserCredential {
+            id: id.to_string(),
+            origin: String::new(),
+            username: String::new(),
+            updated_at_ms: 0,
+            protected_password: None,
+        });
+    let password = if credential.origin.is_empty() {
+        None
+    } else {
+        Some(Zeroizing::new(load_password(&credential)?))
+    };
+    Ok(PasswordSecretBackup {
+        credential,
+        password,
+    })
+}
+
+fn restore_password_secrets(backups: &[PasswordSecretBackup]) -> Result<(), String> {
+    let mut first_error = None;
+    for backup in backups.iter().rev() {
+        let result = match backup.password.as_deref() {
+            Some(password) => store_password(&backup.credential.id, password).map(|_| ()),
+            None => delete_password(&backup.credential),
+        };
+        if first_error.is_none() {
+            first_error = result.err();
+        }
+    }
+    first_error.map_or(Ok(()), Err)
+}
+
+fn rollback_error(primary: String, rollback: Result<(), String>) -> String {
+    match rollback {
+        Ok(()) => primary,
+        Err(error) => format!("{primary}; credential rollback failed: {error}"),
+    }
+}
+
 fn import_passwords(
     app: &crate::DesktopAppHandle,
     imported: Vec<ImportedPassword>,
 ) -> Result<usize, String> {
     let mut stored = load_credentials(app)?;
+    let mut seen = HashSet::new();
+    let imported = imported
+        .into_iter()
+        .filter(|password| seen.insert(credential_id(&password.origin, &password.username)))
+        .collect::<Vec<_>>();
+    let mut backups = Vec::with_capacity(imported.len());
     let mut count = 0;
     for password in imported {
         let id = credential_id(&password.origin, &password.username);
-        let protected_password = store_password(&id, &password.password)?;
+        let existing = stored.iter().find(|item| item.id == id);
+        let backup = backup_password_secret(existing, &id)?;
+        backups.push(backup);
+        let protected_password = store_password(&id, &password.password)
+            .map_err(|error| rollback_error(error, restore_password_secrets(&backups)))?;
         let record = StoredBrowserCredential {
             id: id.clone(),
-            origin: password.origin,
-            username: password.username,
+            origin: password.origin.clone(),
+            username: password.username.clone(),
             updated_at_ms: password.updated_at_ms,
             protected_password,
         };
@@ -871,8 +957,9 @@ fn import_passwords(
         }
         count += 1;
     }
-    stored.sort_by(|left, right| right.updated_at_ms.cmp(&left.updated_at_ms));
-    save_credentials(app, &stored)?;
+    stored.sort_by_key(|item| std::cmp::Reverse(item.updated_at_ms));
+    save_credentials(app, &stored)
+        .map_err(|error| rollback_error(error, restore_password_secrets(&backups)))?;
     Ok(count)
 }
 
@@ -1061,11 +1148,11 @@ pub async fn browser_import_chrome(
     }
     let profile = profile_path(&request.profile_id)?;
     let needs_secret = request.cookies || request.passwords;
-    let secret = if needs_secret {
+    let secret = Zeroizing::new(if needs_secret {
         chrome_secret()?
     } else {
         Vec::new()
-    };
+    });
     let (cookies, mut cookies_skipped) = if request.cookies {
         read_cookies(&profile, &secret)?
     } else {
@@ -1120,22 +1207,44 @@ pub fn browser_password_delete(
     credential_id: String,
 ) -> Result<(), String> {
     let mut credentials = load_credentials(&app)?;
+    let original = credentials.clone();
     let position = credentials
         .iter()
         .position(|item| item.id == credential_id)
         .ok_or_else(|| "browser password was not found".to_string())?;
     let credential = credentials.remove(position);
-    delete_password(&credential)?;
-    save_credentials(&app, &credentials)
+    let backup = backup_password_secret(Some(&credential), &credential.id)?;
+    save_credentials(&app, &credentials)?;
+    if let Err(error) = delete_password(&credential) {
+        let secret_rollback = restore_password_secrets(&[backup]);
+        let metadata_rollback = save_credentials(&app, &original);
+        return Err(rollback_error(
+            rollback_error(error, secret_rollback),
+            metadata_rollback,
+        ));
+    }
+    Ok(())
 }
 
 #[tauri::command]
 pub fn browser_passwords_clear(app: crate::DesktopAppHandle) -> Result<(), String> {
     let credentials = load_credentials(&app)?;
+    let backups = credentials
+        .iter()
+        .map(|credential| backup_password_secret(Some(credential), &credential.id))
+        .collect::<Result<Vec<_>, _>>()?;
+    save_credentials(&app, &[])?;
     for credential in &credentials {
-        delete_password(credential)?;
+        if let Err(error) = delete_password(credential) {
+            let secret_rollback = restore_password_secrets(&backups);
+            let metadata_rollback = save_credentials(&app, &credentials);
+            return Err(rollback_error(
+                rollback_error(error, secret_rollback),
+                metadata_rollback,
+            ));
+        }
     }
-    save_credentials(&app, &[])
+    Ok(())
 }
 
 #[tauri::command]
@@ -1256,7 +1365,7 @@ pub fn browser_tab_action(
             let query = serde_json::to_string(&query).map_err(|error| error.to_string())?;
             let backwards = action == "find-backward";
             webview
-                .eval(&format!(
+                .eval(format!(
                     "window.find({query}, false, {backwards}, true, false, true, false)"
                 ))
                 .map_err(|error| format!("failed to find in page: {error}"))?;
@@ -1279,7 +1388,7 @@ pub fn browser_tab_action(
                 return Err("contact field is too long".to_string());
             }
             let contact = serde_json::to_string(&contact).map_err(|error| error.to_string())?;
-            webview.eval(&format!(r#"
+            webview.eval(format!(r#"
 (() => {{
   const data = {contact};
   const visible = (el) => !el.disabled && !el.readOnly && el.getClientRects().length > 0;
@@ -1321,7 +1430,7 @@ pub fn browser_take_screenshot() -> Result<String, String> {
             .args(["-i", path.to_string_lossy().as_ref()])
             .spawn()
             .map_err(|error| format!("failed to start screenshot tool: {error}"))?;
-        return Ok(path.to_string_lossy().to_string());
+        Ok(path.to_string_lossy().to_string())
     }
     #[cfg(target_os = "windows")]
     {
@@ -1329,7 +1438,7 @@ pub fn browser_take_screenshot() -> Result<String, String> {
             .arg("ms-screenclip:")
             .spawn()
             .map_err(|error| format!("failed to start Windows screen capture: {error}"))?;
-        return Ok("clipboard".to_string());
+        Ok("clipboard".to_string())
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     Err("screen capture is currently supported on macOS and Windows".to_string())

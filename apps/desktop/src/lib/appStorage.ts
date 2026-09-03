@@ -25,6 +25,15 @@ export interface RpcProfile {
   builtin?: boolean;
 }
 
+export interface StoredEvmChainConfig {
+  chain_id: number;
+  name: string;
+  native_symbol: string;
+  rpc_url: string;
+  explorer_url: string | null;
+  testnet: boolean;
+}
+
 export const DEFAULT_RPC_PROFILES: RpcProfile[] = [
   {
     id: "solana-mainnet",
@@ -239,7 +248,7 @@ export function currentNetwork(value: string | number | undefined): AppNetwork {
 }
 
 export function currentUiTheme(value: string | null | undefined): AppUiTheme {
-  if (value === "dark" || value === "deep-sea") return value;
+  if (value === "light" || value === "dark" || value === "deep-sea") return value;
   return "deep-sea";
 }
 
@@ -281,6 +290,15 @@ function sanitizeRpcProfile(raw: Partial<RpcProfile> | undefined): RpcProfile | 
   return { id, name, url, network, builtin: raw?.builtin === true };
 }
 
+export function parsePersistedRpcProfiles(value: unknown): RpcProfile[] | null {
+  if (!Array.isArray(value)) return null;
+  const customProfiles = value
+    .map((item) => sanitizeRpcProfile(item as Partial<RpcProfile>))
+    .filter((item): item is RpcProfile => Boolean(item))
+    .filter((item) => !item.builtin);
+  return mergeRpcProfiles(customProfiles);
+}
+
 export function mergeRpcProfiles(customProfiles: RpcProfile[]): RpcProfile[] {
   const profiles: RpcProfile[] = [];
   const seen = new Set<string>();
@@ -298,13 +316,7 @@ function loadStoredRpcProfiles(): RpcProfile[] {
   try {
     const raw = loadStorageValue(RPC_PROFILES_STORAGE_KEY, LEGACY_RPC_PROFILES_STORAGE_KEY);
     if (!raw) return DEFAULT_RPC_PROFILES;
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return DEFAULT_RPC_PROFILES;
-    const customProfiles = parsed
-      .map((item) => sanitizeRpcProfile(item as Partial<RpcProfile>))
-      .filter((item): item is RpcProfile => Boolean(item))
-      .filter((item) => !item.builtin);
-    return mergeRpcProfiles(customProfiles);
+    return parsePersistedRpcProfiles(JSON.parse(raw)) ?? DEFAULT_RPC_PROFILES;
   } catch {
     return DEFAULT_RPC_PROFILES;
   }
@@ -338,17 +350,20 @@ function sanitizeDownloadHistoryItem(raw: Partial<DownloadHistoryItem> | undefin
   return { id, filename, path, createdAt, type };
 }
 
+export function parseDownloadHistory(value: unknown): DownloadHistoryItem[] | null {
+  if (!Array.isArray(value)) return null;
+  return value
+    .map((item) => sanitizeDownloadHistoryItem(item as Partial<DownloadHistoryItem>))
+    .filter((item): item is DownloadHistoryItem => Boolean(item))
+    .slice(0, MAX_DOWNLOAD_HISTORY);
+}
+
 export function loadDownloadHistory(): DownloadHistoryItem[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = loadStorageValue(DOWNLOAD_HISTORY_STORAGE_KEY, LEGACY_DOWNLOAD_HISTORY_STORAGE_KEY);
     if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map((item) => sanitizeDownloadHistoryItem(item as Partial<DownloadHistoryItem>))
-      .filter((item): item is DownloadHistoryItem => Boolean(item))
-      .slice(0, MAX_DOWNLOAD_HISTORY);
+    return parseDownloadHistory(JSON.parse(raw)) ?? [];
   } catch {
     return [];
   }
@@ -394,6 +409,35 @@ export function validateRpcUrl(value: string): string | null {
   } catch {
     return null;
   }
+}
+
+export function normalizeStoredEvmChain(value: unknown): StoredEvmChainConfig | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const chainId = Number(record.chain_id);
+  const name = String(record.name ?? "").trim();
+  const nativeSymbol = String(record.native_symbol ?? "").trim();
+  const rpcUrl = validateRpcUrl(String(record.rpc_url ?? ""));
+  const rawExplorerUrl = String(record.explorer_url ?? "").trim();
+  const explorerUrl = rawExplorerUrl ? validateRpcUrl(rawExplorerUrl) : null;
+  if (
+    !Number.isSafeInteger(chainId) ||
+    chainId <= 0 ||
+    !name ||
+    name.length > 80 ||
+    !nativeSymbol ||
+    nativeSymbol.length > 16 ||
+    !rpcUrl ||
+    (rawExplorerUrl && !explorerUrl)
+  ) return null;
+  return {
+    chain_id: chainId,
+    name,
+    native_symbol: nativeSymbol,
+    rpc_url: rpcUrl,
+    explorer_url: explorerUrl,
+    testnet: Boolean(record.testnet),
+  };
 }
 
 export function isSafeUrlHostname(hostname: string): boolean {

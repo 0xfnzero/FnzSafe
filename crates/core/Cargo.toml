@@ -77,3 +77,8 @@ path = "src/lib.rs"
 name = "fnzero-safe"
 path = "src/main.rs"
 required-features = ["full"]
+
+[[example]]
+name = "bot_example"
+path = "examples/bot_example.rs"
+required-features = ["solana-ops"]

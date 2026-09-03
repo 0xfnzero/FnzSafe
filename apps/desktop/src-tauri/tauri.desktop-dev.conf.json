@@ -1,5 +1,10 @@
 {
   "build": {
     "beforeDevCommand": ""
+  },
+  "bundle": {
+    "macOS": {
+      "signingIdentity": "Apple Development: 8618601694368 (94LXBVQLBM)"
+    }
   }
 }

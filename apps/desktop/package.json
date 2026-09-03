@@ -3,15 +3,20 @@
   "version": "0.4.6",
   "private": true,
   "engines": {
-    "node": "20 || >=22"
+    "node": ">=22 <25"
   },
   "scripts": {
+    "install:ai-runtime": "npm ci --prefix ai-runtime --omit=dev",
+    "prepare:ai-runtime": "npm run install:ai-runtime && node scripts/prepare-ai-runtime.cjs",
+    "test:ai-runtime": "npm test --prefix ai-runtime",
+    "test:ai-runtime-live": "npm run test:live --prefix ai-runtime",
+    "test:unit": "node --test src/lib/appStorage.test.mjs src/lib/browserStorage.test.mjs src/lib/chainMetadata.test.mjs src/lib/hydratedStorage.test.mjs src/lib/requestIntent.test.mjs src/lib/researchAiProviders.test.mjs src/lib/settingsCenter.test.mjs src/lib/twitterChainDetection.test.mjs src/lib/twitterKols.test.mjs src/lib/twitterSignals.test.mjs",
     "dev": "next dev -H 127.0.0.1 -p 3840",
     "predev:stack": "node scripts/kill-dev-processes.cjs && node scripts/ensure-out.cjs",
     "dev:stack": "node scripts/dev-stack.cjs",
     "stop": "node scripts/kill-dev-processes.cjs",
     "backend": "cargo run --release -p fnzero-safe-desktop-api",
-    "prebuild": "node scripts/assert-no-next-dev.cjs && node scripts/check-sensitive-inputs.cjs",
+    "prebuild": "node scripts/assert-no-next-dev.cjs && node scripts/check-sensitive-inputs.cjs && npm run prepare:ai-runtime",
     "build": "next build",
     "build:desktop-api": "cargo build --release -p fnzero-safe-desktop-api",
     "start": "next start",
@@ -20,7 +25,7 @@
     "test:program-deploy": "node scripts/test-program-deploy.cjs",
     "lint": "node scripts/check-sensitive-inputs.cjs && eslint",
     "tauri": "node scripts/run-tauri-cef.cjs",
-    "predesktop:dev": "node scripts/kill-dev-processes.cjs && node scripts/refresh-desktop-icons.cjs",
+    "predesktop:dev": "node scripts/kill-dev-processes.cjs && node scripts/refresh-desktop-icons.cjs && npm run prepare:ai-runtime",
     "desktop:dev": "node scripts/desktop-dev.cjs",
     "desktop:build": "npm run tauri -- build"
   },

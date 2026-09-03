@@ -7,14 +7,15 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
+use std::io::Write;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{
-    atomic::{AtomicU16, Ordering},
+    atomic::{AtomicBool, AtomicU16, Ordering},
     Mutex,
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -23,9 +24,11 @@ use tauri::{
     WebviewUrl,
 };
 use tauri_plugin_deep_link::DeepLinkExt;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
+mod app_store;
 mod browser_profile;
+mod research_store;
 
 type DesktopRuntime = tauri::Cef;
 type DesktopApp = tauri::App<DesktopRuntime>;
@@ -39,7 +42,7 @@ const SOLANA_MAX_ACCOUNT_DATA_BYTES: usize = 10 * 1024 * 1024;
 const UPGRADEABLE_LOADER_PROGRAMDATA_METADATA_BYTES: usize = 45;
 const MAX_PROGRAM_SO_BYTES: usize =
     SOLANA_MAX_ACCOUNT_DATA_BYTES - UPGRADEABLE_LOADER_PROGRAMDATA_METADATA_BYTES;
-const MAX_PROGRAM_SO_BASE64_BYTES: usize = (MAX_PROGRAM_SO_BYTES + 2) / 3 * 4;
+const MAX_PROGRAM_SO_BASE64_BYTES: usize = MAX_PROGRAM_SO_BYTES.div_ceil(3) * 4;
 const MAX_PROXY_BODY_BYTES: usize = MAX_PROGRAM_SO_BASE64_BYTES + 1024 * 1024;
 const MAX_DOWNLOAD_FILE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_SECURE_PUBLIC_KEY_PEM_BYTES: usize = 2 * 1024;
@@ -56,6 +59,7 @@ const DAPP_TAB_TEXT_EVENT: &str = "dapp://tab-text";
 const DAPP_DOWNLOAD_EVENT: &str = "dapp://download";
 const DAPP_CONNECT_REQUEST_EVENT: &str = "dapp://connect-request";
 const DAPP_REQUEST_TTL_MS: u64 = 3 * 60 * 1000;
+const MAX_PENDING_DAPP_REQUESTS: usize = 64;
 const DAPP_WALLET_NAME: &str = "FnzSafe";
 const DESKTOP_API_BIN_NAME: &str = "fnzero-safe-desktop-api";
 const LEGACY_DESKTOP_APP_PID_FILE_NAME: &str = "desktop.pid";
@@ -156,9 +160,19 @@ struct DappPollResponse {
 
 #[derive(Default)]
 struct DappBridgeState {
+    paused: AtomicBool,
+    active_tab_label: Mutex<Option<String>>,
     sessions: Mutex<HashMap<String, DappSession>>,
     requests: Mutex<HashMap<String, DappPendingRequest>>,
     connect_requests: Mutex<HashMap<String, DappPendingConnectRequest>>,
+}
+
+fn ensure_dapp_connections_active(state: &DappBridgeState) -> Result<(), String> {
+    if state.paused.load(Ordering::Acquire) {
+        Err("dapp connections are paused while the application is locked".to_string())
+    } else {
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -434,7 +448,47 @@ struct DappTabTextEvent {
     url: String,
     text: String,
     tweets: Vec<DappCapturedTweet>,
+    profile: Option<DappCapturedTwitterProfile>,
+    authenticated: Option<bool>,
+    backfill_complete: bool,
     captured_at_ms: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DappSubmitPageTextRequest {
+    request_id: String,
+    text: String,
+    tweets: Option<Vec<DappCapturedTweet>>,
+    profile: Option<DappCapturedTwitterProfile>,
+    authenticated: Option<bool>,
+    #[serde(default)]
+    backfill_complete: bool,
+    url: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct DappCapturedTwitterProfile {
+    #[serde(default)]
+    handle: String,
+    #[serde(default)]
+    display_name: String,
+    #[serde(default)]
+    avatar_url: Option<String>,
+    #[serde(default)]
+    bio: Option<String>,
+    #[serde(default)]
+    followers_label: Option<String>,
+    #[serde(default)]
+    following_label: Option<String>,
+    #[serde(default)]
+    location: Option<String>,
+    #[serde(default)]
+    website: Option<String>,
+    #[serde(default)]
+    joined_label: Option<String>,
+    #[serde(default)]
+    verified: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -502,6 +556,12 @@ struct BiometricWalletStoreRequest {
     wallet_id: String,
     public_key: String,
     password: String,
+}
+
+impl Drop for BiometricWalletStoreRequest {
+    fn drop(&mut self) {
+        self.password.zeroize();
+    }
 }
 
 #[derive(Serialize)]
@@ -936,22 +996,35 @@ async fn proxy_api_request(
     Ok(ProxyResponse { status, body })
 }
 
+fn raw_url_has_authority_credentials(value: &str) -> bool {
+    value
+        .split_once("://")
+        .map(|(_, value)| value.split(['/', '?', '#']).next().unwrap_or_default())
+        .is_some_and(|authority| authority.contains('@'))
+}
+
+fn url_has_authority_credentials(url: &tauri::Url) -> bool {
+    !url.username().is_empty() || url.password().is_some()
+}
+
 fn is_allowed_external_https_url(url: &str) -> bool {
     let trimmed = url.trim();
-    if !trimmed.starts_with("https://") || trimmed.len() > 2048 {
+    if trimmed.len() > 2_048
+        || trimmed.chars().any(char::is_whitespace)
+        || raw_url_has_authority_credentials(trimmed)
+    {
         return false;
     }
-    if trimmed.chars().any(|c| c.is_control() || c.is_whitespace()) {
-        return false;
-    }
-    let Some(rest) = trimmed.strip_prefix("https://") else {
+    let Ok(parsed) = tauri::Url::parse(trimmed) else {
         return false;
     };
-    let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
-    if host.is_empty() || host.starts_with('.') || host.ends_with('.') || host.contains('@') {
+    let Some(host) = parsed.host_str() else {
         return false;
-    }
-    true
+    };
+    parsed.scheme() == "https"
+        && !url_has_authority_credentials(&parsed)
+        && !host.starts_with('.')
+        && !host.ends_with('.')
 }
 
 fn spawn_system_browser(url: &str) -> Result<(), String> {
@@ -965,8 +1038,8 @@ fn spawn_system_browser(url: &str) -> Result<(), String> {
     }
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("cmd")
-            .args(["/C", "start", "", url])
+        std::process::Command::new("explorer.exe")
+            .arg(url)
             .spawn()
             .map(|_| ())
             .map_err(|error| format!("failed to open external browser: {error}"))
@@ -978,6 +1051,88 @@ fn spawn_system_browser(url: &str) -> Result<(), String> {
             .spawn()
             .map(|_| ())
             .map_err(|error| format!("failed to open external browser: {error}"))
+    }
+}
+
+fn spawn_google_chrome(url: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let status = std::process::Command::new("open")
+            .args(["-a", "Google Chrome", url])
+            .status()
+            .map_err(|error| format!("failed to open Google Chrome: {error}"))?;
+        status
+            .success()
+            .then_some(())
+            .ok_or_else(|| "Google Chrome is not available".to_string())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let mut candidates = vec![PathBuf::from("chrome.exe")];
+        for root in ["LOCALAPPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)"] {
+            if let Some(path) = env::var_os(root) {
+                candidates.push(PathBuf::from(path).join("Google/Chrome/Application/chrome.exe"));
+            }
+        }
+        for executable in candidates {
+            if std::process::Command::new(executable)
+                .arg(url)
+                .spawn()
+                .is_ok()
+            {
+                return Ok(());
+            }
+        }
+        Err("Google Chrome is not available".to_string())
+    }
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    {
+        for executable in ["google-chrome", "google-chrome-stable"] {
+            if std::process::Command::new(executable)
+                .arg(url)
+                .spawn()
+                .is_ok()
+            {
+                return Ok(());
+            }
+        }
+        Err("Google Chrome is not available".to_string())
+    }
+}
+
+fn spawn_telegram_link(url: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let status = std::process::Command::new("open")
+            .arg(url)
+            .status()
+            .map_err(|error| format!("failed to open Telegram: {error}"))?;
+        status
+            .success()
+            .then_some(())
+            .ok_or_else(|| "Telegram is not available".to_string())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let status = std::process::Command::new("explorer.exe")
+            .arg(url)
+            .status()
+            .map_err(|error| format!("failed to open Telegram: {error}"))?;
+        status
+            .success()
+            .then_some(())
+            .ok_or_else(|| "Telegram is not available".to_string())
+    }
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    {
+        let status = std::process::Command::new("xdg-open")
+            .arg(url)
+            .status()
+            .map_err(|error| format!("failed to open Telegram: {error}"))?;
+        status
+            .success()
+            .then_some(())
+            .ok_or_else(|| "Telegram is not available".to_string())
     }
 }
 
@@ -1095,6 +1250,9 @@ fn dapp_browser_data_directory(app: &DesktopAppHandle) -> Result<PathBuf, String
 }
 
 fn is_safe_browser_url(url: &tauri::Url) -> bool {
+    if url_has_authority_credentials(url) {
+        return false;
+    }
     match url.scheme() {
         "https" => url.host_str().is_some_and(|host| {
             !host.is_empty()
@@ -1117,6 +1275,117 @@ fn is_safe_dapp_webview_navigation_url(url: &tauri::Url) -> bool {
     matches!(url.scheme(), "about" | "blob" | "data")
 }
 
+fn is_valid_telegram_token(value: &str, allow_dash: bool) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || byte == b'_' || (allow_dash && byte == b'-')
+        })
+}
+
+fn is_valid_telegram_post(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 32 && value.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn telegram_deep_link(url: &tauri::Url) -> Option<String> {
+    if url.as_str().len() > 2_048 || url_has_authority_credentials(url) {
+        return None;
+    }
+    if url.scheme() == "tg" {
+        if !matches!(url.path(), "" | "/") || url.fragment().is_some() {
+            return None;
+        }
+        let route = url.host_str()?.to_ascii_lowercase();
+        let mut domain = None;
+        let mut invite = None;
+        let mut post = None;
+        for (key, value) in url.query_pairs() {
+            let slot = match key.as_ref() {
+                "domain" => &mut domain,
+                "invite" => &mut invite,
+                "post" => &mut post,
+                _ => return None,
+            };
+            if slot.replace(value.into_owned()).is_some() {
+                return None;
+            }
+        }
+        return match route.as_str() {
+            "join" if domain.is_none() && post.is_none() => invite
+                .filter(|value| is_valid_telegram_token(value, true))
+                .map(|value| format!("tg://join?invite={value}")),
+            "resolve" if invite.is_none() => {
+                let domain = domain.filter(|value| is_valid_telegram_token(value, false))?;
+                match post {
+                    Some(post) if is_valid_telegram_post(&post) => {
+                        Some(format!("tg://resolve?domain={domain}&post={post}"))
+                    }
+                    None => Some(format!("tg://resolve?domain={domain}")),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+    }
+    if url.scheme() != "https" || url.query().is_some() || url.fragment().is_some() {
+        return None;
+    }
+    let host = url.host_str()?.to_ascii_lowercase();
+    if !matches!(
+        host.as_str(),
+        "t.me" | "telegram.me" | "www.t.me" | "www.telegram.me"
+    ) {
+        return None;
+    }
+    let segments = url
+        .path_segments()?
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    match segments.as_slice() {
+        [invite] if invite.starts_with('+') => invite
+            .strip_prefix('+')
+            .filter(|value| is_valid_telegram_token(value, true))
+            .map(|value| format!("tg://join?invite={value}")),
+        [route, invite] if route.eq_ignore_ascii_case("joinchat") => {
+            is_valid_telegram_token(invite, true).then(|| format!("tg://join?invite={invite}"))
+        }
+        [route, domain] if route.eq_ignore_ascii_case("s") => {
+            is_valid_telegram_token(domain, false).then(|| format!("tg://resolve?domain={domain}"))
+        }
+        [route, domain, post]
+            if route.eq_ignore_ascii_case("s")
+                && is_valid_telegram_token(domain, false)
+                && is_valid_telegram_post(post) =>
+        {
+            Some(format!("tg://resolve?domain={domain}&post={post}"))
+        }
+        [domain] if is_valid_telegram_token(domain, false) => {
+            Some(format!("tg://resolve?domain={domain}"))
+        }
+        [domain, post]
+            if is_valid_telegram_token(domain, false) && is_valid_telegram_post(post) =>
+        {
+            Some(format!("tg://resolve?domain={domain}&post={post}"))
+        }
+        _ => None,
+    }
+}
+
+fn open_telegram_target(url: &tauri::Url) -> bool {
+    let Some(native_url) = telegram_deep_link(url) else {
+        return false;
+    };
+    let fallback_url = (url.scheme() == "https").then(|| url.to_string());
+    std::thread::spawn(move || {
+        if spawn_telegram_link(&native_url).is_err() {
+            if let Some(fallback_url) = fallback_url {
+                let _ = spawn_system_browser(&fallback_url);
+            }
+        }
+    });
+    true
+}
+
 fn is_allowed_connected_dapp_navigation_url(dapp: &AllowedDapp, url: &tauri::Url) -> bool {
     is_allowed_dapp_url(dapp, url) || matches!(url.scheme(), "about" | "blob")
 }
@@ -1126,7 +1395,9 @@ fn parse_dapp_browser_url(raw_url: &str) -> Result<tauri::Url, String> {
     if trimmed.is_empty() || trimmed.len() > 2048 {
         return Err("invalid dapp URL".to_string());
     }
-    if trimmed.chars().any(|c| c.is_control() || c.is_whitespace()) {
+    if trimmed.chars().any(|c| c.is_control() || c.is_whitespace())
+        || raw_url_has_authority_credentials(trimmed)
+    {
         return Err("invalid dapp URL".to_string());
     }
     let url = trimmed
@@ -1145,7 +1416,7 @@ fn host_matches_domain(host: &str, domain: &str) -> bool {
 }
 
 fn is_allowed_dapp_url(dapp: &AllowedDapp, url: &tauri::Url) -> bool {
-    if url.scheme() != "https" {
+    if url.scheme() != "https" || !is_safe_browser_url(url) {
         return false;
     }
     let Some(host) = url.host_str().map(|value| value.to_ascii_lowercase()) else {
@@ -1331,9 +1602,7 @@ fn validate_deep_link_app_url(value: &str) -> Result<tauri::Url, String> {
 }
 
 fn related_callback_host(app_host: &str, callback_host: &str) -> bool {
-    app_host == callback_host
-        || callback_host.ends_with(&format!(".{app_host}"))
-        || app_host.ends_with(&format!(".{callback_host}"))
+    app_host == callback_host || callback_host.ends_with(&format!(".{app_host}"))
 }
 
 fn validate_deep_link_callback_url(
@@ -1344,12 +1613,20 @@ fn validate_deep_link_callback_url(
         return Ok(None);
     };
     let trimmed = callback_url.trim();
+    if trimmed.len() > 2_048
+        || trimmed.chars().any(char::is_whitespace)
+        || raw_url_has_authority_credentials(trimmed)
+    {
+        return Err("callback_url is invalid or too long".to_string());
+    }
     let callback = trimmed
         .parse::<tauri::Url>()
         .map_err(|error| format!("invalid callback_url: {error}"))?;
     let callback_is_local_http = callback.scheme() == "http"
         && matches!(callback.host_str(), Some("localhost" | "127.0.0.1" | "::1"));
-    if callback.scheme() != "https" && !callback_is_local_http {
+    if (callback.scheme() != "https" && !callback_is_local_http)
+        || url_has_authority_credentials(&callback)
+    {
         return Err("callback_url must be a valid https or localhost URL".to_string());
     }
     let app_host = app_url
@@ -1527,14 +1804,19 @@ fn enqueue_dapp_sign_request(
     webview_label: String,
     event: DappSignRequestEvent,
 ) -> Result<(), String> {
+    ensure_dapp_connections_active(state)?;
     let mut requests = state
         .requests
         .lock()
         .map_err(|_| "dapp request lock poisoned".to_string())?;
+    ensure_dapp_connections_active(state)?;
     requests.retain(|_, pending| {
         now_ms().saturating_sub(pending.event.created_at_ms) <= DAPP_REQUEST_TTL_MS
             && pending.result.is_none()
     });
+    if requests.len() >= MAX_PENDING_DAPP_REQUESTS {
+        return Err("too many pending dapp signing requests".to_string());
+    }
     if requests.contains_key(&event.request_id) {
         return Err("dapp signing request id is already pending".to_string());
     }
@@ -1548,8 +1830,16 @@ fn enqueue_dapp_sign_request(
     );
     drop(requests);
 
-    app.emit_to("main", DAPP_SIGN_REQUEST_EVENT, event)
-        .map_err(|error| format!("failed to notify main window: {error}"))
+    let request_id = event.request_id.clone();
+    if let Err(error) = app.emit_to("main", DAPP_SIGN_REQUEST_EVENT, event) {
+        state
+            .requests
+            .lock()
+            .map_err(|_| "dapp request lock poisoned during notification rollback".to_string())?
+            .remove(&request_id);
+        return Err(format!("failed to notify main window: {error}"));
+    }
+    Ok(())
 }
 
 fn enqueue_dapp_connect_request(
@@ -1557,14 +1847,19 @@ fn enqueue_dapp_connect_request(
     state: &DappBridgeState,
     event: DappConnectRequestEvent,
 ) -> Result<(), String> {
+    ensure_dapp_connections_active(state)?;
     let mut requests = state
         .connect_requests
         .lock()
         .map_err(|_| "dapp connect request lock poisoned".to_string())?;
+    ensure_dapp_connections_active(state)?;
     requests.retain(|_, pending| {
         now_ms().saturating_sub(pending.event.created_at_ms) <= DAPP_REQUEST_TTL_MS
             && pending.result.is_none()
     });
+    if requests.len() >= MAX_PENDING_DAPP_REQUESTS {
+        return Err("too many pending dapp connection requests".to_string());
+    }
     if requests.contains_key(&event.request_id) {
         return Err("dapp connect request id is already pending".to_string());
     }
@@ -1577,8 +1872,18 @@ fn enqueue_dapp_connect_request(
     );
     drop(requests);
 
-    app.emit_to("main", DAPP_CONNECT_REQUEST_EVENT, event)
-        .map_err(|error| format!("failed to notify main window: {error}"))
+    let request_id = event.request_id.clone();
+    if let Err(error) = app.emit_to("main", DAPP_CONNECT_REQUEST_EVENT, event) {
+        state
+            .connect_requests
+            .lock()
+            .map_err(|_| {
+                "dapp connect request lock poisoned during notification rollback".to_string()
+            })?
+            .remove(&request_id);
+        return Err(format!("failed to notify main window: {error}"));
+    }
+    Ok(())
 }
 
 fn focus_main_window(app: &DesktopAppHandle) {
@@ -2220,6 +2525,15 @@ fn open_external_url(url: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn open_url_in_chrome(url: String) -> Result<(), String> {
+    let url = url.trim().to_string();
+    if !is_allowed_external_https_url(&url) {
+        return Err("only https URLs can be opened in Chrome".to_string());
+    }
+    spawn_google_chrome(&url)
+}
+
+#[tauri::command]
 #[allow(clippy::too_many_arguments)]
 fn dapp_open_tab(
     app: DesktopAppHandle,
@@ -2233,10 +2547,14 @@ fn dapp_open_tab(
     y: f64,
     width: f64,
     height: f64,
+    hidden: Option<bool>,
 ) -> Result<(), String> {
     let label = dapp_tab_label(&tab_id)?;
     let url = parse_dapp_browser_url(&url)?;
     let dapp = app_id.as_deref().and_then(allowed_dapp);
+    if dapp.is_some() {
+        ensure_dapp_connections_active(state.inner())?;
+    }
     if let Some(dapp) = dapp.as_ref() {
         if !is_allowed_dapp_url(dapp, &url) {
             return Err("dapp tab URL does not match the selected DApp".to_string());
@@ -2284,6 +2602,9 @@ fn dapp_open_tab(
     let mut builder = WebviewBuilder::new(label.clone(), WebviewUrl::External(url.clone()))
         .data_directory(data_directory)
         .on_navigation(move |target_url| {
+            if open_telegram_target(target_url) {
+                return false;
+            }
             let allowed = match dapp_for_nav.as_ref() {
                 Some(dapp) => is_allowed_connected_dapp_navigation_url(dapp, target_url),
                 None => is_safe_dapp_webview_navigation_url(target_url),
@@ -2333,6 +2654,9 @@ fn dapp_open_tab(
             }
         })
         .on_new_window(move |target_url, _features| {
+            if open_telegram_target(&target_url) {
+                return tauri::webview::NewWindowResponse::Deny;
+            }
             if is_safe_browser_url(&target_url) {
                 let _ = app_for_new_window.emit_to(
                     "main",
@@ -2390,27 +2714,38 @@ fn dapp_open_tab(
     webview
         .set_bounds(bounds)
         .map_err(|error| format!("failed to position dapp tab: {error}"))?;
-    webview
-        .show()
-        .map_err(|error| format!("failed to show dapp tab: {error}"))?;
-    raise_embedded_webview(&webview)?;
+    if hidden.unwrap_or(false) {
+        webview
+            .hide()
+            .map_err(|error| format!("failed to hide dapp tab: {error}"))?;
+    } else {
+        webview
+            .show()
+            .map_err(|error| format!("failed to show dapp tab: {error}"))?;
+        raise_embedded_webview(&webview)?;
+    }
 
     if let (Some(dapp), Some(wallet_public_key)) = (dapp, wallet_public_key) {
-        state
+        let mut sessions = state
             .sessions
             .lock()
-            .map_err(|_| "dapp session lock poisoned".to_string())?
-            .insert(
-                label,
-                DappSession {
-                    app_id: dapp.id.to_string(),
-                    app_name: dapp.name.to_string(),
-                    url: url.as_str().to_string(),
-                    wallet_public_key,
-                    network,
-                    opened_at_ms: now_ms(),
-                },
-            );
+            .map_err(|_| "dapp session lock poisoned".to_string())?;
+        if let Err(error) = ensure_dapp_connections_active(state.inner()) {
+            drop(sessions);
+            let _ = webview.close();
+            return Err(error);
+        }
+        sessions.insert(
+            label,
+            DappSession {
+                app_id: dapp.id.to_string(),
+                app_name: dapp.name.to_string(),
+                url: url.as_str().to_string(),
+                wallet_public_key,
+                network,
+                opened_at_ms: now_ms(),
+            },
+        );
     }
     Ok(())
 }
@@ -2507,6 +2842,7 @@ fn raise_embedded_webview(webview: &DesktopWebview) -> Result<(), String> {
 #[tauri::command]
 fn dapp_set_active_tab(
     app: DesktopAppHandle,
+    state: tauri::State<'_, DappBridgeState>,
     tab_id: Option<String>,
     x: f64,
     y: f64,
@@ -2519,30 +2855,42 @@ fn dapp_set_active_tab(
     } else {
         None
     };
-    let mut active_webview = None;
-    for (label, webview) in app.webviews() {
-        if !label.starts_with(DAPP_TAB_LABEL_PREFIX) {
-            continue;
+    let mut active_tab_label = state
+        .active_tab_label
+        .lock()
+        .map_err(|_| "active dapp tab lock poisoned".to_string())?;
+    let previous_active_label = active_tab_label.clone();
+    *active_tab_label = active_label.clone();
+    let result = (|| {
+        let mut active_webview = None;
+        for (label, webview) in app.webviews() {
+            if !label.starts_with(DAPP_TAB_LABEL_PREFIX) {
+                continue;
+            }
+            if active_label.as_deref() == Some(label.as_str()) {
+                active_webview = Some(webview);
+            } else {
+                let _ = webview.hide();
+            }
         }
-        if active_label.as_deref() == Some(label.as_str()) {
-            active_webview = Some(webview);
-        } else {
-            let _ = webview.hide();
-        }
-    }
 
-    if let Some(webview) = active_webview {
-        webview
-            .show()
-            .map_err(|error| format!("failed to show dapp tab: {error}"))?;
-        if let Some(bounds) = bounds {
+        if let Some(webview) = active_webview {
             webview
-                .set_bounds(bounds)
-                .map_err(|error| format!("failed to position dapp tab: {error}"))?;
+                .show()
+                .map_err(|error| format!("failed to show dapp tab: {error}"))?;
+            if let Some(bounds) = bounds {
+                webview
+                    .set_bounds(bounds)
+                    .map_err(|error| format!("failed to position dapp tab: {error}"))?;
+            }
+            raise_embedded_webview(&webview)?;
         }
-        raise_embedded_webview(&webview)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        *active_tab_label = previous_active_label;
     }
-    Ok(())
+    result
 }
 
 #[tauri::command]
@@ -2568,11 +2916,16 @@ fn dapp_close_tab(
 #[tauri::command]
 async fn dapp_request_tab_text(
     app: DesktopAppHandle,
+    state: tauri::State<'_, DappBridgeState>,
     tab_id: String,
     request_id: String,
     advance: Option<bool>,
     background: Option<bool>,
+    latest_only: Option<bool>,
+    resume_backfill: Option<bool>,
 ) -> Result<(), String> {
+    let latest_only = latest_only.unwrap_or(false);
+    let resume_backfill = resume_backfill.unwrap_or(false);
     if request_id.is_empty()
         || request_id.len() > 100
         || !request_id
@@ -2616,6 +2969,15 @@ async fn dapp_request_tab_text(
     const requestId = {request_id_json};
     const isTwitter = /(^|\.)((x)|(twitter))\.com$/i.test(window.location.hostname);
     const clean = (value, limit) => String(value || "").trim().slice(0, limit);
+    const detectTwitterAuth = () => {{
+      if (!isTwitter) return null;
+      const path = window.location.pathname.toLowerCase();
+      if (path === "/login" || path.startsWith("/i/flow/login")) return false;
+      if (document.querySelector("[data-testid='SideNav_AccountSwitcher_Button']")) return true;
+      if (document.querySelector("a[data-testid='AppTabBar_Home_Link']") && document.querySelector("a[href='/compose/post'], [data-testid='SideNav_NewTweet_Button']")) return true;
+      if (document.querySelector("a[href='/login'], [data-testid='loginButton']")) return false;
+      return null;
+    }};
     const absoluteTwitterStatusUrl = (href) => {{
       try {{
         const url = new URL(href, window.location.origin);
@@ -2672,7 +3034,51 @@ async fn dapp_request_tab_text(
       return {{ text, links }};
     }};
 
-    const scan = {{ requestId, isTwitter, collectedTweets: new Map(), latestNodes: [] }};
+    const collectProfile = () => {{
+      if (!isTwitter) return null;
+      const pathMatch = window.location.pathname.match(/^\/([A-Za-z0-9_]{{1,15}})\/?$/);
+      if (!pathMatch) return null;
+      const handle = pathMatch[1].toLowerCase();
+      const reserved = new Set(["home", "explore", "search", "notifications", "messages", "settings", "compose", "i"]);
+      if (reserved.has(handle)) return null;
+      const root = document.querySelector("main [data-testid='primaryColumn']") || document.querySelector("main") || document.body;
+      const userName = root.querySelector("[data-testid='UserName']");
+      if (!userName) return null;
+      const nameLines = clean(userName.innerText || userName.textContent, 160)
+        .split(/\n+/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      const displayName = nameLines.find((line) => !line.startsWith("@")) || "";
+      const profileLinks = Array.from(root.querySelectorAll("a[href]"));
+      const linkForPath = (suffixes) => profileLinks.find((link) => {{
+        try {{
+          const path = new URL(link.getAttribute("href") || "", window.location.origin).pathname.replace(/\/$/, "").toLowerCase();
+          return suffixes.some((suffix) => path === `/${{handle}}/${{suffix}}`);
+        }} catch (_) {{
+          return false;
+        }}
+      }});
+      const followersLink = linkForPath(["followers", "verified_followers"]);
+      const followingLink = linkForPath(["following"]);
+      const avatar = root.querySelector(`a[href='/${{handle}}/photo'] img[src]`) ||
+        root.querySelector("[data-testid^='UserAvatar-Container-'] img[src]");
+      const websiteNode = root.querySelector("[data-testid='UserUrl'] a[href]") || root.querySelector("[data-testid='UserUrl']");
+      return {{
+        handle,
+        display_name: clean(displayName, 80),
+        avatar_url: clean(avatar?.currentSrc || avatar?.getAttribute("src"), 2048) || null,
+        bio: clean(root.querySelector("[data-testid='UserDescription']")?.innerText, 400) || null,
+        followers_label: clean(followersLink?.innerText || followersLink?.textContent, 80) || null,
+        following_label: clean(followingLink?.innerText || followingLink?.textContent, 80) || null,
+        location: clean(root.querySelector("[data-testid='UserLocation']")?.innerText, 120) || null,
+        website: clean(websiteNode?.innerText || websiteNode?.textContent, 512) || null,
+        joined_label: clean(root.querySelector("[data-testid='UserJoinDate']")?.innerText, 120) || null,
+        verified: Boolean(userName.querySelector("[data-testid='icon-verified'], svg[aria-label*='Verified'], svg[aria-label*='认证']")),
+      }};
+    }};
+
+    const cutoffMs = Date.now() - (3 * 24 * 60 * 60 * 1000);
+    const scan = {{ requestId, isTwitter, latestOnly: {latest_only}, cutoffMs, oldTweetKeys: new Set(), reachedCutoff: false, reachedEnd: false, stalledEndPasses: 0, lastProgressKey: "", collectedTweets: new Map(), latestNodes: [], profile: collectProfile(), detectTwitterAuth }};
     const expandTweetTexts = () => {{
       if (!isTwitter) return;
       const tweetNodes = Array.from(document.querySelectorAll("article[data-testid='tweet'], [data-testid='tweet']"));
@@ -2689,8 +3095,15 @@ async fn dapp_request_tab_text(
         ? Array.from(document.querySelectorAll("article[data-testid='tweet'], [data-testid='tweet']"))
         : [];
       for (const node of tweetNodes) {{
-        if (scan.collectedTweets.size >= 200) break;
+        if (scan.collectedTweets.size >= 1000) break;
         const time = node.querySelector("time[datetime]");
+        const publishedAt = clean(time?.getAttribute("datetime"), 64);
+        const publishedAtMs = Date.parse(publishedAt);
+        if (Number.isFinite(publishedAtMs) && publishedAtMs < scan.cutoffMs) {{
+          scan.oldTweetKeys.add(`${{publishedAt}}:${{clean(node.innerText || node.textContent, 160)}}`);
+          if (scan.oldTweetKeys.size >= 3) scan.reachedCutoff = true;
+          continue;
+        }}
         const statusAnchors = Array.from(node.querySelectorAll("a[href*='/status/']"));
         const statusAnchor = time?.closest("a[href*='/status/']") ||
           statusAnchors.find((anchor) => absoluteTwitterStatusUrl(anchor.getAttribute("href") || ""));
@@ -2722,22 +3135,30 @@ async fn dapp_request_tab_text(
           text,
           links: serialized?.links || [],
           source_url: sourceUrl || null,
-          published_at: clean(time?.getAttribute("datetime"), 64) || null,
+          published_at: publishedAt || null,
         }};
         const key = tweet.source_url || tweet.tweet_id || `${{tweet.author_handle}}:${{tweet.text}}`;
         const previous = scan.collectedTweets.get(key);
         if (!previous || tweet.text.length > previous.text.length) scan.collectedTweets.set(key, tweet);
       }}
       scan.latestNodes = tweetNodes;
+      const root = document.documentElement;
+      const atBottom = window.scrollY + Math.max(window.innerHeight || 0, 600) >= root.scrollHeight - 8;
+      const progressKey = `${{scan.collectedTweets.size}}:${{root.scrollHeight}}`;
+      scan.stalledEndPasses = atBottom && progressKey === scan.lastProgressKey
+        ? scan.stalledEndPasses + 1
+        : 0;
+      scan.lastProgressKey = progressKey;
+      if (scan.stalledEndPasses >= 5) scan.reachedEnd = true;
     }};
     scan.expandTweetTexts = expandTweetTexts;
     scan.collectTweets = collectTweets;
+    scan.collectProfile = collectProfile;
     window.__FNZERO_TWEET_SCAN__ = scan;
-    expandTweetTexts();
-    collectTweets();
-    if ({advance} && isTwitter) {{
-      const viewport = Math.max(window.innerHeight || 0, 600);
-      window.scrollBy({{ top: Math.floor(viewport * 0.85), left: 0, behavior: "auto" }});
+    if ({advance} && isTwitter && !{resume_backfill}) window.scrollTo({{ top: 0, left: 0, behavior: "auto" }});
+    if (!{advance}) {{
+      expandTweetTexts();
+      collectTweets();
     }}
   }} catch (_) {{}}
 }})();
@@ -2751,9 +3172,14 @@ async fn dapp_request_tab_text(
     if should_advance {
         // Hidden Chromium pages throttle JavaScript timers. Pace the traversal
         // from Rust so scanning remains bounded while the monitor tab is shown.
-        for pass in 1..10 {
-            tokio::time::sleep(Duration::from_millis(650)).await;
-            let should_scroll = if pass < 9 { "true" } else { "false" };
+        let total_passes = if latest_only { 5 } else { 45 };
+        for pass in 1..total_passes {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            let should_scroll = if pass < total_passes - 1 {
+                "true"
+            } else {
+                "false"
+            };
             let step_script = format!(
                 r#"
 (function () {{
@@ -2762,9 +3188,9 @@ async fn dapp_request_tab_text(
     if (!scan || scan.requestId !== {request_id_json}) return;
     scan.expandTweetTexts();
     scan.collectTweets();
-    if ({should_scroll} && scan.isTwitter && scan.collectedTweets.size < 200) {{
+    if ({should_scroll} && scan.isTwitter && !scan.reachedCutoff && scan.collectedTweets.size < 1000) {{
       const viewport = Math.max(window.innerHeight || 0, 600);
-      window.scrollBy({{ top: Math.floor(viewport * 0.85), left: 0, behavior: "auto" }});
+      window.scrollBy({{ top: Math.floor(viewport * 1.8), left: 0, behavior: "auto" }});
     }}
   }} catch (_) {{}}
 }})();
@@ -2787,8 +3213,16 @@ async fn dapp_request_tab_text(
     if (typeof invoke !== "function") return;
     const clean = (value, limit) => String(value || "").trim().slice(0, limit);
     scan.collectTweets();
-    const tweets = Array.from(scan.collectedTweets.values()).slice(0, 200);
-    const readableNodes = tweets.length > 0
+    scan.profile = scan.collectProfile();
+    const capturedAtMs = Date.now();
+    const tweets = Array.from(scan.collectedTweets.values())
+      .filter((tweet) => {{
+        const publishedAtMs = Date.parse(tweet.published_at || "");
+        return Number.isFinite(publishedAtMs) && publishedAtMs >= scan.cutoffMs && publishedAtMs <= capturedAtMs;
+      }})
+      .sort((left, right) => Date.parse(right.published_at || 0) - Date.parse(left.published_at || 0))
+      .slice(0, 1000);
+    const readableNodes = tweets.length > 0 || scan.isTwitter
       ? []
       : scan.latestNodes.length > 0
         ? scan.latestNodes
@@ -2800,12 +3234,15 @@ async fn dapp_request_tab_text(
         .filter(Boolean)
         .join("\n\n")
         .slice(0, 250000);
-    await invoke("dapp_submit_page_text", {{
+    await invoke("dapp_submit_page_text", {{ payload: {{
       requestId: scan.requestId,
       text,
       tweets,
+      profile: scan.profile,
+      authenticated: scan.detectTwitterAuth(),
+      backfillComplete: Boolean(scan.latestOnly || scan.reachedCutoff || scan.reachedEnd || scan.collectedTweets.size >= 1000),
       url: window.location.href,
-    }});
+    }} }});
     if (window.__FNZERO_TWEET_SCAN__?.requestId === scan.requestId) {{
       delete window.__FNZERO_TWEET_SCAN__;
     }}
@@ -2821,23 +3258,66 @@ async fn dapp_request_tab_text(
     .await;
 
     if run_in_background {
-        let _ = webview.hide();
-        if let Some(bounds) = original_bounds {
-            let _ = webview.set_bounds(bounds);
+        let active_tab_label = state.active_tab_label.lock().ok();
+        let became_active = active_tab_label
+            .as_deref()
+            .and_then(|label| label.as_deref())
+            == Some(label.as_str());
+        if !became_active {
+            let _ = webview.hide();
+            if let Some(bounds) = original_bounds {
+                let _ = webview.set_bounds(bounds);
+            }
         }
     }
     scan_result
+}
+
+fn normalize_twitter_status_url(value: &str) -> Option<String> {
+    if value.len() > 2_048 {
+        return None;
+    }
+    let mut parsed = tauri::Url::parse(value.trim()).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        return None;
+    }
+    let host = parsed.host_str()?.to_ascii_lowercase();
+    let is_twitter = host == "x.com"
+        || host.ends_with(".x.com")
+        || host == "twitter.com"
+        || host.ends_with(".twitter.com");
+    let segments = parsed.path_segments()?.collect::<Vec<_>>();
+    let has_status_id = segments.windows(2).any(|pair| {
+        pair[0].eq_ignore_ascii_case("status")
+            && !pair[1].is_empty()
+            && pair[1].chars().all(|character| character.is_ascii_digit())
+    });
+    if !is_twitter || !has_status_id {
+        return None;
+    }
+    parsed.set_query(None);
+    parsed.set_fragment(None);
+    Some(parsed.to_string())
 }
 
 #[tauri::command]
 fn dapp_submit_page_text(
     webview: DesktopWebview,
     app: DesktopAppHandle,
-    request_id: String,
-    text: String,
-    tweets: Option<Vec<DappCapturedTweet>>,
-    url: String,
+    payload: DappSubmitPageTextRequest,
 ) -> Result<(), String> {
+    let DappSubmitPageTextRequest {
+        request_id,
+        text,
+        tweets,
+        profile,
+        authenticated,
+        backfill_complete,
+        url,
+    } = payload;
     if request_id.is_empty()
         || request_id.len() > 100
         || !request_id
@@ -2857,7 +3337,7 @@ fn dapp_submit_page_text(
     let clipped_tweets = tweets
         .unwrap_or_default()
         .into_iter()
-        .take(200)
+        .take(1_000)
         .filter_map(|tweet| {
             let text = tweet.text.trim().chars().take(4_000).collect::<String>();
             if text.is_empty() {
@@ -2871,20 +3351,17 @@ fn dapp_submit_page_text(
                 .take(15)
                 .collect::<String>()
                 .to_ascii_lowercase();
-            let author_handle = author_handle
+            let author_handle = if author_handle
                 .chars()
                 .all(|value| value.is_ascii_alphanumeric() || value == '_')
-                .then_some(author_handle)
-                .unwrap_or_default();
-            let source_url = tweet.source_url.and_then(|value| {
-                let parsed = tauri::Url::parse(value.trim()).ok()?;
-                let host = parsed.host_str()?.to_ascii_lowercase();
-                let is_twitter = host == "x.com"
-                    || host.ends_with(".x.com")
-                    || host == "twitter.com"
-                    || host.ends_with(".twitter.com");
-                (is_twitter && parsed.path().contains("/status/")).then(|| parsed.to_string())
-            });
+            {
+                author_handle
+            } else {
+                String::new()
+            };
+            let source_url = tweet
+                .source_url
+                .and_then(|value| normalize_twitter_status_url(&value));
             let avatar_url = tweet.avatar_url.and_then(|value| {
                 let parsed = tauri::Url::parse(value.trim()).ok()?;
                 let host = parsed.host_str()?.to_ascii_lowercase();
@@ -2931,6 +3408,47 @@ fn dapp_submit_page_text(
             })
         })
         .collect::<Vec<_>>();
+    let clipped_profile = profile.and_then(|profile| {
+        let handle = profile
+            .handle
+            .trim()
+            .trim_start_matches('@')
+            .chars()
+            .take(15)
+            .collect::<String>()
+            .to_ascii_lowercase();
+        if handle.is_empty()
+            || !handle
+                .chars()
+                .all(|value| value.is_ascii_alphanumeric() || value == '_')
+        {
+            return None;
+        }
+        let avatar_url = profile.avatar_url.and_then(|value| {
+            let parsed = tauri::Url::parse(value.trim()).ok()?;
+            let host = parsed.host_str()?.to_ascii_lowercase();
+            let is_x_image = parsed.scheme() == "https"
+                && (host == "pbs.twimg.com" || host.ends_with(".pbs.twimg.com"));
+            (is_x_image && parsed.as_str().len() <= 2_048).then(|| parsed.to_string())
+        });
+        let optional_text = |value: Option<String>, limit: usize| {
+            value
+                .map(|item| item.trim().chars().take(limit).collect::<String>())
+                .filter(|item| !item.is_empty())
+        };
+        Some(DappCapturedTwitterProfile {
+            handle,
+            display_name: profile.display_name.trim().chars().take(80).collect(),
+            avatar_url,
+            bio: optional_text(profile.bio, 400),
+            followers_label: optional_text(profile.followers_label, 80),
+            following_label: optional_text(profile.following_label, 80),
+            location: optional_text(profile.location, 120),
+            website: optional_text(profile.website, 512),
+            joined_label: optional_text(profile.joined_label, 120),
+            verified: profile.verified,
+        })
+    });
     app.emit_to(
         "main",
         DAPP_TAB_TEXT_EVENT,
@@ -2940,6 +3458,9 @@ fn dapp_submit_page_text(
             url: parsed_url.as_str().to_string(),
             text: clipped_text,
             tweets: clipped_tweets,
+            profile: clipped_profile,
+            authenticated,
+            backfill_complete,
             captured_at_ms: now_ms(),
         },
     )
@@ -3064,6 +3585,9 @@ fn dapp_poll_sign_request(
 fn dapp_pending_sign_request(
     state: tauri::State<'_, DappBridgeState>,
 ) -> Result<Option<DappSignRequestEvent>, String> {
+    if state.paused.load(Ordering::Acquire) {
+        return Ok(None);
+    }
     let mut requests = state
         .requests
         .lock()
@@ -3082,6 +3606,9 @@ fn dapp_pending_sign_request(
 fn dapp_pending_connect_request(
     state: tauri::State<'_, DappBridgeState>,
 ) -> Result<Option<DappConnectRequestEvent>, String> {
+    if state.paused.load(Ordering::Acquire) {
+        return Ok(None);
+    }
     let mut requests = state
         .connect_requests
         .lock()
@@ -3102,12 +3629,14 @@ fn resolve_dapp_sign_request(
     request_id: String,
     result: DappSignResult,
 ) -> Result<(), String> {
+    ensure_dapp_connections_active(state.inner())?;
     let request_id = request_id.trim();
     let mut callback_target = None;
     let mut requests = state
         .requests
         .lock()
         .map_err(|_| "dapp request lock poisoned".to_string())?;
+    ensure_dapp_connections_active(state.inner())?;
     let pending = requests
         .get_mut(request_id)
         .ok_or_else(|| "dapp signing request is no longer pending".to_string())?;
@@ -3115,6 +3644,7 @@ fn resolve_dapp_sign_request(
         requests.remove(request_id);
         return Err("dapp signing request expired".to_string());
     }
+    ensure_dapp_result_pending(&pending.result, "dapp signing request")?;
     if let Some(callback_url) = pending.event.callback_url.as_deref() {
         callback_target = Some(append_dapp_result_to_callback_url(
             callback_url,
@@ -3122,12 +3652,10 @@ fn resolve_dapp_sign_request(
             &result,
         )?);
     }
-    pending.result = Some(result);
-    drop(requests);
-
-    if let Some(callback_target) = callback_target {
-        spawn_system_browser(&callback_target)?;
+    if let Some(callback_target) = callback_target.as_deref() {
+        spawn_system_browser(callback_target)?;
     }
+    pending.result = Some(result);
     Ok(())
 }
 
@@ -3137,11 +3665,13 @@ fn resolve_dapp_connect_request(
     request_id: String,
     result: DappSignResult,
 ) -> Result<(), String> {
+    ensure_dapp_connections_active(state.inner())?;
     let request_id = request_id.trim();
     let mut requests = state
         .connect_requests
         .lock()
         .map_err(|_| "dapp connect request lock poisoned".to_string())?;
+    ensure_dapp_connections_active(state.inner())?;
     let pending = requests
         .get_mut(request_id)
         .ok_or_else(|| "dapp connect request is no longer pending".to_string())?;
@@ -3149,12 +3679,213 @@ fn resolve_dapp_connect_request(
         requests.remove(request_id);
         return Err("dapp connect request expired".to_string());
     }
+    ensure_dapp_result_pending(&pending.result, "dapp connect request")?;
     let callback_target =
         append_dapp_result_to_callback_url(&pending.event.callback_url, request_id, &result)?;
-    pending.result = Some(result);
-    drop(requests);
-
     spawn_system_browser(&callback_target)?;
+    pending.result = Some(result);
+    Ok(())
+}
+
+fn ensure_dapp_result_pending(
+    result: &Option<DappSignResult>,
+    request: &str,
+) -> Result<(), String> {
+    if result.is_some() {
+        return Err(format!("{request} is already resolved"));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn dapp_pause_connections(state: tauri::State<'_, DappBridgeState>) -> Result<(), String> {
+    pause_dapp_connections(state.inner())
+}
+
+fn pause_dapp_connections(state: &DappBridgeState) -> Result<(), String> {
+    state.paused.store(true, Ordering::Release);
+    let sessions = state
+        .sessions
+        .lock()
+        .map_err(|_| "dapp session lock poisoned".to_string())?;
+    drop(sessions);
+    state
+        .requests
+        .lock()
+        .map_err(|_| "dapp request lock poisoned".to_string())?
+        .clear();
+    state
+        .connect_requests
+        .lock()
+        .map_err(|_| "dapp connect request lock poisoned".to_string())?
+        .clear();
+    Ok(())
+}
+
+#[tauri::command]
+fn dapp_resume_connections(state: tauri::State<'_, DappBridgeState>) {
+    state.paused.store(false, Ordering::Release);
+}
+
+fn dapp_session_matches_permission(
+    session: &DappSession,
+    origin: &str,
+    wallet_public_key: &str,
+    network: &str,
+) -> bool {
+    app_store::normalize_dapp_origin(&session.url)
+        .is_ok_and(|session_origin| session_origin == origin)
+        && session.wallet_public_key == wallet_public_key
+        && session.network.eq_ignore_ascii_case(network)
+}
+
+fn dapp_sign_request_matches_permission(
+    request: &DappSignRequestEvent,
+    origin: &str,
+    wallet_public_key: &str,
+    network: &str,
+) -> bool {
+    app_store::normalize_dapp_origin(&request.app_url)
+        .is_ok_and(|request_origin| request_origin == origin)
+        && request.wallet_public_key == wallet_public_key
+        && request.network.eq_ignore_ascii_case(network)
+}
+
+fn dapp_connect_request_matches_permission(
+    request: &DappConnectRequestEvent,
+    origin: &str,
+    network: &str,
+) -> bool {
+    app_store::normalize_dapp_origin(&request.app_url)
+        .is_ok_and(|request_origin| request_origin == origin)
+        && request.network.eq_ignore_ascii_case(network)
+}
+
+#[tauri::command]
+fn dapp_disconnect_connection(
+    state: tauri::State<'_, DappBridgeState>,
+    store: tauri::State<'_, app_store::AppStore>,
+    origin: String,
+    wallet_public_key: String,
+    wallet_id: String,
+    network: String,
+) -> Result<bool, String> {
+    let origin = app_store::normalize_dapp_origin(&origin)?;
+    let wallet_public_key = wallet_public_key.trim();
+    let network = network.trim();
+    if wallet_public_key.is_empty() || network.is_empty() {
+        return Err("wallet and network are required".to_string());
+    }
+
+    disconnect_dapp_connection_state(state.inner(), &origin, wallet_public_key, network, || {
+        app_store::revoke_dapp_permission_for_identity(
+            store.inner(),
+            &origin,
+            &wallet_id,
+            wallet_public_key,
+            network,
+        )
+    })
+}
+
+fn disconnect_dapp_connection_state<ResultValue>(
+    state: &DappBridgeState,
+    origin: &str,
+    wallet_public_key: &str,
+    network: &str,
+    persist_revoke: impl FnOnce() -> Result<ResultValue, String>,
+) -> Result<ResultValue, String> {
+    let mut sessions = state
+        .sessions
+        .lock()
+        .map_err(|_| "dapp session lock poisoned".to_string())?;
+    let mut requests = state
+        .requests
+        .lock()
+        .map_err(|_| "dapp request lock poisoned".to_string())?;
+    let mut connect_requests = state
+        .connect_requests
+        .lock()
+        .map_err(|_| "dapp connect request lock poisoned".to_string())?;
+    let removed_labels = sessions
+        .iter()
+        .filter(|(_, session)| {
+            dapp_session_matches_permission(session, origin, wallet_public_key, network)
+        })
+        .map(|(label, _)| label.clone())
+        .collect::<HashSet<_>>();
+
+    let result = persist_revoke()?;
+    sessions.retain(|label, _| !removed_labels.contains(label));
+    requests.retain(|_, pending| {
+        !removed_labels.contains(&pending.webview_label)
+            && !dapp_sign_request_matches_permission(
+                &pending.event,
+                origin,
+                wallet_public_key,
+                network,
+            )
+    });
+    connect_requests.retain(|_, pending| {
+        !dapp_connect_request_matches_permission(&pending.event, origin, network)
+    });
+    Ok(result)
+}
+
+#[tauri::command]
+fn dapp_disconnect_wallet(
+    state: tauri::State<'_, DappBridgeState>,
+    store: tauri::State<'_, app_store::AppStore>,
+    wallet_id: String,
+    wallet_public_key: String,
+) -> Result<usize, String> {
+    disconnect_dapp_wallet_state(state.inner(), &wallet_public_key, || {
+        app_store::revoke_dapp_permissions_for_wallet(
+            store.inner(),
+            &wallet_id,
+            wallet_public_key.trim(),
+        )
+    })
+}
+
+fn disconnect_dapp_wallet_state<ResultValue>(
+    state: &DappBridgeState,
+    wallet_public_key: &str,
+    persist_revoke: impl FnOnce() -> Result<ResultValue, String>,
+) -> Result<ResultValue, String> {
+    let wallet_public_key = wallet_public_key.trim();
+    if wallet_public_key.is_empty() {
+        return Err("wallet public key is required".to_string());
+    }
+    let mut sessions = state
+        .sessions
+        .lock()
+        .map_err(|_| "dapp session lock poisoned".to_string())?;
+    let mut requests = state
+        .requests
+        .lock()
+        .map_err(|_| "dapp request lock poisoned".to_string())?;
+    let removed_labels = sessions
+        .iter()
+        .filter(|(_, session)| session.wallet_public_key == wallet_public_key)
+        .map(|(label, _)| label.clone())
+        .collect::<HashSet<_>>();
+
+    let result = persist_revoke()?;
+    sessions.retain(|label, _| !removed_labels.contains(label));
+    requests.retain(|_, pending| {
+        !removed_labels.contains(&pending.webview_label)
+            && pending.event.wallet_public_key != wallet_public_key
+    });
+    Ok(result)
+}
+
+#[tauri::command]
+fn open_developer_tools(app: DesktopAppHandle) -> Result<(), String> {
+    let webview = app
+        .get_webview("main")
+        .ok_or_else(|| "main webview is unavailable".to_string())?;
+    webview.open_devtools();
     Ok(())
 }
 
@@ -3203,10 +3934,9 @@ fn downloads_dir() -> Result<PathBuf, String> {
     Ok(home.join("Downloads"))
 }
 
-fn non_overwriting_path(directory: &Path, filename: &str) -> PathBuf {
-    let candidate = directory.join(filename);
-    if !candidate.exists() {
-        return candidate;
+fn numbered_download_path(directory: &Path, filename: &str, index: usize) -> PathBuf {
+    if index == 0 {
+        return directory.join(filename);
     }
     let path = Path::new(filename);
     let stem = path
@@ -3214,24 +3944,34 @@ fn non_overwriting_path(directory: &Path, filename: &str) -> PathBuf {
         .and_then(|value| value.to_str())
         .unwrap_or(filename);
     let extension = path.extension().and_then(|value| value.to_str());
-    for index in 1..10_000 {
-        let next_name = match extension {
-            Some(extension) if !extension.is_empty() => format!("{stem}-{index}.{extension}"),
-            _ => format!("{stem}-{index}"),
-        };
-        let next_path = directory.join(next_name);
-        if !next_path.exists() {
-            return next_path;
-        }
-    }
-    directory.join(format!("{stem}-{}", uuid_like_timestamp()))
+    let next_name = match extension {
+        Some(extension) if !extension.is_empty() => format!("{stem}-{index}.{extension}"),
+        _ => format!("{stem}-{index}"),
+    };
+    directory.join(next_name)
 }
 
-fn uuid_like_timestamp() -> String {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis().to_string())
-        .unwrap_or_else(|_| "now".to_string())
+fn write_new_download(directory: &Path, filename: &str, content: &[u8]) -> Result<PathBuf, String> {
+    for index in 0..10_000 {
+        let path = numbered_download_path(directory, filename, index);
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                if let Err(error) = file.write_all(content) {
+                    drop(file);
+                    let _ = fs::remove_file(&path);
+                    return Err(format!("failed to write download file: {error}"));
+                }
+                return Ok(path);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(format!("failed to create download file: {error}")),
+        }
+    }
+    Err("too many files use this download name".to_string())
 }
 
 #[tauri::command]
@@ -3243,9 +3983,7 @@ fn save_download_file(filename: String, content: String) -> Result<String, Strin
     let directory = downloads_dir()?;
     std::fs::create_dir_all(&directory)
         .map_err(|error| format!("failed to create Downloads directory: {error}"))?;
-    let path = non_overwriting_path(&directory, &filename);
-    std::fs::write(&path, content.as_bytes())
-        .map_err(|error| format!("failed to write download file: {error}"))?;
+    let path = write_new_download(&directory, &filename, content.as_bytes())?;
     Ok(path.to_string_lossy().to_string())
 }
 
@@ -3646,6 +4384,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             proxy_api_request,
             open_external_url,
+            open_url_in_chrome,
             dapp_open_tab,
             dapp_navigate_tab,
             dapp_set_active_tab,
@@ -3660,12 +4399,39 @@ pub fn run() {
             browser_profile::browser_autofill,
             browser_profile::browser_tab_action,
             browser_profile::browser_take_screenshot,
+            app_store::settings_get,
+            app_store::settings_update,
+            app_store::settings_import_legacy,
+            app_store::address_book_list,
+            app_store::address_book_upsert,
+            app_store::address_book_delete,
+            app_store::dapp_permissions_list,
+            app_store::dapp_permission_grant,
+            app_store::dapp_permission_revoke,
+            app_store::settings_diagnostics,
+            research_store::research_ingest,
+            research_store::research_resolve_tokens,
+            research_store::research_scan_cursor,
+            research_store::research_list_kols,
+            research_store::research_list_signals,
+            research_store::research_clear_signals,
+            research_store::research_remove_kol,
+            research_store::research_query,
+            research_store::research_ai_chat,
+            research_store::research_ai_key_status,
+            research_store::research_ai_key_store,
+            research_store::research_ai_key_delete,
             dapp_submit_sign_request,
             dapp_poll_sign_request,
             dapp_pending_sign_request,
             dapp_pending_connect_request,
             resolve_dapp_sign_request,
             resolve_dapp_connect_request,
+            dapp_pause_connections,
+            dapp_resume_connections,
+            dapp_disconnect_connection,
+            dapp_disconnect_wallet,
+            open_developer_tools,
             biometric_wallet_status,
             biometric_wallet_store_password,
             biometric_wallet_get_password,
@@ -3675,6 +4441,13 @@ pub fn run() {
             open_download_file_location
         ])
         .setup(move |app| {
+            let research_database_path = preferred_wallet_database_path(app);
+            let app_store = app_store::AppStore::new(research_database_path.clone())
+                .map_err(std::io::Error::other)?;
+            app.manage(app_store);
+            let research_store = research_store::ResearchStore::new(research_database_path)
+                .map_err(std::io::Error::other)?;
+            app.manage(research_store);
             if !cfg!(debug_assertions) {
                 if let Err(error) = terminate_recorded_process(&desktop_api_pid_file) {
                     log::warn!("failed to stop recorded desktop API process: {error}");
@@ -3729,6 +4502,77 @@ mod tests {
         encoding::{AsDer, PublicKeyX509Der},
         rsa::{KeySize, OaepPrivateDecryptingKey, PrivateDecryptingKey},
     };
+
+    #[test]
+    fn twitter_status_sources_require_web_urls_and_numeric_status_ids() {
+        assert_eq!(
+            normalize_twitter_status_url("https://X.com/User/status/123?ref=home#top").as_deref(),
+            Some("https://x.com/User/status/123")
+        );
+        assert!(normalize_twitter_status_url("ftp://x.com/User/status/123").is_none());
+        assert!(normalize_twitter_status_url("https://x.com/User/status/not-a-number").is_none());
+        assert!(normalize_twitter_status_url("https://example.com/User/status/123").is_none());
+    }
+
+    #[test]
+    fn telegram_links_are_converted_to_native_app_routes() {
+        let invite = "https://t.me/+Abc_123-xyz".parse::<tauri::Url>().unwrap();
+        let channel = "https://t.me/fnzero/42".parse::<tauri::Url>().unwrap();
+        let preview = "https://t.me/s/fnzero/42".parse::<tauri::Url>().unwrap();
+        let native = "tg://resolve?domain=fnzero".parse::<tauri::Url>().unwrap();
+        let unsafe_proxy = "tg://proxy?server=example.com&port=443"
+            .parse::<tauri::Url>()
+            .unwrap();
+        let extra_parameter = "tg://resolve?domain=fnzero&start=secret"
+            .parse::<tauri::Url>()
+            .unwrap();
+        let extra_path = "https://t.me/fnzero/42/extra"
+            .parse::<tauri::Url>()
+            .unwrap();
+        let non_numeric_post = "https://t.me/fnzero/latest".parse::<tauri::Url>().unwrap();
+        let query_parameter = "https://t.me/fnzero?start=secret"
+            .parse::<tauri::Url>()
+            .unwrap();
+        let unrelated = "https://example.com/fnzero".parse::<tauri::Url>().unwrap();
+
+        assert_eq!(
+            telegram_deep_link(&invite).as_deref(),
+            Some("tg://join?invite=Abc_123-xyz")
+        );
+        assert_eq!(
+            telegram_deep_link(&channel).as_deref(),
+            Some("tg://resolve?domain=fnzero&post=42")
+        );
+        assert_eq!(
+            telegram_deep_link(&preview).as_deref(),
+            Some("tg://resolve?domain=fnzero&post=42")
+        );
+        assert_eq!(telegram_deep_link(&native), Some(native.to_string()));
+        assert!(telegram_deep_link(&unsafe_proxy).is_none());
+        assert!(telegram_deep_link(&extra_parameter).is_none());
+        assert!(telegram_deep_link(&extra_path).is_none());
+        assert!(telegram_deep_link(&non_numeric_post).is_none());
+        assert!(telegram_deep_link(&query_parameter).is_none());
+        assert!(telegram_deep_link(&unrelated).is_none());
+    }
+
+    #[test]
+    fn download_paths_are_numbered_without_overwriting_existing_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = write_new_download(directory.path(), "report.json", b"first").unwrap();
+        let second = write_new_download(directory.path(), "report.json", b"second").unwrap();
+
+        assert_eq!(
+            first.file_name().and_then(|value| value.to_str()),
+            Some("report.json")
+        );
+        assert_eq!(
+            second.file_name().and_then(|value| value.to_str()),
+            Some("report-1.json")
+        );
+        assert_eq!(fs::read(first).unwrap(), b"first");
+        assert_eq!(fs::read(second).unwrap(), b"second");
+    }
 
     #[test]
     fn secure_body_envelope_round_trips_with_backend_key_format() {
@@ -3877,6 +4721,7 @@ mod tests {
         assert!(!is_allowed_external_https_url("https://.example.com"));
         assert!(!is_allowed_external_https_url("https://example.com."));
         assert!(!is_allowed_external_https_url("https://example.com\n.evil"));
+        assert!(parse_dapp_browser_url("https://@example.com").is_err());
     }
 
     #[test]
@@ -3893,6 +4738,7 @@ mod tests {
         let pumpfun = allowed_dapp("pumpfun").unwrap();
         let same_domain = "https://pump.fun/coin/example".parse().unwrap();
         let subdomain = "https://frontend-api.pump.fun/".parse().unwrap();
+        let credentialed = "https://user:pass@pump.fun/coin/example".parse().unwrap();
         let other_https = "https://example.com/".parse().unwrap();
 
         assert!(is_allowed_connected_dapp_navigation_url(
@@ -3904,8 +4750,210 @@ mod tests {
         ));
         assert!(!is_allowed_connected_dapp_navigation_url(
             &pumpfun,
+            &credentialed
+        ));
+        assert!(!is_allowed_connected_dapp_navigation_url(
+            &pumpfun,
             &other_https
         ));
+    }
+
+    #[test]
+    fn dapp_disconnect_matching_is_exact_for_origin_wallet_and_network() {
+        let session = DappSession {
+            app_id: "pumpfun".to_string(),
+            app_name: "Pump.fun".to_string(),
+            url: "https://pump.fun/coin/example?source=wallet".to_string(),
+            wallet_public_key: "wallet-a".to_string(),
+            network: "mainnet".to_string(),
+            opened_at_ms: now_ms(),
+        };
+
+        assert!(dapp_session_matches_permission(
+            &session,
+            "https://pump.fun",
+            "wallet-a",
+            "MAINNET"
+        ));
+        assert!(!dapp_session_matches_permission(
+            &session,
+            "https://example.com",
+            "wallet-a",
+            "mainnet"
+        ));
+        assert!(!dapp_session_matches_permission(
+            &session,
+            "https://pump.fun",
+            "wallet-b",
+            "mainnet"
+        ));
+        assert!(!dapp_session_matches_permission(
+            &session,
+            "https://pump.fun",
+            "wallet-a",
+            "devnet"
+        ));
+
+        let sign_request = DappSignRequestEvent {
+            request_id: "sign-1".to_string(),
+            app_id: "pumpfun".to_string(),
+            app_name: "Pump.fun".to_string(),
+            app_url: session.url.clone(),
+            request_purpose: None,
+            method: "signMessage".to_string(),
+            wallet_public_key: session.wallet_public_key.clone(),
+            network: session.network.clone(),
+            transaction_base64: String::new(),
+            transaction_format: "message".to_string(),
+            message_base64: Some("aGVsbG8=".to_string()),
+            callback_url: None,
+            known_programs: Vec::new(),
+            created_at_ms: now_ms(),
+        };
+        assert!(dapp_sign_request_matches_permission(
+            &sign_request,
+            "https://pump.fun",
+            "wallet-a",
+            "mainnet"
+        ));
+        assert!(!dapp_sign_request_matches_permission(
+            &sign_request,
+            "https://pump.fun",
+            "wallet-b",
+            "mainnet"
+        ));
+
+        let connect_request = DappConnectRequestEvent {
+            request_id: "connect-1".to_string(),
+            app_id: "fnzsafe-deep-link".to_string(),
+            app_name: "Pump.fun".to_string(),
+            app_url: session.url,
+            network: session.network,
+            callback_url: "https://pump.fun/wallet/callback".to_string(),
+            created_at_ms: now_ms(),
+        };
+        assert!(dapp_connect_request_matches_permission(
+            &connect_request,
+            "https://pump.fun",
+            "mainnet"
+        ));
+        assert!(!dapp_connect_request_matches_permission(
+            &connect_request,
+            "https://pump.fun",
+            "devnet"
+        ));
+    }
+
+    #[test]
+    fn resolved_dapp_requests_cannot_be_completed_twice() {
+        let resolved = Some(DappSignResult {
+            approved: true,
+            error: None,
+            public_key: Some("wallet-a".to_string()),
+            signature: None,
+            raw_transaction: None,
+            recent_blockhash: None,
+        });
+        assert!(ensure_dapp_result_pending(&None, "dapp request").is_ok());
+        assert_eq!(
+            ensure_dapp_result_pending(&resolved, "dapp request").unwrap_err(),
+            "dapp request is already resolved"
+        );
+    }
+
+    #[test]
+    fn wallet_disconnect_keeps_other_wallet_sessions() {
+        let state = DappBridgeState::default();
+        let session = |wallet_public_key: &str| DappSession {
+            app_id: "pumpfun".to_string(),
+            app_name: "Pump.fun".to_string(),
+            url: "https://pump.fun".to_string(),
+            wallet_public_key: wallet_public_key.to_string(),
+            network: "mainnet".to_string(),
+            opened_at_ms: now_ms(),
+        };
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.insert("wallet-a-tab".to_string(), session("wallet-a"));
+            sessions.insert("wallet-b-tab".to_string(), session("wallet-b"));
+        }
+        disconnect_dapp_wallet_state(&state, "wallet-a", || Ok(())).unwrap();
+        let sessions = state.sessions.lock().unwrap();
+        assert!(!sessions.contains_key("wallet-a-tab"));
+        assert!(sessions.contains_key("wallet-b-tab"));
+    }
+
+    #[test]
+    fn connection_disconnect_keeps_memory_state_when_permission_revoke_fails() {
+        let state = DappBridgeState::default();
+        state.sessions.lock().unwrap().insert(
+            "wallet-a-tab".to_string(),
+            DappSession {
+                app_id: "pumpfun".to_string(),
+                app_name: "Pump.fun".to_string(),
+                url: "https://pump.fun".to_string(),
+                wallet_public_key: "wallet-a".to_string(),
+                network: "mainnet".to_string(),
+                opened_at_ms: now_ms(),
+            },
+        );
+
+        let result = disconnect_dapp_connection_state(
+            &state,
+            "https://pump.fun",
+            "wallet-a",
+            "mainnet",
+            || Err::<bool, _>("database unavailable".to_string()),
+        );
+
+        assert!(result.is_err());
+        assert!(state.sessions.lock().unwrap().contains_key("wallet-a-tab"));
+    }
+
+    #[test]
+    fn wallet_disconnect_keeps_memory_state_when_permission_revoke_fails() {
+        let state = DappBridgeState::default();
+        state.sessions.lock().unwrap().insert(
+            "wallet-a-tab".to_string(),
+            DappSession {
+                app_id: "pumpfun".to_string(),
+                app_name: "Pump.fun".to_string(),
+                url: "https://pump.fun".to_string(),
+                wallet_public_key: "wallet-a".to_string(),
+                network: "mainnet".to_string(),
+                opened_at_ms: now_ms(),
+            },
+        );
+
+        let result = disconnect_dapp_wallet_state(&state, "wallet-a", || {
+            Err::<usize, _>("database unavailable".to_string())
+        });
+
+        assert!(result.is_err());
+        assert!(state.sessions.lock().unwrap().contains_key("wallet-a-tab"));
+    }
+
+    #[test]
+    fn paused_dapp_bridge_rejects_new_work_until_resumed() {
+        let state = DappBridgeState::default();
+        state.sessions.lock().unwrap().insert(
+            "existing-tab".to_string(),
+            DappSession {
+                app_id: "pumpfun".to_string(),
+                app_name: "Pump.fun".to_string(),
+                url: "https://pump.fun".to_string(),
+                wallet_public_key: "wallet-a".to_string(),
+                network: "mainnet".to_string(),
+                opened_at_ms: now_ms(),
+            },
+        );
+        assert!(ensure_dapp_connections_active(&state).is_ok());
+        pause_dapp_connections(&state).unwrap();
+        assert!(ensure_dapp_connections_active(&state).is_err());
+        assert!(state.sessions.lock().unwrap().contains_key("existing-tab"));
+        state.paused.store(false, Ordering::Release);
+        assert!(ensure_dapp_connections_active(&state).is_ok());
+        assert!(state.sessions.lock().unwrap().contains_key("existing-tab"));
     }
 
     #[test]
@@ -4002,6 +5050,32 @@ mod tests {
         assert_eq!(
             error,
             "callback_url must belong to the same site as app_url"
+        );
+
+        let app_url = "https://tenant.github.io/app".parse().unwrap();
+        assert!(validate_deep_link_callback_url(
+            Some("https://github.io/callback".to_string()),
+            &app_url,
+        )
+        .is_err());
+        assert!(validate_deep_link_callback_url(
+            Some("https://user:secret@tenant.github.io/callback".to_string()),
+            &app_url,
+        )
+        .is_err());
+        assert!(validate_deep_link_callback_url(
+            Some("https://@tenant.github.io/callback".to_string()),
+            &app_url,
+        )
+        .is_err());
+        assert_eq!(
+            validate_deep_link_callback_url(
+                Some("https://auth.tenant.github.io/callback".to_string()),
+                &app_url,
+            )
+            .unwrap()
+            .as_deref(),
+            Some("https://auth.tenant.github.io/callback")
         );
     }
 

@@ -30,6 +30,7 @@ program-keypair.json
 # Desktop UI
 /ui/.next/
 /apps/desktop/node_modules/
+/apps/desktop/ai-runtime/node_modules/
 /apps/desktop/.next/
 /apps/desktop/.next-build/
 /apps/desktop/out/

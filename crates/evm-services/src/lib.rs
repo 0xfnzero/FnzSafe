@@ -307,6 +307,26 @@ pub struct EvmDappSignSubmitResult {
     pub status: String,
 }
 
+macro_rules! zeroize_fields_on_drop {
+    ($type:ty, $($field:ident),+ $(,)?) => {
+        impl Drop for $type {
+            fn drop(&mut self) {
+                $(self.$field.zeroize();)+
+            }
+        }
+    };
+}
+
+zeroize_fields_on_drop!(EvmCreateWalletRequest, password);
+zeroize_fields_on_drop!(EvmImportPrivateKeyRequest, private_key_hex, password);
+zeroize_fields_on_drop!(EvmImportMnemonicRequest, mnemonic, password);
+zeroize_fields_on_drop!(EvmImportKeystoreRequest, keystore_json, password);
+zeroize_fields_on_drop!(EvmUnlockWalletRequest, keystore_json, password);
+zeroize_fields_on_drop!(EvmExportPrivateKeyRequest, keystore_json, password);
+zeroize_fields_on_drop!(EvmExportPrivateKeyResponse, private_key_hex);
+zeroize_fields_on_drop!(EvmPaymentSubmitRequest, keystore_json, password);
+zeroize_fields_on_drop!(EvmDappSignSubmitRequest, keystore_json, password);
+
 #[derive(Debug, Deserialize, Serialize)]
 struct EvmKeystore {
     version: u8,
@@ -371,7 +391,7 @@ pub fn builtin_chains() -> Vec<EvmChainConfig> {
         chain(
             137,
             "Polygon",
-            "MATIC",
+            "POL",
             "https://polygon-rpc.com",
             Some("https://polygonscan.com"),
             false,
@@ -441,6 +461,14 @@ pub fn builtin_chains() -> Vec<EvmChainConfig> {
             false,
         ),
         chain(
+            4663,
+            "Robinhood Chain",
+            "ETH",
+            "https://rpc.mainnet.chain.robinhood.com",
+            Some("https://robinscan.io"),
+            false,
+        ),
+        chain(
             11155111,
             "Ethereum Sepolia",
             "ETH",
@@ -459,7 +487,7 @@ pub fn builtin_chains() -> Vec<EvmChainConfig> {
         chain(
             80002,
             "Polygon Amoy",
-            "MATIC",
+            "POL",
             "https://rpc-amoy.polygon.technology",
             Some("https://amoy.polygonscan.com"),
             true,
@@ -553,6 +581,19 @@ pub fn export_private_key(
 }
 
 pub fn load_asset_snapshot(req: EvmAssetQueryRequest) -> EvmResult<EvmAssetSnapshot> {
+    load_asset_snapshot_with_history(req, true)
+}
+
+pub fn load_asset_snapshot_without_history(
+    req: EvmAssetQueryRequest,
+) -> EvmResult<EvmAssetSnapshot> {
+    load_asset_snapshot_with_history(req, false)
+}
+
+fn load_asset_snapshot_with_history(
+    req: EvmAssetQueryRequest,
+    include_history: bool,
+) -> EvmResult<EvmAssetSnapshot> {
     validate_chain(&req.chain)?;
     let wallet_address = normalize_address(&req.wallet_address, "wallet address")?;
     let native_balance_wei = rpc_call(
@@ -572,8 +613,11 @@ pub fn load_asset_snapshot(req: EvmAssetQueryRequest) -> EvmResult<EvmAssetSnaps
         )?);
     }
 
-    let (recent_transactions, history_status, history_message) =
-        load_recent_transactions(&req.chain, &wallet_address);
+    let (recent_transactions, history_status, history_message) = if include_history {
+        load_recent_transactions(&req.chain, &wallet_address)
+    } else {
+        (Vec::new(), "not_requested".to_string(), None)
+    };
 
     Ok(EvmAssetSnapshot {
         chain: req.chain,
@@ -737,7 +781,7 @@ pub fn submit_payment(req: EvmPaymentSubmitRequest) -> EvmResult<EvmTransactionS
 
     Ok(EvmTransactionSubmitResult {
         transaction_hash: tx_hash,
-        chain: req.chain,
+        chain: req.chain.clone(),
         submitted_at: submitted_at(),
         status: format!("submitted from {from}"),
         block_number: None,
@@ -850,7 +894,7 @@ pub fn submit_dapp_signing(req: EvmDappSignSubmitRequest) -> EvmResult<EvmDappSi
                 signed_transaction: None,
                 transaction: Some(EvmTransactionSubmitResult {
                     transaction_hash: tx_hash,
-                    chain: req.chain,
+                    chain: req.chain.clone(),
                     submitted_at: submitted_at(),
                     status: "submitted".to_string(),
                     block_number: None,
@@ -2657,6 +2701,29 @@ mod tests {
 
     const DEV_PRIVATE_KEY: &str =
         "0x0000000000000000000000000000000000000000000000000000000000000001";
+
+    #[test]
+    fn includes_robinhood_chain_mainnet() {
+        let robinhood = builtin_chains()
+            .into_iter()
+            .find(|chain| chain.chain_id == 4663)
+            .expect("Robinhood Chain mainnet should be built in");
+        assert_eq!(robinhood.name, "Robinhood Chain");
+        assert_eq!(robinhood.native_symbol, "ETH");
+        assert!(!robinhood.testnet);
+    }
+
+    #[test]
+    fn polygon_networks_use_pol_as_the_native_symbol() {
+        let chains = builtin_chains();
+        for chain_id in [137, 80002] {
+            let polygon = chains
+                .iter()
+                .find(|chain| chain.chain_id == chain_id)
+                .expect("Polygon network should be built in");
+            assert_eq!(polygon.native_symbol, "POL");
+        }
+    }
 
     #[test]
     fn derives_known_evm_address_from_private_key() {

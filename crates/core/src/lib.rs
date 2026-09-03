@@ -185,6 +185,8 @@ const KEYSTORE_ENCRYPTION_TYPE: &str = "password_only";
 const KEYSTORE_V2_KDF: &str = "argon2id";
 const KEYSTORE_V2_CIPHER: &str = "aes-256-gcm";
 const KEYSTORE_V2_AAD_DOMAIN: &[u8] = b"sol-safekey-keystore";
+const SECRET_ENVELOPE_AAD: &[u8] = b"fnzsafe-secret-envelope-v1";
+const SECRET_ENVELOPE_MAX_BYTES: usize = 16 * 1024;
 const KEYSTORE_V2_ARGON2_MEMORY_KIB: u32 = 64 * 1024;
 const KEYSTORE_V2_ARGON2_ITERATIONS: u32 = 3;
 const KEYSTORE_V2_ARGON2_PARALLELISM: u32 = 1;
@@ -266,6 +268,14 @@ struct KeystoreKdfParamsV2 {
     iterations: u32,
     parallelism: u32,
     salt: String,
+}
+
+#[derive(Deserialize, Serialize)]
+struct SecretEnvelopeV1 {
+    version: u8,
+    kind: String,
+    crypto: KeystoreCryptoV2,
+    created_at: String,
 }
 
 fn validate_v2_password_for_creation(password: &str) -> EncryptionResult<()> {
@@ -586,6 +596,108 @@ impl KeyManager {
     pub fn encrypt_with_password(private_key: &str, password: &str) -> EncryptionResult<String> {
         let keypair = parse_base58_keypair(private_key)?;
         encrypt_keystore_v2(&keypair, password)
+    }
+
+    /// Encrypt arbitrary UTF-8 secret material in an authenticated, password-derived envelope.
+    pub fn encrypt_secret_with_password(secret: &str, password: &str) -> EncryptionResult<String> {
+        validate_v2_password_for_creation(password)?;
+        if secret.is_empty() || secret.len() > SECRET_ENVELOPE_MAX_BYTES {
+            return Err("Secret is empty or too large".to_string());
+        }
+        let mut rng = OsRng;
+        let mut salt = [0u8; KEYSTORE_V2_SALT_BYTES];
+        rng.fill_bytes(&mut salt);
+        let nonce = Aes256Gcm::generate_nonce(&mut rng);
+        let key = derive_keystore_v2_key(password, &salt)?;
+        let cipher = Aes256Gcm::new_from_slice(key.as_ref())
+            .map_err(|_| "AES-256-GCM initialization failed".to_string())?;
+        let plaintext = Zeroizing::new(secret.as_bytes().to_vec());
+        let ciphertext = cipher
+            .encrypt(
+                &nonce,
+                Payload {
+                    msg: plaintext.as_ref(),
+                    aad: SECRET_ENVELOPE_AAD,
+                },
+            )
+            .map_err(|_| "Secret encryption failed".to_string())?;
+        serde_json::to_string(&SecretEnvelopeV1 {
+            version: 1,
+            kind: "password-secret".to_string(),
+            crypto: KeystoreCryptoV2 {
+                kdf: KEYSTORE_V2_KDF.to_string(),
+                kdf_params: KeystoreKdfParamsV2 {
+                    memory_kib: KEYSTORE_V2_ARGON2_MEMORY_KIB,
+                    iterations: KEYSTORE_V2_ARGON2_ITERATIONS,
+                    parallelism: KEYSTORE_V2_ARGON2_PARALLELISM,
+                    salt: general_purpose::STANDARD.encode(salt),
+                },
+                cipher: KEYSTORE_V2_CIPHER.to_string(),
+                nonce: general_purpose::STANDARD.encode(nonce),
+                ciphertext: general_purpose::STANDARD.encode(ciphertext),
+            },
+            created_at: chrono::Utc::now().to_rfc3339(),
+        })
+        .map_err(|_| "Failed to serialize secret envelope".to_string())
+    }
+
+    /// Decrypt an authenticated UTF-8 secret envelope.
+    pub fn decrypt_secret_with_password(
+        encrypted_data: &str,
+        password: &str,
+    ) -> EncryptionResult<String> {
+        validate_password_size(password)?;
+        if encrypted_data.len() > MAX_KEYSTORE_JSON_BYTES {
+            return Err("Secret envelope is too large".to_string());
+        }
+        let envelope: SecretEnvelopeV1 = serde_json::from_str(encrypted_data)
+            .map_err(|_| "Invalid secret envelope".to_string())?;
+        if envelope.version != 1
+            || envelope.kind != "password-secret"
+            || envelope.crypto.kdf != KEYSTORE_V2_KDF
+            || envelope.crypto.cipher != KEYSTORE_V2_CIPHER
+            || envelope.crypto.kdf_params.memory_kib != KEYSTORE_V2_ARGON2_MEMORY_KIB
+            || envelope.crypto.kdf_params.iterations != KEYSTORE_V2_ARGON2_ITERATIONS
+            || envelope.crypto.kdf_params.parallelism != KEYSTORE_V2_ARGON2_PARALLELISM
+        {
+            return Err("Unsupported secret envelope parameters".to_string());
+        }
+        let salt_bytes = general_purpose::STANDARD
+            .decode(&envelope.crypto.kdf_params.salt)
+            .map_err(|_| "Invalid secret envelope salt".to_string())?;
+        let salt: [u8; KEYSTORE_V2_SALT_BYTES] = salt_bytes
+            .try_into()
+            .map_err(|_| "Invalid secret envelope salt".to_string())?;
+        let nonce_bytes = general_purpose::STANDARD
+            .decode(&envelope.crypto.nonce)
+            .map_err(|_| "Invalid secret envelope nonce".to_string())?;
+        if nonce_bytes.len() != KEYSTORE_V2_NONCE_BYTES {
+            return Err("Invalid secret envelope nonce".to_string());
+        }
+        let ciphertext = general_purpose::STANDARD
+            .decode(&envelope.crypto.ciphertext)
+            .map_err(|_| "Invalid secret envelope ciphertext".to_string())?;
+        if ciphertext.len() <= KEYSTORE_V2_TAG_BYTES
+            || ciphertext.len() > SECRET_ENVELOPE_MAX_BYTES + KEYSTORE_V2_TAG_BYTES
+        {
+            return Err("Invalid secret envelope ciphertext".to_string());
+        }
+        let key = derive_keystore_v2_key(password, &salt)?;
+        let cipher = Aes256Gcm::new_from_slice(key.as_ref())
+            .map_err(|_| "AES-256-GCM initialization failed".to_string())?;
+        let plaintext = Zeroizing::new(
+            cipher
+                .decrypt(
+                    aes_gcm::Nonce::from_slice(&nonce_bytes),
+                    Payload {
+                        msg: &ciphertext,
+                        aad: SECRET_ENVELOPE_AAD,
+                    },
+                )
+                .map_err(|_| "Secret password or authenticated data is invalid".to_string())?,
+        );
+        String::from_utf8(plaintext.to_vec())
+            .map_err(|_| "Decrypted secret is not valid UTF-8".to_string())
     }
 
     /// Decrypt a private key with a password
@@ -1194,5 +1306,20 @@ mod tests {
         assert!(KeyManager::keystore_version(r#"{"version":3}"#).is_err());
         assert!(KeyManager::keystore_version(r#"{"version":2}"#).is_err());
         assert!(KeyManager::keystore_version("{}").is_err());
+    }
+
+    #[test]
+    fn authenticated_secret_envelope_round_trips_and_rejects_tampering() {
+        let password = "secure-secret-password";
+        let secret = "test test test test test test test test test test test junk";
+        let encrypted = KeyManager::encrypt_secret_with_password(secret, password).unwrap();
+        assert_eq!(
+            KeyManager::decrypt_secret_with_password(&encrypted, password).unwrap(),
+            secret
+        );
+        assert!(KeyManager::decrypt_secret_with_password(&encrypted, "wrong-password").is_err());
+        let mut value: serde_json::Value = serde_json::from_str(&encrypted).unwrap();
+        value["kind"] = json!("different-secret-kind");
+        assert!(KeyManager::decrypt_secret_with_password(&value.to_string(), password).is_err());
     }
 }

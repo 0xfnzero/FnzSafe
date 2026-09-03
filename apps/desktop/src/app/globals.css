@@ -480,6 +480,202 @@ input[type="number"]::-webkit-inner-spin-button {
   color: #303236 !important;
 }
 
+.app-shell[data-app-theme="light"] .app-twitter-chrome-import {
+  border-color: #c8e7fa !important;
+  background: #eef8fe !important;
+  color: #0f4f78 !important;
+}
+
+.app-shell[data-app-theme="light"] .app-twitter-chrome-import button {
+  border-color: #8ecdf3 !important;
+  background: #ffffff !important;
+  color: #0f5f91 !important;
+}
+
+.app-shell[data-app-theme="light"] .app-twitter-chrome-import button:hover {
+  background: #e2f3fd !important;
+}
+
+/* The monitor is an X-adjacent reading surface, so its light theme follows
+   X's neutral palette instead of inheriting the app's dark research canvas. */
+.app-shell[data-app-theme="light"] .app-twitter-monitor-home {
+  background: #f4f6f8 !important;
+  color: #0f1419 !important;
+  color-scheme: light;
+}
+
+.app-shell[data-app-theme="light"] .app-twitter-monitor-home :where(
+  [class~="bg-black/15"],
+  [class~="bg-black/20"],
+  [class~="bg-black/25"],
+  [class~="bg-zinc-950"],
+  [class~="bg-white/[0.025]"],
+  [class~="bg-white/[0.04]"],
+  [class~="bg-white/[0.06]"],
+  [class~="bg-white/[0.08]"]
+) {
+  background-color: #f9fafb !important;
+}
+
+.app-shell[data-app-theme="light"] .app-twitter-monitor-home :where(
+  [class~="border-white/10"],
+  [class~="border-white/15"],
+  [class~="border-white/[0.06]"],
+  [class~="border-white/[0.08]"]
+) {
+  border-color: #dfe5eb !important;
+}
+
+.app-shell[data-app-theme="light"] .app-twitter-monitor-home [class*="divide-y"] > :not([hidden]) ~ :not([hidden]) {
+  border-color: #dfe5eb !important;
+}
+
+.app-shell[data-app-theme="light"] .app-twitter-monitor-home :where(
+  [class~="text-white"],
+  [class~="text-gray-100"],
+  [class~="text-gray-200"],
+  [class~="text-gray-300"]
+) {
+  color: #0f1419 !important;
+}
+
+.app-shell[data-app-theme="light"] .app-twitter-monitor-home :where(
+  [class~="text-gray-400"],
+  [class~="text-gray-500"],
+  [class~="text-zinc-400"]
+) {
+  color: #536471 !important;
+}
+
+.app-shell[data-app-theme="light"] .app-twitter-monitor-home :where(
+  [class~="text-gray-600"],
+  [class~="text-gray-700"]
+) {
+  color: #8b98a5 !important;
+}
+
+.app-shell[data-app-theme="light"] .app-twitter-monitor-home :where(
+  [class~="text-sky-100"],
+  [class~="text-sky-200"],
+  [class~="text-sky-300"],
+  [class~="text-sky-400"]
+) {
+  color: #1d9bf0 !important;
+}
+
+.app-shell[data-app-theme="light"] .app-twitter-monitor-home [class~="text-violet-300"] {
+  color: #7856ff !important;
+}
+
+.app-shell[data-app-theme="light"] .app-twitter-monitor-home [class~="text-cyan-200"] {
+  color: #0b6f89 !important;
+}
+
+.app-shell[data-app-theme="light"] .app-twitter-monitor-home [class~="text-zinc-300"] {
+  color: #536471 !important;
+}
+
+.app-shell[data-app-theme="light"] .app-twitter-monitor-home .app-twitter-tweet-text {
+  color: #0f1419 !important;
+}
+
+.app-shell[data-app-theme="light"] .app-twitter-monitor-tabs {
+  gap: 1rem;
+  border-color: #dfe5eb !important;
+  padding-bottom: 0;
+}
+
+.app-shell[data-app-theme="light"] .app-twitter-monitor-tab {
+  position: relative;
+  height: 36px;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: #536471 !important;
+}
+
+.app-shell[data-app-theme="light"] .app-twitter-monitor-tab:hover {
+  background: #eef2f5 !important;
+  color: #0f1419 !important;
+}
+
+.app-shell[data-app-theme="light"] .app-twitter-monitor-tab[aria-pressed="true"] {
+  color: #0f1419 !important;
+}
+
+.app-shell[data-app-theme="light"] .app-twitter-monitor-tab[aria-pressed="true"]::after {
+  position: absolute;
+  right: 0.5rem;
+  bottom: -1px;
+  left: 0.5rem;
+  height: 4px;
+  border-radius: 999px;
+  background: #1d9bf0;
+  content: "";
+}
+
+.app-shell[data-app-theme="light"] .app-twitter-monitor-toolbar {
+  border-color: #dfe5eb !important;
+  padding-top: 0.25rem;
+}
+
+.app-shell[data-app-theme="light"] .app-twitter-open-x {
+  border-color: #0f1419 !important;
+  background: #0f1419 !important;
+  color: #ffffff !important;
+}
+
+.app-shell[data-app-theme="light"] .app-twitter-open-x:hover {
+  background: #272c30 !important;
+}
+
+.app-shell[data-app-theme="light"] .app-twitter-primary-action {
+  background: #0f1419 !important;
+  color: #ffffff !important;
+}
+
+.app-shell[data-app-theme="light"] .app-twitter-primary-action:hover {
+  background: #272c30 !important;
+}
+
+.app-shell[data-app-theme="light"] .app-twitter-monitor-panel {
+  border-color: #dfe5eb !important;
+  border-radius: 0 !important;
+  background: #f9fafb !important;
+  box-shadow: none !important;
+}
+
+.app-shell[data-app-theme="light"] .app-twitter-signal-row:hover {
+  background: #eef2f5 !important;
+}
+
+.app-shell[data-app-theme="light"] .app-twitter-token-row {
+  border-color: #dfe5eb !important;
+  background: #f1f4f6 !important;
+}
+
+.app-shell[data-app-theme="light"] .app-twitter-token-row code {
+  background: transparent !important;
+  color: #536471 !important;
+}
+
+.app-shell[data-app-theme="light"] .app-twitter-monitor-home select,
+.app-shell[data-app-theme="light"] .app-twitter-monitor-home textarea {
+  border-color: #cfd9de !important;
+  background: #fbfcfd !important;
+  color: #0f1419 !important;
+}
+
+.app-shell[data-app-theme="light"] .app-twitter-monitor-home :where(select, textarea):focus {
+  border-color: #1d9bf0 !important;
+  box-shadow: 0 0 0 1px #1d9bf0;
+}
+
+.app-shell[data-app-theme="light"] .app-twitter-monitor-home .app-twitter-author-menu-surface {
+  border-color: #dfe5eb !important;
+  background: #fbfcfd !important;
+  box-shadow: 0 8px 28px rgba(15, 20, 25, 0.15) !important;
+}
+
 .app-shell[data-app-theme="light"] .app-dapp-store-home {
   background: #f5f7fa !important;
   color: #303236 !important;

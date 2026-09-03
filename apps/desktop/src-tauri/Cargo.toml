@@ -43,11 +43,12 @@ time = "0.3"
 cookie = "0.18"
 aws-lc-rs = { version = "=1.17.3", default-features = false, features = ["non-fips", "prebuilt-nasm"] }
 base64 = "0.22"
+bs58 = "0.5"
 pem-rfc7468 = { version = "0.7", features = ["std"] }
 rand = "0.8"
 zeroize = "1"
 rfd = "0.15"
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", features = ["time", "rt"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6.2"

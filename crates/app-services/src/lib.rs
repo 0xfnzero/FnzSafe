@@ -59,18 +59,13 @@ pub enum AppSurface {
     Mobile,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AppNetwork {
+    #[default]
     Mainnet,
     Devnet,
     Testnet,
-}
-
-impl Default for AppNetwork {
-    fn default() -> Self {
-        Self::Mainnet
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1872,8 +1867,8 @@ pub fn evm_wallet_export_private_key(
         password: req.password,
     })
     .map(|value| EvmExportPrivateKeyResponse {
-        address: value.address,
-        private_key_hex: value.private_key_hex,
+        address: value.address.clone(),
+        private_key_hex: value.private_key_hex.clone(),
     })
     .map_err(map_evm_error)
 }
@@ -2036,6 +2031,18 @@ pub fn load_asset_snapshot(req: AssetQueryRequest) -> AppServiceResult<AssetSnap
 
 pub fn evm_load_asset_snapshot(req: EvmAssetQueryRequest) -> AppServiceResult<EvmAssetSnapshot> {
     evm::load_asset_snapshot(evm::EvmAssetQueryRequest {
+        chain: req.chain.into(),
+        wallet_address: req.wallet_address,
+        tokens: req.tokens.into_iter().map(Into::into).collect(),
+    })
+    .map(Into::into)
+    .map_err(map_evm_error)
+}
+
+pub fn evm_load_asset_balances_snapshot(
+    req: EvmAssetQueryRequest,
+) -> AppServiceResult<EvmAssetSnapshot> {
+    evm::load_asset_snapshot_without_history(evm::EvmAssetQueryRequest {
         chain: req.chain.into(),
         wallet_address: req.wallet_address,
         tokens: req.tokens.into_iter().map(Into::into).collect(),

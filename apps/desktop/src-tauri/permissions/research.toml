@@ -1,0 +1,23 @@
+[[permission]]
+identifier = "allow-research-store"
+description = "Allow the trusted main wallet window to manage the local research knowledge base and KOL records."
+commands.allow = [
+  "research_ingest",
+  "research_scan_cursor",
+  "research_resolve_tokens",
+  "research_list_kols",
+  "research_list_signals",
+  "research_clear_signals",
+  "research_remove_kol",
+  "research_query"
+]
+
+[[permission]]
+identifier = "allow-research-ai"
+description = "Allow the trusted main wallet window to query the research assistant and manage provider credentials in secure system storage."
+commands.allow = [
+  "research_ai_chat",
+  "research_ai_key_status",
+  "research_ai_key_store",
+  "research_ai_key_delete"
+]

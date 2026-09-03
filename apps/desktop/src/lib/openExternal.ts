@@ -7,6 +7,18 @@ function isTauriWebview(): boolean {
 
 /** Open a URL in the system default browser (Tauri) or a new tab (web). */
 export async function openExternalUrl(url: string): Promise<void> {
+  return openValidatedExternalUrl(url, "open_external_url");
+}
+
+/** Open a URL in Google Chrome, preserving the web fallback for local development. */
+export async function openUrlInChrome(url: string): Promise<void> {
+  return openValidatedExternalUrl(url, "open_url_in_chrome");
+}
+
+async function openValidatedExternalUrl(
+  url: string,
+  command: "open_external_url" | "open_url_in_chrome",
+): Promise<void> {
   const target = url.trim();
   let parsed: URL;
   try {
@@ -24,7 +36,7 @@ export async function openExternalUrl(url: string): Promise<void> {
   }
 
   if (isTauriWebview()) {
-    await invoke("open_external_url", { url: target });
+    await invoke(command, { url: target });
     return;
   }
 

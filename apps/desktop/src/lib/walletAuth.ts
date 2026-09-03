@@ -17,6 +17,9 @@ export interface SavedWallet {
   id: string;
   name: string;
   public_key: string;
+  evm_address?: string | null;
+  evm_wallet_id?: string | null;
+  evm_derivation_path?: string | null;
   created_at: number;
   updated_at: number;
   keystore_version: "v2" | "legacy_v1" | "unknown";

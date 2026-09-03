@@ -37,6 +37,9 @@ pub struct WalletSummary {
     pub id: String,
     pub name: String,
     pub public_key: String,
+    pub evm_address: Option<String>,
+    pub evm_wallet_id: Option<String>,
+    pub evm_derivation_path: Option<String>,
     pub created_at: u64,
     pub updated_at: u64,
     pub keystore_version: String,
@@ -139,6 +142,18 @@ pub const PROGRAM_DEPLOYMENT_STATUS_FINALIZED: &str = "finalized";
 
 impl From<SavedWallet> for WalletSummary {
     fn from(wallet: SavedWallet) -> Self {
+        let metadata = serde_json::from_str::<serde_json::Value>(&wallet.keystore_json)
+            .ok()
+            .and_then(|value| value.get("metadata").cloned());
+        let metadata_string = |key: &str| {
+            metadata
+                .as_ref()
+                .and_then(|value| value.get(key))
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        };
         let keystore_version = match KeyManager::keystore_version(&wallet.keystore_json) {
             Ok(KeystoreVersion::V2) => "v2",
             Ok(KeystoreVersion::LegacyV1) => "legacy_v1",
@@ -149,6 +164,9 @@ impl From<SavedWallet> for WalletSummary {
             id: wallet.id,
             name: wallet.name,
             public_key: wallet.public_key,
+            evm_address: metadata_string("evm_address"),
+            evm_wallet_id: metadata_string("evm_wallet_id"),
+            evm_derivation_path: metadata_string("evm_derivation_path"),
             created_at: wallet.created_at,
             updated_at: wallet.updated_at,
             keystore_version,
@@ -1707,6 +1725,69 @@ pub fn update_metadata(
     .map_err(|e| format!("读取钱包失败: {}", e))
 }
 
+/// Replaces only encrypted wallet material while preserving the wallet identity and creation time.
+/// The compare-and-swap guard prevents a concurrent rename or rewrite from being silently lost.
+pub fn replace_keystore_atomically(
+    wallet_id: &str,
+    expected_public_key: &str,
+    expected_keystore_json: &str,
+    keystore_json: String,
+) -> Result<SavedWallet, String> {
+    let _guard = store_lock()
+        .lock()
+        .map_err(|_| "数据库写锁已损坏".to_string())?;
+    let mut conn = open_connection()?;
+    let now = now_unix_secs()?;
+    replace_keystore_atomically_with_connection(
+        &mut conn,
+        wallet_id,
+        expected_public_key,
+        expected_keystore_json,
+        keystore_json,
+        now,
+    )
+}
+
+fn replace_keystore_atomically_with_connection(
+    conn: &mut Connection,
+    wallet_id: &str,
+    expected_public_key: &str,
+    expected_keystore_json: &str,
+    keystore_json: String,
+    now: u64,
+) -> Result<SavedWallet, String> {
+    let transaction = conn
+        .transaction()
+        .map_err(|error| format!("开始钱包改密事务失败: {error}"))?;
+    let updated = transaction
+        .execute(
+            "UPDATE wallets SET keystore_json = ?1, updated_at = ?2 \
+             WHERE id = ?3 AND public_key = ?4 AND keystore_json = ?5",
+            params![
+                keystore_json,
+                now,
+                wallet_id,
+                expected_public_key,
+                expected_keystore_json
+            ],
+        )
+        .map_err(|error| format!("原子更新钱包密文失败: {error}"))?;
+    if updated != 1 {
+        return Err("钱包已被其它操作修改，请刷新后重试".to_string());
+    }
+    let wallet = transaction
+        .query_row(
+            "SELECT id, name, public_key, keystore_json, created_at, updated_at FROM wallets WHERE id = ?1",
+            params![wallet_id],
+            row_to_wallet,
+        )
+        .map_err(|error| format!("回读改密后的钱包失败: {error}"))?;
+    transaction
+        .commit()
+        .map_err(|error| format!("提交钱包改密事务失败: {error}"))?;
+    Ok(wallet)
+}
+
 pub fn delete(wallet_id: &str) -> Result<(), String> {
     let _guard = store_lock()
         .lock()
@@ -1968,6 +2049,86 @@ pub fn save_token_metadata(network: &str, records: &[TokenMetadataRecord]) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wallet_keystore_replacement_preserves_identity_and_rejects_stale_ciphertext() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO wallets (id, name, public_key, keystore_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params!["wallet-id", "Primary", "solana-address", "old-ciphertext", 10_u64, 10_u64],
+        )
+        .unwrap();
+
+        let replaced = replace_keystore_atomically_with_connection(
+            &mut conn,
+            "wallet-id",
+            "solana-address",
+            "old-ciphertext",
+            "new-ciphertext".to_string(),
+            20,
+        )
+        .unwrap();
+        assert_eq!(replaced.id, "wallet-id");
+        assert_eq!(replaced.name, "Primary");
+        assert_eq!(replaced.public_key, "solana-address");
+        assert_eq!(replaced.keystore_json, "new-ciphertext");
+        assert_eq!(replaced.created_at, 10);
+        assert_eq!(replaced.updated_at, 20);
+
+        assert!(replace_keystore_atomically_with_connection(
+            &mut conn,
+            "wallet-id",
+            "solana-address",
+            "old-ciphertext",
+            "stale-overwrite".to_string(),
+            30,
+        )
+        .is_err());
+        let stored = conn
+            .query_row(
+                "SELECT id, name, public_key, keystore_json, created_at, updated_at FROM wallets WHERE id = ?1",
+                ["wallet-id"],
+                row_to_wallet,
+            )
+            .unwrap();
+        assert_eq!(stored.keystore_json, "new-ciphertext");
+        assert_eq!(stored.updated_at, 20);
+    }
+
+    #[test]
+    fn wallet_summary_includes_universal_wallet_accounts() {
+        let wallet = SavedWallet {
+            id: "wallet-id".to_string(),
+            name: "Primary".to_string(),
+            public_key: "solana-address".to_string(),
+            keystore_json: serde_json::json!({
+                "metadata": {
+                    "evm_address": "0x1234567890abcdef1234567890abcdef12345678",
+                    "evm_wallet_id": "evm-1234567890abcdef1234567890abcdef12345678",
+                    "evm_derivation_path": "m/44'/60'/0'/0/0"
+                }
+            })
+            .to_string(),
+            created_at: 1,
+            updated_at: 2,
+        };
+
+        let summary = WalletSummary::from(wallet);
+
+        assert_eq!(
+            summary.evm_address.as_deref(),
+            Some("0x1234567890abcdef1234567890abcdef12345678")
+        );
+        assert_eq!(
+            summary.evm_wallet_id.as_deref(),
+            Some("evm-1234567890abcdef1234567890abcdef12345678")
+        );
+        assert_eq!(
+            summary.evm_derivation_path.as_deref(),
+            Some("m/44'/60'/0'/0/0")
+        );
+    }
 
     fn deployment_record(buffer_address: &str, program_sha256: &str) -> ProgramDeploymentRecord {
         ProgramDeploymentRecord {

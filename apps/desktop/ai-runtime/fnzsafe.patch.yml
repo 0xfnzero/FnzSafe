@@ -1,0 +1,73 @@
+# FnzSafe owns product policy and Web3 tools; DeepSeek Harness owns the agent loop,
+# sessions, skills, model adapter, and tool execution.
+
+- id: system-prompt
+  config:
+    includeHarnessIdentity: false
+    includeRuntimeContext: false
+    persona: !!js process.env.FNZSAFE_DSH_SYSTEM_PROMPT
+
+- id: llm-deepseek
+  config:
+    apiKeyEnv: DEEPSEEK_API_KEY
+    models: !!js "[{ id: process.env.FNZSAFE_DSH_MODEL, name: process.env.FNZSAFE_DSH_MODEL, contextWindow: Number(process.env.FNZSAFE_DSH_CONTEXT_WINDOW || 128000), inputModalities: ['text'] }]"
+
+- id: sandbox-policy
+  config:
+    mode: read-only
+    workspaceRoot: !!js process.cwd()
+
+# Wallet research is deliberately read-only. The only product-specific runtime
+# capability is the public-data MCP plugin below.
+- id: persistent-bash
+  disabled: true
+- id: persistent-pwsh
+  disabled: true
+- id: str-replace-editor
+  disabled: true
+
+- insert:
+    - id: skill
+      name: '@deepseek-ai/dsh-skill'
+
+    - id: skill-filesystem
+      name: '@deepseek-ai/dsh-skill-filesystem'
+      config:
+        includeDefaultRoots: false
+        customSkillDirs:
+          - !!js process.env.FNZSAFE_DSH_SKILL_ROOT
+
+    - id: tool-skill
+      name: '@deepseek-ai/dsh-tool-skill'
+
+    - id: web
+      name: '@deepseek-ai/dsh-web'
+      config:
+        searchProvider: deepseek-official
+        fetchProvider: http
+
+    - id: web-search-deepseek
+      name: '@deepseek-ai/dsh-web-search-deepseek'
+      config:
+        apiKeyEnv: DEEPSEEK_API_KEY
+
+    - id: web-fetch-http
+      name: '@deepseek-ai/dsh-web-fetch-http'
+
+    - id: tool-web
+      name: '@deepseek-ai/dsh-tool-web'
+      config:
+        fetch: true
+        searchTimeoutMs: 60000
+
+    - id: fnzsafe-web3-market-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: fnzsafe_web3
+        transport: stdio
+        command: !!js process.execPath
+        args:
+          - !!js process.env.FNZSAFE_WEB3_MCP_SERVER_PATH
+        cwd: !!js process.cwd()
+        toolCallTimeoutMs: 30000
+        failOnStartupError: true

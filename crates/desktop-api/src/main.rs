@@ -632,14 +632,19 @@ fn maybe_auto_migrate_saved_wallet_keystore(
         );
         return None;
     }
+    checkpoint_sensitive_rewrite_best_effort("Legacy wallet auto-migration", &wallet.id);
+    Some(updated)
+}
+
+fn checkpoint_sensitive_rewrite_best_effort(operation: &str, wallet_id: &str) {
     if let Err(error) = wallet_store::checkpoint_sensitive_rewrite() {
         tracing::warn!(
-            "Legacy wallet auto-migration for {} could not truncate WAL: {}",
-            wallet.id,
+            "{} for {} committed but could not truncate WAL: {}",
+            operation,
+            wallet_id,
             error
         );
     }
-    Some(updated)
 }
 
 fn keypair_from_saved_wallet_with_password(
@@ -1038,6 +1043,155 @@ fn with_keystore_metadata_extra(
 
 fn with_keystore_metadata(keystore_json: &str, name: Option<&str>) -> Result<String, ApiError> {
     with_keystore_metadata_extra(keystore_json, name, None, None)
+}
+
+fn with_universal_wallet_metadata(
+    keystore_json: &str,
+    evm_wallet: &app_services::EvmWalletSummary,
+    evm_keystore_json: &str,
+) -> Result<String, ApiError> {
+    let mut data: Value = serde_json::from_str(keystore_json).map_err(|_| ApiError {
+        message: "Invalid JSON format".to_string(),
+    })?;
+    let metadata = data
+        .as_object_mut()
+        .and_then(|object| object.get_mut("metadata"))
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| ApiError {
+            message: "Keystore metadata is missing".to_string(),
+        })?;
+    metadata.insert(
+        "wallet_kind".to_string(),
+        Value::String("universal".to_string()),
+    );
+    metadata.insert(
+        "evm_address".to_string(),
+        Value::String(evm_wallet.address.clone()),
+    );
+    metadata.insert(
+        "evm_wallet_id".to_string(),
+        Value::String(evm_wallet.id.clone()),
+    );
+    if let Some(path) = evm_wallet.derivation_path.as_deref() {
+        metadata.insert(
+            "evm_derivation_path".to_string(),
+            Value::String(path.to_string()),
+        );
+    }
+    metadata.insert(
+        "evm_keystore_json".to_string(),
+        Value::String(evm_keystore_json.to_string()),
+    );
+    serde_json::to_string(&data).map_err(|error| ApiError {
+        message: format!("序列化统一钱包 Keystore 失败: {error}"),
+    })
+}
+
+fn validate_universal_evm_identity(
+    universal_keystore_json: &str,
+    evm_wallet: &app_services::EvmWalletSummary,
+) -> Result<(), ApiError> {
+    if keystore_metadata_value(universal_keystore_json, "wallet_kind").as_deref()
+        != Some("universal")
+    {
+        return Err(ApiError {
+            message: "Wallet kind metadata is missing or invalid".to_string(),
+        });
+    }
+    for (field, expected, actual) in [
+        (
+            "EVM address",
+            keystore_metadata_value(universal_keystore_json, "evm_address"),
+            &evm_wallet.address,
+        ),
+        (
+            "EVM wallet ID",
+            keystore_metadata_value(universal_keystore_json, "evm_wallet_id"),
+            &evm_wallet.id,
+        ),
+    ] {
+        let expected = expected.ok_or_else(|| ApiError {
+            message: format!("{field} metadata is missing"),
+        })?;
+        if !expected.eq_ignore_ascii_case(actual) {
+            return Err(ApiError {
+                message: format!("{field} metadata does not match the encrypted EVM account"),
+            });
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod universal_wallet_tests {
+    use super::*;
+
+    const TEST_MNEMONIC: &str = "test test test test test test test test test test test junk";
+    const TEST_PASSWORD: &str = "universal-wallet-test-password";
+
+    #[test]
+    fn derives_and_unlocks_solana_and_evm_accounts_from_one_mnemonic() {
+        let (solana_path, solana_path_label) = normalize_mnemonic_derivation_path(None).unwrap();
+        let solana_keypair = keypair_from_mnemonic_phrase(TEST_MNEMONIC, &solana_path).unwrap();
+        let solana_keystore =
+            KeyManager::keypair_to_encrypted_json(&solana_keypair, TEST_PASSWORD).unwrap();
+        let solana_keystore = with_keystore_metadata_extra(
+            &solana_keystore,
+            Some("Primary"),
+            Some("encrypted-mnemonic"),
+            Some(&solana_path_label),
+        )
+        .unwrap();
+        let evm =
+            app_services::evm_wallet_import_mnemonic(app_services::EvmImportMnemonicRequest {
+                name: "Primary".to_string(),
+                mnemonic: TEST_MNEMONIC.to_string(),
+                derivation_path: None,
+                password: TEST_PASSWORD.to_string(),
+            })
+            .unwrap();
+
+        assert_eq!(
+            evm.wallet.address,
+            "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+        );
+        assert_eq!(
+            evm.wallet.derivation_path.as_deref(),
+            Some("m/44'/60'/0'/0/0")
+        );
+
+        let universal_keystore =
+            with_universal_wallet_metadata(&solana_keystore, &evm.wallet, &evm.keystore_json)
+                .unwrap();
+        let unlocked_solana =
+            KeyManager::keypair_from_encrypted_json(&universal_keystore, TEST_PASSWORD).unwrap();
+        assert_eq!(unlocked_solana.pubkey(), solana_keypair.pubkey());
+
+        let saved_evm_keystore =
+            keystore_metadata_value(&universal_keystore, "evm_keystore_json").unwrap();
+        let unlocked_evm = app_services::evm_wallet_unlock(app_services::EvmUnlockWalletRequest {
+            keystore_json: saved_evm_keystore,
+            password: TEST_PASSWORD.to_string(),
+        })
+        .unwrap();
+        assert_eq!(unlocked_evm, evm.wallet);
+        assert_eq!(
+            keystore_metadata_value(&universal_keystore, "wallet_kind").as_deref(),
+            Some("universal")
+        );
+        validate_universal_evm_identity(&universal_keystore, &unlocked_evm).unwrap();
+
+        let mut tampered: Value = serde_json::from_str(&universal_keystore).unwrap();
+        tampered["metadata"]["evm_address"] =
+            Value::String("0x0000000000000000000000000000000000000000".to_string());
+        assert!(validate_universal_evm_identity(&tampered.to_string(), &unlocked_evm).is_err());
+
+        for field in ["evm_address", "evm_wallet_id", "wallet_kind"] {
+            let mut missing: Value = serde_json::from_str(&universal_keystore).unwrap();
+            missing["metadata"].as_object_mut().unwrap().remove(field);
+            assert!(validate_universal_evm_identity(&missing.to_string(), &unlocked_evm).is_err());
+        }
+    }
 }
 
 fn normalize_mnemonic_phrase(phrase: &str) -> Result<String, ApiError> {
@@ -2777,7 +2931,7 @@ async fn load_token_metadata_map(
             .map(|response| response.value)
             .unwrap_or_default();
 
-        for ((mint, pubkey), account) in chunk.iter().zip(accounts.into_iter()) {
+        for ((mint, pubkey), account) in chunk.iter().zip(accounts) {
             let metadata = match account.clone() {
                 Some(account) => token_2022_metadata_from_account(account).await,
                 None => TokenMetadata::default(),
@@ -3581,6 +3735,14 @@ async fn main() -> anyhow::Result<()> {
             get(list_wallets).post(save_keystore_wallet),
         )
         .route(
+            "/api/wallets/create-universal",
+            post(create_universal_wallet),
+        )
+        .route(
+            "/api/wallets/create-universal/",
+            post(create_universal_wallet),
+        )
+        .route(
             "/api/wallets/{wallet_id}",
             patch(rename_wallet).delete(delete_wallet),
         )
@@ -3592,6 +3754,22 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/wallets/{wallet_id}/delete/", post(delete_wallet_post))
         .route("/api/wallets/{wallet_id}/export", post(export_wallet))
         .route("/api/wallets/{wallet_id}/export/", post(export_wallet))
+        .route(
+            "/api/wallets/{wallet_id}/verify-password",
+            post(verify_wallet_password),
+        )
+        .route(
+            "/api/wallets/{wallet_id}/verify-password/",
+            post(verify_wallet_password),
+        )
+        .route(
+            "/api/wallets/{wallet_id}/change-password",
+            post(change_wallet_password),
+        )
+        .route(
+            "/api/wallets/{wallet_id}/change-password/",
+            post(change_wallet_password),
+        )
         .route(
             "/api/wallets/{wallet_id}/migrate-keystore",
             post(migrate_wallet_keystore),
@@ -3615,6 +3793,14 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/wallets/{wallet_id}/export-mnemonic/",
             post(export_wallet_mnemonic),
+        )
+        .route(
+            "/api/wallets/{wallet_id}/evm-keystore",
+            post(unlock_saved_evm_wallet),
+        )
+        .route(
+            "/api/wallets/{wallet_id}/evm-keystore/",
+            post(unlock_saved_evm_wallet),
         )
         // Wallet Management (U, 7)
         .route("/api/wallet/balance", post(get_balance))
@@ -3858,100 +4044,142 @@ async fn evm_chains() -> Json<Vec<app_services::EvmChainConfig>> {
     Json(app_services::evm_builtin_chains())
 }
 
+async fn run_app_service_task<T, F>(task: F) -> Result<T, ApiError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, app_services::AppServiceError> + Send + 'static,
+{
+    tokio::task::spawn_blocking(task)
+        .await
+        .map_err(|error| ApiError {
+            message: format!("App service task terminated unexpectedly: {error}"),
+        })?
+        .map_err(api_error_from_app_service)
+}
+
+fn include_evm_history_by_default() -> bool {
+    true
+}
+
+#[derive(Deserialize)]
+struct DesktopEvmAssetQueryRequest {
+    chain: app_services::EvmChainConfig,
+    wallet_address: String,
+    tokens: Vec<app_services::EvmTokenQuery>,
+    #[serde(default = "include_evm_history_by_default")]
+    include_history: bool,
+}
+
 async fn evm_wallet_create(
     Json(req): Json<app_services::EvmCreateWalletRequest>,
 ) -> Result<Json<app_services::EvmWalletKeystore>, ApiError> {
-    app_services::evm_wallet_create(req)
+    run_app_service_task(move || app_services::evm_wallet_create(req))
+        .await
         .map(Json)
-        .map_err(api_error_from_app_service)
 }
 
 async fn evm_wallet_import_private_key(
     Json(req): Json<app_services::EvmImportPrivateKeyRequest>,
 ) -> Result<Json<app_services::EvmWalletKeystore>, ApiError> {
-    app_services::evm_wallet_import_private_key(req)
+    run_app_service_task(move || app_services::evm_wallet_import_private_key(req))
+        .await
         .map(Json)
-        .map_err(api_error_from_app_service)
 }
 
 async fn evm_wallet_import_mnemonic(
     Json(req): Json<app_services::EvmImportMnemonicRequest>,
 ) -> Result<Json<app_services::EvmWalletKeystore>, ApiError> {
-    app_services::evm_wallet_import_mnemonic(req)
+    run_app_service_task(move || app_services::evm_wallet_import_mnemonic(req))
+        .await
         .map(Json)
-        .map_err(api_error_from_app_service)
 }
 
 async fn evm_wallet_import_keystore(
     Json(req): Json<app_services::EvmImportKeystoreRequest>,
 ) -> Result<Json<app_services::EvmWalletKeystore>, ApiError> {
-    app_services::evm_wallet_import_keystore(req)
+    run_app_service_task(move || app_services::evm_wallet_import_keystore(req))
+        .await
         .map(Json)
-        .map_err(api_error_from_app_service)
 }
 
 async fn evm_wallet_unlock(
     Json(req): Json<app_services::EvmUnlockWalletRequest>,
 ) -> Result<Json<app_services::EvmWalletSummary>, ApiError> {
-    app_services::evm_wallet_unlock(req)
+    run_app_service_task(move || app_services::evm_wallet_unlock(req))
+        .await
         .map(Json)
-        .map_err(api_error_from_app_service)
 }
 
 async fn evm_wallet_export_private_key(
     Json(req): Json<app_services::EvmExportPrivateKeyRequest>,
 ) -> Result<Json<app_services::EvmExportPrivateKeyResponse>, ApiError> {
-    app_services::evm_wallet_export_private_key(req)
+    run_app_service_task(move || app_services::evm_wallet_export_private_key(req))
+        .await
         .map(Json)
-        .map_err(api_error_from_app_service)
 }
 
 async fn evm_assets(
-    Json(req): Json<app_services::EvmAssetQueryRequest>,
+    Json(req): Json<DesktopEvmAssetQueryRequest>,
 ) -> Result<Json<app_services::EvmAssetSnapshot>, ApiError> {
-    app_services::evm_load_asset_snapshot(req)
-        .map(Json)
-        .map_err(api_error_from_app_service)
+    let include_history = req.include_history;
+    let service_request = app_services::EvmAssetQueryRequest {
+        chain: req.chain,
+        wallet_address: req.wallet_address,
+        tokens: req.tokens,
+    };
+    let snapshot = tokio::task::spawn_blocking(move || {
+        if include_history {
+            app_services::evm_load_asset_snapshot(service_request)
+        } else {
+            app_services::evm_load_asset_balances_snapshot(service_request)
+        }
+    })
+    .await
+    .map_err(|error| ApiError {
+        message: format!("EVM asset task terminated unexpectedly: {error}"),
+    })?
+    .map_err(api_error_from_app_service)?;
+    Ok(Json(snapshot))
 }
 
 async fn evm_payment_preview(
     Json(req): Json<app_services::EvmPaymentPreviewRequest>,
 ) -> Result<Json<app_services::EvmPaymentPreview>, ApiError> {
-    app_services::evm_payment_preview(req)
+    run_app_service_task(move || app_services::evm_payment_preview(req))
+        .await
         .map(Json)
-        .map_err(api_error_from_app_service)
 }
 
 async fn evm_payment_submit(
     Json(req): Json<app_services::EvmPaymentSubmitRequest>,
 ) -> Result<Json<app_services::EvmTransactionSubmitResult>, ApiError> {
-    app_services::evm_payment_submit(req)
+    run_app_service_task(move || app_services::evm_payment_submit(req))
+        .await
         .map(Json)
-        .map_err(api_error_from_app_service)
 }
 
 async fn evm_transaction_status(
     Json(req): Json<app_services::EvmTransactionStatusRequest>,
 ) -> Result<Json<app_services::EvmTransactionStatus>, ApiError> {
-    app_services::evm_transaction_status(req)
+    run_app_service_task(move || app_services::evm_transaction_status(req))
+        .await
         .map(Json)
-        .map_err(api_error_from_app_service)
 }
 
 async fn evm_dapp_preview(
     Json(req): Json<app_services::EvmDappSignPreviewRequest>,
 ) -> Result<Json<app_services::EvmDappSignPreview>, ApiError> {
-    app_services::evm_dapp_sign_preview(req)
+    run_app_service_task(move || app_services::evm_dapp_sign_preview(req))
+        .await
         .map(Json)
-        .map_err(api_error_from_app_service)
 }
 
 async fn evm_dapp_submit(
     Json(req): Json<app_services::EvmDappSignSubmitRequest>,
 ) -> Result<Json<app_services::EvmDappSignSubmitResult>, ApiError> {
-    app_services::evm_dapp_sign_submit(req)
+    run_app_service_task(move || app_services::evm_dapp_sign_submit(req))
+        .await
         .map(Json)
-        .map_err(api_error_from_app_service)
 }
 
 fn api_error_from_app_service(error: app_services::AppServiceError) -> ApiError {
@@ -4045,6 +4273,12 @@ struct CreateKeyResponse {
     name: String,
 }
 
+impl Drop for CreateKeyResponse {
+    fn drop(&mut self) {
+        self.secret_key.zeroize();
+    }
+}
+
 async fn create_key(
     Json(req): Json<CreateKeyRequest>,
 ) -> Result<Json<CreateKeyResponse>, ApiError> {
@@ -4064,6 +4298,13 @@ struct EncryptKeyRequest {
     secret_key: String,
     password: String,
 }
+
+impl Drop for EncryptKeyRequest {
+    fn drop(&mut self) {
+        self.secret_key.zeroize();
+        self.password.zeroize();
+    }
+}
 #[derive(Serialize)]
 struct EncryptKeyResponse {
     encrypted_key: String,
@@ -4072,6 +4313,12 @@ struct EncryptKeyResponse {
 #[derive(Deserialize)]
 struct CreateEncryptedKeyRequest {
     password: String,
+}
+
+impl Drop for CreateEncryptedKeyRequest {
+    fn drop(&mut self) {
+        self.password.zeroize();
+    }
 }
 #[derive(Serialize)]
 struct CreateEncryptedKeyResponse {
@@ -4112,9 +4359,22 @@ struct DecryptKeyRequest {
     encrypted_key: String,
     password: String,
 }
+
+impl Drop for DecryptKeyRequest {
+    fn drop(&mut self) {
+        self.encrypted_key.zeroize();
+        self.password.zeroize();
+    }
+}
 #[derive(Serialize)]
 struct DecryptKeyResponse {
     secret_key: String,
+}
+
+impl Drop for DecryptKeyResponse {
+    fn drop(&mut self) {
+        self.secret_key.zeroize();
+    }
 }
 
 async fn decrypt_key(
@@ -4173,6 +4433,12 @@ struct CreateMnemonicKeystoreResponse {
     public_key: String,
     mnemonic: String,
     derivation_path: String,
+}
+
+impl Drop for CreateMnemonicKeystoreResponse {
+    fn drop(&mut self) {
+        self.mnemonic.zeroize();
+    }
 }
 
 #[derive(Deserialize)]
@@ -4235,7 +4501,7 @@ async fn create_mnemonic_keystore(
             })?
             .to_string();
         let keypair = keypair_from_mnemonic_phrase(&mnemonic, &derivation_path)?;
-        let encrypted_mnemonic = KeyManager::encrypt_with_password(&mnemonic, &req.password)
+        let encrypted_mnemonic = KeyManager::encrypt_secret_with_password(&mnemonic, &req.password)
             .map_err(|message| ApiError { message })?;
         let keystore_json = KeyManager::keypair_to_encrypted_json(&keypair, &req.password)
             .map_err(|message| ApiError { message })?;
@@ -4266,7 +4532,7 @@ async fn import_mnemonic_keystore(
         normalize_mnemonic_derivation_path(req.derivation_path.as_deref())?;
     let response = run_keystore_task(move || {
         let keypair = keypair_from_mnemonic_phrase(&mnemonic, &derivation_path)?;
-        let encrypted_mnemonic = KeyManager::encrypt_with_password(&mnemonic, &req.password)
+        let encrypted_mnemonic = KeyManager::encrypt_secret_with_password(&mnemonic, &req.password)
             .map_err(|message| ApiError { message })?;
         let keystore_json = KeyManager::keypair_to_encrypted_json(&keypair, &req.password)
             .map_err(|message| ApiError { message })?;
@@ -4341,6 +4607,31 @@ impl Drop for SaveKeystoreWalletRequest {
 struct SaveKeystoreWalletResponse {
     wallet: WalletSummary,
 }
+
+#[derive(Deserialize)]
+struct CreateUniversalWalletRequest {
+    name: String,
+    password: String,
+}
+
+impl Drop for CreateUniversalWalletRequest {
+    fn drop(&mut self) {
+        self.password.zeroize();
+    }
+}
+
+#[derive(Serialize)]
+struct CreateUniversalWalletResponse {
+    wallet: WalletSummary,
+    evm_wallet: app_services::EvmWalletSummary,
+    mnemonic: String,
+}
+
+impl Drop for CreateUniversalWalletResponse {
+    fn drop(&mut self) {
+        self.mnemonic.zeroize();
+    }
+}
 #[derive(Serialize)]
 struct ListWalletsResponse {
     wallets: Vec<WalletSummary>,
@@ -4360,6 +4651,36 @@ struct MigrateWalletKeystoreRequest {
     new_password: String,
 }
 
+#[derive(Deserialize)]
+struct VerifyWalletPasswordRequest {
+    password: String,
+}
+
+impl Drop for VerifyWalletPasswordRequest {
+    fn drop(&mut self) {
+        self.password.zeroize();
+    }
+}
+
+#[derive(Serialize)]
+struct VerifyWalletPasswordResponse {
+    verified: bool,
+    public_key: String,
+}
+
+#[derive(Deserialize)]
+struct ChangeWalletPasswordRequest {
+    current_password: String,
+    new_password: String,
+}
+
+impl Drop for ChangeWalletPasswordRequest {
+    fn drop(&mut self) {
+        self.current_password.zeroize();
+        self.new_password.zeroize();
+    }
+}
+
 impl Drop for MigrateWalletKeystoreRequest {
     fn drop(&mut self) {
         self.current_password.zeroize();
@@ -4374,14 +4695,113 @@ struct ExportWalletResponse {
 struct ExportWalletPrivateKeyResponse {
     private_key: String,
 }
+impl Drop for ExportWalletPrivateKeyResponse {
+    fn drop(&mut self) {
+        self.private_key.zeroize();
+    }
+}
 #[derive(Serialize)]
 struct ExportWalletMnemonicResponse {
     mnemonic: String,
+}
+impl Drop for ExportWalletMnemonicResponse {
+    fn drop(&mut self) {
+        self.mnemonic.zeroize();
+    }
+}
+
+#[derive(Deserialize)]
+struct UnlockSavedEvmWalletRequest {
+    password: String,
+}
+
+impl Drop for UnlockSavedEvmWalletRequest {
+    fn drop(&mut self) {
+        self.password.zeroize();
+    }
+}
+
+async fn create_universal_wallet(
+    Json(mut req): Json<CreateUniversalWalletRequest>,
+) -> Result<Json<CreateUniversalWalletResponse>, ApiError> {
+    let name =
+        validate_optional_label(Some(req.name.clone()), "钱包名称")?.ok_or_else(|| ApiError {
+            message: "钱包名称不能为空".to_string(),
+        })?;
+    require_nonempty(req.password.as_str(), "密码")?;
+    let password = Zeroizing::new(std::mem::take(&mut req.password));
+    let response = run_keystore_task(move || {
+        let (solana_derivation_path, solana_derivation_path_label) =
+            normalize_mnemonic_derivation_path(None)?;
+        let mnemonic = Mnemonic::generate_in(Language::English, 12)
+            .map_err(|error| ApiError {
+                message: format!("生成助记词失败: {error}"),
+            })?
+            .to_string();
+        let solana_keypair = keypair_from_mnemonic_phrase(&mnemonic, &solana_derivation_path)?;
+        let encrypted_mnemonic = KeyManager::encrypt_secret_with_password(&mnemonic, &password)
+            .map_err(|message| ApiError { message })?;
+        let solana_keystore_json =
+            KeyManager::keypair_to_encrypted_json(&solana_keypair, &password)
+                .map_err(|message| ApiError { message })?;
+        let solana_keystore_json = with_keystore_metadata_extra(
+            &solana_keystore_json,
+            Some(&name),
+            Some(&encrypted_mnemonic),
+            Some(&solana_derivation_path_label),
+        )?;
+        let evm =
+            app_services::evm_wallet_import_mnemonic(app_services::EvmImportMnemonicRequest {
+                name: name.clone(),
+                mnemonic: mnemonic.clone(),
+                derivation_path: None,
+                password: password.to_string(),
+            })
+            .map_err(api_error_from_app_service)?;
+        let universal_keystore_json =
+            with_universal_wallet_metadata(&solana_keystore_json, &evm.wallet, &evm.keystore_json)?;
+        let wallet = wallet_store::upsert(
+            universal_keystore_json,
+            solana_keypair.pubkey().to_string(),
+            Some(name),
+        )
+        .map_err(|message| ApiError { message })?;
+        Ok(CreateUniversalWalletResponse {
+            wallet: wallet.into(),
+            evm_wallet: evm.wallet,
+            mnemonic,
+        })
+    })
+    .await?;
+    Ok(Json(response))
 }
 
 async fn list_wallets() -> Result<Json<ListWalletsResponse>, ApiError> {
     let wallets = wallet_store::list_summaries().map_err(|message| ApiError { message })?;
     Ok(Json(ListWalletsResponse { wallets }))
+}
+
+async fn unlock_saved_evm_wallet(
+    Path(wallet_id): Path<String>,
+    Json(req): Json<UnlockSavedEvmWalletRequest>,
+) -> Result<Json<app_services::EvmWalletKeystore>, ApiError> {
+    validate_wallet_id(&wallet_id)?;
+    require_nonempty(&req.password, "密码")?;
+    let (_, wallet) = keypair_from_saved_wallet_with_password(&wallet_id, &req.password, "钱包")?;
+    let evm_keystore_json = keystore_metadata_value(&wallet.keystore_json, "evm_keystore_json")
+        .ok_or_else(|| ApiError {
+            message: "这个钱包没有 EVM 派生账户".to_string(),
+        })?;
+    let evm_wallet = app_services::evm_wallet_unlock(app_services::EvmUnlockWalletRequest {
+        keystore_json: evm_keystore_json.clone(),
+        password: req.password.clone(),
+    })
+    .map_err(api_error_from_app_service)?;
+    validate_universal_evm_identity(&wallet.keystore_json, &evm_wallet)?;
+    Ok(Json(app_services::EvmWalletKeystore {
+        wallet: evm_wallet,
+        keystore_json: evm_keystore_json,
+    }))
 }
 
 async fn save_keystore_wallet(
@@ -4484,6 +4904,344 @@ async fn export_wallet(
     Ok(Json(ExportWalletResponse { keystore_json }))
 }
 
+async fn verify_wallet_password(
+    Path(wallet_id): Path<String>,
+    Json(mut req): Json<VerifyWalletPasswordRequest>,
+) -> Result<Json<VerifyWalletPasswordResponse>, ApiError> {
+    validate_wallet_id(&wallet_id)?;
+    require_nonempty(&req.password, "钱包密码")?;
+    let password = Zeroizing::new(std::mem::take(&mut req.password));
+    let wallet = wallet_store::find(&wallet_id).map_err(|message| ApiError { message })?;
+    let public_key = run_keystore_task(move || {
+        let keypair = KeyManager::keypair_from_encrypted_json(&wallet.keystore_json, &password)
+            .map_err(|_| ApiError {
+                message: "钱包密码错误".to_string(),
+            })?;
+        let public_key = keypair.pubkey().to_string();
+        if public_key != wallet.public_key {
+            return Err(ApiError {
+                message: "钱包密文与保存的地址不一致".to_string(),
+            });
+        }
+        Ok(public_key)
+    })
+    .await?;
+    Ok(Json(VerifyWalletPasswordResponse {
+        verified: true,
+        public_key,
+    }))
+}
+
+fn reencrypt_saved_wallet_material(
+    wallet: &wallet_store::SavedWallet,
+    current_password: &str,
+    new_password: &str,
+) -> Result<String, ApiError> {
+    let keypair = KeyManager::keypair_from_encrypted_json(&wallet.keystore_json, current_password)
+        .map_err(|_| ApiError {
+            message: "当前钱包密码错误".to_string(),
+        })?;
+    if keypair.pubkey().to_string() != wallet.public_key {
+        return Err(ApiError {
+            message: "钱包密文与保存的地址不一致".to_string(),
+        });
+    }
+
+    let old_document: Value =
+        serde_json::from_str(&wallet.keystore_json).map_err(|error| ApiError {
+            message: format!("钱包 Keystore 格式无效: {error}"),
+        })?;
+    let mut metadata = old_document
+        .get("metadata")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+
+    let mnemonic = metadata
+        .get("encrypted_mnemonic")
+        .and_then(Value::as_str)
+        .map(|encrypted| {
+            KeyManager::decrypt_secret_with_password(encrypted, current_password)
+                .map(Zeroizing::new)
+                .map_err(|_| ApiError {
+                    message: "当前密码无法解密钱包助记词".to_string(),
+                })
+        })
+        .transpose()?;
+    if let Some(mnemonic) = mnemonic.as_deref() {
+        let encrypted = KeyManager::encrypt_secret_with_password(mnemonic, new_password)
+            .map_err(|message| ApiError { message })?;
+        metadata.insert("encrypted_mnemonic".to_string(), Value::String(encrypted));
+    }
+
+    if let Some(old_evm_keystore) = metadata
+        .get("evm_keystore_json")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+    {
+        let old_evm_wallet =
+            app_services::evm_wallet_unlock(app_services::EvmUnlockWalletRequest {
+                keystore_json: old_evm_keystore.clone(),
+                password: current_password.to_string(),
+            })
+            .map_err(api_error_from_app_service)?;
+        validate_universal_evm_identity(&wallet.keystore_json, &old_evm_wallet)?;
+        let expected_address = old_evm_wallet.address.to_ascii_lowercase();
+        let reencrypted = if let Some(mnemonic) = mnemonic.as_deref() {
+            app_services::evm_wallet_import_mnemonic(app_services::EvmImportMnemonicRequest {
+                name: wallet.name.clone(),
+                mnemonic: mnemonic.to_string(),
+                derivation_path: metadata
+                    .get("evm_derivation_path")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                password: new_password.to_string(),
+            })
+            .map_err(api_error_from_app_service)?
+        } else {
+            let exported = app_services::evm_wallet_export_private_key(
+                app_services::EvmExportPrivateKeyRequest {
+                    keystore_json: old_evm_keystore,
+                    password: current_password.to_string(),
+                },
+            )
+            .map_err(api_error_from_app_service)?;
+            let private_key = Zeroizing::new(exported.private_key_hex);
+            app_services::evm_wallet_import_private_key(app_services::EvmImportPrivateKeyRequest {
+                name: wallet.name.clone(),
+                private_key_hex: private_key.to_string(),
+                password: new_password.to_string(),
+            })
+            .map_err(api_error_from_app_service)?
+        };
+        if expected_address != reencrypted.wallet.address.to_ascii_lowercase() {
+            return Err(ApiError {
+                message: "EVM 钱包地址在改密过程中发生变化".to_string(),
+            });
+        }
+        metadata.insert(
+            "evm_keystore_json".to_string(),
+            Value::String(reencrypted.keystore_json),
+        );
+    }
+
+    let new_keystore = KeyManager::keypair_to_encrypted_json(&keypair, new_password)
+        .map_err(|message| ApiError { message })?;
+    let mut new_document: Value =
+        serde_json::from_str(&new_keystore).map_err(|error| ApiError {
+            message: format!("新 Keystore 格式无效: {error}"),
+        })?;
+    let object = new_document.as_object_mut().ok_or_else(|| ApiError {
+        message: "新 Keystore 格式无效".to_string(),
+    })?;
+    object.insert("metadata".to_string(), Value::Object(metadata));
+    let new_keystore = serde_json::to_string(&new_document).map_err(|error| ApiError {
+        message: format!("序列化新 Keystore 失败: {error}"),
+    })?;
+
+    let verified = KeyManager::keypair_from_encrypted_json(&new_keystore, new_password)
+        .map_err(|message| ApiError { message })?;
+    if verified.pubkey().to_string() != wallet.public_key {
+        return Err(ApiError {
+            message: "改密后的钱包地址校验失败".to_string(),
+        });
+    }
+    Ok(new_keystore)
+}
+
+#[cfg(test)]
+mod wallet_password_change_tests {
+    use super::*;
+    use solana_sdk::signature::Keypair;
+
+    const OLD_PASSWORD: &str = "old-password-123";
+    const NEW_PASSWORD: &str = "new-password-456";
+    const MNEMONIC: &str = "test test test test test test test test test test test junk";
+
+    fn saved_wallet(keystore_json: String, keypair: &Keypair) -> wallet_store::SavedWallet {
+        wallet_store::SavedWallet {
+            id: "stable-wallet-id".to_string(),
+            name: "Primary".to_string(),
+            public_key: keypair.pubkey().to_string(),
+            keystore_json,
+            created_at: 11,
+            updated_at: 22,
+        }
+    }
+
+    #[test]
+    fn changes_standard_v2_password_without_changing_solana_identity() {
+        let keypair = Keypair::new();
+        let keystore = KeyManager::keypair_to_encrypted_json(&keypair, OLD_PASSWORD).unwrap();
+        let wallet = saved_wallet(keystore, &keypair);
+        let changed = reencrypt_saved_wallet_material(&wallet, OLD_PASSWORD, NEW_PASSWORD).unwrap();
+        assert!(KeyManager::keypair_from_encrypted_json(&changed, OLD_PASSWORD).is_err());
+        assert_eq!(
+            KeyManager::keypair_from_encrypted_json(&changed, NEW_PASSWORD)
+                .unwrap()
+                .pubkey(),
+            keypair.pubkey()
+        );
+        assert_eq!(wallet.id, "stable-wallet-id");
+        assert_eq!(wallet.created_at, 11);
+    }
+
+    #[test]
+    fn reencrypts_saved_mnemonic_and_rejects_wrong_current_password() {
+        let keypair = Keypair::new();
+        let encrypted_mnemonic =
+            KeyManager::encrypt_secret_with_password(MNEMONIC, OLD_PASSWORD).unwrap();
+        let base = KeyManager::keypair_to_encrypted_json(&keypair, OLD_PASSWORD).unwrap();
+        let keystore = with_keystore_metadata_extra(
+            &base,
+            Some("Primary"),
+            Some(&encrypted_mnemonic),
+            Some("m/44'/501'/0'/0'"),
+        )
+        .unwrap();
+        let wallet = saved_wallet(keystore, &keypair);
+        assert!(reencrypt_saved_wallet_material(&wallet, "wrong-password", NEW_PASSWORD).is_err());
+        let changed = reencrypt_saved_wallet_material(&wallet, OLD_PASSWORD, NEW_PASSWORD).unwrap();
+        let encrypted = keystore_metadata_encrypted_mnemonic(&changed).unwrap();
+        assert!(KeyManager::decrypt_secret_with_password(&encrypted, OLD_PASSWORD).is_err());
+        assert_eq!(
+            KeyManager::decrypt_secret_with_password(&encrypted, NEW_PASSWORD).unwrap(),
+            MNEMONIC
+        );
+    }
+
+    #[test]
+    fn atomically_prepares_all_universal_wallet_secrets_and_preserves_addresses() {
+        let (solana_path, solana_path_label) = normalize_mnemonic_derivation_path(None).unwrap();
+        let solana_keypair = keypair_from_mnemonic_phrase(MNEMONIC, &solana_path).unwrap();
+        let encrypted_mnemonic =
+            KeyManager::encrypt_secret_with_password(MNEMONIC, OLD_PASSWORD).unwrap();
+        let solana = KeyManager::keypair_to_encrypted_json(&solana_keypair, OLD_PASSWORD).unwrap();
+        let solana = with_keystore_metadata_extra(
+            &solana,
+            Some("Primary"),
+            Some(&encrypted_mnemonic),
+            Some(&solana_path_label),
+        )
+        .unwrap();
+        let evm =
+            app_services::evm_wallet_import_mnemonic(app_services::EvmImportMnemonicRequest {
+                name: "Primary".to_string(),
+                mnemonic: MNEMONIC.to_string(),
+                derivation_path: None,
+                password: OLD_PASSWORD.to_string(),
+            })
+            .unwrap();
+        let universal =
+            with_universal_wallet_metadata(&solana, &evm.wallet, &evm.keystore_json).unwrap();
+        let wallet = saved_wallet(universal, &solana_keypair);
+        let changed = reencrypt_saved_wallet_material(&wallet, OLD_PASSWORD, NEW_PASSWORD).unwrap();
+
+        assert_eq!(
+            keystore_metadata_value(&changed, "evm_address"),
+            Some(evm.wallet.address.clone())
+        );
+        assert_eq!(
+            keystore_metadata_value(&changed, "evm_wallet_id"),
+            Some(evm.wallet.id.clone())
+        );
+        let changed_evm = keystore_metadata_value(&changed, "evm_keystore_json").unwrap();
+        assert!(
+            app_services::evm_wallet_unlock(app_services::EvmUnlockWalletRequest {
+                keystore_json: changed_evm.clone(),
+                password: OLD_PASSWORD.to_string(),
+            })
+            .is_err()
+        );
+        let unlocked = app_services::evm_wallet_unlock(app_services::EvmUnlockWalletRequest {
+            keystore_json: changed_evm,
+            password: NEW_PASSWORD.to_string(),
+        })
+        .unwrap();
+        assert_eq!(unlocked.address, evm.wallet.address);
+    }
+
+    #[test]
+    fn universal_password_change_rejects_missing_evm_identity_metadata() {
+        let (solana_path, solana_path_label) = normalize_mnemonic_derivation_path(None).unwrap();
+        let solana_keypair = keypair_from_mnemonic_phrase(MNEMONIC, &solana_path).unwrap();
+        let encrypted_mnemonic =
+            KeyManager::encrypt_secret_with_password(MNEMONIC, OLD_PASSWORD).unwrap();
+        let solana = KeyManager::keypair_to_encrypted_json(&solana_keypair, OLD_PASSWORD).unwrap();
+        let solana = with_keystore_metadata_extra(
+            &solana,
+            Some("Primary"),
+            Some(&encrypted_mnemonic),
+            Some(&solana_path_label),
+        )
+        .unwrap();
+        let evm =
+            app_services::evm_wallet_import_mnemonic(app_services::EvmImportMnemonicRequest {
+                name: "Primary".to_string(),
+                mnemonic: MNEMONIC.to_string(),
+                derivation_path: None,
+                password: OLD_PASSWORD.to_string(),
+            })
+            .unwrap();
+        let universal =
+            with_universal_wallet_metadata(&solana, &evm.wallet, &evm.keystore_json).unwrap();
+        let mut document: Value = serde_json::from_str(&universal).unwrap();
+        document["metadata"]
+            .as_object_mut()
+            .unwrap()
+            .remove("evm_address");
+        let wallet = saved_wallet(serde_json::to_string(&document).unwrap(), &solana_keypair);
+
+        assert!(reencrypt_saved_wallet_material(&wallet, OLD_PASSWORD, NEW_PASSWORD).is_err());
+    }
+}
+
+async fn change_wallet_password(
+    Path(wallet_id): Path<String>,
+    Json(mut req): Json<ChangeWalletPasswordRequest>,
+) -> Result<Json<SaveKeystoreWalletResponse>, ApiError> {
+    validate_wallet_id(&wallet_id)?;
+    require_nonempty(&req.current_password, "当前钱包密码")?;
+    require_nonempty(&req.new_password, "新钱包密码")?;
+    if req.new_password.chars().count() < 10 {
+        return Err(ApiError {
+            message: "新钱包密码至少需要 10 个字符".to_string(),
+        });
+    }
+    if req.new_password.len() > 1024 {
+        return Err(ApiError {
+            message: "新钱包密码过长".to_string(),
+        });
+    }
+    if req.current_password == req.new_password {
+        return Err(ApiError {
+            message: "新密码不能与当前密码相同".to_string(),
+        });
+    }
+    let current_password = Zeroizing::new(std::mem::take(&mut req.current_password));
+    let new_password = Zeroizing::new(std::mem::take(&mut req.new_password));
+    let wallet = wallet_store::find(&wallet_id).map_err(|message| ApiError { message })?;
+    let expected_keystore = wallet.keystore_json.clone();
+    let expected_public_key = wallet.public_key.clone();
+    let updated = run_keystore_task(move || {
+        let reencrypted =
+            reencrypt_saved_wallet_material(&wallet, &current_password, &new_password)?;
+        let updated = wallet_store::replace_keystore_atomically(
+            &wallet.id,
+            &expected_public_key,
+            &expected_keystore,
+            reencrypted,
+        )
+        .map_err(|message| ApiError { message })?;
+        checkpoint_sensitive_rewrite_best_effort("Wallet password change", &updated.id);
+        Ok(updated)
+    })
+    .await?;
+    Ok(Json(SaveKeystoreWalletResponse {
+        wallet: updated.into(),
+    }))
+}
+
 async fn migrate_wallet_keystore(
     Path(wallet_id): Path<String>,
     Json(req): Json<MigrateWalletKeystoreRequest>,
@@ -4516,7 +5274,7 @@ async fn migrate_wallet_keystore(
                 message: "Keystore 迁移后的钱包身份不一致".to_string(),
             });
         }
-        wallet_store::checkpoint_sensitive_rewrite().map_err(|message| ApiError { message })?;
+        checkpoint_sensitive_rewrite_best_effort("Legacy wallet migration", &updated.id);
         Ok(updated)
     })
     .await?;
@@ -4560,11 +5318,9 @@ async fn export_wallet_mnemonic(
         keystore_metadata_encrypted_mnemonic(&wallet.keystore_json).ok_or_else(|| ApiError {
             message: "这个钱包没有保存助记词记录；当前版本创建或导入的普通 keystore 只保存加密私钥，无法从私钥反推出助记词。".to_string(),
         })?;
-    let mnemonic =
-        KeyManager::decrypt_with_password(&encrypted_mnemonic, &req.password).map_err(|error| {
-            ApiError {
-                message: format!("解密助记词失败: {error}"),
-            }
+    let mnemonic = KeyManager::decrypt_secret_with_password(&encrypted_mnemonic, &req.password)
+        .map_err(|error| ApiError {
+            message: format!("解密助记词失败: {error}"),
         })?;
     if mnemonic.split_whitespace().count() < 12 {
         return Err(ApiError {
@@ -11176,32 +11932,30 @@ async fn deploy_program(
                             ));
                         }
                     }
-                    DEPLOYMENT_STATUS_BUFFER_READY => {
-                        if chain_completed < record.completed_writes {
-                            return Err(deployment_journal_error(format!(
-                                "finalized Buffer 仅完成 {} 块，少于旧 journal 的 {} 块",
-                                chain_completed, record.completed_writes
-                            )));
-                        }
+                    DEPLOYMENT_STATUS_BUFFER_READY if chain_completed < record.completed_writes => {
+                        return Err(deployment_journal_error(format!(
+                            "finalized Buffer 仅完成 {} 块，少于旧 journal 的 {} 块",
+                            chain_completed, record.completed_writes
+                        )));
                     }
                     DEPLOYMENT_STATUS_BUFFER_FINALIZED
                     | DEPLOYMENT_STATUS_DEPLOY_SIGNED
                     | DEPLOYMENT_STATUS_DEPLOY_RECONCILE
                     | DEPLOYMENT_STATUS_DEPLOY_FINALIZED
-                    | DEPLOYMENT_STATUS_FINALIZED => {
-                        if !write_plan.pending_chunk_indexes.is_empty() {
-                            return Err(deployment_journal_error(
-                                "旧 journal 声称 Buffer 已 finalized，但回读仍存在 pending chunk",
-                            ));
-                        }
+                    | DEPLOYMENT_STATUS_FINALIZED
+                        if !write_plan.pending_chunk_indexes.is_empty() =>
+                    {
+                        return Err(deployment_journal_error(
+                            "旧 journal 声称 Buffer 已 finalized，但回读仍存在 pending chunk",
+                        ));
                     }
                     DEPLOYMENT_STATUS_CREATE_BUFFER_SIGNED
-                    | DEPLOYMENT_STATUS_CREATE_BUFFER_RECONCILE => {
-                        if record.completed_writes != 0 {
-                            return Err(deployment_journal_error(
-                                "旧 create-buffer journal 含非零写入进度，拒绝迁移",
-                            ));
-                        }
+                    | DEPLOYMENT_STATUS_CREATE_BUFFER_RECONCILE
+                        if record.completed_writes != 0 =>
+                    {
+                        return Err(deployment_journal_error(
+                            "旧 create-buffer journal 含非零写入进度，拒绝迁移",
+                        ));
                     }
                     _ => {}
                 }
@@ -13618,21 +14372,37 @@ struct Setup2faRequest {
     #[serde(default)]
     issuer: Option<String>,
 }
+
+impl Drop for Setup2faRequest {
+    fn drop(&mut self) {
+        self.hardware_fingerprint.zeroize();
+        self.master_password.zeroize();
+    }
+}
 #[derive(Serialize)]
 struct Setup2faResponse {
     totp_secret: String,
     qr_code_url: String,
 }
 
-async fn setup_2fa(Json(req): Json<Setup2faRequest>) -> Result<Json<Setup2faResponse>, ApiError> {
+impl Drop for Setup2faResponse {
+    fn drop(&mut self) {
+        self.totp_secret.zeroize();
+        self.qr_code_url.zeroize();
+    }
+}
+
+async fn setup_2fa(
+    Json(mut req): Json<Setup2faRequest>,
+) -> Result<Json<Setup2faResponse>, ApiError> {
     require_nonempty(req.hardware_fingerprint.trim(), "硬件指纹")?;
     require_nonempty(req.master_password.as_str(), "主密码")?;
     validate_text_len(&req.hardware_fingerprint, "硬件指纹", MAX_TEXT_FIELD_CHARS)?;
     validate_text_len(&req.master_password, "主密码", MAX_TEXT_FIELD_CHARS)?;
-    let account = validate_optional_label(req.account, "账户名称")?
+    let account = validate_optional_label(req.account.take(), "账户名称")?
         .unwrap_or_else(|| "fnzero-safe".to_string());
-    let issuer =
-        validate_optional_label(req.issuer, "发行者")?.unwrap_or_else(|| "FnzSafe".to_string());
+    let issuer = validate_optional_label(req.issuer.take(), "发行者")?
+        .unwrap_or_else(|| "FnzSafe".to_string());
 
     let totp_secret = fnzero_safe::derive_totp_secret_from_hardware_and_password(
         &req.hardware_fingerprint,
@@ -13670,6 +14440,15 @@ struct CreateTripleFactorRequest {
     question_index: usize,
     security_answer: String,
 }
+
+impl Drop for CreateTripleFactorRequest {
+    fn drop(&mut self) {
+        self.totp_secret.zeroize();
+        self.hardware_fingerprint.zeroize();
+        self.master_password.zeroize();
+        self.security_answer.zeroize();
+    }
+}
 #[derive(Serialize)]
 struct CreateTripleFactorResponse {
     encrypted_wallet: String,
@@ -13693,7 +14472,7 @@ async fn create_triple_factor_wallet(
     validate_text_len(&req.master_password, "主密码", MAX_TEXT_FIELD_CHARS)?;
     validate_text_len(&req.security_answer, "安全答案", MAX_TEXT_FIELD_CHARS)?;
     let keypair = req.wallet.keypair()?;
-    let private_key = keypair.to_base58_string();
+    let private_key = Zeroizing::new(keypair.to_base58_string());
 
     let encrypted = fnzero_safe::encrypt_with_triple_factor(
         &private_key,
@@ -13727,6 +14506,16 @@ struct UnlockTripleFactorRequest {
     security_answer: String,
     totp_code: String,
 }
+
+impl Drop for UnlockTripleFactorRequest {
+    fn drop(&mut self) {
+        self.encrypted_wallet.zeroize();
+        self.hardware_fingerprint.zeroize();
+        self.master_password.zeroize();
+        self.security_answer.zeroize();
+        self.totp_code.zeroize();
+    }
+}
 #[derive(Serialize)]
 struct UnlockTripleFactorResponse {
     public_key: String,
@@ -13756,6 +14545,7 @@ async fn unlock_triple_factor_wallet(
     .map_err(|e| ApiError {
         message: format!("解密失败: {}", e),
     })?;
+    let decrypted = Zeroizing::new(decrypted);
 
     let public_key = KeyManager::get_public_key(&decrypted).map_err(|e| ApiError {
         message: format!("获取公钥失败: {}", e),

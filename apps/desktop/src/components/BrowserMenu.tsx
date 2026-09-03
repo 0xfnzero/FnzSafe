@@ -35,23 +35,43 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslations } from "@/hooks/useTranslations";
+import { openUrlInChrome } from "@/lib/openExternal";
+import {
+  DEFAULT_BROWSER_SETTINGS,
+  EMPTY_BROWSER_CONTACT,
+  MAX_BROWSER_DOWNLOADS,
+  mergeBrowserHistory,
+  parseBrowserContact,
+  parseBrowserDownloads,
+  parseBrowserHistory,
+  parseBrowserSettings,
+  type BrowserContactState,
+  type BrowserDownloadEntry,
+  type BrowserHistoryEntry,
+  type BrowserSettingsState,
+} from "@/lib/browserStorage";
 
 const HISTORY_KEY = "fnzsafe.browser.history.v1";
 const DOWNLOADS_KEY = "fnzsafe.browser.downloads.v1";
 const SETTINGS_KEY = "fnzsafe.browser.settings.v1";
 const CONTACT_KEY = "fnzsafe.browser.contact.v1";
-const MAX_HISTORY = 5000;
-const MAX_DOWNLOADS = 500;
 
 type BrowserDialog = "import" | "passwords" | "contact" | "downloads" | "history" | "clear" | "settings" | null;
 
 interface BrowserMenuProps {
   activeTabId: string;
+  currentUrl: string;
   tabOpen: boolean;
   onNavigate: (url: string) => void;
   onOverlayChange: (open: boolean) => void;
+  importDialogRequest?: number;
+  onImportDialogRequestHandled?: () => void;
+  onChromeAuthImportCompleted?: () => void;
   addressField: ReactNode;
 }
+
+export const CHROME_AUTH_IMPORT_STORAGE_KEY = "fnzsafe.browser.chrome-auth-imported.v1";
+export const CHROME_AUTH_IMPORT_EVENT = "fnzsafe:chrome-auth-imported";
 
 interface ChromeProfileInfo {
   id: string;
@@ -60,21 +80,6 @@ interface ChromeProfileInfo {
   has_cookies: boolean;
   has_passwords: boolean;
   has_history: boolean;
-}
-
-interface BrowserHistoryEntry {
-  url: string;
-  title: string;
-  visited_at_ms: number;
-}
-
-interface BrowserDownloadEntry {
-  id: string;
-  tab_id: string;
-  url: string;
-  path: string;
-  status: "started" | "completed" | "failed";
-  updated_at_ms: number;
 }
 
 interface BrowserCredentialSummary {
@@ -123,37 +128,11 @@ interface DappDownloadEvent {
   status: "started" | "completed" | "failed";
 }
 
-interface BrowserSettingsState {
-  autofillPasswords: boolean;
-  autofillContacts: boolean;
-  saveHistory: boolean;
-}
-
-interface BrowserContactState {
-  full_name: string;
-  email: string;
-  phone: string;
-  address: string;
-}
-
-const DEFAULT_SETTINGS: BrowserSettingsState = {
-  autofillPasswords: true,
-  autofillContacts: true,
-  saveHistory: true,
-};
-
-const EMPTY_CONTACT: BrowserContactState = {
-  full_name: "",
-  email: "",
-  phone: "",
-  address: "",
-};
-
-function readStored<T>(key: string, fallback: T): T {
+function readStored<T>(key: string, parse: (value: unknown) => T, fallback: T): T {
   if (typeof window === "undefined") return fallback;
   try {
     const raw = window.localStorage.getItem(key);
-    return raw ? JSON.parse(raw) as T : fallback;
+    return raw ? parse(JSON.parse(raw)) : fallback;
   } catch {
     return fallback;
   }
@@ -163,17 +142,6 @@ function errorText(error: unknown, fallback: string): string {
   if (typeof error === "string" && error.trim()) return error;
   if (error instanceof Error && error.message) return error.message;
   return fallback;
-}
-
-function mergeHistory(current: BrowserHistoryEntry[], incoming: BrowserHistoryEntry[]): BrowserHistoryEntry[] {
-  const byUrl = new Map<string, BrowserHistoryEntry>();
-  for (const item of [...incoming, ...current]) {
-    if (!item.url || byUrl.has(item.url)) continue;
-    byUrl.set(item.url, item);
-  }
-  return [...byUrl.values()]
-    .sort((left, right) => right.visited_at_ms - left.visited_at_ms)
-    .slice(0, MAX_HISTORY);
 }
 
 function formatTime(value: number): string {
@@ -219,7 +187,17 @@ function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (che
   );
 }
 
-export function BrowserMenu({ activeTabId, tabOpen, onNavigate, onOverlayChange, addressField }: BrowserMenuProps) {
+export function BrowserMenu({
+  activeTabId,
+  currentUrl,
+  tabOpen,
+  onNavigate,
+  onOverlayChange,
+  importDialogRequest = 0,
+  onImportDialogRequestHandled,
+  onChromeAuthImportCompleted,
+  addressField,
+}: BrowserMenuProps) {
   const t = useTranslations();
   const [menuOpen, setMenuOpen] = useState(false);
   const [autoFillMenuOpen, setAutoFillMenuOpen] = useState(false);
@@ -236,10 +214,10 @@ export function BrowserMenu({ activeTabId, tabOpen, onNavigate, onOverlayChange,
   const [importPhase, setImportPhase] = useState<ChromeImportPhase>("select");
   const [importItems, setImportItems] = useState<Record<ChromeImportKind, ChromeImportItemState>>(EMPTY_IMPORT_ITEMS);
   const [passwords, setPasswords] = useState<BrowserCredentialSummary[]>([]);
-  const [history, setHistory] = useState<BrowserHistoryEntry[]>(() => readStored(HISTORY_KEY, []));
-  const [downloads, setDownloads] = useState<BrowserDownloadEntry[]>(() => readStored(DOWNLOADS_KEY, []));
-  const [settings, setSettingsState] = useState<BrowserSettingsState>(() => ({ ...DEFAULT_SETTINGS, ...readStored(SETTINGS_KEY, DEFAULT_SETTINGS) }));
-  const [contact, setContact] = useState<BrowserContactState>(() => ({ ...EMPTY_CONTACT, ...readStored(CONTACT_KEY, EMPTY_CONTACT) }));
+  const [history, setHistory] = useState<BrowserHistoryEntry[]>(() => readStored(HISTORY_KEY, parseBrowserHistory, []));
+  const [downloads, setDownloads] = useState<BrowserDownloadEntry[]>(() => readStored(DOWNLOADS_KEY, parseBrowserDownloads, []));
+  const [settings, setSettingsState] = useState<BrowserSettingsState>(() => readStored(SETTINGS_KEY, parseBrowserSettings, DEFAULT_BROWSER_SETTINGS));
+  const [contact, setContact] = useState<BrowserContactState>(() => readStored(CONTACT_KEY, parseBrowserContact, EMPTY_BROWSER_CONTACT));
   const [clearSelection, setClearSelection] = useState({ browsing: true, history: true, downloads: true, passwords: false });
   const overlayOpen = menuOpen || findOpen || dialog !== null;
 
@@ -287,7 +265,7 @@ export function BrowserMenu({ activeTabId, tabOpen, onNavigate, onOverlayChange,
             title: hostLabel(event.payload.url),
             visited_at_ms: Date.now(),
           };
-          setHistory((items) => mergeHistory(items, [entry]));
+          setHistory((items) => mergeBrowserHistory(items, [entry]));
         }
         window.setTimeout(() => void applyAutofill(event.payload.tab_id), 350);
       }),
@@ -295,7 +273,7 @@ export function BrowserMenu({ activeTabId, tabOpen, onNavigate, onOverlayChange,
         setDownloads((items) => {
           const id = `${event.payload.tab_id}:${event.payload.url}:${event.payload.path}`;
           const next: BrowserDownloadEntry = { ...event.payload, id, updated_at_ms: Date.now() };
-          return [next, ...items.filter((item) => item.id !== id)].slice(0, MAX_DOWNLOADS);
+          return [next, ...items.filter((item) => item.id !== id)].slice(0, MAX_BROWSER_DOWNLOADS);
         });
       }),
     ]).then((cleanups) => {
@@ -326,7 +304,7 @@ export function BrowserMenu({ activeTabId, tabOpen, onNavigate, onOverlayChange,
     await runTabAction("zoom", String(normalized));
   };
 
-  const openDialog = async (next: BrowserDialog) => {
+  const openDialog = useCallback(async (next: BrowserDialog) => {
     setMenuOpen(false);
     setAutoFillMenuOpen(false);
     setDialog(next);
@@ -348,7 +326,13 @@ export function BrowserMenu({ activeTabId, tabOpen, onNavigate, onOverlayChange,
         toast.error(errorText(error, t("features.dapp-store.browser.passwordLoadFailed")));
       }
     }
-  };
+  }, [t]);
+
+  useEffect(() => {
+    if (importDialogRequest <= 0) return;
+    void openDialog("import");
+    onImportDialogRequestHandled?.();
+  }, [importDialogRequest, onImportDialogRequestHandled, openDialog]);
 
   const importFromChrome = async (retryKinds?: ChromeImportKind[]) => {
     const kinds = retryKinds ?? [
@@ -365,6 +349,7 @@ export function BrowserMenu({ activeTabId, tabOpen, onNavigate, onOverlayChange,
       return next;
     });
     let cookiesChanged = false;
+    let authImportSucceeded = false;
     for (const kind of kinds) {
       setImportItems((current) => ({ ...current, [kind]: { status: "running", count: 0, skipped: 0 } }));
       try {
@@ -376,10 +361,12 @@ export function BrowserMenu({ activeTabId, tabOpen, onNavigate, onOverlayChange,
             history: kind === "history",
           },
         });
-        if (result.history.length) setHistory((items) => mergeHistory(items, result.history));
+        const importedHistory = parseBrowserHistory(result.history);
+        if (importedHistory.length) setHistory((items) => mergeBrowserHistory(items, importedHistory));
         const count = kind === "cookies" ? result.cookies_imported : kind === "passwords" ? result.passwords_imported : result.history_imported;
         const skipped = kind === "cookies" ? result.cookies_skipped : kind === "passwords" ? result.passwords_skipped : 0;
         if (kind === "cookies" && count > 0) cookiesChanged = true;
+        if ((kind === "cookies" || kind === "passwords") && count > 0) authImportSucceeded = true;
         setImportItems((current) => ({ ...current, [kind]: { status: "success", count, skipped } }));
       } catch (error) {
         setImportItems((current) => ({
@@ -390,6 +377,11 @@ export function BrowserMenu({ activeTabId, tabOpen, onNavigate, onOverlayChange,
     }
     setImportPhase("complete");
     setImportBusy(false);
+    if (authImportSucceeded) {
+      window.localStorage.setItem(CHROME_AUTH_IMPORT_STORAGE_KEY, new Date().toISOString());
+      window.dispatchEvent(new Event(CHROME_AUTH_IMPORT_EVENT));
+      onChromeAuthImportCompleted?.();
+    }
     if (cookiesChanged && tabOpen) await runTabAction("reload");
   };
 
@@ -500,6 +492,17 @@ export function BrowserMenu({ activeTabId, tabOpen, onNavigate, onOverlayChange,
 
       {menuOpen && (
         <div className="absolute right-0 top-11 z-[100] w-72 overflow-visible rounded-lg border border-white/15 bg-[#272a2f] py-1 shadow-2xl">
+          {menuItem(<ExternalLink className="h-4 w-4" />, t("features.dapp-store.browser.openInChrome"), () => {
+            setMenuOpen(false);
+            if (!tabOpen || !currentUrl) {
+              toast.error(t("features.dapp-store.browser.openPageFirst"));
+              return;
+            }
+            void openUrlInChrome(currentUrl).catch((error) => {
+              toast.error(errorText(error, t("features.dapp-store.browser.openInChromeFailed")));
+            });
+          })}
+          <div className="my-1 border-t border-white/10" />
           {menuItem(<Search className="h-4 w-4" />, t("features.dapp-store.browser.find"), () => { setMenuOpen(false); setFindOpen(true); })}
           {menuItem(<Printer className="h-4 w-4" />, t("features.dapp-store.browser.print"), () => { setMenuOpen(false); void runTabAction("print"); })}
           <div className="flex h-11 items-center gap-2 px-3 text-sm">
@@ -659,7 +662,7 @@ export function BrowserMenu({ activeTabId, tabOpen, onNavigate, onOverlayChange,
             ))}
           </div>
           <div className="mt-5 flex justify-end gap-2">
-            <button type="button" onClick={() => setContact(EMPTY_CONTACT)} className="h-10 rounded-md border border-white/10 px-4 text-sm hover:bg-white/10">{t("features.dapp-store.browser.clear")}</button>
+            <button type="button" onClick={() => setContact(EMPTY_BROWSER_CONTACT)} className="h-10 rounded-md border border-white/10 px-4 text-sm hover:bg-white/10">{t("features.dapp-store.browser.clear")}</button>
             <button type="button" onClick={() => { setDialog(null); toast.success(t("features.dapp-store.browser.saved")); }} className="h-10 rounded-md bg-white px-4 text-sm font-semibold text-black">{t("features.dapp-store.browser.save")}</button>
           </div>
         </DialogShell>
