@@ -65,6 +65,8 @@ function runtimeEnvironment(input, workspaceRoot, dshHome, model) {
     FNZSAFE_DSH_SYSTEM_PROMPT: requiredString(input, 'systemPrompt', 80_000),
     FNZSAFE_WEB3_MCP_SERVER_PATH: web3McpPath,
     FNZSAFE_AI_WORKSPACE: workspaceRoot,
+    ...(process.env.FNZSAFE_WALLET_API_URL ? { FNZSAFE_WALLET_API_URL: process.env.FNZSAFE_WALLET_API_URL } : {}),
+    ...(process.env.FNZSAFE_WALLET_API_TOKEN ? { FNZSAFE_WALLET_API_TOKEN: process.env.FNZSAFE_WALLET_API_TOKEN } : {}),
   };
 }
 

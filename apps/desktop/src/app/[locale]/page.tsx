@@ -79,6 +79,7 @@ import { AiSkillMarket } from "@/components/AiSkillMarket";
 import { FieldHelp } from "@/components/FieldHelp";
 import { SavedWalletPicker } from "@/components/SavedWalletPicker";
 import { SettingsCenterLayout, type SettingsNavigationItem } from "@/components/SettingsCenterLayout";
+import { useSecureKeyboardInput } from "@/hooks/useSecureKeyboardInput";
 import {
   UnifiedAssetList,
   WalletAddressPopover,
@@ -1848,6 +1849,33 @@ function normalizeTweetTokenSignal(signal: TweetTokenSignal): TweetTokenSignal {
   };
 }
 
+function researchSignalRecordToTweetTokenSignal(record: ResearchSignalRecord): TweetTokenSignal {
+  return normalizeTweetTokenSignal({
+    id: record.id,
+    chain: record.chain as TweetSignalChain,
+    contractAddress: record.contract_address || undefined,
+    observedChain: record.observed_chain as TweetSignalChain,
+    observedContractAddress: record.observed_contract_address || undefined,
+    tokenSymbols: record.token_symbols,
+    author: record.author,
+    authorName: record.author_name || undefined,
+    avatarUrl: record.avatar_url || undefined,
+    tweetText: record.tweet_text,
+    sourceUrl: record.source_url || undefined,
+    tweetId: record.tweet_id || undefined,
+    publishedAt: record.published_at || undefined,
+    detectedAt: new Date(record.detected_at_ms).toISOString(),
+    resolutionStatus: record.resolution_status || undefined,
+    resolutionConfidence: record.resolution_confidence ?? undefined,
+    resolutionSource: record.resolution_source || undefined,
+  });
+}
+
+async function loadResearchTweetSignals(): Promise<TweetTokenSignal[]> {
+  const records = await invoke<ResearchSignalRecord[]>("research_list_signals");
+  return records.map(researchSignalRecordToTweetTokenSignal);
+}
+
 function twitterKolResearchInput(kol: TwitterKolProfile) {
   return {
     handle: kol.handle,
@@ -3193,6 +3221,7 @@ export default function Home() {
   const dateTimeLocale = params?.locale === "zh" ? "zh-CN" : "en-US";
   const aiSkillLocale: AiSkillLocale = params?.locale === "zh" ? "zh" : "en";
   const t = useTranslations();
+  useSecureKeyboardInput();
   const tf = useCallback((key: string, fallback: string, vars?: Record<string, string | number>) => {
     const value = t(key, vars);
     return value === key ? fallback : value;
@@ -3518,6 +3547,8 @@ export default function Home() {
   twitterTranslateRef.current = tf;
   const passwordConfirmationInFlightRef = useRef(false);
   const applicationLockedRef = useRef(false);
+  const currentWalletIdRef = useRef("");
+  const selectedFormRef = useRef<string | null>(selectedForm);
   const biometricPasswordPromptAttemptRef = useRef("");
   const biometricDappAttemptRef = useRef("");
   const approveDappSignRequestRef = useRef<((passwordOverride?: string) => Promise<void>) | null>(null);
@@ -3525,6 +3556,7 @@ export default function Home() {
   const autoApprovedDappRequestIdRef = useRef<string | null>(null);
   const dappConnectResolutionInFlightRef = useRef<string | null>(null);
   const confirmPasswordPromptRef = useRef<((passwordOverride?: string) => Promise<void>) | null>(null);
+  selectedFormRef.current = selectedForm;
   const [walletAssets, setWalletAssets] = useState<WalletAssetsState | null>(null);
   const [walletSolBalanceCache, setWalletSolBalanceCache] = useState<Record<string, string>>({});
   const [walletTransactions, setWalletTransactions] = useState<WalletTransactionsState | null>(null);
@@ -3548,8 +3580,6 @@ export default function Home() {
   const [evmCustomChainIds, setEvmCustomChainIds] = useState<number[]>([]);
   const [evmChainId, setEvmChainId] = useState("");
   const [evmWallet, setEvmWallet] = useState<DesktopEvmWalletSummary | null>(null);
-  const [evmKeystoreJson, setEvmKeystoreJson] = useState("");
-  const [evmPassword, setEvmPassword] = useState("");
   const [evmRecipient, setEvmRecipient] = useState("");
   const [evmAmount, setEvmAmount] = useState("");
   const [evmTokenContract, setEvmTokenContract] = useState("");
@@ -3987,8 +4017,6 @@ export default function Home() {
       setEvmPreview(null);
       setEvmSubmitResult(null);
       setEvmTransactionStatus(null);
-      setEvmKeystoreJson("");
-      setEvmPassword("");
       toast.success(tf("features.evm-workbench.transactionRejected", "Transaction preview cancelled"));
       return;
     }
@@ -3997,39 +4025,25 @@ export default function Home() {
     const preview = evmPreview;
     const operationIsCurrent = () =>
       !applicationLockedRef.current && evmPreviewRequestIdRef.current === requestId;
-    let keystoreJson = evmKeystoreJson;
-    if (!keystoreJson) {
-      const savedWallet = wallets.find((wallet) => wallet.id === (currentWalletId || wallets[0]?.id));
-      if (!savedWallet?.evm_address) {
-        throw new Error(tf("features.evm-workbench.savedWalletRequired", "Select a saved wallet with an EVM account"));
-      }
-      if (!evmPassword) {
-        throw new Error(tf("features.evm-workbench.passwordRequired", "Wallet password is required"));
-      }
-      const unlockResponse = await apiFetch(`wallets/${savedWallet.id}/evm-keystore`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: evmPassword }),
-      });
-      const unlocked = await unlockResponse.json();
-      if (!unlockResponse.ok) {
-        throw new Error(unlocked.error || tf("features.evm-workbench.unlockFailed", "Failed to unlock EVM wallet"));
-      }
-      if (!operationIsCurrent()) return;
-      keystoreJson = String(unlocked.keystore_json || "");
-      setEvmWallet(unlocked.wallet as DesktopEvmWalletSummary);
+    const savedWallet = wallets.find((wallet) => wallet.id === (currentWalletId || wallets[0]?.id));
+    if (
+      !savedWallet?.evm_address ||
+      savedWallet.evm_address.toLowerCase() !== preview.wallet_address.toLowerCase()
+    ) {
+      throw new Error(tf("features.evm-workbench.savedWalletRequired", "Select a saved wallet with an EVM account"));
     }
     if (!operationIsCurrent()) return;
     const response = await apiFetch("evm/payment/submit", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        wallet_id: savedWallet.id,
         preview_id: preview.preview_id,
         approved: true,
         chain: preview.chain,
         wallet_address: preview.wallet_address,
-        keystore_json: keystoreJson,
-        password: evmPassword,
+        keystore_json: "",
+        password: "",
         recipient: preview.recipient,
         amount_wei_or_units: preview.amount_wei_or_units,
         token_contract: preview.token_contract,
@@ -4044,8 +4058,6 @@ export default function Home() {
     if (!operationIsCurrent()) return;
     if (!response.ok) throw new Error(data.error || "Failed to submit payment");
     setEvmSubmitResult(data as DesktopEvmTransactionSubmitResult);
-    setEvmKeystoreJson("");
-    setEvmPassword("");
     toast.success(tf("features.evm-workbench.transactionSubmitted", "Transaction submitted"));
   });
 
@@ -4199,6 +4211,11 @@ export default function Home() {
   const lockApplication = useCallback(() => {
     if (wallets.length === 0) return;
     applicationLockedRef.current = true;
+    void apiFetch("wallet/session/lock-all", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    }).catch(() => undefined);
     clearPasswordPromptSecrets();
     setPasswordPrompt(null);
     setExportedPrivateKey(null);
@@ -4213,8 +4230,6 @@ export default function Home() {
     setDappTransactionPreviewError(null);
     setDappTransactionPreviewLoading(false);
     setDappPreviewDetailsOpen(false);
-    setEvmPassword("");
-    setEvmKeystoreJson("");
     evmPreviewRequestIdRef.current += 1;
     setEvmPreview(null);
     setEvmSubmitResult(null);
@@ -4267,6 +4282,41 @@ export default function Home() {
       window.clearInterval(interval);
     };
   }, [appPreferences.autoLockMinutes, applicationLocked, lockApplication, wallets.length]);
+
+  useEffect(() => {
+    if (applicationLocked || !currentWalletId) return;
+    let checking = false;
+    const reconcileSession = async () => {
+      if (checking || applicationLockedRef.current) return;
+      checking = true;
+      try {
+        const response = await apiFetch(`wallets/${currentWalletId}/session`, {
+          method: "GET",
+          headers: { "Content-Type": "application/json" },
+        });
+        const session = await response.json();
+        if (
+          currentWalletIdRef.current === currentWalletId &&
+          (!response.ok || session.unlocked !== true)
+        ) {
+          lockApplication();
+        }
+      } catch {
+        if (currentWalletIdRef.current === currentWalletId) lockApplication();
+      } finally {
+        checking = false;
+      }
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") void reconcileSession();
+    };
+    const interval = window.setInterval(() => void reconcileSession(), 60_000);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.clearInterval(interval);
+    };
+  }, [applicationLocked, currentWalletId, lockApplication]);
 
   const unlockWithPassword = useCallback(async () => {
     const wallet = wallets.find((item) => item.id === (currentWalletId || wallets[0]?.id));
@@ -4459,7 +4509,6 @@ export default function Home() {
     evmTokenLookupRequestIdRef.current += 1;
     if (!wallet || !address) {
       setEvmWallet(null);
-      setEvmKeystoreJson("");
       resetEvmChainScopedState();
       return;
     }
@@ -4470,15 +4519,8 @@ export default function Home() {
       address,
       derivation_path: wallet.evm_derivation_path || "m/44'/60'/0'/0/0",
     });
-    setEvmKeystoreJson("");
     resetEvmChainScopedState();
   }, [effectiveWallet, evmWallet?.address, resetEvmChainScopedState]);
-
-  useEffect(() => {
-    if (selectedForm === "evm-workbench") return;
-    setEvmPassword("");
-    setEvmKeystoreJson("");
-  }, [selectedForm]);
 
   useEffect(() => {
     if (!evmWallet || evmChains.length === 0) {
@@ -5266,17 +5308,46 @@ export default function Home() {
   };
 
   const setCurrentWallet = useCallback((walletId: string) => {
-    evmAssetRequestIdRef.current += 1;
-    evmPortfolioRequestIdRef.current += 1;
-    evmTokenLookupRequestIdRef.current += 1;
-    evmPreviewRequestIdRef.current += 1;
-    setCurrentWalletId(walletId);
-    saveCurrentWalletId(walletId);
+    const walletChanged = currentWalletIdRef.current !== walletId;
+    if (walletChanged) {
+      evmAssetRequestIdRef.current += 1;
+      evmPortfolioRequestIdRef.current += 1;
+      evmTokenLookupRequestIdRef.current += 1;
+      evmPreviewRequestIdRef.current += 1;
+      currentWalletIdRef.current = walletId;
+      setCurrentWalletId(walletId);
+      saveCurrentWalletId(walletId);
+    }
     setFormData((prev) => {
-      if (!selectedForm || !authFormsWithWallets.has(selectedForm)) return prev;
+      const formId = selectedFormRef.current;
+      if (!formId || !authFormsWithWallets.has(formId)) return prev;
       return walletId ? { ...prev, wallet_id: walletId } : prev;
     });
-  }, [selectedForm]);
+    if (!walletChanged) return;
+    if (!walletId) {
+      applicationLockedRef.current = false;
+      setApplicationLocked(false);
+      return;
+    }
+    applicationLockedRef.current = true;
+    setApplicationLocked(true);
+    void apiFetch(`wallets/${walletId}/session`, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+    })
+      .then(async (response) => ({ response, session: await response.json() }))
+      .then(({ response, session }) => {
+        if (currentWalletIdRef.current !== walletId) return;
+        const unlocked = response.ok && session.unlocked === true;
+        applicationLockedRef.current = !unlocked;
+        setApplicationLocked(!unlocked);
+      })
+      .catch(() => {
+        if (currentWalletIdRef.current !== walletId) return;
+        applicationLockedRef.current = true;
+        setApplicationLocked(true);
+      });
+  }, []);
 
   const setAppRpc = useCallback((profileId: string) => {
     const profile = rpcProfiles.find((item) => item.id === profileId);
@@ -5381,14 +5452,35 @@ export default function Home() {
       const nextWalletId = loadedWallets.some((wallet) => wallet.id === storedWalletId)
         ? storedWalletId
         : loadedWallets[0]?.id || "";
+      const walletChanged = currentWalletIdRef.current !== nextWalletId;
       setCurrentWallet(nextWalletId);
+      if (nextWalletId && !walletChanged) {
+        try {
+          const sessionResponse = await apiFetch(`wallets/${nextWalletId}/session`, {
+            method: "GET",
+            headers: { "Content-Type": "application/json" },
+          });
+          const session = await sessionResponse.json();
+          if (walletListRequestIdRef.current !== requestId) return;
+          const unlocked = sessionResponse.ok && session.unlocked === true;
+          applicationLockedRef.current = !unlocked;
+          setApplicationLocked(!unlocked);
+        } catch {
+          if (walletListRequestIdRef.current !== requestId) return;
+          applicationLockedRef.current = true;
+          setApplicationLocked(true);
+        }
+      } else if (!nextWalletId) {
+        applicationLockedRef.current = false;
+        setApplicationLocked(false);
+      }
       setFormData((prev) => {
         const prevWalletId = String(prev.wallet_id ?? "").trim();
         const prevWalletStillExists =
           !prevWalletId || loadedWallets.some((wallet) => wallet.id === prevWalletId);
         if (
-          !selectedForm ||
-          !authFormsWithWallets.has(selectedForm) ||
+          !selectedFormRef.current ||
+          !authFormsWithWallets.has(selectedFormRef.current) ||
           String(prev.keystoreJson ?? "").trim()
         ) {
           return prevWalletStillExists ? prev : { ...prev, wallet_id: undefined };
@@ -5412,7 +5504,7 @@ export default function Home() {
     } finally {
       if (walletListRequestIdRef.current === requestId) setWalletsLoading(false);
     }
-  }, [selectedForm, setCurrentWallet, t]);
+  }, [setCurrentWallet, t]);
 
   const createUniversalWallet = async () => {
     const name = String(formData.name || "").trim();
@@ -5441,7 +5533,6 @@ export default function Home() {
       setWallets((previous) => [createdWallet, ...previous.filter((wallet) => wallet.id !== createdWallet.id)]);
       setWalletsLoadError(null);
       setEvmWallet(createdEvm);
-      setEvmKeystoreJson("");
       setEvmPreview(null);
       setEvmSubmitResult(null);
       setCurrentWallet(createdWallet.id);
@@ -5945,7 +6036,9 @@ export default function Home() {
       setRpcProfiles(initialRpc.profiles);
       setSelectedRpcId(initialRpcProfile.id);
       setSettingsNetwork(initialRpcProfile.network || DEFAULT_NETWORK);
-      setCurrentWalletId(loadStoredWalletId());
+      const storedWalletId = loadStoredWalletId();
+      currentWalletIdRef.current = storedWalletId;
+      setCurrentWalletId(storedWalletId);
       setCurrentWalletNetwork(loadCurrentWalletNetwork());
       setDownloadHistory(loadDownloadHistory());
     }
@@ -8764,28 +8857,9 @@ export default function Home() {
   useEffect(() => {
     if (!twitterSignalStorageHydrated || !isTauriWebview()) return;
     let cancelled = false;
-    void invoke<ResearchSignalRecord[]>("research_list_signals")
-      .then((records) => {
-        if (cancelled || records.length === 0) return;
-        const signals = records.map((record): TweetTokenSignal => normalizeTweetTokenSignal({
-          id: record.id,
-          chain: record.chain as TweetSignalChain,
-          contractAddress: record.contract_address || undefined,
-          observedChain: record.observed_chain as TweetSignalChain,
-          observedContractAddress: record.observed_contract_address || undefined,
-          tokenSymbols: record.token_symbols,
-          author: record.author,
-          authorName: record.author_name || undefined,
-          avatarUrl: record.avatar_url || undefined,
-          tweetText: record.tweet_text,
-          sourceUrl: record.source_url || undefined,
-          tweetId: record.tweet_id || undefined,
-          publishedAt: record.published_at || undefined,
-          detectedAt: new Date(record.detected_at_ms).toISOString(),
-          resolutionStatus: record.resolution_status || undefined,
-          resolutionConfidence: record.resolution_confidence ?? undefined,
-          resolutionSource: record.resolution_source || undefined,
-        }));
+    void loadResearchTweetSignals()
+      .then((signals) => {
+        if (cancelled || signals.length === 0) return;
         setTwitterSignals((current) => mergeTweetTokenSignals(current, signals));
       })
       .catch(() => {
@@ -9021,6 +9095,15 @@ export default function Home() {
             resolutionSource: resolution.source,
           };
         }));
+        void loadResearchTweetSignals()
+          .then((signals) => {
+            if (!cancelled) {
+              setTwitterSignals((current) => mergeTweetTokenSignals(current, signals));
+            }
+          })
+          .catch(() => {
+            // Keep the direct resolver result when the SQLite refresh fails.
+          });
       }).catch(() => {
         if (!cancelled && twitterTokenResolutionFingerprintRef.current === fingerprint) {
           twitterTokenResolutionFingerprintRef.current = "";
@@ -9539,10 +9622,6 @@ export default function Home() {
       return;
     }
     const walletPassword = passwordOverride ?? dappPassword;
-    if (!walletPassword) {
-      toast.error(t("formUi.placeholderKeystorePassword"));
-      return;
-    }
     const isMessageSignature = request.method === "signMessage";
     if (!isMessageSignature) {
       if (dappTransactionPreviewLoading) {
@@ -9568,7 +9647,7 @@ export default function Home() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             wallet_id: wallet.id,
-            password: walletPassword,
+            ...(walletPassword ? { password: walletPassword } : {}),
             required_signer: request.wallet_public_key,
             ...(isMessageSignature
               ? { message_base64: request.message_base64 || "" }
@@ -11537,9 +11616,16 @@ export default function Home() {
     }
   };
 
-  const shouldPromptForWalletPassword = (formId: string): boolean => {
+  const shouldPromptForWalletPassword = (formId: string, state: FormState): boolean => {
     if (!WALLET_PASSWORD_FORM_IDS.has(formId)) return false;
     const method = walletAuth(formId);
+    if (
+      method === "keystore" &&
+      String(state.wallet_id ?? "").trim() &&
+      !applicationLockedRef.current
+    ) {
+      return false;
+    }
     return method === "keystore" || method === "encrypted";
   };
 
@@ -11580,13 +11666,13 @@ export default function Home() {
     if (formId === "program-upgrade") {
       setProgramUpgradeInlineError(null);
     }
-    const needsWalletPassword = shouldPromptForWalletPassword(formId);
+    const requestSource = formId === "external-sign"
+      ? hydrateExternalSignFormDataFromJson(formOverride ?? formData)
+      : formOverride ?? formData;
+    const needsWalletPassword = shouldPromptForWalletPassword(formId, requestSource);
     const needsMasterPassword = shouldPromptForMasterPassword(formId);
 
     if (!needsWalletPassword && !needsMasterPassword) {
-      const requestSource = formId === "external-sign"
-        ? hydrateExternalSignFormDataFromJson(formOverride ?? formData)
-        : formOverride ?? formData;
       const nextFormData = formId === "program-deploy"
         ? normalizedProgramDeployFormState(requestSource)
         : requestSource;
@@ -11594,9 +11680,6 @@ export default function Home() {
       return;
     }
 
-    const requestSource = formId === "external-sign"
-      ? hydrateExternalSignFormDataFromJson(formOverride ?? formData)
-      : formOverride ?? formData;
     const nextFormData = formId === "program-deploy"
       ? normalizedProgramDeployFormState(walletAuthFormData(requestSource))
       : walletAuthFormData(requestSource);
@@ -11648,7 +11731,10 @@ export default function Home() {
     proposal: WorkspaceProposal,
     action: WorkspaceProposalAction,
   ) => {
-    if (walletAuth("squads-workspace") !== "keystore") {
+    if (
+      walletAuth("squads-workspace") !== "keystore" ||
+      (String(formData.wallet_id ?? "").trim() && !applicationLockedRef.current)
+    ) {
       void handleWorkspaceProposalAction(proposal, action);
       return;
     }
@@ -18270,24 +18356,13 @@ export default function Home() {
                 className="h-10 w-full rounded-lg border border-white/10 bg-black/40 px-3 font-mono text-sm text-white outline-none read-only:cursor-not-allowed read-only:text-gray-500"
               />
             </label>
-            <label className="space-y-1.5 text-sm text-gray-300">
-              {tf("features.evm-workbench.signingPassword", "Wallet password")}
-              <input
-                type="password"
-                value={evmPassword}
-                onChange={(event) => setEvmPassword(event.target.value)}
-                autoComplete="current-password"
-                placeholder={tf("features.evm-workbench.signingPasswordPlaceholder", "Required only when submitting")}
-                className="h-10 w-full rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none"
-              />
-            </label>
           </div>
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={previewEvmPayment} disabled={evmBusy || !evmWallet} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-white px-3 text-sm font-semibold text-black disabled:opacity-50">
               <ShieldCheck className="h-4 w-4" />
               {tf("features.evm-workbench.preview", "Preview transaction")}
             </button>
-            <button type="button" onClick={() => void submitEvmPayment(true)} disabled={evmBusy || !evmPreview || !evmPassword} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-500 px-3 text-sm font-semibold text-black hover:bg-emerald-400 disabled:opacity-50">
+            <button type="button" onClick={() => void submitEvmPayment(true)} disabled={evmBusy || !evmPreview} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-500 px-3 text-sm font-semibold text-black hover:bg-emerald-400 disabled:opacity-50">
               <Send className="h-4 w-4" />
               {tf("features.evm-workbench.confirmSubmit", "Confirm send")}
             </button>
@@ -18935,20 +19010,6 @@ export default function Home() {
                                   <span className={`inline-flex shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold leading-4 ${tweetSignalChainClass(tokenSignal.chain)}`}>
                                     {tokenSignal.chain}
                                   </span>
-                                  {tokenSignal.resolutionStatus && (
-                                    <span
-                                      className={`shrink-0 text-[10px] ${tokenSignal.resolutionStatus === "conflicted" ? "text-amber-300" : "text-gray-500"}`}
-                                      title={tokenSignal.resolutionSource}
-                                    >
-                                      {tokenSignal.resolutionStatus === "conflicted"
-                                        ? tf("features.twitter-signals.resolutionConflicted", "候选冲突")
-                                        : tokenSignal.resolutionStatus === "resolved"
-                                          ? tf("features.twitter-signals.resolutionConfidence", "自动 {confidence}%", {
-                                            confidence: Math.round((tokenSignal.resolutionConfidence || 0) * 100),
-                                          })
-                                          : tf("features.twitter-signals.resolutionPending", "待确认")}
-                                    </span>
-                                  )}
                                   <code className="min-w-0 overflow-hidden text-ellipsis">{compactContractAddress(tokenLabel)}</code>
                                 </p>
                                 <button

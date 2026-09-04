@@ -2,6 +2,17 @@
   "version": 1,
   "entries": [
     {
+      "id": "automated-wallet-trading",
+      "kind": "skill",
+      "category": "risk",
+      "icon": "shield",
+      "name": { "zh": "受控钱包自动交易", "en": "Controlled Wallet Trading" },
+      "description": { "zh": "通过已解锁的钱包会话执行有严格比例、滑点、时效和防重放限制的 Solana 代币卖出。", "en": "Execute Solana token sales through an unlocked wallet session with strict size, slippage, expiry, and replay limits." },
+      "useCases": { "zh": ["明确授权后的代币减仓", "无需重复输入密码的受控签名"], "en": ["Explicitly authorized token exits", "Controlled signing without repeated password entry"] },
+      "sources": ["FnzSafe in-memory wallet session", "Pump.fun", "PumpSwap"],
+      "tools": ["wallet_session_status", "automated_token_sell"]
+    },
+    {
       "id": "web3-market-research",
       "kind": "skill",
       "category": "research",

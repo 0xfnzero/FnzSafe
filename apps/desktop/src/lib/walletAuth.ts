@@ -62,7 +62,8 @@ export function validateWalletAuth(
 ): boolean {
   method = normalizeWalletAuth(method);
   if (method === "keystore") {
-    return !!((String(formData.wallet_id ?? "").trim() || String(formData.keystoreJson ?? "").trim()) && formData.password);
+    const walletId = String(formData.wallet_id ?? "").trim();
+    return !!(walletId || (String(formData.keystoreJson ?? "").trim() && formData.password));
   }
   if (method === "encrypted") {
     return !!(encryptedKeyFromForm(formData) && formData.password);
@@ -82,9 +83,13 @@ export function applyWalletAuth(
   if (method === "keystore") {
     const walletId = String(formData.wallet_id ?? "").trim();
     const keystoreJson = String(formData.keystoreJson ?? "").trim();
-    if (walletId) body.wallet_id = walletId;
-    else body.keystore_json = keystoreJson;
-    body.password = formData.password;
+    if (walletId) {
+      body.wallet_id = walletId;
+      if (formData.password) body.password = formData.password;
+    } else {
+      body.keystore_json = keystoreJson;
+      body.password = formData.password;
+    }
   } else if (method === "encrypted") {
     body.encrypted_key = encryptedKeyFromForm(formData);
     body.password = formData.password;

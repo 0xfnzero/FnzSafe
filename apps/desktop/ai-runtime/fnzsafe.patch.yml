@@ -17,8 +17,8 @@
     mode: read-only
     workspaceRoot: !!js process.cwd()
 
-# Wallet research is deliberately read-only. The only product-specific runtime
-# capability is the public-data MCP plugin below.
+# The agent has no shell or file-write capability. Product policy and the MCP
+# server constrain its public-data research and bounded wallet actions.
 - id: persistent-bash
   disabled: true
 - id: persistent-pwsh

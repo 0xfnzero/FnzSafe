@@ -2,6 +2,32 @@ import { integerProperty } from './lib/web3-utils.mjs';
 
 export const web3MarketTools = [
   {
+    name: 'wallet_session_status',
+    description: 'Check whether one saved wallet has an active in-memory signing session. This never exposes secret material.',
+    inputSchema: {
+      type: 'object',
+      properties: { walletId: { type: 'string', pattern: '^[A-Fa-f0-9]{32}$' } },
+      required: ['walletId'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'automated_token_sell',
+    description: 'Execute a bounded Solana mainnet Pump.fun or PumpSwap token sale with an already-unlocked saved wallet. This submits a real transaction.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        walletId: { type: 'string', pattern: '^[A-Fa-f0-9]{32}$' },
+        mint: { type: 'string', pattern: '^[1-9A-HJ-NP-Za-km-z]{32,44}$' },
+        venue: { type: 'string', enum: ['pumpfun', 'pumpswap'] },
+        sellPercentBps: integerProperty(1, 2500),
+        slippageBps: integerProperty(1, 500),
+      },
+      required: ['walletId', 'mint', 'venue', 'sellPercentBps', 'slippageBps'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'market_search',
     description: 'Search CoinGecko for a token or project and return current market metrics for matching assets.',
     inputSchema: { type: 'object', properties: { query: { type: 'string', minLength: 1, maxLength: 120 } }, required: ['query'], additionalProperties: false },

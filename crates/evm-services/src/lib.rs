@@ -392,7 +392,7 @@ pub fn builtin_chains() -> Vec<EvmChainConfig> {
             137,
             "Polygon",
             "POL",
-            "https://polygon-rpc.com",
+            "https://polygon-bor-rpc.publicnode.com",
             Some("https://polygonscan.com"),
             false,
         ),
@@ -554,6 +554,22 @@ pub fn import_keystore(req: EvmImportKeystoreRequest) -> EvmResult<EvmWalletKeys
 }
 
 pub fn unlock_wallet(req: EvmUnlockWalletRequest) -> EvmResult<EvmWalletSummary> {
+    unlock_signing_key(&req).map(|(wallet, _)| wallet)
+}
+
+/// Unlocks an EVM keystore for trusted in-process callers.
+///
+/// The returned private key is zeroized on drop and must never cross an IPC or
+/// serialization boundary.
+pub fn unlock_private_key(
+    req: EvmUnlockWalletRequest,
+) -> EvmResult<(EvmWalletSummary, Zeroizing<Vec<u8>>)> {
+    let (wallet, signing_key) = unlock_signing_key(&req)?;
+    let private_key = Zeroizing::new(signing_key.to_bytes().to_vec());
+    Ok((wallet, private_key))
+}
+
+fn unlock_signing_key(req: &EvmUnlockWalletRequest) -> EvmResult<(EvmWalletSummary, SigningKey)> {
     let signing_key = decrypt_keystore(&req.keystore_json, &req.password)?;
     let keystore: EvmKeystore = serde_json::from_str(&req.keystore_json)
         .map_err(|_| EvmServiceError::InvalidInput("Invalid EVM keystore JSON".to_string()))?;
@@ -563,11 +579,12 @@ pub fn unlock_wallet(req: EvmUnlockWalletRequest) -> EvmResult<EvmWalletSummary>
             "Keystore address does not match decrypted private key".to_string(),
         ));
     }
-    Ok(wallet_summary(
+    let wallet = wallet_summary(
         keystore.metadata.wallet_name,
         address,
         keystore.derivation_path,
-    ))
+    );
+    Ok((wallet, signing_key))
 }
 
 pub fn export_private_key(
@@ -699,6 +716,36 @@ pub fn preview_payment(req: EvmPaymentPreviewRequest) -> EvmResult<EvmPaymentPre
 }
 
 pub fn submit_payment(req: EvmPaymentSubmitRequest) -> EvmResult<EvmTransactionSubmitResult> {
+    submit_payment_with_key_loader(&req, || decrypt_keystore(&req.keystore_json, &req.password))
+}
+
+pub fn submit_payment_with_private_key(
+    req: EvmPaymentSubmitRequest,
+    private_key: &[u8],
+) -> EvmResult<EvmTransactionSubmitResult> {
+    submit_payment_with_key_loader(&req, || signing_key_from_bytes(private_key))
+}
+
+pub fn submit_payment_with_private_key_loader<F>(
+    req: EvmPaymentSubmitRequest,
+    load_private_key: F,
+) -> EvmResult<EvmTransactionSubmitResult>
+where
+    F: FnOnce() -> Result<Zeroizing<Vec<u8>>, String>,
+{
+    submit_payment_with_key_loader(&req, || {
+        let private_key = load_private_key().map_err(EvmServiceError::InvalidInput)?;
+        signing_key_from_bytes(private_key.as_slice())
+    })
+}
+
+fn submit_payment_with_key_loader<F>(
+    req: &EvmPaymentSubmitRequest,
+    load_signing_key: F,
+) -> EvmResult<EvmTransactionSubmitResult>
+where
+    F: FnOnce() -> EvmResult<SigningKey>,
+{
     require_non_empty(&req.preview_id, "preview id")?;
     if !req.approved {
         return Err(EvmServiceError::UserRejected);
@@ -758,11 +805,11 @@ pub fn submit_payment(req: EvmPaymentSubmitRequest) -> EvmResult<EvmTransactionS
             "EVM payment preview is stale or mismatched".to_string(),
         ));
     }
-    let signing_key = decrypt_keystore(&req.keystore_json, &req.password)?;
+    let signing_key = load_signing_key()?;
     let from = address_from_signing_key(&signing_key);
     if !address_eq(&from, &wallet_address) {
         return Err(EvmServiceError::InvalidInput(
-            "EVM keystore does not match preview wallet address".to_string(),
+            "EVM signing key does not match preview wallet address".to_string(),
         ));
     }
     let raw_tx = sign_evm_transaction(&EvmTxSigningInput {
@@ -816,6 +863,38 @@ pub fn preview_dapp_signing(req: EvmDappSignPreviewRequest) -> EvmResult<EvmDapp
 }
 
 pub fn submit_dapp_signing(req: EvmDappSignSubmitRequest) -> EvmResult<EvmDappSignSubmitResult> {
+    submit_dapp_signing_with_key_loader(&req, || {
+        decrypt_keystore(&req.keystore_json, &req.password)
+    })
+}
+
+pub fn submit_dapp_signing_with_private_key(
+    req: EvmDappSignSubmitRequest,
+    private_key: &[u8],
+) -> EvmResult<EvmDappSignSubmitResult> {
+    submit_dapp_signing_with_key_loader(&req, || signing_key_from_bytes(private_key))
+}
+
+pub fn submit_dapp_signing_with_private_key_loader<F>(
+    req: EvmDappSignSubmitRequest,
+    load_private_key: F,
+) -> EvmResult<EvmDappSignSubmitResult>
+where
+    F: FnOnce() -> Result<Zeroizing<Vec<u8>>, String>,
+{
+    submit_dapp_signing_with_key_loader(&req, || {
+        let private_key = load_private_key().map_err(EvmServiceError::InvalidInput)?;
+        signing_key_from_bytes(private_key.as_slice())
+    })
+}
+
+fn submit_dapp_signing_with_key_loader<F>(
+    req: &EvmDappSignSubmitRequest,
+    load_signing_key: F,
+) -> EvmResult<EvmDappSignSubmitResult>
+where
+    F: FnOnce() -> EvmResult<SigningKey>,
+{
     require_non_empty(&req.preview_id, "preview id")?;
     if !req.approved {
         return Err(EvmServiceError::UserRejected);
@@ -839,11 +918,11 @@ pub fn submit_dapp_signing(req: EvmDappSignSubmitRequest) -> EvmResult<EvmDappSi
             "EVM dApp preview is stale or mismatched".to_string(),
         ));
     }
-    let signing_key = decrypt_keystore(&req.keystore_json, &req.password)?;
+    let signing_key = load_signing_key()?;
     let signing_address = address_from_signing_key(&signing_key);
     if !address_eq(&signing_address, &wallet_address) {
         return Err(EvmServiceError::InvalidInput(
-            "EVM keystore does not match preview wallet address".to_string(),
+            "EVM signing key does not match preview wallet address".to_string(),
         ));
     }
     match method.as_str() {
@@ -1100,6 +1179,11 @@ fn signing_key_from_hex(private_key_hex: &str) -> EvmResult<SigningKey> {
         .map_err(|_| EvmServiceError::InvalidInput("EVM private key is invalid".to_string()))?;
     bytes.zeroize();
     Ok(signing_key)
+}
+
+fn signing_key_from_bytes(private_key: &[u8]) -> EvmResult<SigningKey> {
+    SigningKey::from_slice(private_key)
+        .map_err(|_| EvmServiceError::InvalidInput("EVM private key bytes are invalid".to_string()))
 }
 
 fn address_from_signing_key(signing_key: &SigningKey) -> String {
@@ -2723,6 +2807,14 @@ mod tests {
                 .expect("Polygon network should be built in");
             assert_eq!(polygon.native_symbol, "POL");
         }
+        let polygon_mainnet = chains
+            .iter()
+            .find(|chain| chain.chain_id == 137)
+            .expect("Polygon mainnet should be built in");
+        assert_eq!(
+            polygon_mainnet.rpc_url,
+            "https://polygon-bor-rpc.publicnode.com"
+        );
     }
 
     #[test]
@@ -2750,6 +2842,28 @@ mod tests {
         assert_eq!(
             unlocked.address,
             "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf"
+        );
+    }
+
+    #[test]
+    fn unlock_private_key_returns_zeroizing_material_for_the_same_address() {
+        let created = import_private_key(EvmImportPrivateKeyRequest {
+            name: "EVM".to_string(),
+            private_key_hex: DEV_PRIVATE_KEY.to_string(),
+            password: "strong-password".to_string(),
+        })
+        .unwrap();
+        let expected_address = created.wallet.address.clone();
+        let (wallet, private_key) = unlock_private_key(EvmUnlockWalletRequest {
+            keystore_json: created.keystore_json,
+            password: "strong-password".to_string(),
+        })
+        .unwrap();
+
+        assert_eq!(wallet.address, expected_address);
+        assert_eq!(
+            private_key.as_slice(),
+            &hex::decode(DEV_PRIVATE_KEY.trim_start_matches("0x")).unwrap()
         );
     }
 
@@ -2983,6 +3097,94 @@ mod tests {
     }
 
     #[test]
+    fn payment_submit_with_private_key_rejects_a_different_wallet_before_sending() {
+        let chain = chain(
+            11155111,
+            "Sepolia",
+            "ETH",
+            "http://127.0.0.1:8545",
+            None,
+            true,
+        );
+        let wallet_address = "0x000000000000000000000000000000000000dead";
+        let recipient = "0x000000000000000000000000000000000000beef";
+        let preview_id = payment_preview_id(&PaymentPreviewIdInput {
+            chain: &chain,
+            wallet_address,
+            recipient,
+            token_contract: None,
+            amount_wei_or_units: "1",
+            gas_limit: "21000",
+            gas_price_wei: "1000000000",
+            max_fee_per_gas_wei: None,
+            max_priority_fee_per_gas_wei: None,
+            nonce: "0",
+        });
+        let request = EvmPaymentSubmitRequest {
+            preview_id,
+            approved: true,
+            chain,
+            wallet_address: wallet_address.to_string(),
+            keystore_json: String::new(),
+            password: String::new(),
+            recipient: recipient.to_string(),
+            amount_wei_or_units: "1".to_string(),
+            token_contract: None,
+            gas_limit: Some("21000".to_string()),
+            gas_price_wei: Some("1000000000".to_string()),
+            max_fee_per_gas_wei: None,
+            max_priority_fee_per_gas_wei: None,
+            nonce: Some("0".to_string()),
+        };
+        let private_key = hex::decode(DEV_PRIVATE_KEY.trim_start_matches("0x")).unwrap();
+
+        let error = submit_payment_with_private_key(request, &private_key).unwrap_err();
+        assert!(matches!(error, EvmServiceError::InvalidInput(_)));
+        assert!(error.to_string().contains("does not match preview"));
+    }
+
+    #[test]
+    fn private_key_loader_is_not_called_for_a_stale_payment_preview() {
+        use std::cell::Cell;
+
+        let chain = chain(
+            11155111,
+            "Sepolia",
+            "ETH",
+            "http://127.0.0.1:8545",
+            None,
+            true,
+        );
+        let loader_called = Cell::new(false);
+        let error = submit_payment_with_private_key_loader(
+            EvmPaymentSubmitRequest {
+                preview_id: "evm-payment:stale".to_string(),
+                approved: true,
+                chain,
+                wallet_address: "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf".to_string(),
+                keystore_json: String::new(),
+                password: String::new(),
+                recipient: "0x000000000000000000000000000000000000beef".to_string(),
+                amount_wei_or_units: "1".to_string(),
+                token_contract: None,
+                gas_limit: Some("21000".to_string()),
+                gas_price_wei: Some("1000000000".to_string()),
+                max_fee_per_gas_wei: None,
+                max_priority_fee_per_gas_wei: None,
+                nonce: Some("0".to_string()),
+            },
+            || {
+                loader_called.set(true);
+                Ok(Zeroizing::new(vec![0_u8; PRIVATE_KEY_BYTES]))
+            },
+        )
+        .unwrap_err();
+
+        assert!(!loader_called.get());
+        assert!(error.to_string().contains("stale or mismatched"));
+    }
+
+    #[test]
     fn payment_preview_id_uses_normalized_token_contract() {
         let chain = chain(
             11155111,
@@ -3157,6 +3359,51 @@ mod tests {
         assert!(matches!(error, EvmServiceError::InvalidInput(_)));
         assert!(error.to_string().contains("stale or mismatched"));
         assert!(!matches!(error, EvmServiceError::WrongPassword));
+    }
+
+    #[test]
+    fn dapp_submit_signs_with_in_memory_private_key() {
+        let chain = chain(
+            11155111,
+            "Sepolia",
+            "ETH",
+            "http://127.0.0.1:8545",
+            None,
+            true,
+        );
+        let wallet_address = "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf";
+        let payload_json = serde_json::json!({ "message": "hello" }).to_string();
+        let preview_id = dapp_sign_preview_id(&DappSignPreviewIdInput {
+            chain: &chain,
+            wallet_address,
+            app_name: "Test dApp",
+            app_url: "https://example.com",
+            method: "personal_sign",
+            payload_json: &payload_json,
+        });
+        let private_key = hex::decode(DEV_PRIVATE_KEY.trim_start_matches("0x")).unwrap();
+        let result = submit_dapp_signing_with_private_key(
+            EvmDappSignSubmitRequest {
+                preview_id,
+                approved: true,
+                chain,
+                wallet_address: wallet_address.to_string(),
+                app_name: "Test dApp".to_string(),
+                app_url: "https://example.com".to_string(),
+                keystore_json: String::new(),
+                password: String::new(),
+                method: "personal_sign".to_string(),
+                payload_json,
+            },
+            &private_key,
+        )
+        .unwrap();
+
+        assert_eq!(result.status, "signed");
+        assert!(result
+            .signature
+            .as_deref()
+            .is_some_and(|value| value.starts_with("0x")));
     }
 
     #[test]

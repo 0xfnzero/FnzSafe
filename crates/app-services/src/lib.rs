@@ -29,6 +29,7 @@ use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 mod squads_v4;
 
@@ -1859,6 +1860,18 @@ pub fn evm_wallet_unlock(req: EvmUnlockWalletRequest) -> AppServiceResult<EvmWal
     .map_err(map_evm_error)
 }
 
+/// Returns EVM signing material only to trusted in-process service callers.
+pub fn evm_wallet_unlock_private_key(
+    req: EvmUnlockWalletRequest,
+) -> AppServiceResult<(EvmWalletSummary, Zeroizing<Vec<u8>>)> {
+    evm::unlock_private_key(evm::EvmUnlockWalletRequest {
+        keystore_json: req.keystore_json,
+        password: req.password,
+    })
+    .map(|(wallet, private_key)| (wallet.into(), private_key))
+    .map_err(map_evm_error)
+}
+
 pub fn evm_wallet_export_private_key(
     req: EvmExportPrivateKeyRequest,
 ) -> AppServiceResult<EvmExportPrivateKeyResponse> {
@@ -2216,7 +2229,34 @@ pub fn evm_payment_preview(req: EvmPaymentPreviewRequest) -> AppServiceResult<Ev
 pub fn evm_payment_submit(
     req: EvmPaymentSubmitRequest,
 ) -> AppServiceResult<EvmTransactionSubmitResult> {
-    evm::submit_payment(evm::EvmPaymentSubmitRequest {
+    evm::submit_payment(evm_payment_submit_request(req))
+        .map(Into::into)
+        .map_err(map_evm_error)
+}
+
+pub fn evm_payment_submit_with_private_key(
+    req: EvmPaymentSubmitRequest,
+    private_key: &[u8],
+) -> AppServiceResult<EvmTransactionSubmitResult> {
+    evm::submit_payment_with_private_key(evm_payment_submit_request(req), private_key)
+        .map(Into::into)
+        .map_err(map_evm_error)
+}
+
+pub fn evm_payment_submit_with_private_key_loader<F>(
+    req: EvmPaymentSubmitRequest,
+    load_private_key: F,
+) -> AppServiceResult<EvmTransactionSubmitResult>
+where
+    F: FnOnce() -> Result<Zeroizing<Vec<u8>>, String>,
+{
+    evm::submit_payment_with_private_key_loader(evm_payment_submit_request(req), load_private_key)
+        .map(Into::into)
+        .map_err(map_evm_error)
+}
+
+fn evm_payment_submit_request(req: EvmPaymentSubmitRequest) -> evm::EvmPaymentSubmitRequest {
+    evm::EvmPaymentSubmitRequest {
         preview_id: req.preview_id,
         approved: req.approved,
         chain: req.chain.into(),
@@ -2231,9 +2271,7 @@ pub fn evm_payment_submit(
         max_fee_per_gas_wei: req.max_fee_per_gas_wei,
         max_priority_fee_per_gas_wei: req.max_priority_fee_per_gas_wei,
         nonce: req.nonce,
-    })
-    .map(Into::into)
-    .map_err(map_evm_error)
+    }
 }
 
 pub fn evm_transaction_status(
@@ -2465,7 +2503,34 @@ pub fn evm_dapp_sign_preview(
 pub fn evm_dapp_sign_submit(
     req: EvmDappSignSubmitRequest,
 ) -> AppServiceResult<EvmDappSignSubmitResult> {
-    evm::submit_dapp_signing(evm::EvmDappSignSubmitRequest {
+    evm::submit_dapp_signing(evm_dapp_submit_request(req))
+        .map(Into::into)
+        .map_err(map_evm_error)
+}
+
+pub fn evm_dapp_sign_submit_with_private_key(
+    req: EvmDappSignSubmitRequest,
+    private_key: &[u8],
+) -> AppServiceResult<EvmDappSignSubmitResult> {
+    evm::submit_dapp_signing_with_private_key(evm_dapp_submit_request(req), private_key)
+        .map(Into::into)
+        .map_err(map_evm_error)
+}
+
+pub fn evm_dapp_sign_submit_with_private_key_loader<F>(
+    req: EvmDappSignSubmitRequest,
+    load_private_key: F,
+) -> AppServiceResult<EvmDappSignSubmitResult>
+where
+    F: FnOnce() -> Result<Zeroizing<Vec<u8>>, String>,
+{
+    evm::submit_dapp_signing_with_private_key_loader(evm_dapp_submit_request(req), load_private_key)
+        .map(Into::into)
+        .map_err(map_evm_error)
+}
+
+fn evm_dapp_submit_request(req: EvmDappSignSubmitRequest) -> evm::EvmDappSignSubmitRequest {
+    evm::EvmDappSignSubmitRequest {
         preview_id: req.preview_id,
         approved: req.approved,
         chain: req.chain.into(),
@@ -2476,9 +2541,7 @@ pub fn evm_dapp_sign_submit(
         password: req.password,
         method: req.method,
         payload_json: req.payload_json,
-    })
-    .map(Into::into)
-    .map_err(map_evm_error)
+    }
 }
 
 pub fn preview_squads_action(req: SquadsPreviewRequest) -> AppServiceResult<SigningPreview> {

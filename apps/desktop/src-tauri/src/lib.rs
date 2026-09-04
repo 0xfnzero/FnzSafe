@@ -29,6 +29,7 @@ use zeroize::{Zeroize, Zeroizing};
 mod app_store;
 mod browser_profile;
 mod research_store;
+mod secure_input;
 
 type DesktopRuntime = tauri::Cef;
 type DesktopApp = tauri::App<DesktopRuntime>;
@@ -2914,6 +2915,7 @@ fn dapp_close_tab(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Tauri maps these named parameters directly from the browser IPC request.
 async fn dapp_request_tab_text(
     app: DesktopAppHandle,
     state: tauri::State<'_, DappBridgeState>,
@@ -4432,6 +4434,7 @@ pub fn run() {
             dapp_disconnect_connection,
             dapp_disconnect_wallet,
             open_developer_tools,
+            secure_input::set_secure_keyboard_input,
             biometric_wallet_status,
             biometric_wallet_store_password,
             biometric_wallet_get_password,

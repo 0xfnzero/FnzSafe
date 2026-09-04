@@ -1,0 +1,4 @@
+interface:
+  display_name: "Automated Wallet Trading"
+  short_description: "Execute bounded sales with an unlocked wallet"
+  default_prompt: "Use $automated-wallet-trading to sell 10% of a specified Solana token with a 1% slippage cap."
