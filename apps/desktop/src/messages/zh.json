@@ -466,6 +466,8 @@
       "empty": "还没有提取到合约地址或代币代码。",
       "showMore": "显示更多",
       "showLess": "收起",
+      "showRemainingTokens": "显示其余 {count} 个代币",
+      "collapseTokens": "收起代币",
       "buy": "购买",
       "openTweet": "打开推文",
       "scanSuccess": "已提取 {count} 条代币线索推文",

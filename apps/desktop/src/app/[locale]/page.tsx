@@ -1662,6 +1662,7 @@ const TWITTER_RESEARCH_AI_STORAGE_KEY = "fnzero-safe.twitter-research-ai.v1";
 const DEFAULT_TWITTER_SIGNAL_INTERVAL_SEC = 60;
 const TWITTER_TOKEN_RESOLUTION_BATCH_SIZE = 24;
 const MAX_TWITTER_SIGNAL_SOURCE_CHARS = 250_000;
+const COLLAPSED_TWITTER_TOKEN_ROWS = 6;
 function normalizeTwitterHandle(value: string): string {
   return value.trim().replace(/^@+/, "").toLowerCase();
 }
@@ -3437,6 +3438,7 @@ export default function Home() {
   const [twitterChromeAuthImported, setTwitterChromeAuthImported] = useState<boolean | null>(null);
   const [twitterChromeImportDialogRequest, setTwitterChromeImportDialogRequest] = useState(0);
   const [expandedTwitterSignalIds, setExpandedTwitterSignalIds] = useState<Set<string>>(() => new Set());
+  const [expandedTwitterTokenGroupIds, setExpandedTwitterTokenGroupIds] = useState<Set<string>>(() => new Set());
   const [biometricStatuses, setBiometricStatuses] = useState<Record<string, BiometricWalletStatus>>({});
   const [biometricBusyWalletId, setBiometricBusyWalletId] = useState<string | null>(null);
   const [savePasswordToBiometric, setSavePasswordToBiometric] = useState(false);
@@ -18895,6 +18897,11 @@ export default function Home() {
                   {pagedTwitterSignalGroups.map((signalGroup) => {
                     const signal = signalGroup.primary;
                     const expanded = expandedTwitterSignalIds.has(signalGroup.key);
+                    const tokensExpanded = expandedTwitterTokenGroupIds.has(signalGroup.key);
+                    const hiddenTokenCount = Math.max(0, signalGroup.signals.length - COLLAPSED_TWITTER_TOKEN_ROWS);
+                    const displayedTokenSignals = tokensExpanded
+                      ? signalGroup.signals
+                      : signalGroup.signals.slice(0, COLLAPSED_TWITTER_TOKEN_ROWS);
                     const signalTime = signal.publishedAt || signal.detectedAt;
                     const displayTime = formatTweetSignalTime(signalTime, dateTimeLocale);
                     const authorHandle = normalizeTwitterKolHandle(signal.author);
@@ -18999,7 +19006,7 @@ export default function Home() {
                           />
                         </div>
                         <div className="col-start-2 ml-auto w-full min-w-0 max-w-[480px] space-y-1 self-start lg:col-start-3 lg:row-start-1 lg:justify-self-end">
-                          {signalGroup.signals.map((tokenSignal, tokenIndex) => {
+                          {displayedTokenSignals.map((tokenSignal, tokenIndex) => {
                             const tokenLabel = tweetSignalTokenLabel(tokenSignal);
                             const tokenSymbolLabel = tokenSignal.tokenSymbols?.join(" ").trim();
                             return (
@@ -19062,6 +19069,23 @@ export default function Home() {
                               </div>
                             );
                           })}
+                          {hiddenTokenCount > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setExpandedTwitterTokenGroupIds((current) => {
+                                const next = new Set(current);
+                                if (next.has(signalGroup.key)) next.delete(signalGroup.key);
+                                else next.add(signalGroup.key);
+                                return next;
+                              })}
+                              className="inline-flex h-7 w-full items-center justify-center rounded-md border border-dashed border-white/10 text-[11px] font-medium text-gray-400 transition-colors hover:bg-white/[0.05] hover:text-gray-200"
+                              aria-expanded={tokensExpanded}
+                            >
+                              {tokensExpanded
+                                ? tf("features.twitter-signals.collapseTokens", "收起代币")
+                                : tf("features.twitter-signals.showRemainingTokens", "显示其余 {count} 个代币", { count: hiddenTokenCount })}
+                            </button>
+                          )}
                         </div>
                       </article>
                     );

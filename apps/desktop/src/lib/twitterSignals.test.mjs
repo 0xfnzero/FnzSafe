@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   canonicalTweetSourceIdentity,
+  compactTweetTokenSignals,
   filterRecentTweetSignals,
   groupTweetSignalsByTweet,
   hasValidTweetSignalIdentity,
@@ -119,6 +120,73 @@ test("groups URL-less signals by their captured tweet id", () => {
     { id: "two", tweetId: "42", author: "@two", tweetText: "second extraction" },
   ]);
   assert.equal(groups.length, 1);
+});
+
+test("deduplicates legacy cashtag prefixes and keeps canonical display symbols", () => {
+  const compacted = compactTweetTokenSignals([
+    { id: "legacy", author: "@kol", tweetText: "$AI", chain: "Unknown", tokenSymbols: ["$$ai"] },
+    { id: "current", author: "@kol", tweetText: "$AI", chain: "Unknown", tokenSymbols: ["AI"] },
+  ]);
+
+  assert.equal(compacted.length, 1);
+  assert.deepEqual(compacted[0].tokenSymbols, ["$AI"]);
+});
+
+test("replaces a symbol-only row with its richer resolved contract row", () => {
+  const compacted = compactTweetTokenSignals([
+    { id: "symbol", author: "@kol", tweetText: "$AI", chain: "Unknown", tokenSymbols: ["$AI"] },
+    {
+      id: "resolved",
+      author: "@kol",
+      tweetText: "$AI",
+      chain: "Solana",
+      contractAddress: "So11111111111111111111111111111111111111112",
+      tokenSymbols: ["AI"],
+      resolutionStatus: "resolved",
+    },
+  ]);
+
+  assert.deepEqual(compacted.map((signal) => signal.id), ["resolved"]);
+  assert.deepEqual(compacted[0].tokenSymbols, ["$AI"]);
+});
+
+test("drops an aggregate row when individual rows cover all of its symbols", () => {
+  const compacted = compactTweetTokenSignals([
+    { id: "ai", author: "@kol", tweetText: "$AI $NVDA", chain: "Unknown", tokenSymbols: ["AI"] },
+    { id: "nvda", author: "@kol", tweetText: "$AI $NVDA", chain: "Unknown", tokenSymbols: ["$NVDA"] },
+    { id: "aggregate", author: "@kol", tweetText: "$AI $NVDA", chain: "Unknown", tokenSymbols: ["$AI", "NVDA"] },
+  ]);
+
+  assert.deepEqual(compacted.map((signal) => signal.id), ["ai", "nvda"]);
+});
+
+test("keeps only uncovered symbols in a partially redundant aggregate row", () => {
+  const compacted = compactTweetTokenSignals([
+    { id: "ai", author: "@kol", tweetText: "$AI $NVDA", chain: "Unknown", tokenSymbols: ["$AI"] },
+    { id: "aggregate", author: "@kol", tweetText: "$AI $NVDA", chain: "Unknown", tokenSymbols: ["AI", "NVDA"] },
+  ]);
+
+  assert.equal(compacted.length, 2);
+  assert.deepEqual(compacted[1].tokenSymbols, ["$NVDA"]);
+});
+
+test("keeps distinct contracts for the same symbol visible", () => {
+  const compacted = compactTweetTokenSignals([
+    { id: "one", author: "@kol", tweetText: "$AI", chain: "BSC", contractAddress: "0x111", tokenSymbols: ["AI"] },
+    { id: "two", author: "@kol", tweetText: "$AI", chain: "BSC", contractAddress: "0x222", tokenSymbols: ["$AI"] },
+    { id: "symbol", author: "@kol", tweetText: "$AI", chain: "Unknown", tokenSymbols: ["$AI"] },
+  ]);
+
+  assert.deepEqual(compacted.map((signal) => signal.id), ["one", "two"]);
+});
+
+test("deduplicates the same contract after its chain is resolved", () => {
+  const compacted = compactTweetTokenSignals([
+    { id: "observed", author: "@kol", tweetText: "$AI", chain: "Unknown EVM", contractAddress: "0x111", tokenSymbols: ["AI"] },
+    { id: "resolved", author: "@kol", tweetText: "$AI", chain: "Robinhood", contractAddress: "0x111", tokenSymbols: ["$AI"], resolutionStatus: "resolved" },
+  ]);
+
+  assert.deepEqual(compacted.map((signal) => signal.id), ["resolved"]);
 });
 
 test("paginates tweet groups with clamped pages and at most 100 items", () => {

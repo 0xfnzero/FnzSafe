@@ -50,9 +50,13 @@ export function tokenSignalObservation(signal: StoredTwitterSignal): TokenSignal
     : { chain: signal.chain, contractAddress: signal.contractAddress };
 }
 
-function normalizedTokenSymbols(signal: StoredTwitterSignal): Set<string> {
+function normalizedTokenSymbols(
+  signal: Pick<StoredTwitterSignal, "tokenSymbols">,
+  stripRepeatedPrefixes = false,
+): Set<string> {
+  const prefixPattern = stripRepeatedPrefixes ? /^\$+/u : /^\$/u;
   return new Set((signal.tokenSymbols || []).flatMap((value) => {
-    const symbol = value.trim().replace(/^\$/u, "");
+    const symbol = value.trim().replace(prefixPattern, "");
     return /^[A-Za-z0-9][A-Za-z0-9._-]{0,23}$/u.test(symbol) ? [symbol.toUpperCase()] : [];
   }));
 }
@@ -282,10 +286,92 @@ interface GroupableTweetSignal {
   id: string;
   author: string;
   tweetText: string;
+  chain?: string;
+  contractAddress?: string;
+  tokenSymbols?: string[];
   sourceUrl?: string;
   tweetId?: string;
   publishedAt?: string;
   detectedAt?: string;
+  resolutionStatus?: "pending" | "resolved" | "conflicted";
+}
+
+function tweetTokenSignalRichness(signal: GroupableTweetSignal): number {
+  return (signal.contractAddress ? 8 : 0)
+    + (signal.resolutionStatus === "resolved" ? 4 : 0)
+    + (signal.chain && signal.chain !== "Unknown" && signal.chain !== "Unknown EVM" ? 2 : 0);
+}
+
+function preferRicherTweetTokenSignal<T extends GroupableTweetSignal>(left: T, right: T): T {
+  return tweetTokenSignalRichness(right) > tweetTokenSignalRichness(left) ? right : left;
+}
+
+function canonicalTokenSymbols<T extends GroupableTweetSignal>(signal: T): T {
+  const symbols = Array.from(normalizedTokenSymbols(signal, true), (symbol) => `$${symbol}`);
+  if (symbols.length === 0 && !signal.tokenSymbols?.length) return signal;
+  return { ...signal, tokenSymbols: symbols.length > 0 ? symbols : undefined };
+}
+
+/**
+ * Collapses legacy cashtag variants and redundant aggregate rows within one tweet.
+ * Distinct contract addresses remain visible because they can represent a real conflict.
+ */
+export function compactTweetTokenSignals<T extends GroupableTweetSignal>(signals: T[]): T[] {
+  const canonical = signals.map(canonicalTokenSymbols);
+  const atomicByIdentity = new Map<string, { signal: T; index: number }>();
+  const aggregates: Array<{ signal: T; index: number }> = [];
+
+  canonical.forEach((signal, index) => {
+    const symbols = Array.from(normalizedTokenSymbols(signal, true));
+    if (!signal.contractAddress && symbols.length > 1) {
+      aggregates.push({ signal, index });
+      return;
+    }
+    const contractIdentity = signal.contractAddress?.trim().toLowerCase();
+    let identity = `record:${signal.id}`;
+    if (contractIdentity) identity = `contract:${contractIdentity}`;
+    else if (symbols.length === 1) identity = `symbol:${symbols[0]}`;
+    const existing = atomicByIdentity.get(identity);
+    if (!existing) {
+      atomicByIdentity.set(identity, { signal, index });
+      return;
+    }
+    atomicByIdentity.set(identity, {
+      signal: preferRicherTweetTokenSignal(existing.signal, signal),
+      index: existing.index,
+    });
+  });
+
+  const atomic = Array.from(atomicByIdentity.values());
+  const addressedSymbols = new Set(atomic.flatMap(({ signal }) =>
+    signal.contractAddress ? Array.from(normalizedTokenSymbols(signal, true)) : [],
+  ));
+  const withoutCoveredSymbolOnly = atomic.filter(({ signal }) => {
+    if (signal.contractAddress) return true;
+    const [symbol] = Array.from(normalizedTokenSymbols(signal, true));
+    return !symbol || !addressedSymbols.has(symbol);
+  });
+  const coveredSymbols = new Set(withoutCoveredSymbolOnly.flatMap(({ signal }) =>
+    Array.from(normalizedTokenSymbols(signal, true)),
+  ));
+  const compactedAggregates: Array<{ signal: T; index: number }> = [];
+
+  for (const entry of aggregates) {
+    const remaining = Array.from(normalizedTokenSymbols(entry.signal, true))
+      .filter((symbol) => !coveredSymbols.has(symbol));
+    if (remaining.length === 0) continue;
+    const signal = { ...entry.signal, tokenSymbols: remaining.map((symbol) => `$${symbol}`) };
+    compactedAggregates.push({ signal, index: entry.index });
+    remaining.forEach((symbol) => coveredSymbols.add(symbol));
+  }
+
+  return [...withoutCoveredSymbolOnly, ...compactedAggregates]
+    .sort((left, right) =>
+      Number(Boolean(right.signal.contractAddress)) - Number(Boolean(left.signal.contractAddress))
+      || tweetTokenSignalRichness(right.signal) - tweetTokenSignalRichness(left.signal)
+      || left.index - right.index,
+    )
+    .map(({ signal }) => signal);
 }
 
 function tweetSignalTimestamp(signal: GroupableTweetSignal): number {
@@ -406,5 +492,8 @@ export function groupTweetSignalsByTweet<T extends GroupableTweetSignal>(
     }
   }
 
-  return Array.from(groups.values());
+  return Array.from(groups.values(), (group) => ({
+    ...group,
+    signals: compactTweetTokenSignals(group.signals),
+  }));
 }

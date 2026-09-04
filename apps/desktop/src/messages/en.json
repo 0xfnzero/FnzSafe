@@ -466,6 +466,8 @@
       "empty": "No contract addresses or cashtags have been extracted yet.",
       "showMore": "Show more",
       "showLess": "Show less",
+      "showRemainingTokens": "Show {count} more tokens",
+      "collapseTokens": "Collapse tokens",
       "buy": "Buy",
       "openTweet": "Open tweet",
       "scanSuccess": "Extracted {count} tweets with token signals",
