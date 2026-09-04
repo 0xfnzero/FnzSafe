@@ -1760,6 +1760,17 @@ fn with_mobile_keystore_metadata(
         "wallet_name".to_string(),
         serde_json::Value::String(wallet_name.to_string()),
     );
+    metadata.insert(
+        "secret_type".to_string(),
+        serde_json::Value::String(
+            if encrypted_mnemonic.is_some() {
+                "mnemonic"
+            } else {
+                "private_key"
+            }
+            .to_string(),
+        ),
+    );
     if let Some(encrypted_mnemonic) = encrypted_mnemonic {
         metadata.insert(
             "encrypted_mnemonic".to_string(),
@@ -1938,10 +1949,16 @@ pub fn import_mnemonic(req: ImportMnemonicRequest) -> AppServiceResult<WalletKey
 
     let keypair = keypair_from_mnemonic_phrase(&mnemonic, &derivation_path)?;
     let public_key = keypair.pubkey().to_string();
+    let encrypted_mnemonic = KeyManager::encrypt_secret_with_password(&mnemonic, &req.password)
+        .map_err(|message| AppServiceError::mobile(MobileErrorCode::InvalidInput, message))?;
     let keystore_json = KeyManager::keypair_to_encrypted_json(&keypair, &req.password)
         .map_err(|message| AppServiceError::mobile(MobileErrorCode::InvalidInput, message))?;
-    let keystore_json =
-        with_mobile_keystore_metadata(&keystore_json, &name, None, Some(&derivation_path_label))?;
+    let keystore_json = with_mobile_keystore_metadata(
+        &keystore_json,
+        &name,
+        Some(&encrypted_mnemonic),
+        Some(&derivation_path_label),
+    )?;
 
     Ok(WalletKeystore {
         wallet: WalletSummary {
@@ -3070,14 +3087,28 @@ mod tests {
 
     #[test]
     fn wallet_mnemonic_import_creates_unlockable_keystore() {
+        const MNEMONIC: &str =
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
         let imported = import_mnemonic(ImportMnemonicRequest {
             name: "Mnemonic Wallet".to_string(),
-            mnemonic: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
-                .to_string(),
+            mnemonic: MNEMONIC.to_string(),
             derivation_path: None,
             password: "strong-password".to_string(),
         })
         .unwrap();
+
+        let document: serde_json::Value = serde_json::from_str(&imported.keystore_json).unwrap();
+        let metadata = document.get("metadata").unwrap();
+        assert_eq!(metadata.get("secret_type").unwrap(), "mnemonic");
+        let encrypted_mnemonic = metadata
+            .get("encrypted_mnemonic")
+            .and_then(serde_json::Value::as_str)
+            .unwrap();
+        assert_eq!(
+            KeyManager::decrypt_secret_with_password(encrypted_mnemonic, "strong-password")
+                .unwrap(),
+            MNEMONIC
+        );
 
         let unlocked = unlock_wallet(UnlockWalletRequest {
             keystore_json: imported.keystore_json,

@@ -78,6 +78,7 @@ import LanguageSwitcher from '@/components/LanguageSwitcher';
 import { AiSkillMarket } from "@/components/AiSkillMarket";
 import { FieldHelp } from "@/components/FieldHelp";
 import { SavedWalletPicker } from "@/components/SavedWalletPicker";
+import { TwitterTokenList, type ResearchTokenListItem } from "@/components/TwitterTokenList";
 import { SettingsCenterLayout, type SettingsNavigationItem } from "@/components/SettingsCenterLayout";
 import { useSecureKeyboardInput } from "@/hooks/useSecureKeyboardInput";
 import {
@@ -1296,7 +1297,7 @@ interface CapturedTweet {
 type TwitterSignalCaptureStatus = "idle" | "waiting" | "scanning" | "success" | "empty" | "error";
 type TwitterAuthStatus = "unknown" | "authenticated" | "unauthenticated";
 type TwitterCaptureIntent = "auto" | "manual";
-type TwitterMonitorView = "signals" | "kols" | "ai";
+type TwitterMonitorView = "signals" | "tokens" | "kols" | "ai";
 interface TwitterCaptureTabState {
   webviewOpen: boolean;
   loading: boolean;
@@ -1770,7 +1771,8 @@ function parseTweetSignalInputs(
     const sourceIdentity = canonicalTweetSourceIdentity(input.sourceUrl, input.tweetId)
       || `${input.authorHandle ?? input.author ?? ""}:${text}`;
     for (const candidate of candidates) {
-      const tokenIdentity = tweetTokenCandidateIdentity(candidate) || `cashtag:${tokenSymbols.join(",")}`;
+      const candidateSymbols = candidate.tokenSymbols ?? (candidate.address ? [] : tokenSymbols);
+      const tokenIdentity = tweetTokenCandidateIdentity(candidate) || `cashtag:${candidateSymbols.join(",")}`;
       const key = `${candidate.chain}:${tokenIdentity}:${sourceIdentity}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -1779,7 +1781,7 @@ function parseTweetSignalInputs(
         id: shortSignalId(key),
         chain: candidate.chain,
         contractAddress: candidate.address,
-        tokenSymbols: candidate.tokenSymbols ?? (candidate.address ? undefined : tokenSymbols),
+        tokenSymbols: candidateSymbols.length > 0 ? candidateSymbols : undefined,
         author: normalizedHandle
           ? `@${normalizedHandle}`
           : input.author?.trim() || tweetAuthorFromText(text, watchedHandles),
@@ -1875,6 +1877,10 @@ function researchSignalRecordToTweetTokenSignal(record: ResearchSignalRecord): T
 async function loadResearchTweetSignals(): Promise<TweetTokenSignal[]> {
   const records = await invoke<ResearchSignalRecord[]>("research_list_signals");
   return records.map(researchSignalRecordToTweetTokenSignal);
+}
+
+async function loadResearchTokens(): Promise<ResearchTokenListItem[]> {
+  return invoke<ResearchTokenListItem[]>("research_list_tokens");
 }
 
 function twitterKolResearchInput(kol: TwitterKolProfile) {
@@ -3394,6 +3400,9 @@ export default function Home() {
   const [dappBrowserOverlayOpen, setDappBrowserOverlayOpen] = useState(false);
   const [twitterBrowserOverlayOpen, setTwitterBrowserOverlayOpen] = useState(false);
   const [twitterMonitorView, setTwitterMonitorView] = useState<TwitterMonitorView>("signals");
+  const [researchTokens, setResearchTokens] = useState<ResearchTokenListItem[]>([]);
+  const [researchTokensLoading, setResearchTokensLoading] = useState(false);
+  const [researchTokensError, setResearchTokensError] = useState("");
   const [twitterKols, setTwitterKols] = useState<TwitterKolProfile[]>([]);
   const [twitterKolInput, setTwitterKolInput] = useState("");
   const [twitterKolSearch, setTwitterKolSearch] = useState("");
@@ -8871,6 +8880,30 @@ export default function Home() {
       cancelled = true;
     };
   }, [twitterSignalStorageHydrated]);
+
+  const refreshResearchTokens = useCallback(async (refreshMarkets = false) => {
+    if (!isTauriWebview()) {
+      setResearchTokensError(tf("features.twitter-signals.tokensDesktopOnly", "代币数据库需要在桌面客户端中使用"));
+      return;
+    }
+    setResearchTokensLoading(true);
+    setResearchTokensError("");
+    try {
+      const tokens = await loadResearchTokens();
+      setResearchTokens(tokens);
+      if (refreshMarkets && tokens.length > 0) {
+        setResearchTokens(await invoke<ResearchTokenListItem[]>("research_refresh_token_markets"));
+      }
+    } catch (error) {
+      setResearchTokensError(errorMessage(error, tf("features.twitter-signals.tokensLoadFailed", "无法读取代币数据库")));
+    } finally {
+      setResearchTokensLoading(false);
+    }
+  }, [tf]);
+
+  useEffect(() => {
+    if (twitterMonitorView === "tokens") void refreshResearchTokens(true);
+  }, [refreshResearchTokens, twitterMonitorView]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -18667,6 +18700,7 @@ export default function Home() {
             <div className="app-twitter-monitor-tabs flex items-center gap-1 border-b border-white/10 pb-2">
               {([
                 ["signals", tf("features.twitter-signals.signalsView", "代币线索"), Radio],
+                ["tokens", tf("features.twitter-signals.tokensView", "代币列表"), Coins],
                 ["kols", tf("features.twitter-signals.kolView", "KOL"), Users],
                 ["ai", tf("features.twitter-signals.aiView", "AI 研究"), Sparkles],
               ] as const).map(([view, label, Icon]) => (
@@ -18912,7 +18946,7 @@ export default function Home() {
                     return (
                       <article
                         key={signalGroup.key}
-                        className="app-twitter-signal-row group grid grid-cols-[40px_minmax(0,1fr)] gap-x-3 gap-y-2 px-3 py-3 transition-colors hover:bg-white/[0.035] md:px-4 lg:grid-cols-[40px_minmax(320px,1fr)_minmax(300px,max-content)] xl:grid-cols-[40px_minmax(360px,680px)_minmax(360px,1fr)]"
+                        className="app-twitter-signal-row group grid grid-cols-[40px_minmax(0,1fr)] gap-x-3 gap-y-2 px-3 py-3 transition-colors hover:bg-white/[0.035] md:px-4 lg:grid-cols-[40px_minmax(280px,1fr)_minmax(0,480px)] xl:grid-cols-[40px_minmax(360px,680px)_minmax(0,1fr)]"
                       >
                         {authorProfileUrl ? (
                           <SelectableTwitterLink
@@ -19014,12 +19048,14 @@ export default function Home() {
                                 key={tokenSignal.id}
                                 className="app-twitter-token-row flex w-full min-w-0 items-center gap-1 rounded-md border border-white/[0.06] bg-black/15 py-0.5 pl-1.5 pr-1"
                               >
-                                <p className="flex min-w-0 flex-1 items-center gap-1.5 whitespace-nowrap text-[11px] leading-5 text-emerald-200/90">
+                                <p className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden whitespace-nowrap text-[11px] leading-5 text-emerald-200/90">
                                   <span className={`inline-flex shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold leading-4 ${tweetSignalChainClass(tokenSignal.chain)}`}>
                                     {tokenSignal.chain}
                                   </span>
                                   {tokenSymbolLabel && (
-                                    <code className="shrink-0 text-emerald-300">{tokenSymbolLabel}</code>
+                                    <code className="max-w-24 shrink-0 truncate text-emerald-300" title={tokenSymbolLabel}>
+                                      {tokenSymbolLabel}
+                                    </code>
                                   )}
                                   {tokenSignal.contractAddress ? (
                                     <code
@@ -19122,6 +19158,40 @@ export default function Home() {
               )}
             </section>
               </>
+            ) : twitterMonitorView === "tokens" ? (
+              <TwitterTokenList
+                tokens={researchTokens}
+                loading={researchTokensLoading}
+                error={researchTokensError}
+                copiedId={copied}
+                locale={dateTimeLocale}
+                labels={{
+                  search: tf("features.twitter-signals.tokenSearch", "搜索 symbol、名称或合约地址"),
+                  allChains: tf("features.twitter-signals.allChains", "全部链"),
+                  latest: tf("features.twitter-signals.sortLatest", "最近提及"),
+                  mentions: tf("features.twitter-signals.mentionsColumn", "提及次数"),
+                  marketCap: tf("features.twitter-signals.marketCap", "市值"),
+                  volume: tf("features.twitter-signals.volume", "成交量"),
+                  liquidity: tf("features.twitter-signals.liquidity", "流动性"),
+                  token: tf("features.twitter-signals.tokenColumn", "代币 / 合约地址"),
+                  price: tf("features.twitter-signals.price", "价格"),
+                  poolFunds: tf("features.twitter-signals.poolFunds", "池子资金"),
+                  kolMentions: tf("features.twitter-signals.kolMentions", "KOL 提及"),
+                  chain: tf("features.twitter-signals.chainColumn", "链"),
+                  swap: tf("features.twitter-signals.swapColumn", "Swap / DEX"),
+                  updated: tf("features.twitter-signals.updatedColumn", "更新时间"),
+                  empty: tf("features.twitter-signals.tokensEmpty", "还没有已解析合约地址的代币"),
+                  loading: tf("features.twitter-signals.tokensLoading", "正在读取代币数据库..."),
+                  refresh: tf("features.twitter-signals.refreshTokens", "刷新代币列表"),
+                  previousPage: tf("features.twitter-signals.previousPage", "上一页"),
+                  nextPage: tf("features.twitter-signals.nextPage", "下一页"),
+                  copyContract: tf("features.twitter-signals.copyContract", "复制合约地址"),
+                  openMarket: tf("features.twitter-signals.openMarket", "打开交易市场"),
+                }}
+                onRefresh={() => void refreshResearchTokens(true)}
+                onCopy={(address, id) => void copyToClipboard(address, id)}
+                onOpen={openSignalTweet}
+              />
             ) : twitterMonitorView === "kols" ? (
               <section className="app-twitter-monitor-panel overflow-hidden rounded-lg border border-white/10 bg-white/[0.025]">
                 <div className="flex flex-wrap items-end gap-2 border-b border-white/10 px-3 py-3 md:px-4">

@@ -18,6 +18,9 @@ const MAX_INGEST_KOLS: usize = 500;
 const MAX_INGEST_TWEETS: usize = 1_000;
 const MAX_INGEST_SIGNALS: usize = 1_000;
 const MAX_LIST_SIGNALS: usize = 1_000;
+const MAX_LIST_TOKENS: usize = 1_000;
+const MAX_MARKET_REFRESH_TOKENS: usize = 100;
+const MARKET_REFRESH_INTERVAL_MS: i64 = 5 * 60 * 1_000;
 const MAX_SIGNAL_TOKEN_SYMBOLS: usize = 32;
 const MAX_RESOLVE_SIGNALS: usize = 200;
 const MAX_RESOLVE_QUERIES: usize = 24;
@@ -26,6 +29,9 @@ const MAX_RPC_RESPONSE_BYTES: usize = 64 * 1024;
 const MAX_RESOLVER_MARKET_USD: f64 = 1_000_000_000_000_000.0;
 const TOKEN_RESOLUTION_WINDOW_MS: i64 = 7 * 24 * 60 * 60 * 1_000;
 const TOKEN_RESOLUTION_THRESHOLD: f64 = 0.78;
+const PRIORITY_SYMBOL_RESOLUTION_THRESHOLD: f64 = 0.55;
+const PRIORITY_SYMBOL_MIN_LIQUIDITY_USD: f64 = 1_000.0;
+const PRIORITY_SYMBOL_MIN_VOLUME_24H_USD: f64 = 100.0;
 const TOKEN_RESOLUTION_MARGIN: f64 = 0.12;
 const MAX_FUTURE_CAPTURE_SKEW_MS: i64 = 5 * 60 * 1_000;
 const DSH_PROCESS_TIMEOUT: Duration = Duration::from_secs(190);
@@ -102,13 +108,25 @@ pub struct ResearchStore {
 }
 
 impl ResearchStore {
+    #[cfg(test)]
     pub fn new(database_path: PathBuf) -> Result<Self, String> {
+        Self::new_with_legacy(database_path, None)
+    }
+
+    pub fn new_with_legacy(
+        database_path: PathBuf,
+        legacy_database_path: Option<PathBuf>,
+    ) -> Result<Self, String> {
         let store = Self {
             database_path,
             ai_runtime_lock: Arc::new(Mutex::new(())),
         };
         let connection = store.open()?;
         initialize_schema(&connection)?;
+        if let Some(legacy_path) = legacy_database_path {
+            migrate_legacy_research_data(&connection, &legacy_path)?;
+        }
+        reconcile_local_token_resolutions(&connection)?;
         Ok(store)
     }
 
@@ -265,7 +283,7 @@ fn validate_token_resolve_request(request: &ResearchTokenResolveRequest) -> Resu
         if !signal_ids.insert(signal_id) {
             return Err("duplicate token resolution signal ID".to_string());
         }
-        if signal.text.len() > 4_000
+        if exceeds_char_limit(&signal.text, 4_000)
             || signal.chain.len() > 64
             || signal.author_handle.len() > 160
             || signal
@@ -395,6 +413,24 @@ pub struct ResearchTokenSummary {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct ResearchTokenListItem {
+    pub id: i64,
+    pub symbol: String,
+    pub name: Option<String>,
+    pub chain: String,
+    pub contract_address: String,
+    pub price_usd: Option<f64>,
+    pub volume_24h_usd: Option<f64>,
+    pub liquidity_usd: Option<f64>,
+    pub market_cap_usd: Option<f64>,
+    pub market_source: Option<String>,
+    pub market_updated_at_ms: Option<i64>,
+    pub mention_count: i64,
+    pub kol_mention_count: i64,
+    pub latest_mention_at_ms: i64,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct ResearchQueryResult {
     pub mode: String,
     pub answer: String,
@@ -489,6 +525,12 @@ fn open_database(path: &Path) -> Result<Connection, String> {
     }
     let connection = Connection::open(path)
         .map_err(|error| format!("failed to open research database: {error}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|error| format!("failed to secure research database permissions: {error}"))?;
+    }
     connection
         .pragma_update(None, "journal_mode", "WAL")
         .map_err(|error| format!("failed to enable research WAL mode: {error}"))?;
@@ -634,6 +676,10 @@ fn initialize_schema(connection: &Connection) -> Result<(), String> {
                 protected_key BLOB NOT NULL,
                 updated_at_ms INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS research_module_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             "#,
         )
         .map_err(|error| format!("failed to initialize research schema: {error}"))?;
@@ -643,6 +689,111 @@ fn initialize_schema(connection: &Connection) -> Result<(), String> {
         )
         .map_err(|error| format!("failed to initialize research full-text index: {error}"))?;
     Ok(())
+}
+
+fn legacy_research_table_exists(connection: &Connection, table: &str) -> Result<bool, String> {
+    connection
+        .query_row(
+            "SELECT 1 FROM legacy.sqlite_master WHERE type = 'table' AND name = ?1",
+            [table],
+            |_| Ok(()),
+        )
+        .optional()
+        .map(|value| value.is_some())
+        .map_err(|error| format!("failed to inspect legacy research database: {error}"))
+}
+
+fn migrate_legacy_research_data(
+    connection: &Connection,
+    legacy_database_path: &Path,
+) -> Result<(), String> {
+    const MIGRATION_KEY: &str = "legacy-main-database-import-v1";
+    let already_imported = connection
+        .query_row(
+            "SELECT 1 FROM research_module_meta WHERE key = ?1",
+            [MIGRATION_KEY],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(|error| format!("failed to read research migration state: {error}"))?
+        .is_some();
+    if already_imported || !legacy_database_path.is_file() {
+        return Ok(());
+    }
+    let destination_has_data: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM research_tweets LIMIT 1) OR EXISTS(SELECT 1 FROM research_tokens LIMIT 1)",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("failed to inspect research database: {error}"))?;
+    if destination_has_data {
+        connection
+            .execute(
+                "INSERT OR REPLACE INTO research_module_meta (key, value) VALUES (?1, 'skipped-nonempty')",
+                [MIGRATION_KEY],
+            )
+            .map_err(|error| format!("failed to save research migration state: {error}"))?;
+        return Ok(());
+    }
+
+    connection
+        .execute(
+            "ATTACH DATABASE ?1 AS legacy",
+            [legacy_database_path.to_string_lossy().as_ref()],
+        )
+        .map_err(|error| format!("failed to attach legacy research database: {error}"))?;
+    let migration_result = (|| -> Result<(), String> {
+        let copies = [
+            ("research_authors", "INSERT OR IGNORE INTO research_authors (handle, display_name, avatar_url, bio, followers_label, following_label, location, website, joined_label, verified, is_kol, added_at, updated_at) SELECT handle, display_name, avatar_url, bio, followers_label, following_label, location, website, joined_label, verified, is_kol, added_at, updated_at FROM legacy.research_authors"),
+            ("research_tweets", "INSERT OR IGNORE INTO research_tweets (tweet_key, tweet_id, author_handle, author_name, avatar_url, text, content_hash, source_url, published_at, captured_at_ms) SELECT tweet_key, tweet_id, author_handle, author_name, avatar_url, text, content_hash, source_url, published_at, captured_at_ms FROM legacy.research_tweets"),
+            ("research_tokens", "INSERT OR IGNORE INTO research_tokens (id, chain, chain_id, contract_address, normalized_address, symbol, name, decimals, source, confidence, first_seen_at_ms, last_seen_at_ms, verified_at_ms) SELECT id, chain, chain_id, contract_address, normalized_address, symbol, name, decimals, source, confidence, first_seen_at_ms, last_seen_at_ms, verified_at_ms FROM legacy.research_tokens"),
+            ("research_token_mentions", "INSERT OR IGNORE INTO research_token_mentions (id, tweet_key, chain, token_key, contract_address, token_symbol, opinion, confidence, captured_at_ms) SELECT id, tweet_key, chain, token_key, contract_address, token_symbol, opinion, confidence, captured_at_ms FROM legacy.research_token_mentions"),
+            ("research_token_resolutions", "INSERT OR IGNORE INTO research_token_resolutions (mention_id, token_id, status, confidence, method, evidence_json, resolved_at_ms) SELECT mention_id, token_id, status, confidence, method, evidence_json, resolved_at_ms FROM legacy.research_token_resolutions"),
+            ("research_token_resolution_events", "INSERT OR IGNORE INTO research_token_resolution_events (id, mention_id, old_token_id, new_token_id, reason, confidence, created_at_ms) SELECT id, mention_id, old_token_id, new_token_id, reason, confidence, created_at_ms FROM legacy.research_token_resolution_events"),
+            ("research_scan_cursors", "INSERT OR IGNORE INTO research_scan_cursors (source_url, last_tweet_id, last_scanned_at_ms, seen_count, backfill_complete) SELECT source_url, last_tweet_id, last_scanned_at_ms, seen_count, backfill_complete FROM legacy.research_scan_cursors"),
+            ("research_market_snapshots", "INSERT OR IGNORE INTO research_market_snapshots (chain, token_key, captured_at_ms, price_usd, volume_24h_usd, liquidity_usd, market_cap_usd, holders, source) SELECT chain, token_key, captured_at_ms, price_usd, volume_24h_usd, liquidity_usd, market_cap_usd, holders, source FROM legacy.research_market_snapshots"),
+            ("research_embeddings", "INSERT OR IGNORE INTO research_embeddings (content_hash, model, dimensions, vector, created_at_ms) SELECT content_hash, model, dimensions, vector, created_at_ms FROM legacy.research_embeddings"),
+            ("research_wallet_action_audit", "INSERT OR IGNORE INTO research_wallet_action_audit (id, created_at_ms, action, chain, token_key, request_json, status, transaction_signature) SELECT id, created_at_ms, action, chain, token_key, request_json, status, transaction_signature FROM legacy.research_wallet_action_audit"),
+            ("research_ai_credentials", "INSERT OR IGNORE INTO research_ai_credentials (provider, protected_key, updated_at_ms) SELECT provider, protected_key, updated_at_ms FROM legacy.research_ai_credentials"),
+        ];
+        connection
+            .execute_batch("BEGIN IMMEDIATE")
+            .map_err(|error| format!("failed to begin research migration: {error}"))?;
+        for (table, sql) in copies {
+            if legacy_research_table_exists(connection, table)? {
+                connection
+                    .execute(sql, [])
+                    .map_err(|error| format!("failed to migrate {table}: {error}"))?;
+            }
+        }
+        connection
+            .execute("DELETE FROM research_tweets_fts", [])
+            .map_err(|error| format!("failed to reset migrated tweet index: {error}"))?;
+        connection
+            .execute(
+                "INSERT INTO research_tweets_fts (tweet_key, author_handle, text) SELECT tweet_key, author_handle, text FROM research_tweets",
+                [],
+            )
+            .map_err(|error| format!("failed to rebuild migrated tweet index: {error}"))?;
+        connection
+            .execute(
+                "INSERT OR REPLACE INTO research_module_meta (key, value) VALUES (?1, 'copied')",
+                [MIGRATION_KEY],
+            )
+            .map_err(|error| format!("failed to save research migration state: {error}"))?;
+        connection
+            .execute_batch("COMMIT")
+            .map_err(|error| format!("failed to commit research migration: {error}"))?;
+        Ok(())
+    })();
+    if migration_result.is_err() {
+        let _ = connection.execute_batch("ROLLBACK");
+    }
+    let detach_result = connection
+        .execute("DETACH DATABASE legacy", [])
+        .map_err(|error| format!("failed to detach legacy research database: {error}"));
+    migration_result.and(detach_result.map(|_| ()))
 }
 
 fn normalize_handle(value: &str) -> Option<String> {
@@ -879,6 +1030,10 @@ fn clipped(value: &str, limit: usize) -> String {
     value.trim().chars().take(limit).collect()
 }
 
+fn exceeds_char_limit(value: &str, limit: usize) -> bool {
+    value.chars().take(limit.saturating_add(1)).count() > limit
+}
+
 fn optional_clipped(value: Option<&str>, limit: usize) -> Option<String> {
     let value = clipped(value.unwrap_or_default(), limit);
     (!value.is_empty()).then_some(value)
@@ -1073,6 +1228,15 @@ fn chain_priority_bonus(chain_id: Option<u64>) -> f64 {
     }
 }
 
+fn resolver_chain_priority(chain: &str) -> u8 {
+    match normalize_research_chain(chain).as_str() {
+        "Robinhood" => 0,
+        "BSC" => 1,
+        "Ethereum" => 2,
+        _ => 3,
+    }
+}
+
 struct ResearchTokenUpsert<'a> {
     chain: &'a str,
     chain_id: Option<u64>,
@@ -1156,6 +1320,47 @@ fn upsert_research_token(
             |row| row.get(0),
         )
         .map_err(|error| format!("failed to read saved research token: {error}"))
+}
+
+fn available_market_value(value: f64) -> Option<f64> {
+    (value.is_finite() && value > 0.0).then_some(value)
+}
+
+fn save_market_snapshot(
+    connection: &Connection,
+    candidate: &ResolverCandidate,
+    captured_at_ms: i64,
+) -> Result<(), String> {
+    if !candidate.from_dex {
+        return Ok(());
+    }
+    connection
+        .execute(
+            r#"
+            INSERT INTO research_market_snapshots (
+                chain, token_key, captured_at_ms, price_usd, volume_24h_usd,
+                liquidity_usd, market_cap_usd, source
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            ON CONFLICT(chain, token_key, captured_at_ms) DO UPDATE SET
+                price_usd = COALESCE(excluded.price_usd, research_market_snapshots.price_usd),
+                volume_24h_usd = COALESCE(excluded.volume_24h_usd, research_market_snapshots.volume_24h_usd),
+                liquidity_usd = COALESCE(excluded.liquidity_usd, research_market_snapshots.liquidity_usd),
+                market_cap_usd = COALESCE(excluded.market_cap_usd, research_market_snapshots.market_cap_usd),
+                source = COALESCE(excluded.source, research_market_snapshots.source)
+            "#,
+            params![
+                normalize_research_chain(&candidate.chain),
+                contract_token_key(&candidate.address),
+                captured_at_ms,
+                available_market_value(candidate.price_usd),
+                available_market_value(candidate.volume_24h_usd),
+                available_market_value(candidate.liquidity_usd),
+                available_market_value(candidate.market_cap_usd),
+                candidate.market_source.as_deref().or(Some("DexScreener")),
+            ],
+        )
+        .map_err(|error| format!("failed to save research market snapshot: {error}"))?;
+    Ok(())
 }
 
 fn save_token_resolution(
@@ -1361,7 +1566,7 @@ fn validate_ingest_request(request: &ResearchIngestRequest) -> Result<(), String
             Some(&tweet.tweet_id),
             tweet.source_url.as_deref(),
         )?;
-        if tweet.text.trim().is_empty() || tweet.text.len() > 4_000 {
+        if tweet.text.trim().is_empty() || exceeds_char_limit(&tweet.text, 4_000) {
             return Err("invalid tweet text".to_string());
         }
     }
@@ -1387,7 +1592,7 @@ fn validate_ingest_request(request: &ResearchIngestRequest) -> Result<(), String
             signal.tweet_id.as_deref(),
             signal.source_url.as_deref(),
         )?;
-        if signal.text.trim().is_empty() || signal.text.len() > 4_000 {
+        if signal.text.trim().is_empty() || exceeds_char_limit(&signal.text, 4_000) {
             return Err("invalid token signal text".to_string());
         }
         validate_signal_identity(&signal.chain, signal.contract_address.as_deref())?;
@@ -1601,6 +1806,9 @@ struct DexScreenerPair {
     liquidity: DexScreenerLiquidity,
     #[serde(default)]
     volume: DexScreenerVolume,
+    price_usd: Option<String>,
+    #[serde(default)]
+    dex_id: String,
     market_cap: Option<f64>,
     fdv: Option<f64>,
     pair_created_at: Option<i64>,
@@ -1675,12 +1883,16 @@ struct ResolverCandidate {
     address: String,
     symbol: String,
     name: Option<String>,
+    price_usd: f64,
     liquidity_usd: f64,
     volume_24h_usd: f64,
     market_cap_usd: f64,
+    market_source: Option<String>,
     pair_created_at_ms: Option<i64>,
     from_dex: bool,
     from_rpc: bool,
+    confirmed_mentions: usize,
+    latest_confirmed_at_ms: Option<i64>,
     symbol_conflicted: bool,
     query_incomplete: bool,
     evidence: Vec<ResolverEvidence>,
@@ -1787,9 +1999,17 @@ async fn fetch_dex_candidates(
         } else {
             normalized_market_usd(pair.fdv)
         };
-        for (token, market_cap_usd) in [
-            (&pair.base_token, base_market_cap_usd),
-            (&pair.quote_token, 0.0),
+        for (token, market_cap_usd, price_usd) in [
+            (
+                &pair.base_token,
+                base_market_cap_usd,
+                pair.price_usd
+                    .as_deref()
+                    .and_then(|value| value.parse::<f64>().ok())
+                    .map(|value| normalized_market_usd(Some(value)))
+                    .unwrap_or_default(),
+            ),
+            (&pair.quote_token, 0.0, 0.0),
         ] {
             let valid_address = if chain == "Solana" {
                 is_solana_token_address(&token.address)
@@ -1819,19 +2039,31 @@ async fn fetch_dex_candidates(
                     address: clipped(&token.address, 128),
                     symbol: normalized_symbol.clone(),
                     name: optional_clipped(Some(&token.name), 160),
+                    price_usd,
                     liquidity_usd: 0.0,
                     volume_24h_usd: 0.0,
                     market_cap_usd: 0.0,
+                    market_source: optional_clipped(Some(&pair.dex_id), 64),
                     pair_created_at_ms: pair.pair_created_at,
                     from_dex: true,
                     from_rpc: false,
+                    confirmed_mentions: 0,
+                    latest_confirmed_at_ms: None,
                     symbol_conflicted: false,
                     query_incomplete: false,
                     evidence: Vec::new(),
                 });
-            candidate.liquidity_usd = candidate
-                .liquidity_usd
-                .max(normalized_market_usd(pair.liquidity.usd));
+            let pair_liquidity_usd = normalized_market_usd(pair.liquidity.usd);
+            if pair_liquidity_usd >= candidate.liquidity_usd {
+                candidate.market_source = optional_clipped(Some(&pair.dex_id), 64)
+                    .or_else(|| candidate.market_source.clone());
+                if price_usd > 0.0 {
+                    candidate.price_usd = price_usd;
+                }
+            } else if candidate.price_usd == 0.0 && price_usd > 0.0 {
+                candidate.price_usd = price_usd;
+            }
+            candidate.liquidity_usd = candidate.liquidity_usd.max(pair_liquidity_usd);
             candidate.volume_24h_usd = (candidate.volume_24h_usd
                 + normalized_market_usd(pair.volume.h24))
             .min(MAX_RESOLVER_MARKET_USD);
@@ -1972,12 +2204,16 @@ async fn fetch_priority_rpc_candidate(
         address: address.to_string(),
         symbol,
         name,
+        price_usd: 0.0,
         liquidity_usd: 0.0,
         volume_24h_usd: 0.0,
         market_cap_usd: 0.0,
+        market_source: None,
         pair_created_at_ms: None,
         from_dex: false,
         from_rpc: true,
+        confirmed_mentions: 0,
+        latest_confirmed_at_ms: None,
         symbol_conflicted: false,
         query_incomplete: false,
         evidence: Vec::new(),
@@ -2116,9 +2352,40 @@ fn load_local_resolver_candidates(
     let mut statement = connection
         .prepare(
             r#"
+            WITH resolution_stats AS (
+                SELECT token_id,
+                       COUNT(*) AS confirmed_mentions,
+                       MAX(resolved_at_ms) AS latest_confirmed_at_ms
+                FROM research_token_resolutions
+                WHERE status = 'resolved'
+                  AND token_id IS NOT NULL
+                  AND method != 'local-catalog'
+                GROUP BY token_id
+            ),
+            latest_market AS (
+                SELECT market.chain, market.token_key, market.price_usd,
+                       market.volume_24h_usd, market.liquidity_usd,
+                       market.market_cap_usd, market.source
+                FROM research_market_snapshots market
+                JOIN (
+                    SELECT chain, token_key, MAX(captured_at_ms) AS captured_at_ms
+                    FROM research_market_snapshots
+                    GROUP BY chain, token_key
+                ) latest
+                  ON latest.chain = market.chain
+                 AND latest.token_key = market.token_key
+                 AND latest.captured_at_ms = market.captured_at_ms
+            )
             SELECT rt.id, rt.chain, rt.chain_id, rt.contract_address, rt.symbol, rt.name, rt.source,
-                   t.author_handle, m.tweet_key, m.captured_at_ms
+                   t.author_handle, m.tweet_key, m.captured_at_ms,
+                   COALESCE(stats.confirmed_mentions, 0), stats.latest_confirmed_at_ms,
+                   market.price_usd, market.volume_24h_usd, market.liquidity_usd,
+                   market.market_cap_usd, market.source
             FROM research_tokens rt
+            LEFT JOIN resolution_stats stats ON stats.token_id = rt.id
+            LEFT JOIN latest_market market
+              ON market.chain = rt.chain
+             AND market.token_key = rt.normalized_address
             LEFT JOIN research_token_resolutions bound
               ON bound.token_id = rt.id
              AND bound.status = 'resolved'
@@ -2145,13 +2412,37 @@ fn load_local_resolver_candidates(
                 row.get::<_, Option<String>>(7)?,
                 row.get::<_, Option<String>>(8)?,
                 row.get::<_, Option<i64>>(9)?,
+                row.get::<_, i64>(10)?,
+                row.get::<_, Option<i64>>(11)?,
+                row.get::<_, Option<f64>>(12)?,
+                row.get::<_, Option<f64>>(13)?,
+                row.get::<_, Option<f64>>(14)?,
+                row.get::<_, Option<f64>>(15)?,
+                row.get::<_, Option<String>>(16)?,
             ))
         })
         .map_err(|error| format!("failed to query local token candidates: {error}"))?;
     let mut candidates = HashMap::<(String, String), ResolverCandidate>::new();
     for row in rows {
-        let (token_id, chain, chain_id, address, symbol, name, source, author, tweet_key, at) =
-            row.map_err(|error| format!("failed to read local token candidate: {error}"))?;
+        let (
+            token_id,
+            chain,
+            chain_id,
+            address,
+            symbol,
+            name,
+            source,
+            author,
+            tweet_key,
+            at,
+            confirmed_mentions,
+            latest_confirmed_at_ms,
+            price_usd,
+            volume_24h_usd,
+            liquidity_usd,
+            market_cap_usd,
+            market_source,
+        ) = row.map_err(|error| format!("failed to read local token candidate: {error}"))?;
         let candidate = candidates
             .entry((chain.clone(), contract_token_key(&address)))
             .or_insert_with(|| ResolverCandidate {
@@ -2161,12 +2452,17 @@ fn load_local_resolver_candidates(
                 address,
                 symbol,
                 name,
-                liquidity_usd: 0.0,
-                volume_24h_usd: 0.0,
-                market_cap_usd: 0.0,
+                price_usd: normalized_market_usd(price_usd),
+                liquidity_usd: normalized_market_usd(liquidity_usd),
+                volume_24h_usd: normalized_market_usd(volume_24h_usd),
+                market_cap_usd: normalized_market_usd(market_cap_usd),
+                market_source,
                 pair_created_at_ms: None,
                 from_dex: false,
                 from_rpc: source == "chain-rpc",
+                confirmed_mentions: usize::try_from(confirmed_mentions.max(0))
+                    .unwrap_or(usize::MAX),
+                latest_confirmed_at_ms,
                 symbol_conflicted: false,
                 query_incomplete: false,
                 evidence: Vec::new(),
@@ -2214,14 +2510,34 @@ fn merge_resolver_candidates(
         }
         entry.from_dex |= candidate.from_dex;
         entry.from_rpc |= candidate.from_rpc;
+        entry.confirmed_mentions = entry.confirmed_mentions.max(candidate.confirmed_mentions);
+        entry.latest_confirmed_at_ms = entry
+            .latest_confirmed_at_ms
+            .max(candidate.latest_confirmed_at_ms);
         entry.query_incomplete |= candidate.query_incomplete;
+        if candidate.price_usd > 0.0 {
+            entry.price_usd = candidate.price_usd;
+        }
         entry.liquidity_usd = entry.liquidity_usd.max(candidate.liquidity_usd);
         entry.volume_24h_usd = entry.volume_24h_usd.max(candidate.volume_24h_usd);
         entry.market_cap_usd = entry.market_cap_usd.max(candidate.market_cap_usd);
+        entry.market_source = candidate
+            .market_source
+            .clone()
+            .or_else(|| entry.market_source.clone());
         entry.name = entry.name.clone().or_else(|| candidate.name.clone());
         entry.evidence.extend(candidate.evidence.clone());
     }
+    for candidate in merged.values_mut() {
+        if candidate_is_locally_confirmed(candidate) {
+            candidate.query_incomplete = false;
+        }
+    }
     merged.into_values().collect()
+}
+
+fn candidate_is_locally_confirmed(candidate: &ResolverCandidate) -> bool {
+    candidate.token_id.is_some() && candidate.confirmed_mentions > 0
 }
 
 fn resolver_candidate_matches_signal(
@@ -2316,6 +2632,23 @@ fn resolver_candidate_score(
     if evidence_authors.len() >= 2 {
         score += 0.15;
     }
+    if !address_query && candidate_is_locally_confirmed(candidate) {
+        score += 0.45;
+        if candidate.confirmed_mentions >= 2 {
+            score += 0.04;
+        }
+        if candidate.confirmed_mentions >= 5 {
+            score += 0.03;
+        }
+        if candidate
+            .latest_confirmed_at_ms
+            .is_some_and(|confirmed_at| {
+                observed_at.saturating_sub(confirmed_at) <= 30 * 24 * 60 * 60 * 1_000
+            })
+        {
+            score += 0.03;
+        }
+    }
     score += resolver_market_activity_score(candidate, observed_at);
     score += chain_priority_bonus(candidate.chain_id);
     score.min(1.0)
@@ -2394,9 +2727,13 @@ fn resolver_market_activity_score(candidate: &ResolverCandidate, observed_at_ms:
 
 fn sort_ranked_candidates(ranked: &mut [(&ResolverCandidate, f64)]) {
     ranked.sort_by(|left, right| {
-        right
-            .1
-            .total_cmp(&left.1)
+        candidate_resolution_priority(left.0)
+            .cmp(&candidate_resolution_priority(right.0))
+            .then_with(|| right.1.total_cmp(&left.1))
+            .then_with(|| right.0.volume_24h_usd.total_cmp(&left.0.volume_24h_usd))
+            .then_with(|| right.0.liquidity_usd.total_cmp(&left.0.liquidity_usd))
+            .then_with(|| right.0.market_cap_usd.total_cmp(&left.0.market_cap_usd))
+            .then_with(|| right.0.pair_created_at_ms.cmp(&left.0.pair_created_at_ms))
             .then_with(|| left.0.chain.cmp(&right.0.chain))
             .then_with(|| {
                 contract_token_key(&left.0.address).cmp(&contract_token_key(&right.0.address))
@@ -2405,11 +2742,119 @@ fn sort_ranked_candidates(ranked: &mut [(&ResolverCandidate, f64)]) {
     });
 }
 
-fn candidate_clears_resolution(candidate: &ResolverCandidate, score: f64, runner_up: f64) -> bool {
-    !candidate.symbol_conflicted
-        && !candidate.query_incomplete
-        && score >= TOKEN_RESOLUTION_THRESHOLD
-        && score - runner_up >= TOKEN_RESOLUTION_MARGIN
+fn candidate_resolution_priority(candidate: &ResolverCandidate) -> (u8, u8) {
+    (
+        u8::from(!candidate_is_locally_confirmed(candidate)),
+        resolver_chain_priority(&candidate.chain),
+    )
+}
+
+fn rank_candidates_for_signal<'a>(
+    signal: &ResearchTokenResolveSignalInput,
+    candidates: &'a [ResolverCandidate],
+) -> Vec<(&'a ResolverCandidate, f64)> {
+    let matching = candidates
+        .iter()
+        .filter(|candidate| resolver_candidate_matches_signal(signal, candidate))
+        .collect::<Vec<_>>();
+    let mut candidates_per_priority = HashMap::<(u8, u8), usize>::new();
+    for candidate in &matching {
+        *candidates_per_priority
+            .entry(candidate_resolution_priority(candidate))
+            .or_default() += 1;
+    }
+    let mut ranked = matching
+        .into_iter()
+        .map(|candidate| {
+            let candidate_count = candidates_per_priority
+                .get(&candidate_resolution_priority(candidate))
+                .copied()
+                .unwrap_or_default();
+            (
+                candidate,
+                resolver_candidate_score(signal, candidate, candidate_count),
+            )
+        })
+        .filter(|(_, score)| *score > 0.0)
+        .collect::<Vec<_>>();
+    sort_ranked_candidates(&mut ranked);
+    ranked
+}
+
+fn candidate_meets_resolution_requirements(
+    query: &ResolverQuery,
+    candidate: &ResolverCandidate,
+) -> bool {
+    if candidate.symbol_conflicted || candidate.query_incomplete {
+        return false;
+    }
+    if matches!(query, ResolverQuery::Symbol(_)) && candidate_is_locally_confirmed(candidate) {
+        return true;
+    }
+    if matches!(query, ResolverQuery::Symbol(_)) && resolver_chain_priority(&candidate.chain) < 3 {
+        return candidate.from_dex
+            && candidate.liquidity_usd >= PRIORITY_SYMBOL_MIN_LIQUIDITY_USD
+            && candidate.volume_24h_usd >= PRIORITY_SYMBOL_MIN_VOLUME_24H_USD;
+    }
+    true
+}
+
+fn candidate_clears_resolution(
+    query: &ResolverQuery,
+    candidate: &ResolverCandidate,
+    score: f64,
+    runner_up: f64,
+) -> bool {
+    if !candidate_meets_resolution_requirements(query, candidate) {
+        return false;
+    }
+    if matches!(query, ResolverQuery::Symbol(_)) && candidate_is_locally_confirmed(candidate) {
+        return score >= TOKEN_RESOLUTION_THRESHOLD && score - runner_up >= TOKEN_RESOLUTION_MARGIN;
+    }
+    if matches!(query, ResolverQuery::Symbol(_)) && resolver_chain_priority(&candidate.chain) < 3 {
+        return score >= PRIORITY_SYMBOL_RESOLUTION_THRESHOLD;
+    }
+    score >= TOKEN_RESOLUTION_THRESHOLD && score - runner_up >= TOKEN_RESOLUTION_MARGIN
+}
+
+fn select_ranked_resolution_candidate<'a>(
+    query: &ResolverQuery,
+    ranked: &[(&'a ResolverCandidate, f64)],
+) -> Option<(&'a ResolverCandidate, f64, f64)> {
+    let mut group_start = 0;
+    while group_start < ranked.len() {
+        let priority = candidate_resolution_priority(ranked[group_start].0);
+        let group_end = ranked[group_start..]
+            .iter()
+            .position(|(candidate, _)| candidate_resolution_priority(candidate) != priority)
+            .map(|offset| group_start + offset)
+            .unwrap_or(ranked.len());
+        let mut eligible = ranked[group_start..group_end]
+            .iter()
+            .copied()
+            .filter(|(candidate, _)| candidate_meets_resolution_requirements(query, candidate));
+        if let Some((candidate, score)) = eligible.next() {
+            let runner_up = eligible.next().map(|(_, score)| score).unwrap_or_default();
+            if candidate_clears_resolution(query, candidate, score, runner_up) {
+                return Some((candidate, score, runner_up));
+            }
+            if candidate_is_locally_confirmed(candidate) {
+                return None;
+            }
+        }
+        group_start = group_end;
+    }
+    None
+}
+
+fn resolves_from_local_catalog(
+    signal: &ResearchTokenResolveSignalInput,
+    query: &ResolverQuery,
+    candidates: &[ResolverCandidate],
+) -> bool {
+    let ranked = rank_candidates_for_signal(signal, candidates);
+    select_ranked_resolution_candidate(query, &ranked)
+        .is_some_and(|(candidate, _, _)| candidate_is_locally_confirmed(candidate))
 }
 
 fn mention_ids_for_signal(
@@ -2484,7 +2929,9 @@ fn reconcile_local_token_resolutions(connection: &Connection) -> Result<(), Stri
 
     let candidates = load_local_resolver_candidates(connection)?
         .into_iter()
-        .filter(|candidate| !candidate.evidence.is_empty())
+        .filter(|candidate| {
+            candidate_is_locally_confirmed(candidate) || !candidate.evidence.is_empty()
+        })
         .collect::<Vec<_>>();
     if candidates.is_empty() {
         return Ok(());
@@ -2544,42 +2991,36 @@ fn reconcile_local_token_resolutions(connection: &Connection) -> Result<(), Stri
         if matching.is_empty() {
             continue;
         }
-        let mut ranked = matching
-            .iter()
-            .map(|candidate| {
-                (
-                    *candidate,
-                    resolver_candidate_score(&signal, candidate, matching.len()),
-                )
-            })
-            .filter(|(_, score)| *score > 0.0)
-            .collect::<Vec<_>>();
-        sort_ranked_candidates(&mut ranked);
-        let Some((best, score)) = ranked.first().copied() else {
+        let local_matching = matching.into_iter().cloned().collect::<Vec<_>>();
+        let ranked = rank_candidates_for_signal(&signal, &local_matching);
+        let query = ResolverQuery::Symbol(symbol);
+        let Some((best, score, _)) = select_ranked_resolution_candidate(&query, &ranked) else {
+            if ranked.len() > 1 {
+                save_token_resolution(
+                    connection,
+                    mention_id,
+                    None,
+                    "conflicted",
+                    ranked.first().map(|item| item.1).unwrap_or_default(),
+                    "local-catalog-conflict",
+                    None,
+                )?;
+            }
             continue;
         };
-        let runner_up = ranked.get(1).map(|item| item.1).unwrap_or_default();
-        if score >= TOKEN_RESOLUTION_THRESHOLD && score - runner_up >= TOKEN_RESOLUTION_MARGIN {
-            save_token_resolution(
-                connection,
-                mention_id,
-                best.token_id,
-                "resolved",
-                score,
-                "tweet-evidence",
-                None,
-            )?;
-        } else if ranked.len() > 1 {
-            save_token_resolution(
-                connection,
-                mention_id,
-                None,
-                "conflicted",
-                score,
-                "tweet-evidence-conflict",
-                None,
-            )?;
-        }
+        save_token_resolution(
+            connection,
+            mention_id,
+            best.token_id,
+            "resolved",
+            score,
+            if candidate_is_locally_confirmed(best) {
+                "local-catalog"
+            } else {
+                "tweet-evidence"
+            },
+            None,
+        )?;
     }
     Ok(())
 }
@@ -2590,11 +3031,18 @@ pub async fn research_resolve_tokens(
     request: ResearchTokenResolveRequest,
 ) -> Result<ResearchTokenResolveResult, String> {
     validate_token_resolve_request(&request)?;
+    let initial_local_candidates = {
+        let connection = store.open()?;
+        initialize_schema(&connection)?;
+        load_local_resolver_candidates(&connection)?
+    };
     let mut queries = Vec::<ResolverQuery>::new();
     let mut query_keys = HashSet::new();
     for signal in &request.signals {
         if let Some(query) = resolver_query_for_signal(signal) {
-            if query_keys.insert(query.key()) {
+            if !resolves_from_local_catalog(signal, &query, &initial_local_candidates)
+                && query_keys.insert(query.key())
+            {
                 queries.push(query);
             }
         }
@@ -2663,6 +3111,7 @@ pub async fn research_resolve_tokens(
                     observed_at_ms: observed_at,
                 },
             )?);
+            save_market_snapshot(&transaction, candidate, observed_at)?;
         }
     }
 
@@ -2706,29 +3155,30 @@ pub async fn research_resolve_tokens(
             .map(Vec::as_slice)
             .unwrap_or(&[]);
         let candidates = merge_resolver_candidates(&relevant_local, external);
-        let matching = candidates
-            .iter()
-            .filter(|candidate| resolver_candidate_matches_signal(signal, candidate))
-            .collect::<Vec<_>>();
-        let mut ranked = matching
-            .iter()
-            .map(|candidate| {
-                (
-                    *candidate,
-                    resolver_candidate_score(signal, candidate, matching.len()),
-                )
+        let ranked = rank_candidates_for_signal(signal, &candidates);
+        let selected = select_ranked_resolution_candidate(&query, &ranked);
+        let best = selected
+            .map(|(candidate, score, _)| (candidate, score))
+            .or_else(|| ranked.first().copied());
+        let runner_up = selected
+            .map(|(_, _, score)| score)
+            .or_else(|| {
+                ranked.first().and_then(|(candidate, _)| {
+                    let priority = candidate_resolution_priority(candidate);
+                    ranked
+                        .iter()
+                        .skip(1)
+                        .find(|(candidate, _)| candidate_resolution_priority(candidate) == priority)
+                        .map(|(_, score)| *score)
+                })
             })
-            .filter(|(_, score)| *score > 0.0)
-            .collect::<Vec<_>>();
-        sort_ranked_candidates(&mut ranked);
-        let best = ranked.first().copied();
-        let runner_up = ranked.get(1).map(|item| item.1).unwrap_or_default();
-        let resolved = best.is_some_and(|(candidate, score)| {
-            candidate_clears_resolution(candidate, score, runner_up)
-        });
+            .unwrap_or_default();
+        let resolved = selected.is_some();
         let (status, confidence, source) = match best {
             Some((candidate, score)) if resolved => {
-                let method = if !candidate.evidence.is_empty() && candidate.from_dex {
+                let method = if candidate_is_locally_confirmed(candidate) {
+                    "local-catalog"
+                } else if !candidate.evidence.is_empty() && candidate.from_dex {
                     "tweet-evidence+dexscreener"
                 } else if !candidate.evidence.is_empty() && candidate.from_rpc {
                     "tweet-evidence+chain-rpc"
@@ -2745,6 +3195,8 @@ pub async fn research_resolve_tokens(
                     "volume_24h_usd": candidate.volume_24h_usd,
                     "market_cap_usd": candidate.market_cap_usd,
                     "chain_priority": chain_priority_bonus(candidate.chain_id),
+                    "confirmed_mentions": candidate.confirmed_mentions,
+                    "latest_confirmed_at_ms": candidate.latest_confirmed_at_ms,
                 });
                 if let Some(token_id) = candidate.token_id {
                     let resolved_symbol = symbol.as_deref().unwrap_or(&candidate.symbol);
@@ -2790,7 +3242,11 @@ pub async fn research_resolve_tokens(
             && (external_failed
                 || matches!(
                     source,
-                    "no-candidate" | "metadata-conflict" | "resolver-incomplete"
+                    "no-candidate"
+                        | "metadata-conflict"
+                        | "resolver-incomplete"
+                        | "candidate-ranking"
+                        | "symbol-or-chain-conflict"
                 ));
         let unresolved_symbol =
             symbol.or_else(|| best.map(|(candidate, _)| candidate.symbol.clone()));
@@ -3142,6 +3598,171 @@ pub fn research_list_signals(
     let connection = store.open()?;
     initialize_schema(&connection)?;
     list_recent_signals(&connection, now_ms())
+}
+
+fn list_research_tokens(connection: &Connection) -> Result<Vec<ResearchTokenListItem>, String> {
+    let mut statement = connection
+        .prepare(
+            r#"
+            WITH mention_stats AS (
+                SELECT rr.token_id,
+                       COUNT(DISTINCT m.tweet_key) AS mention_count,
+                       COUNT(DISTINCT CASE WHEN a.is_kol = 1 THEN m.tweet_key END) AS kol_mention_count,
+                       MAX(COALESCE(CAST(strftime('%s', t.published_at) AS INTEGER) * 1000,
+                                    m.captured_at_ms)) AS latest_mention_at_ms
+                FROM research_token_resolutions rr
+                JOIN research_token_mentions m ON m.id = rr.mention_id
+                JOIN research_tweets t ON t.tweet_key = m.tweet_key
+                JOIN research_authors a ON a.handle = t.author_handle
+                WHERE rr.status = 'resolved' AND rr.token_id IS NOT NULL
+                GROUP BY rr.token_id
+            )
+            SELECT rt.id, COALESCE(rt.symbol, ''), rt.name, rt.chain, rt.contract_address,
+                   market.price_usd, market.volume_24h_usd, market.liquidity_usd,
+                   market.market_cap_usd, market.source, market.captured_at_ms,
+                   stats.mention_count, stats.kol_mention_count, stats.latest_mention_at_ms
+            FROM mention_stats stats
+            JOIN research_tokens rt ON rt.id = stats.token_id
+            LEFT JOIN research_market_snapshots market
+              ON market.chain = rt.chain
+             AND market.token_key = rt.normalized_address
+             AND market.captured_at_ms = (
+                 SELECT MAX(latest.captured_at_ms)
+                 FROM research_market_snapshots latest
+                 WHERE latest.chain = rt.chain
+                   AND latest.token_key = rt.normalized_address
+             )
+            WHERE rt.contract_address != ''
+            ORDER BY stats.latest_mention_at_ms DESC, stats.mention_count DESC, rt.id DESC
+            LIMIT ?1
+            "#,
+        )
+        .map_err(|error| format!("failed to prepare research token list: {error}"))?;
+    let tokens = statement
+        .query_map([MAX_LIST_TOKENS as i64], |row| {
+            Ok(ResearchTokenListItem {
+                id: row.get(0)?,
+                symbol: row.get(1)?,
+                name: row.get(2)?,
+                chain: row.get(3)?,
+                contract_address: row.get(4)?,
+                price_usd: row.get(5)?,
+                volume_24h_usd: row.get(6)?,
+                liquidity_usd: row.get(7)?,
+                market_cap_usd: row.get(8)?,
+                market_source: row.get(9)?,
+                market_updated_at_ms: row.get(10)?,
+                mention_count: row.get(11)?,
+                kol_mention_count: row.get(12)?,
+                latest_mention_at_ms: row.get(13)?,
+            })
+        })
+        .map_err(|error| format!("failed to query research token list: {error}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("failed to read research token list: {error}"))?;
+    Ok(tokens)
+}
+
+#[tauri::command]
+pub fn research_list_tokens(
+    store: tauri::State<'_, ResearchStore>,
+) -> Result<Vec<ResearchTokenListItem>, String> {
+    let connection = store.open()?;
+    initialize_schema(&connection)?;
+    list_research_tokens(&connection)
+}
+
+#[tauri::command]
+pub async fn research_refresh_token_markets(
+    store: tauri::State<'_, ResearchStore>,
+) -> Result<Vec<ResearchTokenListItem>, String> {
+    let token_queries = {
+        let connection = store.open()?;
+        initialize_schema(&connection)?;
+        let mut statement = connection
+            .prepare(
+                r#"
+                SELECT rt.contract_address, rt.chain
+                FROM research_tokens rt
+                JOIN research_token_resolutions rr ON rr.token_id = rt.id AND rr.status = 'resolved'
+                LEFT JOIN research_market_snapshots market
+                  ON market.chain = rt.chain AND market.token_key = rt.normalized_address
+                GROUP BY rt.id
+                HAVING COALESCE(MAX(market.captured_at_ms), 0) < ?1
+                ORDER BY MAX(rr.resolved_at_ms) DESC
+                LIMIT ?2
+                "#,
+            )
+            .map_err(|error| format!("failed to prepare market refresh: {error}"))?;
+        let queries = statement
+            .query_map(
+                params![
+                    now_ms().saturating_sub(MARKET_REFRESH_INTERVAL_MS),
+                    MAX_MARKET_REFRESH_TOKENS as i64
+                ],
+                |row| {
+                    Ok(ResolverQuery::Address {
+                        address: row.get(0)?,
+                        chain_hint: Some(row.get(1)?),
+                    })
+                },
+            )
+            .map_err(|error| format!("failed to query market refresh targets: {error}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("failed to read market refresh targets: {error}"))?;
+        queries
+    };
+    if token_queries.is_empty() {
+        return research_list_tokens(store);
+    }
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .user_agent("FnzSafe/0.4 token-market-refresh")
+        .build()
+        .map_err(|error| format!("failed to initialize market refresh: {error}"))?;
+    let mut candidates = Vec::new();
+    for batch in token_queries.chunks(MAX_RESOLVE_QUERIES) {
+        let mut tasks = tokio::task::JoinSet::new();
+        for query in batch {
+            let client = client.clone();
+            let query = query.clone();
+            tasks.spawn(async move { fetch_dex_candidates(&client, &query).await });
+        }
+        while let Some(result) = tasks.join_next().await {
+            if let Ok(Ok(mut fetched)) = result {
+                candidates.append(&mut fetched);
+            }
+        }
+    }
+    if !candidates.is_empty() {
+        let mut connection = store.open()?;
+        initialize_schema(&connection)?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| format!("failed to begin market refresh: {error}"))?;
+        let observed_at_ms = now_ms();
+        for candidate in &candidates {
+            upsert_research_token(
+                &transaction,
+                &ResearchTokenUpsert {
+                    chain: &candidate.chain,
+                    chain_id: candidate.chain_id,
+                    address: &candidate.address,
+                    symbol: Some(&candidate.symbol),
+                    name: candidate.name.as_deref(),
+                    source: "DexScreener",
+                    confidence: 0.70,
+                    observed_at_ms,
+                },
+            )?;
+            save_market_snapshot(&transaction, candidate, observed_at_ms)?;
+        }
+        transaction
+            .commit()
+            .map_err(|error| format!("failed to commit market refresh: {error}"))?;
+    }
+    let connection = store.open()?;
+    list_research_tokens(&connection)
 }
 
 fn clear_signal_history(connection: &mut Connection) -> Result<(), String> {
@@ -3866,6 +4487,349 @@ pub async fn research_ai_chat(
 mod tests {
     use super::*;
 
+    fn explicit_token_request(tweet_id: &str, captured_at_ms: i64) -> ResearchIngestRequest {
+        let source_url = format!("https://x.com/analyst/status/{tweet_id}");
+        ResearchIngestRequest {
+            source_url: "https://x.com/home".to_string(),
+            captured_at_ms,
+            kols: vec![ResearchKolInput {
+                handle: "analyst".to_string(),
+                display_name: Some("Analyst".to_string()),
+                avatar_url: None,
+                bio: None,
+                followers_label: None,
+                following_label: None,
+                location: None,
+                website: None,
+                joined_label: None,
+                verified: false,
+                added_at: "2026-09-04T00:00:00Z".to_string(),
+                updated_at: None,
+            }],
+            tweets: vec![ResearchTweetInput {
+                tweet_id: tweet_id.to_string(),
+                author_handle: "analyst".to_string(),
+                author_name: "Analyst".to_string(),
+                avatar_url: None,
+                text: "$PONS contract".to_string(),
+                source_url: Some(source_url.clone()),
+                published_at: None,
+            }],
+            signals: vec![ResearchSignalInput {
+                tweet_id: Some(tweet_id.to_string()),
+                author_handle: "analyst".to_string(),
+                text: "$PONS contract".to_string(),
+                chain: "Robinhood".to_string(),
+                contract_address: Some("0x1111111111111111111111111111111111111111".to_string()),
+                token_symbols: vec!["PONS".to_string()],
+                source_url: Some(source_url),
+                published_at: None,
+                detected_at_ms: Some(captured_at_ms),
+            }],
+            backfill_complete: false,
+        }
+    }
+
+    fn confirmed_candidate(
+        chain: &str,
+        chain_id: u64,
+        address: &str,
+        symbol: &str,
+        confirmed_at_ms: i64,
+    ) -> ResolverCandidate {
+        ResolverCandidate {
+            token_id: Some(chain_id as i64),
+            chain: chain.to_string(),
+            chain_id: Some(chain_id),
+            address: address.to_string(),
+            symbol: symbol.to_string(),
+            name: None,
+            price_usd: 0.0,
+            liquidity_usd: 0.0,
+            volume_24h_usd: 0.0,
+            market_cap_usd: 0.0,
+            market_source: None,
+            pair_created_at_ms: None,
+            from_dex: false,
+            from_rpc: false,
+            confirmed_mentions: 1,
+            latest_confirmed_at_ms: Some(confirmed_at_ms),
+            symbol_conflicted: false,
+            query_incomplete: false,
+            evidence: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn local_catalog_reuses_unique_confirmed_token_without_market_data() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = ResearchStore::new(directory.path().join("research.sqlite3")).unwrap();
+        let old_at_ms = now_ms() - 60 * 24 * 60 * 60 * 1_000;
+        let current_at_ms = now_ms();
+        let mut connection = store.open().unwrap();
+        ingest(&mut connection, &explicit_token_request("7000", old_at_ms)).unwrap();
+        ingest(
+            &mut connection,
+            &ResearchIngestRequest {
+                source_url: "https://x.com/home".to_string(),
+                captured_at_ms: current_at_ms,
+                kols: Vec::new(),
+                tweets: Vec::new(),
+                signals: vec![ResearchSignalInput {
+                    tweet_id: Some("7002".to_string()),
+                    author_handle: "new_analyst".to_string(),
+                    text: "$PONS is active again".to_string(),
+                    chain: "Unknown".to_string(),
+                    contract_address: None,
+                    token_symbols: vec!["PONS".to_string()],
+                    source_url: Some("https://x.com/new_analyst/status/7002".to_string()),
+                    published_at: None,
+                    detected_at_ms: Some(current_at_ms),
+                }],
+                backfill_complete: false,
+            },
+        )
+        .unwrap();
+
+        let resolution: (String, String, String, String) = connection
+            .query_row(
+                "SELECT rr.status, rr.method, rt.chain, rt.contract_address FROM research_token_mentions m JOIN research_token_resolutions rr ON rr.mention_id = m.id JOIN research_tokens rt ON rt.id = rr.token_id WHERE m.tweet_key = 'x:7002'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            resolution,
+            (
+                "resolved".to_string(),
+                "local-catalog".to_string(),
+                "Robinhood".to_string(),
+                "0x1111111111111111111111111111111111111111".to_string(),
+            )
+        );
+        let candidate = load_local_resolver_candidates(&connection)
+            .unwrap()
+            .into_iter()
+            .find(|candidate| candidate.symbol == "PONS")
+            .unwrap();
+        assert_eq!(candidate.confirmed_mentions, 1);
+        assert_eq!(candidate.liquidity_usd, 0.0);
+    }
+
+    #[test]
+    fn confirmed_local_candidates_keep_required_chain_priority() {
+        let observed_at_ms = now_ms();
+        let signal = ResearchTokenResolveSignalInput {
+            signal_id: "signal".to_string(),
+            chain: "Unknown".to_string(),
+            contract_address: None,
+            token_symbols: vec!["PONS".to_string()],
+            author_handle: "analyst".to_string(),
+            text: "$PONS".to_string(),
+            tweet_id: Some("7100".to_string()),
+            source_url: Some("https://x.com/analyst/status/7100".to_string()),
+            published_at: None,
+            detected_at_ms: Some(observed_at_ms),
+        };
+        let candidates = vec![
+            confirmed_candidate(
+                "Ethereum",
+                1,
+                "0x1111111111111111111111111111111111111111",
+                "PONS",
+                observed_at_ms,
+            ),
+            confirmed_candidate(
+                "BSC",
+                56,
+                "0x2222222222222222222222222222222222222222",
+                "PONS",
+                observed_at_ms,
+            ),
+            confirmed_candidate(
+                "Robinhood",
+                4_663,
+                "0x3333333333333333333333333333333333333333",
+                "PONS",
+                observed_at_ms,
+            ),
+        ];
+        let ranked = rank_candidates_for_signal(&signal, &candidates);
+        let selected =
+            select_ranked_resolution_candidate(&ResolverQuery::Symbol("PONS".to_string()), &ranked)
+                .unwrap();
+        assert_eq!(selected.0.chain, "Robinhood");
+        assert!(resolves_from_local_catalog(
+            &signal,
+            &ResolverQuery::Symbol("PONS".to_string()),
+            &candidates,
+        ));
+    }
+
+    #[test]
+    fn ambiguous_same_chain_confirmed_tokens_are_not_reused() {
+        let observed_at_ms = now_ms();
+        let signal = ResearchTokenResolveSignalInput {
+            signal_id: "signal".to_string(),
+            chain: "Unknown".to_string(),
+            contract_address: None,
+            token_symbols: vec!["PONS".to_string()],
+            author_handle: "analyst".to_string(),
+            text: "$PONS".to_string(),
+            tweet_id: Some("7200".to_string()),
+            source_url: Some("https://x.com/analyst/status/7200".to_string()),
+            published_at: None,
+            detected_at_ms: Some(observed_at_ms),
+        };
+        let candidates = vec![
+            confirmed_candidate(
+                "Robinhood",
+                4_663,
+                "0x1111111111111111111111111111111111111111",
+                "PONS",
+                observed_at_ms,
+            ),
+            confirmed_candidate(
+                "Robinhood",
+                4_663,
+                "0x2222222222222222222222222222222222222222",
+                "PONS",
+                observed_at_ms,
+            ),
+            confirmed_candidate(
+                "BSC",
+                56,
+                "0x3333333333333333333333333333333333333333",
+                "PONS",
+                observed_at_ms,
+            ),
+        ];
+        let ranked = rank_candidates_for_signal(&signal, &candidates);
+        assert!(select_ranked_resolution_candidate(
+            &ResolverQuery::Symbol("PONS".to_string()),
+            &ranked,
+        )
+        .is_none());
+        assert!(!resolves_from_local_catalog(
+            &signal,
+            &ResolverQuery::Symbol("PONS".to_string()),
+            &candidates,
+        ));
+    }
+
+    #[test]
+    fn token_list_persists_identity_market_and_mention_counts() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = ResearchStore::new(directory.path().join("research.sqlite3")).unwrap();
+        let captured_at_ms = now_ms();
+        ingest(
+            &mut store.open().unwrap(),
+            &explicit_token_request("7001", captured_at_ms),
+        )
+        .unwrap();
+        let connection = store.open().unwrap();
+        connection
+            .execute(
+                "UPDATE research_tokens SET name = 'Pons Token' WHERE symbol = 'PONS'",
+                [],
+            )
+            .unwrap();
+        save_market_snapshot(
+            &connection,
+            &ResolverCandidate {
+                token_id: None,
+                chain: "Robinhood".to_string(),
+                chain_id: Some(4_663),
+                address: "0x1111111111111111111111111111111111111111".to_string(),
+                symbol: "PONS".to_string(),
+                name: Some("Pons Token".to_string()),
+                price_usd: 0.25,
+                liquidity_usd: 125_000.0,
+                volume_24h_usd: 75_000.0,
+                market_cap_usd: 2_500_000.0,
+                market_source: Some("uniswap".to_string()),
+                pair_created_at_ms: None,
+                from_dex: true,
+                from_rpc: false,
+                confirmed_mentions: 0,
+                latest_confirmed_at_ms: None,
+                symbol_conflicted: false,
+                query_incomplete: false,
+                evidence: Vec::new(),
+            },
+            captured_at_ms,
+        )
+        .unwrap();
+
+        let resolver_candidate = load_local_resolver_candidates(&connection)
+            .unwrap()
+            .into_iter()
+            .find(|candidate| candidate.symbol == "PONS")
+            .unwrap();
+        assert_eq!(resolver_candidate.price_usd, 0.25);
+        assert_eq!(resolver_candidate.liquidity_usd, 125_000.0);
+        assert_eq!(resolver_candidate.volume_24h_usd, 75_000.0);
+        assert_eq!(resolver_candidate.market_cap_usd, 2_500_000.0);
+
+        let tokens = list_research_tokens(&connection).unwrap();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(
+            tokens[0].contract_address,
+            "0x1111111111111111111111111111111111111111"
+        );
+        assert_eq!(tokens[0].name.as_deref(), Some("Pons Token"));
+        assert_eq!(tokens[0].price_usd, Some(0.25));
+        assert_eq!(tokens[0].market_source.as_deref(), Some("uniswap"));
+        assert_eq!(tokens[0].mention_count, 1);
+        assert_eq!(tokens[0].kol_mention_count, 1);
+    }
+
+    #[test]
+    fn legacy_research_data_is_copied_to_the_module_database_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let legacy_path = directory.path().join("main.sqlite3");
+        let module_path = directory.path().join("twitter-research.sqlite3");
+        let legacy_store = ResearchStore::new(legacy_path.clone()).unwrap();
+        ingest(
+            &mut legacy_store.open().unwrap(),
+            &explicit_token_request("7101", now_ms()),
+        )
+        .unwrap();
+
+        let module_store =
+            ResearchStore::new_with_legacy(module_path.clone(), Some(legacy_path.clone())).unwrap();
+        assert_eq!(
+            list_research_tokens(&module_store.open().unwrap())
+                .unwrap()
+                .len(),
+            1
+        );
+
+        ingest(
+            &mut legacy_store.open().unwrap(),
+            &explicit_token_request("7102", now_ms()),
+        )
+        .unwrap();
+        let reopened = ResearchStore::new_with_legacy(module_path, Some(legacy_path)).unwrap();
+        let tweet_count: i64 = reopened
+            .open()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM research_tweets", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(tweet_count, 1);
+    }
+
+    #[test]
+    fn tweet_limits_count_unicode_characters_instead_of_utf8_bytes() {
+        let mut request = explicit_token_request("7201", now_ms());
+        let chinese_text = "推".repeat(4_000);
+        request.tweets[0].text = chinese_text.clone();
+        request.signals[0].text = chinese_text;
+        assert!(validate_ingest_request(&request).is_ok());
+        request.signals[0].text.push('推');
+        assert!(validate_ingest_request(&request).is_err());
+    }
+
     #[test]
     fn ingest_is_idempotent_and_queries_kol_tokens() {
         let directory = tempfile::tempdir().unwrap();
@@ -4542,7 +5506,7 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        assert_eq!(corrected, ("conflicted".to_string(), None));
+        assert_eq!(corrected, ("resolved".to_string(), Some(robinhood_id)));
         let explicit_resolution: (String, i64, String) = connection
             .query_row(
                 "SELECT rr.status, rr.token_id, rr.method FROM research_token_mentions m JOIN research_token_resolutions rr ON rr.mention_id = m.id WHERE m.tweet_key = 'x:9002'",
@@ -4734,7 +5698,7 @@ mod tests {
     }
 
     #[test]
-    fn chain_priority_cannot_resolve_an_address_present_on_multiple_evm_chains() {
+    fn preferred_chain_candidates_follow_required_fallback_order() {
         let signal = ResearchTokenResolveSignalInput {
             signal_id: "signal".to_string(),
             chain: "Unknown EVM".to_string(),
@@ -4754,20 +5718,61 @@ mod tests {
             address: "0x1111111111111111111111111111111111111111".to_string(),
             symbol: "PONS".to_string(),
             name: None,
+            price_usd: 0.0,
             liquidity_usd: 0.0,
             volume_24h_usd: 0.0,
             market_cap_usd: 0.0,
+            market_source: None,
             pair_created_at_ms: None,
             from_dex: true,
             from_rpc: false,
+            confirmed_mentions: 0,
+            latest_confirmed_at_ms: None,
             symbol_conflicted: false,
             query_incomplete: false,
             evidence: Vec::new(),
         };
-        let robinhood = resolver_candidate_score(&signal, &candidate("Robinhood", 4_663), 2);
-        let bsc = resolver_candidate_score(&signal, &candidate("BSC", 56), 2);
-        assert!(robinhood >= TOKEN_RESOLUTION_THRESHOLD);
-        assert!(robinhood - bsc < TOKEN_RESOLUTION_MARGIN);
+        let robinhood = candidate("Robinhood", 4_663);
+        let bsc = candidate("BSC", 56);
+        let ethereum = candidate("Ethereum", 1);
+        let base = candidate("Base", 8_453);
+
+        let query = ResolverQuery::Address {
+            address: robinhood.address.clone(),
+            chain_hint: None,
+        };
+        let mut ranked = vec![
+            (&ethereum, resolver_candidate_score(&signal, &ethereum, 1)),
+            (&base, resolver_candidate_score(&signal, &base, 1)),
+            (&bsc, resolver_candidate_score(&signal, &bsc, 1)),
+            (&robinhood, resolver_candidate_score(&signal, &robinhood, 1)),
+        ];
+        sort_ranked_candidates(&mut ranked);
+        assert_eq!(
+            select_ranked_resolution_candidate(&query, &ranked)
+                .unwrap()
+                .0
+                .chain,
+            "Robinhood"
+        );
+
+        ranked.retain(|(candidate, _)| candidate.chain != "Robinhood");
+        assert_eq!(
+            select_ranked_resolution_candidate(&query, &ranked)
+                .unwrap()
+                .0
+                .chain,
+            "BSC"
+        );
+
+        ranked.retain(|(candidate, _)| candidate.chain != "BSC");
+        assert_eq!(
+            select_ranked_resolution_candidate(&query, &ranked)
+                .unwrap()
+                .0
+                .chain,
+            "Ethereum"
+        );
     }
 
     #[test]
@@ -4792,12 +5797,16 @@ mod tests {
             address: "0x1111111111111111111111111111111111111111".to_string(),
             symbol: "PONS".to_string(),
             name: None,
+            price_usd: 0.0,
             liquidity_usd: 1_000_000.0,
             volume_24h_usd: 100_000.0,
             market_cap_usd: 5_000_000.0,
+            market_source: None,
             pair_created_at_ms,
             from_dex: true,
             from_rpc: false,
+            confirmed_mentions: 0,
+            latest_confirmed_at_ms: None,
             symbol_conflicted: false,
             query_incomplete: false,
             evidence: Vec::new(),
@@ -4819,12 +5828,16 @@ mod tests {
             address: "0x1111111111111111111111111111111111111111".to_string(),
             symbol: "PONS".to_string(),
             name: None,
+            price_usd: 0.0,
             liquidity_usd: 100_000.0,
             volume_24h_usd,
             market_cap_usd,
+            market_source: None,
             pair_created_at_ms: Some(pair_created_at_ms),
             from_dex: true,
             from_rpc: false,
+            confirmed_mentions: 0,
+            latest_confirmed_at_ms: None,
             symbol_conflicted: false,
             query_incomplete: false,
             evidence: Vec::new(),
@@ -4869,24 +5882,40 @@ mod tests {
             address: "0x1111111111111111111111111111111111111111".to_string(),
             symbol: "AI".to_string(),
             name: None,
+            price_usd: 0.0,
             liquidity_usd: 0.0,
             volume_24h_usd: 0.0,
             market_cap_usd: 1_000_000_000.0,
+            market_source: None,
             pair_created_at_ms: Some(observed_at_ms - 365 * 24 * 60 * 60 * 1_000),
             from_dex: true,
             from_rpc: false,
+            confirmed_mentions: 0,
+            latest_confirmed_at_ms: None,
             symbol_conflicted: false,
             query_incomplete: false,
             evidence: Vec::new(),
         };
 
         assert!(resolver_candidate_score(&signal, &candidate, 1) < TOKEN_RESOLUTION_THRESHOLD);
+        assert!(!candidate_clears_resolution(
+            &ResolverQuery::Symbol("AI".to_string()),
+            &candidate,
+            PRIORITY_SYMBOL_RESOLUTION_THRESHOLD,
+            0.0,
+        ));
         let wash_traded = ResolverCandidate {
             volume_24h_usd: 10_000_000.0,
             market_cap_usd: 1_000_000.0,
             ..candidate
         };
         assert!(resolver_candidate_score(&signal, &wash_traded, 1) < TOKEN_RESOLUTION_THRESHOLD);
+        assert!(!candidate_clears_resolution(
+            &ResolverQuery::Symbol("AI".to_string()),
+            &wash_traded,
+            PRIORITY_SYMBOL_RESOLUTION_THRESHOLD,
+            0.0,
+        ));
     }
 
     #[test]
@@ -4898,12 +5927,16 @@ mod tests {
             address: "0x1111111111111111111111111111111111111111".to_string(),
             symbol: symbol.to_string(),
             name: None,
+            price_usd: 0.0,
             liquidity_usd: 0.0,
             volume_24h_usd: 0.0,
             market_cap_usd: 0.0,
+            market_source: None,
             pair_created_at_ms: None,
             from_dex: !from_rpc,
             from_rpc,
+            confirmed_mentions: 0,
+            latest_confirmed_at_ms: None,
             symbol_conflicted: false,
             query_incomplete: false,
             evidence: Vec::new(),
@@ -4944,12 +5977,16 @@ mod tests {
             address: address.to_string(),
             symbol: "PONS".to_string(),
             name: None,
+            price_usd: 0.0,
             liquidity_usd: 0.0,
             volume_24h_usd: 0.0,
             market_cap_usd: 0.0,
+            market_source: None,
             pair_created_at_ms: None,
             from_dex: false,
             from_rpc: true,
+            confirmed_mentions: 0,
+            latest_confirmed_at_ms: None,
             symbol_conflicted: false,
             query_incomplete: false,
             evidence: Vec::new(),
@@ -5001,12 +6038,16 @@ mod tests {
             address: "0x1111111111111111111111111111111111111111".to_string(),
             symbol: "PONS".to_string(),
             name: None,
+            price_usd: 0.0,
             liquidity_usd: 0.0,
             volume_24h_usd: 0.0,
             market_cap_usd: 0.0,
+            market_source: None,
             pair_created_at_ms: None,
             from_dex: false,
             from_rpc: true,
+            confirmed_mentions: 0,
+            latest_confirmed_at_ms: None,
             symbol_conflicted: false,
             query_incomplete: false,
             evidence: Vec::new(),
@@ -5019,7 +6060,15 @@ mod tests {
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].chain, "BSC");
         assert!(candidates[0].query_incomplete);
-        assert!(!candidate_clears_resolution(&candidates[0], 1.0, 0.0));
+        assert!(!candidate_clears_resolution(
+            &ResolverQuery::Address {
+                address: candidates[0].address.clone(),
+                chain_hint: None,
+            },
+            &candidates[0],
+            1.0,
+            0.0,
+        ));
         assert!(finish_rpc_candidates(Vec::new(), vec!["all failed".to_string()]).is_err());
         assert!(finish_rpc_candidates(Vec::new(), Vec::new())
             .unwrap()
@@ -5047,12 +6096,16 @@ mod tests {
             address: "0x1111111111111111111111111111111111111111".to_string(),
             symbol: symbol.to_string(),
             name: None,
+            price_usd: 0.0,
             liquidity_usd: 1_000.0,
             volume_24h_usd: 100.0,
             market_cap_usd: 0.0,
+            market_source: None,
             pair_created_at_ms: None,
             from_dex: !from_rpc,
             from_rpc,
+            confirmed_mentions: 0,
+            latest_confirmed_at_ms: None,
             symbol_conflicted: false,
             query_incomplete: false,
             evidence: Vec::new(),
@@ -5090,12 +6143,16 @@ mod tests {
             address: address.to_string(),
             symbol: "PONS".to_string(),
             name: None,
+            price_usd: 0.0,
             liquidity_usd: 0.0,
             volume_24h_usd: 0.0,
             market_cap_usd: 0.0,
+            market_source: None,
             pair_created_at_ms: None,
             from_dex: true,
             from_rpc: false,
+            confirmed_mentions: 0,
+            latest_confirmed_at_ms: None,
             symbol_conflicted: false,
             query_incomplete: false,
             evidence: Vec::new(),
@@ -5106,6 +6163,119 @@ mod tests {
         sort_ranked_candidates(&mut ranked);
         assert_eq!(ranked[0].0.chain, "BSC");
         assert_eq!(ranked[1].0.chain, "Ethereum");
+    }
+
+    #[test]
+    fn equal_score_candidates_use_market_metrics_as_tiebreakers() {
+        let candidate =
+            |address: &str, volume_24h_usd, liquidity_usd, market_cap_usd| ResolverCandidate {
+                token_id: None,
+                chain: "Robinhood".to_string(),
+                chain_id: Some(4_663),
+                address: address.to_string(),
+                symbol: "CHIPS".to_string(),
+                name: None,
+                price_usd: 0.0,
+                liquidity_usd,
+                volume_24h_usd,
+                market_cap_usd,
+                market_source: None,
+                pair_created_at_ms: None,
+                from_dex: true,
+                from_rpc: false,
+                confirmed_mentions: 0,
+                latest_confirmed_at_ms: None,
+                symbol_conflicted: false,
+                query_incomplete: false,
+                evidence: Vec::new(),
+            };
+        let liquid = candidate(
+            "0x1111111111111111111111111111111111111111",
+            10_000.0,
+            500_000.0,
+            5_000_000.0,
+        );
+        let active = candidate(
+            "0x2222222222222222222222222222222222222222",
+            500_000.0,
+            100_000.0,
+            1_000_000.0,
+        );
+        let mut ranked = vec![(&liquid, 0.85), (&active, 0.85)];
+
+        sort_ranked_candidates(&mut ranked);
+
+        assert_eq!(ranked[0].0.address, active.address);
+    }
+
+    #[test]
+    fn current_priority_chain_symbol_candidate_can_resolve_without_a_margin() {
+        let candidate = ResolverCandidate {
+            token_id: None,
+            chain: "Robinhood".to_string(),
+            chain_id: Some(4_663),
+            address: "0x1111111111111111111111111111111111111111".to_string(),
+            symbol: "AI".to_string(),
+            name: None,
+            price_usd: 0.0,
+            liquidity_usd: PRIORITY_SYMBOL_MIN_LIQUIDITY_USD,
+            volume_24h_usd: PRIORITY_SYMBOL_MIN_VOLUME_24H_USD,
+            market_cap_usd: 100_000.0,
+            market_source: None,
+            pair_created_at_ms: None,
+            from_dex: true,
+            from_rpc: false,
+            confirmed_mentions: 0,
+            latest_confirmed_at_ms: None,
+            symbol_conflicted: false,
+            query_incomplete: false,
+            evidence: Vec::new(),
+        };
+
+        assert!(candidate_clears_resolution(
+            &ResolverQuery::Symbol("AI".to_string()),
+            &candidate,
+            PRIORITY_SYMBOL_RESOLUTION_THRESHOLD,
+            PRIORITY_SYMBOL_RESOLUTION_THRESHOLD,
+        ));
+        let inactive_robinhood = ResolverCandidate {
+            liquidity_usd: 0.0,
+            volume_24h_usd: 0.0,
+            ..candidate.clone()
+        };
+        let active_bsc = ResolverCandidate {
+            chain: "BSC".to_string(),
+            chain_id: Some(56),
+            address: "0x2222222222222222222222222222222222222222".to_string(),
+            ..candidate
+        };
+        let mut ranked = vec![(&active_bsc, 0.80), (&inactive_robinhood, 0.95)];
+        sort_ranked_candidates(&mut ranked);
+
+        let selected =
+            select_ranked_resolution_candidate(&ResolverQuery::Symbol("AI".to_string()), &ranked)
+                .unwrap();
+
+        assert_eq!(selected.0.chain, "BSC");
+
+        let conflicted_robinhood = ResolverCandidate {
+            symbol_conflicted: true,
+            liquidity_usd: PRIORITY_SYMBOL_MIN_LIQUIDITY_USD * 10.0,
+            volume_24h_usd: PRIORITY_SYMBOL_MIN_VOLUME_24H_USD * 10.0,
+            ..inactive_robinhood
+        };
+        let valid_robinhood = ResolverCandidate {
+            chain: "Robinhood".to_string(),
+            chain_id: Some(4_663),
+            address: "0x3333333333333333333333333333333333333333".to_string(),
+            ..active_bsc
+        };
+        let mut ranked = vec![(&conflicted_robinhood, 0.99), (&valid_robinhood, 0.80)];
+        sort_ranked_candidates(&mut ranked);
+        let selected =
+            select_ranked_resolution_candidate(&ResolverQuery::Symbol("AI".to_string()), &ranked)
+                .unwrap();
+        assert_eq!(selected.0.address, valid_robinhood.address);
     }
 
     #[test]
@@ -5130,12 +6300,16 @@ mod tests {
             address: "0x1111111111111111111111111111111111111111".to_string(),
             symbol: "PONS".to_string(),
             name: None,
+            price_usd: 0.0,
             liquidity_usd: 0.0,
             volume_24h_usd: 0.0,
             market_cap_usd: 0.0,
+            market_source: None,
             pair_created_at_ms: None,
             from_dex: false,
             from_rpc: false,
+            confirmed_mentions: 0,
+            latest_confirmed_at_ms: None,
             symbol_conflicted: false,
             query_incomplete: false,
             evidence,

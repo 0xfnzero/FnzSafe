@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   canonicalTweetSourceIdentity,
   compactTweetTokenSignals,
+  expandAddresslessTokenSignals,
   filterRecentTweetSignals,
   groupTweetSignalsByTweet,
   hasValidTweetSignalIdentity,
@@ -15,6 +16,25 @@ import {
   tokenResolutionRetryDelayMs,
   tokenSignalObservation,
 } from "./twitterSignals.ts";
+
+test("splits legacy addressless aggregates into independently resolvable signals", () => {
+  const expanded = expandAddresslessTokenSignals([{
+    id: "legacy",
+    author: "@kol",
+    tweetText: "$PONS $USELESS",
+    chain: "Unknown",
+    tokenSymbols: ["$PONS", "$USELESS"],
+  }]);
+
+  assert.deepEqual(expanded.map((signal) => [signal.id, signal.tokenSymbols]), [
+    ["legacy:symbol:pons", ["$PONS"]],
+    ["legacy:symbol:useless", ["$USELESS"]],
+  ]);
+  assert.ok(expanded.every((signal) => isTokenResolutionTarget({
+    ...signal,
+    detectedAt: new Date().toISOString(),
+  })));
+});
 
 test("canonicalizes Twitter and X status aliases to one source identity", () => {
   assert.equal(
@@ -384,6 +404,8 @@ test("rejects malformed tweet identity before batching storage or resolution", (
 test("backs off longer while waiting for a new token to appear", () => {
   assert.equal(tokenResolutionRetryDelayMs("resolver-unavailable"), 30_000);
   assert.equal(tokenResolutionRetryDelayMs("no-candidate"), 300_000);
+  assert.equal(tokenResolutionRetryDelayMs("candidate-ranking"), 300_000);
+  assert.equal(tokenResolutionRetryDelayMs("symbol-or-chain-conflict"), 300_000);
 });
 
 test("keeps an inferred chain when the same unknown-address signal is captured again", () => {

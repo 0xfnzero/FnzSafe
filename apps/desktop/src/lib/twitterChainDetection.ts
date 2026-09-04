@@ -260,7 +260,8 @@ export function extractTweetTokenCandidates(text: string): {
     }
   }
   if (candidates.length === 0 && tokenSymbols.length > 0) {
-    candidates.push({ chain: detectTweetTokenChain(text) });
+    const chain = detectTweetTokenChain(text);
+    candidates.push(...tokenSymbols.map((symbol) => ({ chain, tokenSymbols: [symbol] })));
   }
   return { tokenSymbols, candidates };
 }

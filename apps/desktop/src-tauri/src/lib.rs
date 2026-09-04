@@ -4205,6 +4205,16 @@ fn preferred_wallet_database_path(app: &DesktopApp) -> PathBuf {
     target
 }
 
+fn preferred_research_database_path(app: &DesktopApp) -> PathBuf {
+    if let Ok(path) = env::var("FNZERO_SAFE_RESEARCH_DB_PATH") {
+        let path = path.trim();
+        if !path.is_empty() {
+            return PathBuf::from(path);
+        }
+    }
+    stable_app_support_dir(app).join("twitter-research.sqlite3")
+}
+
 fn desktop_api_binary_candidates(app: &DesktopApp) -> Vec<PathBuf> {
     let binary_name = desktop_api_binary_name();
     let mut candidates = Vec::new();
@@ -4416,6 +4426,8 @@ pub fn run() {
             research_store::research_scan_cursor,
             research_store::research_list_kols,
             research_store::research_list_signals,
+            research_store::research_list_tokens,
+            research_store::research_refresh_token_markets,
             research_store::research_clear_signals,
             research_store::research_remove_kol,
             research_store::research_query,
@@ -4444,12 +4456,15 @@ pub fn run() {
             open_download_file_location
         ])
         .setup(move |app| {
-            let research_database_path = preferred_wallet_database_path(app);
-            let app_store = app_store::AppStore::new(research_database_path.clone())
+            let wallet_database_path = preferred_wallet_database_path(app);
+            let app_store = app_store::AppStore::new(wallet_database_path.clone())
                 .map_err(std::io::Error::other)?;
             app.manage(app_store);
-            let research_store = research_store::ResearchStore::new(research_database_path)
-                .map_err(std::io::Error::other)?;
+            let research_store = research_store::ResearchStore::new_with_legacy(
+                preferred_research_database_path(app),
+                Some(wallet_database_path),
+            )
+            .map_err(std::io::Error::other)?;
             app.manage(research_store);
             if !cfg!(debug_assertions) {
                 if let Err(error) = terminate_recorded_process(&desktop_api_pid_file) {

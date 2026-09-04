@@ -38,6 +38,16 @@ test("does not treat a cashtagged native token as a chain declaration", () => {
   assert.equal(result.candidates[0]?.chain, "Unknown");
 });
 
+test("creates one resolvable candidate per cashtag when no address is present", () => {
+  const result = extractTweetTokenCandidates("Robinhood: $PONS $USELESS $MARSCOIN");
+
+  assert.deepEqual(result.candidates, [
+    { chain: "Robinhood", tokenSymbols: ["$PONS"] },
+    { chain: "Robinhood", tokenSymbols: ["$USELESS"] },
+    { chain: "Robinhood", tokenSymbols: ["$MARSCOIN"] },
+  ]);
+});
+
 test("preserves case-sensitive non-EVM candidate identities", () => {
   const solanaAddress = "So11111111111111111111111111111111111111112";
   assert.equal(isSolanaTokenAddress(solanaAddress), true);

@@ -84,7 +84,11 @@ export function isTokenResolutionTarget(signal: StoredTwitterSignal): boolean {
 }
 
 export function tokenResolutionRetryDelayMs(source?: string): number {
-  return source === "no-candidate" ? TOKEN_DISCOVERY_RETRY_MS : TOKEN_RESOLUTION_RETRY_MS;
+  return source === "no-candidate"
+    || source === "candidate-ranking"
+    || source === "symbol-or-chain-conflict"
+    ? TOKEN_DISCOVERY_RETRY_MS
+    : TOKEN_RESOLUTION_RETRY_MS;
 }
 
 function tweetSignalMergeKey(signal: StoredTwitterSignal): string {
@@ -105,6 +109,8 @@ function tweetSymbolSourceKey(signal: StoredTwitterSignal): string | undefined {
 }
 
 export function mergeTweetTokenSignals<T extends StoredTwitterSignal>(existing: T[], incoming: T[]): T[] {
+  existing = expandAddresslessTokenSignals(existing);
+  incoming = expandAddresslessTokenSignals(incoming);
   const existingByKey = new Map(existing.map((signal) => [tweetSignalMergeKey(signal), signal]));
   const addresslessBySymbol = new Map(existing.flatMap((signal) => {
     if (tokenSignalObservation(signal).contractAddress) return [];
@@ -208,7 +214,7 @@ export function parseStoredTwitterSignals(value: unknown): StoredTwitterSignal[]
       resolutionSource: storedString(item.resolutionSource, 64),
     });
   }
-  return signals;
+  return expandAddresslessTokenSignals(signals).slice(0, MAX_STORED_TWITTER_SIGNALS);
 }
 const INLINE_TWEET_ENTITY_LINE_RE = new RegExp(
   `^(?:${INLINE_TWEET_ENTITY_SOURCE}[，,。.!?！？:：;；]?)(?:[ \\t]+${INLINE_TWEET_ENTITY_SOURCE}[，,。.!?！？:：;；]?)*$`,
@@ -310,6 +316,19 @@ function canonicalTokenSymbols<T extends GroupableTweetSignal>(signal: T): T {
   const symbols = Array.from(normalizedTokenSymbols(signal, true), (symbol) => `$${symbol}`);
   if (symbols.length === 0 && !signal.tokenSymbols?.length) return signal;
   return { ...signal, tokenSymbols: symbols.length > 0 ? symbols : undefined };
+}
+
+export function expandAddresslessTokenSignals<T extends GroupableTweetSignal>(signals: T[]): T[] {
+  return signals.flatMap((signal) => {
+    if (signal.contractAddress) return [signal];
+    const symbols = Array.from(normalizedTokenSymbols(signal, true));
+    if (symbols.length <= 1) return [canonicalTokenSymbols(signal)];
+    return symbols.map((symbol) => ({
+      ...signal,
+      id: `${signal.id}:symbol:${symbol.toLowerCase()}`,
+      tokenSymbols: [`$${symbol}`],
+    }));
+  });
 }
 
 /**
