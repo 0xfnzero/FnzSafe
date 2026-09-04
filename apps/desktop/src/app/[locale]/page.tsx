@@ -19001,6 +19001,7 @@ export default function Home() {
                         <div className="col-start-2 ml-auto w-full min-w-0 max-w-[480px] space-y-1 self-start lg:col-start-3 lg:row-start-1 lg:justify-self-end">
                           {signalGroup.signals.map((tokenSignal, tokenIndex) => {
                             const tokenLabel = tweetSignalTokenLabel(tokenSignal);
+                            const tokenSymbolLabel = tokenSignal.tokenSymbols?.join(" ").trim();
                             return (
                               <div
                                 key={tokenSignal.id}
@@ -19010,7 +19011,19 @@ export default function Home() {
                                   <span className={`inline-flex shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold leading-4 ${tweetSignalChainClass(tokenSignal.chain)}`}>
                                     {tokenSignal.chain}
                                   </span>
-                                  <code className="min-w-0 overflow-hidden text-ellipsis">{compactContractAddress(tokenLabel)}</code>
+                                  {tokenSymbolLabel && (
+                                    <code className="shrink-0 text-emerald-300">{tokenSymbolLabel}</code>
+                                  )}
+                                  {tokenSignal.contractAddress ? (
+                                    <code
+                                      className="min-w-0 overflow-hidden text-ellipsis"
+                                      title={tokenSignal.contractAddress}
+                                    >
+                                      {compactContractAddress(tokenSignal.contractAddress)}
+                                    </code>
+                                  ) : !tokenSymbolLabel ? (
+                                    <code>-</code>
+                                  ) : null}
                                 </p>
                                 <button
                                   type="button"
