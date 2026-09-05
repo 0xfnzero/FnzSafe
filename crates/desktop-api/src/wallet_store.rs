@@ -40,6 +40,7 @@ pub struct WalletSummary {
     pub evm_address: Option<String>,
     pub evm_wallet_id: Option<String>,
     pub evm_derivation_path: Option<String>,
+    pub secret_type: String,
     pub created_at: u64,
     pub updated_at: u64,
     pub keystore_version: String,
@@ -142,9 +143,18 @@ pub const PROGRAM_DEPLOYMENT_STATUS_FINALIZED: &str = "finalized";
 
 impl From<SavedWallet> for WalletSummary {
     fn from(wallet: SavedWallet) -> Self {
-        let metadata = serde_json::from_str::<serde_json::Value>(&wallet.keystore_json)
-            .ok()
-            .and_then(|value| value.get("metadata").cloned());
+        let document = serde_json::from_str::<serde_json::Value>(&wallet.keystore_json).ok();
+        let root_secret_type = document
+            .as_ref()
+            .filter(|value| value.get("version").and_then(serde_json::Value::as_u64) == Some(3))
+            .and_then(|value| value.get("secret_type"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| *value == "mnemonic")
+            .map(ToOwned::to_owned);
+        let metadata = document
+            .as_ref()
+            .and_then(|value| value.get("metadata"))
+            .cloned();
         let metadata_string = |key: &str| {
             metadata
                 .as_ref()
@@ -155,6 +165,7 @@ impl From<SavedWallet> for WalletSummary {
                 .map(ToOwned::to_owned)
         };
         let keystore_version = match KeyManager::keystore_version(&wallet.keystore_json) {
+            Ok(KeystoreVersion::V3) => "v3",
             Ok(KeystoreVersion::V2) => "v2",
             Ok(KeystoreVersion::LegacyV1) => "legacy_v1",
             Err(_) => "unknown",
@@ -167,6 +178,13 @@ impl From<SavedWallet> for WalletSummary {
             evm_address: metadata_string("evm_address"),
             evm_wallet_id: metadata_string("evm_wallet_id"),
             evm_derivation_path: metadata_string("evm_derivation_path"),
+            secret_type: root_secret_type.unwrap_or_else(|| {
+                if metadata_string("encrypted_mnemonic").is_some() {
+                    "mnemonic".to_string()
+                } else {
+                    "private_key".to_string()
+                }
+            }),
             created_at: wallet.created_at,
             updated_at: wallet.updated_at,
             keystore_version,
@@ -2128,6 +2146,33 @@ mod tests {
             summary.evm_derivation_path.as_deref(),
             Some("m/44'/60'/0'/0/0")
         );
+        assert_eq!(summary.secret_type, "private_key");
+    }
+
+    #[test]
+    fn wallet_summary_identifies_v3_mnemonic_keystore() {
+        let keystore_json = KeyManager::mnemonic_to_encrypted_json(
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "m/44'/501'/0'/0'",
+            "strong-password",
+        )
+        .unwrap();
+        let public_key = serde_json::from_str::<serde_json::Value>(&keystore_json).unwrap()
+            ["public_key"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let summary = WalletSummary::from(SavedWallet {
+            id: "wallet-id".to_string(),
+            name: "Seed Wallet".to_string(),
+            public_key,
+            keystore_json,
+            created_at: 1,
+            updated_at: 2,
+        });
+
+        assert_eq!(summary.keystore_version, "v3");
+        assert_eq!(summary.secret_type, "mnemonic");
     }
 
     fn deployment_record(buffer_address: &str, program_sha256: &str) -> ProgramDeploymentRecord {

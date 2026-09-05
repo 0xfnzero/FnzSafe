@@ -15,6 +15,7 @@
     "allow-set-active-dapp-tab",
     "allow-close-dapp-tab",
     "allow-request-dapp-tab-text",
+    "allow-request-fomo-profile",
     "allow-browser-management",
     "allow-settings-store",
     "allow-research-store",

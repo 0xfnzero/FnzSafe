@@ -487,7 +487,7 @@ Legacy `SOL_SAFEKEY_*` variables are still accepted as fallbacks for existing lo
 
 1. **Local-first API**: the desktop API binds to loopback and requires a local API token for protected routes.
 2. **Encrypted sensitive requests**: password and secret-bearing JSON requests are encrypted before crossing the local web/API boundary.
-3. **Keystore-first storage**: saved wallets store encrypted keystore JSON, not plaintext private keys.
+3. **Typed keystore storage**: v3 mnemonic keystores encrypt the BIP-39 mnemonic and derive Solana/EVM keys only when unlocked; v2 private-key keystores encrypt one account key. Legacy v1/v2 files remain importable.
 4. **Mobile private storage**: mobile keystore files stay in app private storage; wallet metadata and biometric settings use secure storage.
 5. **Biometric confirmation**: mobile signing actions can be gated by platform biometrics; desktop Touch ID uses macOS Keychain access control.
 6. **Explicit signing confirmation**: payments, dApp signing, transaction sending, and Squads actions go through a confirmation screen.

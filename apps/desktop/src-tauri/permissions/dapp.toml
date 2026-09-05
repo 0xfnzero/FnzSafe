@@ -34,6 +34,31 @@ description = "Allow an embedded browser tab to return its visible page text to 
 commands.allow = ["dapp_submit_page_text"]
 
 [[permission]]
+identifier = "allow-submit-fomo-alerts"
+description = "Allow an authenticated fomo.family tab to submit sanitized trading alerts."
+commands.allow = ["dapp_submit_fomo_alerts"]
+
+[[permission]]
+identifier = "allow-submit-fomo-auth"
+description = "Allow a fomo.family tab to report only its boolean authentication status."
+commands.allow = ["dapp_submit_fomo_auth"]
+
+[[permission]]
+identifier = "allow-submit-fomo-stream"
+description = "Allow the dedicated fomo.family Alerts tab to report sanitized stream health."
+commands.allow = ["dapp_submit_fomo_stream"]
+
+[[permission]]
+identifier = "allow-request-fomo-profile"
+description = "Allow the trusted main window to request one Fomo profile from the authenticated Alerts session."
+commands.allow = ["dapp_request_fomo_profile"]
+
+[[permission]]
+identifier = "allow-submit-fomo-profile"
+description = "Allow the authenticated Fomo Alerts tab to return one sanitized Fomo profile."
+commands.allow = ["dapp_submit_fomo_profile"]
+
+[[permission]]
 identifier = "allow-browser-management"
 description = "Manage the embedded browser, import Chrome data, and use protected browser credentials from the trusted main window."
 commands.allow = [

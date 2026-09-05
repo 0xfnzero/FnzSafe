@@ -36,8 +36,11 @@ use aes_gcm::{
 };
 use argon2::{Algorithm, Argon2, Block, Params, Version as Argon2Version};
 use base64::{engine::general_purpose, Engine};
+use bip39::{Language, Mnemonic};
 use ring::digest;
 use serde::{Deserialize, Serialize};
+use solana_derivation_path::DerivationPath;
+use solana_sdk::signer::keypair::keypair_from_seed_and_derivation_path;
 use std::str::FromStr;
 use std::sync::{Condvar, Mutex, OnceLock};
 use zeroize::Zeroizing;
@@ -179,6 +182,7 @@ pub fn generate_encryption_key_simple(password: &str) -> [u8; 32] {
 }
 
 pub const KEYSTORE_V2_VERSION: u8 = 2;
+pub const KEYSTORE_V3_VERSION: u8 = 3;
 pub const MAX_KEYSTORE_JSON_BYTES: usize = 128 * 1024;
 
 const KEYSTORE_ENCRYPTION_TYPE: &str = "password_only";
@@ -242,6 +246,7 @@ impl Drop for KeystoreKdfPermit {
 pub enum KeystoreVersion {
     LegacyV1,
     V2,
+    V3,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -251,6 +256,22 @@ struct KeystoreV2 {
     encryption_type: String,
     crypto: KeystoreCryptoV2,
     created_at: String,
+}
+
+#[derive(Deserialize, Serialize)]
+struct KeystoreV3 {
+    version: u8,
+    public_key: String,
+    secret_type: String,
+    derivation_path: String,
+    encryption_type: String,
+    crypto: KeystoreCryptoV2,
+    created_at: String,
+}
+
+struct DecryptedMnemonicKeystore {
+    mnemonic: Zeroizing<String>,
+    keypair: Keypair,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -303,6 +324,26 @@ fn keystore_v2_aad(public_key: &str) -> Vec<u8> {
     aad.push(KEYSTORE_V2_VERSION);
     aad.push(0);
     aad.extend_from_slice(public_key.as_bytes());
+    aad
+}
+
+fn keystore_v3_aad(public_key: &str, secret_type: &str, derivation_path: &str) -> Vec<u8> {
+    let mut aad = Vec::with_capacity(
+        KEYSTORE_V2_AAD_DOMAIN.len()
+            + public_key.len()
+            + secret_type.len()
+            + derivation_path.len()
+            + 7,
+    );
+    aad.extend_from_slice(KEYSTORE_V2_AAD_DOMAIN);
+    aad.push(0);
+    aad.push(KEYSTORE_V3_VERSION);
+    aad.push(0);
+    aad.extend_from_slice(public_key.as_bytes());
+    aad.push(0);
+    aad.extend_from_slice(secret_type.as_bytes());
+    aad.push(0);
+    aad.extend_from_slice(derivation_path.as_bytes());
     aad
 }
 
@@ -540,6 +581,161 @@ fn decrypt_keystore_v2(json_data: &str, password: &str) -> EncryptionResult<Keyp
     Ok(keypair)
 }
 
+fn normalize_mnemonic(mnemonic: &str) -> EncryptionResult<String> {
+    let normalized = mnemonic.split_whitespace().collect::<Vec<_>>().join(" ");
+    Mnemonic::parse_in_normalized(Language::English, &normalized)
+        .map_err(|_| "Mnemonic checksum failed; check the words and order".to_string())?;
+    Ok(normalized)
+}
+
+fn keypair_from_mnemonic_and_path(
+    mnemonic: &str,
+    derivation_path: &str,
+) -> EncryptionResult<Keypair> {
+    let mnemonic = Mnemonic::parse_in_normalized(Language::English, mnemonic)
+        .map_err(|_| "Mnemonic checksum failed; check the words and order".to_string())?;
+    let derivation_path = DerivationPath::from_absolute_path_str(derivation_path)
+        .map_err(|error| format!("Invalid Solana derivation path: {error}"))?;
+    let seed = Zeroizing::new(mnemonic.to_seed(""));
+    keypair_from_seed_and_derivation_path(seed.as_ref(), Some(derivation_path))
+        .map_err(|error| format!("Failed to derive Solana keypair from mnemonic: {error}"))
+}
+
+fn encrypt_mnemonic_keystore_v3(
+    mnemonic: &str,
+    derivation_path: &str,
+    password: &str,
+) -> EncryptionResult<String> {
+    validate_v2_password_for_creation(password)?;
+    let mnemonic = Zeroizing::new(normalize_mnemonic(mnemonic)?);
+    let derivation_path = derivation_path.trim().to_string();
+    DerivationPath::from_absolute_path_str(&derivation_path)
+        .map_err(|error| format!("Invalid Solana derivation path: {error}"))?;
+    let keypair = keypair_from_mnemonic_and_path(&mnemonic, &derivation_path)?;
+    let public_key = keypair.pubkey().to_string();
+    let mut rng = OsRng;
+    let mut salt = [0u8; KEYSTORE_V2_SALT_BYTES];
+    rng.fill_bytes(&mut salt);
+    let nonce = Aes256Gcm::generate_nonce(&mut rng);
+    let key = derive_keystore_v2_key(password, &salt)?;
+    let cipher = Aes256Gcm::new_from_slice(key.as_ref())
+        .map_err(|_| "AES-256-GCM initialization failed".to_string())?;
+    let aad = keystore_v3_aad(&public_key, "mnemonic", &derivation_path);
+    let ciphertext = cipher
+        .encrypt(
+            &nonce,
+            Payload {
+                msg: mnemonic.as_bytes(),
+                aad: &aad,
+            },
+        )
+        .map_err(|_| "AES-256-GCM encryption failed".to_string())?;
+
+    serde_json::to_string(&KeystoreV3 {
+        version: KEYSTORE_V3_VERSION,
+        public_key,
+        secret_type: "mnemonic".to_string(),
+        derivation_path,
+        encryption_type: KEYSTORE_ENCRYPTION_TYPE.to_string(),
+        crypto: KeystoreCryptoV2 {
+            kdf: KEYSTORE_V2_KDF.to_string(),
+            kdf_params: KeystoreKdfParamsV2 {
+                memory_kib: KEYSTORE_V2_ARGON2_MEMORY_KIB,
+                iterations: KEYSTORE_V2_ARGON2_ITERATIONS,
+                parallelism: KEYSTORE_V2_ARGON2_PARALLELISM,
+                salt: general_purpose::STANDARD.encode(salt),
+            },
+            cipher: KEYSTORE_V2_CIPHER.to_string(),
+            nonce: general_purpose::STANDARD.encode(nonce),
+            ciphertext: general_purpose::STANDARD.encode(ciphertext),
+        },
+        created_at: chrono::Utc::now().to_rfc3339(),
+    })
+    .map_err(|_| "Failed to serialize v3 mnemonic keystore".to_string())
+}
+
+fn decrypt_mnemonic_keystore_v3(
+    json_data: &str,
+    password: &str,
+) -> EncryptionResult<DecryptedMnemonicKeystore> {
+    let keystore: KeystoreV3 = serde_json::from_str(json_data)
+        .map_err(|_| "Invalid v3 mnemonic keystore JSON".to_string())?;
+    if keystore.version != KEYSTORE_V3_VERSION
+        || keystore.secret_type != "mnemonic"
+        || keystore.encryption_type != KEYSTORE_ENCRYPTION_TYPE
+    {
+        return Err("Unsupported v3 mnemonic keystore".to_string());
+    }
+    if keystore.crypto.kdf != KEYSTORE_V2_KDF
+        || keystore.crypto.cipher != KEYSTORE_V2_CIPHER
+        || keystore.crypto.kdf_params.memory_kib != KEYSTORE_V2_ARGON2_MEMORY_KIB
+        || keystore.crypto.kdf_params.iterations != KEYSTORE_V2_ARGON2_ITERATIONS
+        || keystore.crypto.kdf_params.parallelism != KEYSTORE_V2_ARGON2_PARALLELISM
+    {
+        return Err("Unsupported v3 mnemonic keystore cryptography".to_string());
+    }
+    let expected_public_key = Pubkey::from_str(&keystore.public_key)
+        .map_err(|_| "Keystore public_key is invalid".to_string())?;
+    if expected_public_key.to_string() != keystore.public_key {
+        return Err("Keystore public_key is not canonical".to_string());
+    }
+    DerivationPath::from_absolute_path_str(&keystore.derivation_path)
+        .map_err(|error| format!("Invalid Solana derivation path: {error}"))?;
+    if keystore.derivation_path.trim() != keystore.derivation_path {
+        return Err("Keystore derivation_path is not canonical".to_string());
+    }
+    let salt: [u8; KEYSTORE_V2_SALT_BYTES] = general_purpose::STANDARD
+        .decode(keystore.crypto.kdf_params.salt.as_bytes())
+        .map_err(|_| "Keystore salt is not valid base64".to_string())?
+        .try_into()
+        .map_err(|_| "Keystore salt has an invalid length".to_string())?;
+    let nonce_bytes: [u8; KEYSTORE_V2_NONCE_BYTES] = general_purpose::STANDARD
+        .decode(keystore.crypto.nonce.as_bytes())
+        .map_err(|_| "Keystore nonce is not valid base64".to_string())?
+        .try_into()
+        .map_err(|_| "Keystore nonce has an invalid length".to_string())?;
+    let ciphertext = general_purpose::STANDARD
+        .decode(keystore.crypto.ciphertext.as_bytes())
+        .map_err(|_| "Keystore ciphertext is not valid base64".to_string())?;
+    if ciphertext.len() <= KEYSTORE_V2_TAG_BYTES
+        || ciphertext.len() > SECRET_ENVELOPE_MAX_BYTES + KEYSTORE_V2_TAG_BYTES
+    {
+        return Err("Keystore ciphertext has an invalid length".to_string());
+    }
+    let key = derive_keystore_v2_key(password, &salt)?;
+    let cipher = Aes256Gcm::new_from_slice(key.as_ref())
+        .map_err(|_| "AES-256-GCM initialization failed".to_string())?;
+    let aad = keystore_v3_aad(
+        &keystore.public_key,
+        &keystore.secret_type,
+        &keystore.derivation_path,
+    );
+    let plaintext = Zeroizing::new(
+        cipher
+            .decrypt(
+                aes_gcm::Nonce::from_slice(&nonce_bytes),
+                Payload {
+                    msg: &ciphertext,
+                    aad: &aad,
+                },
+            )
+            .map_err(|_| "V3 keystore password or authenticated data is invalid".to_string())?,
+    );
+    let mnemonic = Zeroizing::new(
+        String::from_utf8(plaintext.to_vec())
+            .map_err(|_| "Decrypted mnemonic is not valid UTF-8".to_string())?,
+    );
+    let normalized = Zeroizing::new(normalize_mnemonic(&mnemonic)?);
+    if normalized.as_str() != mnemonic.as_str() {
+        return Err("Decrypted mnemonic is not normalized".to_string());
+    }
+    let keypair = keypair_from_mnemonic_and_path(&mnemonic, &keystore.derivation_path)?;
+    if keypair.pubkey() != expected_public_key {
+        return Err("V3 keystore public_key does not match the derived keypair".to_string());
+    }
+    Ok(DecryptedMnemonicKeystore { mnemonic, keypair })
+}
+
 // ============================================================================
 // High-Level Key Management API (简单集成用)
 // ============================================================================
@@ -772,6 +968,35 @@ impl KeyManager {
         encrypt_keystore_v2(keypair, password)
     }
 
+    /// Encrypt a BIP-39 mnemonic as the primary keystore secret.
+    pub fn mnemonic_to_encrypted_json(
+        mnemonic: &str,
+        derivation_path: &str,
+        password: &str,
+    ) -> EncryptionResult<String> {
+        encrypt_mnemonic_keystore_v3(mnemonic, derivation_path, password)
+    }
+
+    /// Derive a Solana keypair from a BIP-39 mnemonic and absolute path.
+    pub fn keypair_from_mnemonic(
+        mnemonic: &str,
+        derivation_path: &str,
+    ) -> EncryptionResult<Keypair> {
+        let mnemonic = Zeroizing::new(normalize_mnemonic(mnemonic)?);
+        keypair_from_mnemonic_and_path(&mnemonic, derivation_path.trim())
+    }
+
+    /// Decrypt the mnemonic from a v3 mnemonic keystore.
+    pub fn mnemonic_from_encrypted_json(
+        json_data: &str,
+        password: &str,
+    ) -> EncryptionResult<Zeroizing<String>> {
+        if Self::keystore_version(json_data)? != KeystoreVersion::V3 {
+            return Err("Keystore does not contain a primary mnemonic secret".to_string());
+        }
+        decrypt_mnemonic_keystore_v3(json_data, password).map(|decrypted| decrypted.mnemonic)
+    }
+
     /// Detect the supported password-keystore format without decrypting it.
     pub fn keystore_version(json_data: &str) -> EncryptionResult<KeystoreVersion> {
         if json_data.len() > MAX_KEYSTORE_JSON_BYTES {
@@ -781,6 +1006,15 @@ impl KeyManager {
             serde_json::from_str(json_data).map_err(|_| "Invalid JSON format".to_string())?;
         let version = value.get("version");
         match version {
+            Some(serde_json::Value::Number(number)) if number.as_u64() == Some(3) => {
+                if value.get("crypto").is_none()
+                    || value.get("secret_type").and_then(serde_json::Value::as_str)
+                        != Some("mnemonic")
+                {
+                    return Err("V3 mnemonic keystore is missing required fields".to_string());
+                }
+                Ok(KeystoreVersion::V3)
+            }
             Some(serde_json::Value::Number(number)) if number.as_u64() == Some(2) => {
                 if value.get("crypto").is_none() {
                     return Err("V2 keystore is missing crypto".to_string());
@@ -818,6 +1052,9 @@ impl KeyManager {
     ) -> EncryptionResult<Keypair> {
         match Self::keystore_version(json_data)? {
             KeystoreVersion::V2 => decrypt_keystore_v2(json_data, password),
+            KeystoreVersion::V3 => {
+                Err("V3 mnemonic keystore is not a v2 private-key keystore".to_string())
+            }
             KeystoreVersion::LegacyV1 => Err(
                 "Legacy v1 keystore is not allowed for this operation; migrate it explicitly"
                     .to_string(),
@@ -833,6 +1070,9 @@ impl KeyManager {
         match Self::keystore_version(json_data)? {
             KeystoreVersion::LegacyV1 => decrypt_legacy_keystore(json_data, password),
             KeystoreVersion::V2 => decrypt_keystore_v2(json_data, password),
+            KeystoreVersion::V3 => {
+                decrypt_mnemonic_keystore_v3(json_data, password).map(|decrypted| decrypted.keypair)
+            }
         }
     }
 
@@ -1143,6 +1383,45 @@ mod tests {
         let restored_keypair = KeyManager::keypair_from_encrypted_json_v2(&json, password).unwrap();
 
         assert_eq!(keypair.to_bytes(), restored_keypair.to_bytes());
+    }
+
+    #[test]
+    fn mnemonic_keystore_v3_round_trip_and_metadata_authentication() {
+        const MNEMONIC: &str =
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        const PATH: &str = "m/44'/501'/0'/0'";
+        let password = "secure_password";
+        let json = KeyManager::mnemonic_to_encrypted_json(MNEMONIC, PATH, password).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(value["version"], KEYSTORE_V3_VERSION);
+        assert_eq!(value["secret_type"], "mnemonic");
+        assert_eq!(value["derivation_path"], PATH);
+        assert!(!json.contains(MNEMONIC));
+        assert_eq!(
+            KeyManager::keystore_version(&json).unwrap(),
+            KeystoreVersion::V3
+        );
+        assert_eq!(
+            KeyManager::mnemonic_from_encrypted_json(&json, password)
+                .unwrap()
+                .as_str(),
+            MNEMONIC
+        );
+        let restored = KeyManager::keypair_from_encrypted_json(&json, password).unwrap();
+        assert_eq!(restored.pubkey().to_string(), value["public_key"]);
+
+        for field in ["public_key", "secret_type", "derivation_path"] {
+            let mut tampered = value.clone();
+            tampered[field] = match field {
+                "public_key" => serde_json::Value::String(Keypair::new().pubkey().to_string()),
+                "secret_type" => serde_json::Value::String("private_key".to_string()),
+                _ => serde_json::Value::String("m/44'/501'/1'/0'".to_string()),
+            };
+            assert!(
+                KeyManager::keypair_from_encrypted_json(&tampered.to_string(), password).is_err()
+            );
+        }
     }
 
     #[test]

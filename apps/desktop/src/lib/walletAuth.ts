@@ -20,9 +20,10 @@ export interface SavedWallet {
   evm_address?: string | null;
   evm_wallet_id?: string | null;
   evm_derivation_path?: string | null;
+  secret_type?: "mnemonic" | "private_key";
   created_at: number;
   updated_at: number;
-  keystore_version: "v2" | "legacy_v1" | "unknown";
+  keystore_version: "v3" | "v2" | "legacy_v1" | "unknown";
 }
 
 export type WalletAuthTab = "keystore" | "encrypted" | "private";

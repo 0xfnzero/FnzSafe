@@ -27,11 +27,32 @@ export interface StoredTwitterSignal {
   resolutionStatus?: "pending" | "resolved" | "conflicted";
   resolutionConfidence?: number;
   resolutionSource?: string;
+  signalSource?: "x" | "fomo";
+  fomoEventType?: "swap_buy" | "swap_sell" | "transfer_in" | "transfer_out" | "multi_user_buy" | "multi_user_sell" | "thesis_created";
+  tradeDirection?: "buy" | "sell" | "transfer_in" | "transfer_out";
+  usdAmount?: number;
+  marketCapUsd?: number;
+  traderCount?: number;
+  followerCount?: number;
 }
 
 export interface TokenSignalObservation {
   chain: string;
   contractAddress?: string;
+}
+
+export function filterTweetTokenSignalsByAuthor<T extends StoredTwitterSignal>(
+  signals: T[],
+  watchedUsers: string,
+): T[] {
+  const watchedHandles = new Set(watchedUsers
+    .split(/[\s,;，；]+/u)
+    .map((value) => value.trim().replace(/^@+/u, "").toLowerCase())
+    .filter(Boolean));
+  if (watchedHandles.size === 0) return signals;
+  return signals.filter((signal) => watchedHandles.has(
+    signal.author.trim().replace(/^@+/u, "").toLowerCase(),
+  ));
 }
 
 export function hasAutomaticTokenResolution(signal: StoredTwitterSignal): boolean {
@@ -62,6 +83,21 @@ function normalizedTokenSymbols(
 }
 
 export function hasValidTweetSignalIdentity(signal: StoredTwitterSignal): boolean {
+  if (signal.signalSource === "fomo") {
+    if (signal.tweetId || !signal.sourceUrl || !signal.contractAddress) return false;
+    try {
+      const url = new URL(signal.sourceUrl);
+      const host = url.hostname.toLowerCase();
+      const pathParts = url.pathname.split("/").filter(Boolean);
+      return url.protocol === "https:"
+        && (host === "fomo.family" || host.endsWith(".fomo.family"))
+        && pathParts.length === 3
+        && pathParts[0] === "tokens"
+        && pathParts[2].toLowerCase() === signal.contractAddress.trim().toLowerCase();
+    } catch {
+      return false;
+    }
+  }
   const handle = signal.author.trim().replace(/^@+/u, "").toLowerCase();
   if (!/^[a-z0-9_]{1,15}$/u.test(handle)) return false;
   const tweetId = signal.tweetId?.trim();
@@ -73,7 +109,7 @@ export function hasValidTweetSignalIdentity(signal: StoredTwitterSignal): boolea
 }
 
 export function isTokenResolutionTarget(signal: StoredTwitterSignal): boolean {
-  if (!hasValidTweetSignalIdentity(signal) || hasAutomaticTokenResolution(signal)) return false;
+  if (signal.signalSource === "fomo" || !hasValidTweetSignalIdentity(signal) || hasAutomaticTokenResolution(signal)) return false;
   const observation = tokenSignalObservation(signal);
   if (observation.contractAddress) {
     const address = observation.contractAddress.trim();
@@ -96,6 +132,7 @@ function tweetSignalMergeKey(signal: StoredTwitterSignal): string {
   const tokenIdentity = observation.contractAddress?.toLowerCase()
     || `cashtag:${(signal.tokenSymbols || []).join(",")}`;
   const sourceIdentity = canonicalTweetSourceIdentity(signal.sourceUrl, signal.tweetId)
+    || (signal.signalSource === "fomo" && signal.sourceUrl ? signal.sourceUrl : undefined)
     || `${signal.author.trim().replace(/^@/u, "").toLowerCase()}:${normalizeTweetSignalText(signal.tweetText)}`;
   return `${tokenIdentity}:${sourceIdentity}`;
 }
@@ -104,6 +141,7 @@ function tweetSymbolSourceKey(signal: StoredTwitterSignal): string | undefined {
   const symbols = Array.from(normalizedTokenSymbols(signal)).sort();
   if (symbols.length === 0) return undefined;
   const sourceIdentity = canonicalTweetSourceIdentity(signal.sourceUrl, signal.tweetId)
+    || (signal.signalSource === "fomo" && signal.sourceUrl ? signal.sourceUrl : undefined)
     || `${signal.author.trim().replace(/^@/u, "").toLowerCase()}:${normalizeTweetSignalText(signal.tweetText)}`;
   return `${symbols.join(",")}:${sourceIdentity}`;
 }
@@ -132,10 +170,23 @@ export function mergeTweetTokenSignals<T extends StoredTwitterSignal>(existing: 
     const observation = tokenSignalObservation(signal);
     const preserveResolution = hasAutomaticTokenResolution(previous)
       && (observation.chain === "Unknown" || observation.chain === "Unknown EVM");
+    const preserveFomoMetadata = previous.signalSource === "fomo";
     return {
       ...signal,
       id: previous.id,
       detectedAt: previous.detectedAt,
+      ...(preserveFomoMetadata ? {
+        author: previous.author,
+        authorName: previous.authorName,
+        avatarUrl: previous.avatarUrl,
+        signalSource: previous.signalSource,
+        fomoEventType: previous.fomoEventType,
+        tradeDirection: previous.tradeDirection,
+        usdAmount: previous.usdAmount,
+        marketCapUsd: previous.marketCapUsd,
+        traderCount: previous.traderCount,
+        followerCount: previous.followerCount,
+      } : {}),
       ...(preserveResolution ? {
         chain: previous.chain,
         contractAddress: previous.contractAddress,
@@ -212,6 +263,34 @@ export function parseStoredTwitterSignals(value: unknown): StoredTwitterSignal[]
         ? Math.min(1, Math.max(0, item.resolutionConfidence))
         : undefined,
       resolutionSource: storedString(item.resolutionSource, 64),
+      signalSource: item.signalSource === "fomo" ? "fomo" : item.signalSource === "x" ? "x" : undefined,
+      fomoEventType: item.fomoEventType === "swap_buy"
+        || item.fomoEventType === "swap_sell"
+        || item.fomoEventType === "transfer_in"
+        || item.fomoEventType === "transfer_out"
+        || item.fomoEventType === "multi_user_buy"
+        || item.fomoEventType === "multi_user_sell"
+        || item.fomoEventType === "thesis_created"
+        ? item.fomoEventType
+        : undefined,
+      tradeDirection: item.tradeDirection === "buy"
+        || item.tradeDirection === "sell"
+        || item.tradeDirection === "transfer_in"
+        || item.tradeDirection === "transfer_out"
+        ? item.tradeDirection
+        : undefined,
+      usdAmount: typeof item.usdAmount === "number" && Number.isFinite(item.usdAmount) && item.usdAmount >= 0
+        ? item.usdAmount
+        : undefined,
+      marketCapUsd: typeof item.marketCapUsd === "number" && Number.isFinite(item.marketCapUsd) && item.marketCapUsd >= 0
+        ? item.marketCapUsd
+        : undefined,
+      traderCount: typeof item.traderCount === "number" && Number.isFinite(item.traderCount) && item.traderCount >= 1
+        ? Math.floor(item.traderCount)
+        : undefined,
+      followerCount: typeof item.followerCount === "number" && Number.isFinite(item.followerCount) && item.followerCount >= 0
+        ? Math.min(1_000_000_000, Math.floor(item.followerCount))
+        : undefined,
     });
   }
   return expandAddresslessTokenSignals(signals).slice(0, MAX_STORED_TWITTER_SIGNALS);
@@ -464,7 +543,12 @@ export function canonicalTweetSourceIdentity(
         return `status:${statusIdentity.id}`;
       }
       const pathname = url.pathname === "/" ? "" : url.pathname.replace(/\/$/, "");
-      genericUrlIdentity = `${url.protocol.toLowerCase()}//${hostname}${url.port ? `:${url.port}` : ""}${pathname}`;
+      const fomoAlertId = hostname === "fomo.family"
+        ? url.searchParams.get("tradeId")
+          || url.searchParams.get("alertId")
+          || url.searchParams.get("thesisId")
+        : undefined;
+      genericUrlIdentity = `${url.protocol.toLowerCase()}//${hostname}${url.port ? `:${url.port}` : ""}${pathname}${fomoAlertId ? `?alert=${encodeURIComponent(fomoAlertId)}` : ""}`;
     } catch {
       genericUrlIdentity = value.trim().toLowerCase();
     }

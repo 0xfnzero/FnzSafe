@@ -40,6 +40,8 @@ Open one of these addresses:
 
 The wallet is saved locally after creation. The UI stores the encrypted Keystore, not the password.
 
+New wallets created or imported from a mnemonic use a v3 mnemonic Keystore: its primary ciphertext contains the mnemonic, allowing Solana and EVM accounts to be derived again after import. Wallets created or imported from a private key use a private-key Keystore and restore only that account. The wallet list identifies the Keystore type.
+
 ## Import a wallet
 
 1. Select **Import Wallet**.
@@ -49,6 +51,8 @@ The wallet is saved locally after creation. The UI stores the encrypted Keystore
 5. Select **Import Keystore**.
 
 An import validates the password and saves the encrypted wallet locally. Importing does not move funds or create an on-chain transaction.
+
+Importing a mnemonic Keystore restores and verifies its Solana address and restores the default EVM-derived account from the same mnemonic. Importing a private-key Keystore restores only the account recorded in that file; a mnemonic cannot be reconstructed from a private key.
 
 ## Wallet page
 

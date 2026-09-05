@@ -57,6 +57,11 @@ const DAPP_TAB_URL_EVENT: &str = "dapp://tab-url";
 const DAPP_TAB_TITLE_EVENT: &str = "dapp://tab-title";
 const DAPP_NEW_WINDOW_EVENT: &str = "dapp://new-window";
 const DAPP_TAB_TEXT_EVENT: &str = "dapp://tab-text";
+const DAPP_FOMO_ALERTS_EVENT: &str = "dapp://fomo-alerts";
+const DAPP_FOMO_AUTH_EVENT: &str = "dapp://fomo-auth";
+const DAPP_FOMO_STREAM_EVENT: &str = "dapp://fomo-stream";
+const DAPP_FOMO_PROFILE_EVENT: &str = "dapp://fomo-profile";
+const FOMO_ALERTS_TAB_ID: &str = "twitter-fomo-alerts";
 const DAPP_DOWNLOAD_EVENT: &str = "dapp://download";
 const DAPP_CONNECT_REQUEST_EVENT: &str = "dapp://connect-request";
 const DAPP_REQUEST_TTL_MS: u64 = 3 * 60 * 1000;
@@ -490,6 +495,8 @@ struct DappCapturedTwitterProfile {
     joined_label: Option<String>,
     #[serde(default)]
     verified: bool,
+    #[serde(default)]
+    followed_by_viewer: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -517,6 +524,138 @@ struct DappCapturedTweet {
     published_at: Option<String>,
     #[serde(default)]
     links: Vec<DappCapturedTweetLink>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct DappSubmitFomoAlertsRequest {
+    url: String,
+    alerts: Vec<DappCapturedFomoAlert>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct DappSubmitFomoAuthRequest {
+    url: String,
+    authenticated: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct DappSubmitFomoStreamRequest {
+    url: String,
+    status: String,
+    #[serde(default)]
+    last_activity_at_ms: Option<u64>,
+    #[serde(default)]
+    retry_at_ms: Option<u64>,
+    #[serde(default)]
+    attempt: u32,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct DappSubmitFomoProfileRequest {
+    request_id: String,
+    requested_handle: String,
+    url: String,
+    status_code: u16,
+    #[serde(default)]
+    profile: Option<DappCapturedFomoProfile>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct DappCapturedFomoProfile {
+    user_handle: String,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    profile_picture_url: Option<String>,
+    followers: u64,
+    #[serde(default)]
+    following: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct DappCapturedFomoAlert {
+    id: String,
+    event_type: String,
+    network_id: String,
+    token_address: String,
+    #[serde(default)]
+    ticker: Option<String>,
+    #[serde(default)]
+    user_handle: Option<String>,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    profile_picture_url: Option<String>,
+    #[serde(default)]
+    follower_count: Option<u64>,
+    #[serde(default)]
+    trade_id: Option<String>,
+    #[serde(default)]
+    usd_amount: Option<f64>,
+    #[serde(default)]
+    market_cap: Option<f64>,
+    #[serde(default)]
+    trader_count: Option<u32>,
+    #[serde(default)]
+    thesis: Option<String>,
+    #[serde(default)]
+    thesis_id: Option<String>,
+    created_at_ms: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct DappFomoAlertEventItem {
+    id: String,
+    event_type: String,
+    chain: String,
+    token_address: String,
+    ticker: Option<String>,
+    user_handle: Option<String>,
+    display_name: Option<String>,
+    profile_picture_url: Option<String>,
+    follower_count: Option<u64>,
+    trade_id: Option<String>,
+    usd_amount: Option<f64>,
+    market_cap: Option<f64>,
+    trader_count: Option<u32>,
+    thesis: Option<String>,
+    thesis_id: Option<String>,
+    source_url: String,
+    created_at_ms: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct DappFomoAlertsEvent {
+    tab_id: String,
+    alerts: Vec<DappFomoAlertEventItem>,
+    captured_at_ms: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct DappFomoAuthEvent {
+    tab_id: String,
+    authenticated: bool,
+    url: String,
+    captured_at_ms: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct DappFomoStreamEvent {
+    tab_id: String,
+    status: String,
+    last_activity_at_ms: Option<u64>,
+    retry_at_ms: Option<u64>,
+    attempt: u32,
+    captured_at_ms: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct DappFomoProfileEvent {
+    request_id: String,
+    requested_handle: String,
+    status_code: u16,
+    profile: Option<DappCapturedFomoProfile>,
+    captured_at_ms: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1274,6 +1413,20 @@ fn is_safe_dapp_webview_navigation_url(url: &tauri::Url) -> bool {
     }
 
     matches!(url.scheme(), "about" | "blob" | "data")
+}
+
+fn is_fomo_auth_popup_url(url: &tauri::Url) -> bool {
+    if url.scheme() == "about" && url.path() == "blank" {
+        return true;
+    }
+    if url_has_authority_credentials(url) || url.scheme() != "https" {
+        return false;
+    }
+    let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+    host == "accounts.google.com"
+        || host == "appleid.apple.com"
+        || host == "privy.io"
+        || host.ends_with(".privy.io")
 }
 
 fn is_valid_telegram_token(value: &str, allow_dash: bool) -> bool {
@@ -2515,6 +2668,416 @@ fn dapp_provider_script(
     ))
 }
 
+fn fomo_alert_capture_script() -> &'static str {
+    r#"
+(function () {
+  const host = window.location.hostname.toLowerCase();
+  if ((host !== "fomo.family" && !host.endsWith(".fomo.family")) || window.__FNZSAFE_FOMO_ALERT_CAPTURE__) return;
+  window.__FNZSAFE_FOMO_ALERT_CAPTURE__ = true;
+
+  const alertTypes = new Set([
+    "swap_buy", "swap_sell", "transfer_in", "transfer_out", "multi_user_buy", "multi_user_sell", "thesis_created",
+  ]);
+  const pending = new Map();
+  let flushTimer = null;
+  let authState = null;
+  let loginTriggered = false;
+  let authDomTimer = null;
+  let fomoAuthorization = "";
+  let fomoSupportedChains = "";
+  const streamSockets = new Set();
+  let streamSocketObserved = false;
+  const recoveryStorageKey = "__fnzsafe_fomo_stream_recovery_attempt";
+  let recoveryTimer = null;
+  let recoveryAttempt = 0;
+  let lastStreamActivityAt = 0;
+  let lastStreamReportAt = 0;
+  let lastStreamReportSignature = "";
+  let streamReportRetryTimer = null;
+
+  try {
+    recoveryAttempt = Math.min(16, Math.max(0, Number.parseInt(sessionStorage.getItem(recoveryStorageKey) || "0", 10) || 0));
+  } catch (_) {}
+
+  const clean = (value, limit) => typeof value === "string" ? value.trim().slice(0, limit) : "";
+  const finite = (value) => {
+    const number = Number(value);
+    return Number.isFinite(number) && number >= 0 ? number : null;
+  };
+  const record = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : null;
+  const timestamp = (value) => {
+    if (typeof value === "number" && Number.isFinite(value)) return Math.max(0, Math.floor(value < 1e12 ? value * 1000 : value));
+    const parsed = Date.parse(String(value || ""));
+    return Number.isFinite(parsed) ? parsed : Date.now();
+  };
+
+  const hasOpenStreamSocket = () => Array.from(streamSockets).some((socket) =>
+    socket && socket.readyState === 1
+  );
+
+  const isFomoStreamUrl = (value) => {
+    try {
+      const url = new URL(String(value || ""), window.location.href);
+      return (url.protocol === "ws:" || url.protocol === "wss:")
+        && (url.hostname === "fomo.family" || url.hostname.endsWith(".fomo.family"));
+    } catch (_) {
+      return false;
+    }
+  };
+
+  async function reportStream(status, retryAt = 0, force = false) {
+    const now = Date.now();
+    const signature = `${status}:${retryAt || 0}:${recoveryAttempt}`;
+    if (!force && signature === lastStreamReportSignature && now - lastStreamReportAt < 30_000) return;
+    const invoke = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
+    if (typeof invoke !== "function") {
+      if (streamReportRetryTimer === null) {
+        streamReportRetryTimer = window.setTimeout(() => {
+          streamReportRetryTimer = null;
+          void reportStream(status, retryAt, true);
+        }, 500);
+      }
+      return;
+    }
+    try {
+      await invoke("dapp_submit_fomo_stream", {
+        payload: {
+          status,
+          url: window.location.href,
+          last_activity_at_ms: lastStreamActivityAt || null,
+          retry_at_ms: retryAt || null,
+          attempt: recoveryAttempt,
+        },
+      });
+      lastStreamReportSignature = signature;
+      lastStreamReportAt = now;
+    } catch (_) {}
+  }
+
+  function cancelRecovery() {
+    if (recoveryTimer !== null) {
+      window.clearTimeout(recoveryTimer);
+      recoveryTimer = null;
+    }
+  }
+
+  function markStreamActivity(healthyStream = true) {
+    lastStreamActivityAt = Date.now();
+    if (healthyStream) {
+      cancelRecovery();
+      if (recoveryAttempt !== 0) {
+        recoveryAttempt = 0;
+        try { sessionStorage.removeItem(recoveryStorageKey); } catch (_) {}
+      }
+    }
+    if (healthyStream || !streamSocketObserved) void reportStream("connected");
+  }
+
+  function scheduleStreamRecovery(force = false) {
+    if (!navigator.onLine) {
+      cancelRecovery();
+      void reportStream("offline", 0, true);
+      return;
+    }
+    if (!streamSocketObserved || (!force && hasOpenStreamSocket()) || recoveryTimer !== null) return;
+    const baseDelay = Math.min(300_000, 15_000 * (2 ** Math.min(recoveryAttempt, 5)));
+    const delay = Math.min(300_000, Math.round(baseDelay * (1 + Math.random() * 0.2)));
+    const retryAt = Date.now() + delay;
+    void reportStream("reconnecting", retryAt, true);
+    recoveryTimer = window.setTimeout(() => {
+      recoveryTimer = null;
+      if (!navigator.onLine) {
+        void reportStream("offline", 0, true);
+        return;
+      }
+      if (!force && hasOpenStreamSocket()) {
+        void reportStream("connected", 0, true);
+        return;
+      }
+      recoveryAttempt = Math.min(16, recoveryAttempt + 1);
+      try { sessionStorage.setItem(recoveryStorageKey, String(recoveryAttempt)); } catch (_) {}
+      window.location.reload();
+    }, delay);
+  }
+
+  async function reportAuth(authenticated) {
+    if (authState === authenticated) return;
+    const invoke = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
+    if (typeof invoke !== "function") {
+      window.setTimeout(() => reportAuth(authenticated), 500);
+      return;
+    }
+    try {
+      await invoke("dapp_submit_fomo_auth", { payload: { authenticated, url: window.location.href } });
+      authState = authenticated;
+    } catch (_) {}
+  }
+
+  function detectAuthUi() {
+    authDomTimer = null;
+    const buttons = Array.from(document.querySelectorAll("button"));
+    const text = (element) => String(element.innerText || element.textContent || "").replace(/\s+/g, " ").trim();
+    const buttonLabels = buttons.map(text);
+    const loginModalOpen = buttonLabels.some((label) =>
+      label === "Continue with Apple" || label === "Continue with Google"
+    );
+    if (loginModalOpen) {
+      void reportAuth(false);
+      return;
+    }
+    const loginButton = buttons.find((button) => text(button) === "Login");
+    if (loginButton && window.location.pathname === "/") {
+      void reportAuth(false);
+      if (!loginTriggered) {
+        loginTriggered = true;
+        loginButton.click();
+      }
+      return;
+    }
+    const alertsButton = buttons.find((button) => text(button) === "Alerts");
+    if (alertsButton && window.location.pathname.startsWith("/tokens/")) {
+      void reportAuth(true);
+    }
+  }
+
+  function scheduleAuthUiCheck() {
+    if (authDomTimer !== null) return;
+    authDomTimer = window.setTimeout(detectAuthUi, 50);
+  }
+
+  function normalizeAlert(value) {
+    const item = record(value);
+    if (!item) return null;
+    const rawEventType = clean(item.type, 32);
+    const eventType = rawEventType === "thesis" ? "thesis_created" : rawEventType;
+    const id = clean(item.id, 128);
+    const body = record(item.body) || {};
+    const comment = record(item.comment) || {};
+    const networkId = clean(String(item.networkId ?? body.networkId ?? ""), 32);
+    const tokenAddress = clean(item.tokenAddress ?? body.tokenAddress, 128);
+    if (!id || !alertTypes.has(eventType) || !networkId || !tokenAddress) return null;
+
+    const topTraders = Array.isArray(body.topTraders) ? body.topTraders : [];
+    const topTrader = record(topTraders[0]) || {};
+    const traderProfile = record(item.user) || record(topTrader.user) || record(topTrader.profile) || {};
+    const traderCount = finite(body.uniqueTraders);
+    const thesis = eventType === "thesis_created"
+      ? clean(comment.comment ?? body.comment ?? body.thesis ?? item.thesis, 4000)
+      : "";
+    if (eventType === "thesis_created" && !thesis) return null;
+    const followerCount = finite(
+      item.followers ?? body.followers ?? topTrader.followers ?? traderProfile.followers
+    );
+    return {
+      id,
+      event_type: eventType,
+      network_id: networkId,
+      token_address: tokenAddress,
+      ticker: clean(item.ticker ?? body.ticker, 32) || null,
+      user_handle: clean(item.userHandle ?? body.userHandle ?? topTrader.userHandle, 80) || null,
+      display_name: clean(item.displayName ?? body.displayName ?? topTrader.displayName, 120) || null,
+      profile_picture_url: clean(item.profilePictureLink ?? body.userImageUrl ?? body.profilePictureLink ?? topTrader.profilePictureLink, 2048) || null,
+      follower_count: followerCount === null ? null : Math.floor(followerCount),
+      trade_id: clean(item.tradeId, 128) || null,
+      usd_amount: finite(item.usdAmount ?? body.totalVolume),
+      market_cap: finite(item.fdv ?? item.marketCap ?? body.fdv ?? body.marketCap),
+      trader_count: traderCount === null ? null : Math.max(1, Math.floor(traderCount)),
+      thesis: thesis || null,
+      thesis_id: eventType === "thesis_created"
+        ? clean(comment.commentId ?? comment.id ?? body.commentId ?? item.commentId ?? id, 128) || null
+        : null,
+      created_at_ms: timestamp(item.createdAt),
+    };
+  }
+
+  function collectAlerts(value, depth = 0) {
+    if (depth > 5 || value == null) return [];
+    if (Array.isArray(value)) return value.slice(0, 500).flatMap((item) => collectAlerts(item, depth + 1));
+    const item = record(value);
+    if (!item) return [];
+    const alert = normalizeAlert(item);
+    if (alert) return [alert];
+    return ["responseObject", "items", "payload", "data", "pages"]
+      .flatMap((key) => collectAlerts(item[key], depth + 1));
+  }
+
+  async function flush() {
+    flushTimer = null;
+    if (pending.size === 0) return;
+    const invoke = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
+    if (typeof invoke !== "function") {
+      flushTimer = window.setTimeout(flush, 1000);
+      return;
+    }
+    const alerts = Array.from(pending.values()).slice(0, 200);
+    alerts.forEach((alert) => pending.delete(alert.id));
+    try {
+      await invoke("dapp_submit_fomo_alerts", { payload: { alerts, url: window.location.href } });
+    } catch (_) {
+      alerts.forEach((alert) => pending.set(alert.id, alert));
+      flushTimer = window.setTimeout(flush, 2000);
+    }
+  }
+
+  function enqueue(value) {
+    for (const alert of collectAlerts(value)) pending.set(alert.id, alert);
+    if (pending.size > 0 && flushTimer === null) flushTimer = window.setTimeout(flush, 50);
+  }
+
+  const nativeFetch = window.fetch;
+  if (typeof nativeFetch === "function") {
+    window.fetch = async function (...args) {
+      const response = await nativeFetch.apply(this, args);
+      try {
+        const requestUrl = typeof args[0] === "string" || args[0] instanceof URL
+          ? new URL(String(args[0]), window.location.href)
+          : new URL(args[0]?.url || "", window.location.href);
+        if (requestUrl.hostname === "prod-api.fomo.family") {
+          const headers = new Headers(
+            args[1]?.headers || (typeof Request !== "undefined" && args[0] instanceof Request ? args[0].headers : undefined),
+          );
+          const authorization = headers.get("Authorization") || "";
+          if (/^Bearer\s+\S+$/i.test(authorization) && authorization.length <= 8_192) {
+            fomoAuthorization = authorization;
+          }
+          const supportedChains = headers.get("X-Supported-Chains") || "";
+          if (supportedChains.length <= 2_048) fomoSupportedChains = supportedChains;
+        }
+        if (requestUrl.hostname === "prod-api.fomo.family" && (
+          requestUrl.pathname === "/feed/tradingActivity" || requestUrl.pathname === "/feed"
+        )) {
+          if (response.status === 401 || response.status === 403) void reportAuth(false);
+          else if (response.ok) {
+            void reportAuth(true);
+            markStreamActivity(false);
+            response.clone().json().then(enqueue).catch(() => {});
+          }
+        }
+      } catch (_) {}
+      return response;
+    };
+
+    window.addEventListener("__fnzsafe_fomo_profile_request", async (event) => {
+      const detail = event?.detail || {};
+      const requestId = clean(detail.requestId, 100);
+      const requestedHandle = clean(detail.handle, 40).replace(/^@+/, "").toLowerCase();
+      if (!requestId || !/^[a-z0-9_]{1,40}$/i.test(requestedHandle)) return;
+      const invoke = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
+      if (typeof invoke !== "function") return;
+      let statusCode = 0;
+      let profile = null;
+      try {
+        if (!fomoAuthorization) throw new Error("Fomo authorization is not ready");
+        const headers = { Authorization: fomoAuthorization, Accept: "application/json" };
+        if (fomoSupportedChains) headers["X-Supported-Chains"] = fomoSupportedChains;
+        const response = await nativeFetch(
+          `https://prod-api.fomo.family/v2/users/userHandle/${encodeURIComponent(requestedHandle)}`,
+          { method: "GET", credentials: "include", headers, signal: AbortSignal.timeout(15_000) },
+        );
+        statusCode = response.status;
+        const payload = await response.json().catch(() => null);
+        const user = record(payload?.responseObject);
+        if (response.ok && user) {
+          const followers = finite(user.followers);
+          if (followers !== null) {
+            profile = {
+              user_handle: clean(user.userHandle, 40),
+              display_name: clean(user.displayName, 120) || null,
+              profile_picture_url: clean(user.profilePictureLink, 2048) || null,
+              followers: Math.floor(followers),
+              following: finite(user.following) === null ? null : Math.floor(finite(user.following)),
+            };
+          }
+        }
+      } catch (_) {}
+      try {
+        await invoke("dapp_submit_fomo_profile", {
+          payload: {
+            request_id: requestId,
+            requested_handle: requestedHandle,
+            url: window.location.href,
+            status_code: statusCode,
+            profile,
+          },
+        });
+      } catch (_) {}
+    });
+  }
+
+  const NativeWebSocket = window.WebSocket;
+  if (typeof NativeWebSocket === "function") {
+    class FomoCaptureWebSocket extends NativeWebSocket {
+      constructor(url, protocols) {
+        if (protocols === undefined) super(url);
+        else super(url, protocols);
+        const isFomoStream = isFomoStreamUrl(url);
+        if (isFomoStream) {
+          streamSocketObserved = true;
+          streamSockets.add(this);
+          void reportStream("connecting");
+          this.addEventListener("open", () => {
+            cancelRecovery();
+            lastStreamActivityAt = Date.now();
+            void reportStream("connected", 0, true);
+          });
+          this.addEventListener("close", () => {
+            streamSockets.delete(this);
+            if (hasOpenStreamSocket()) void reportStream("connected", 0, true);
+            else scheduleStreamRecovery(false);
+          });
+          this.addEventListener("error", () => scheduleStreamRecovery(true));
+        }
+        this.addEventListener("message", async (event) => {
+          try {
+            if (isFomoStream) markStreamActivity();
+            let payload = event.data;
+            if (payload instanceof Blob) payload = await payload.text();
+            else if (payload instanceof ArrayBuffer) payload = new TextDecoder().decode(payload);
+            if (typeof payload !== "string" || payload.length > 2_000_000) return;
+            const message = JSON.parse(payload);
+            if (message?.type === "data" && message?.topicType === "trading_activity") {
+              void reportAuth(true);
+              enqueue(message.payload);
+            }
+          } catch (_) {}
+        });
+      }
+    }
+    Object.defineProperty(window, "WebSocket", { value: FomoCaptureWebSocket, configurable: true, writable: true });
+  }
+
+  window.addEventListener("offline", () => {
+    cancelRecovery();
+    void reportStream("offline", 0, true);
+  });
+  window.addEventListener("online", () => scheduleStreamRecovery(true));
+  window.addEventListener("pageshow", () => {
+    if (streamSocketObserved && !hasOpenStreamSocket()) scheduleStreamRecovery(false);
+  });
+  window.setTimeout(() => {
+    if (streamSocketObserved && !hasOpenStreamSocket()) scheduleStreamRecovery(false);
+  }, 30_000);
+  window.setInterval(() => {
+    if (!navigator.onLine) {
+      void reportStream("offline");
+      return;
+    }
+    if (hasOpenStreamSocket() && lastStreamActivityAt > 0 && Date.now() - lastStreamActivityAt > 180_000) {
+      scheduleStreamRecovery(true);
+    }
+  }, 30_000);
+  void reportStream(navigator.onLine ? "connecting" : "offline", 0, true);
+
+  try {
+    const observer = new MutationObserver(scheduleAuthUiCheck);
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+  } catch (_) {}
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", scheduleAuthUiCheck, { once: true });
+  [0, 250, 750, 1500, 3000].forEach((delay) => window.setTimeout(scheduleAuthUiCheck, delay));
+})();
+"#
+}
+
 /// Open a URL in the system default browser (not the Tauri webview).
 #[tauri::command]
 fn open_external_url(url: String) -> Result<(), String> {
@@ -2658,6 +3221,9 @@ fn dapp_open_tab(
             if open_telegram_target(&target_url) {
                 return tauri::webview::NewWindowResponse::Deny;
             }
+            if tab_id_for_new_window == FOMO_ALERTS_TAB_ID && is_fomo_auth_popup_url(&target_url) {
+                return tauri::webview::NewWindowResponse::Allow;
+            }
             if is_safe_browser_url(&target_url) {
                 let _ = app_for_new_window.emit_to(
                     "main",
@@ -2704,6 +3270,7 @@ fn dapp_open_tab(
             true
         });
 
+    builder = builder.initialization_script(fomo_alert_capture_script());
     if let (Some(dapp), Some(wallet_public_key)) = (dapp.as_ref(), wallet_public_key.as_ref()) {
         let init_script = dapp_provider_script(dapp, wallet_public_key, &network)?;
         builder = builder.initialization_script(&init_script);
@@ -3076,6 +3643,7 @@ async fn dapp_request_tab_text(
         website: clean(websiteNode?.innerText || websiteNode?.textContent, 512) || null,
         joined_label: clean(root.querySelector("[data-testid='UserJoinDate']")?.innerText, 120) || null,
         verified: Boolean(userName.querySelector("[data-testid='icon-verified'], svg[aria-label*='Verified'], svg[aria-label*='认证']")),
+        followed_by_viewer: Boolean(root.querySelector("button[data-testid$='-unfollow'], [role='button'][data-testid$='-unfollow']")),
       }};
     }};
 
@@ -3449,6 +4017,7 @@ fn dapp_submit_page_text(
             website: optional_text(profile.website, 512),
             joined_label: optional_text(profile.joined_label, 120),
             verified: profile.verified,
+            followed_by_viewer: profile.followed_by_viewer,
         })
     });
     app.emit_to(
@@ -3467,6 +4036,412 @@ fn dapp_submit_page_text(
         },
     )
     .map_err(|error| format!("failed to emit dapp page text: {error}"))?;
+    Ok(())
+}
+
+fn fomo_network(network_id: &str) -> Option<(&'static str, &'static str, bool)> {
+    match network_id.trim().to_ascii_lowercase().as_str() {
+        "1399811149" | "solana" => Some(("Solana", "solana", true)),
+        "1" | "ethereum" => Some(("Ethereum", "ethereum", false)),
+        "56" | "bnb" => Some(("BSC", "bnb", false)),
+        "8453" | "base" => Some(("Base", "base", false)),
+        "10143" | "monad" => Some(("Monad", "monad", false)),
+        "4663" | "robinhood" => Some(("Robinhood", "robinhood", false)),
+        "1337" | "hyperliquid" => Some(("HyperEVM", "hyperliquid", false)),
+        _ => None,
+    }
+}
+
+fn is_likely_evm_token_address(value: &str) -> bool {
+    value.len() == 42
+        && value.starts_with("0x")
+        && value[2..].bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn validated_fomo_optional_text(
+    value: Option<String>,
+    limit: usize,
+) -> Result<Option<String>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let value = value.trim().chars().take(limit + 1).collect::<String>();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value.chars().count() > limit || value.chars().any(char::is_control) {
+        return Err("invalid Fomo alert text field".to_string());
+    }
+    Ok(Some(value))
+}
+
+fn is_fomo_https_url(url: &tauri::Url) -> bool {
+    let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+    url.scheme() == "https" && (host == "fomo.family" || host.ends_with(".fomo.family"))
+}
+
+fn normalized_fomo_handle(value: &str) -> Option<String> {
+    let handle = value.trim().trim_start_matches('@').to_ascii_lowercase();
+    (!handle.is_empty()
+        && handle.len() <= 40
+        && handle
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_'))
+    .then_some(handle)
+}
+
+fn validated_fomo_alert(input: DappCapturedFomoAlert) -> Result<DappFomoAlertEventItem, String> {
+    let id = input.id.trim().to_string();
+    if id.is_empty()
+        || id.len() > 128
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b':' | b'.'))
+    {
+        return Err("invalid Fomo alert ID".to_string());
+    }
+    let event_type = input.event_type.trim().to_ascii_lowercase();
+    if !matches!(
+        event_type.as_str(),
+        "swap_buy"
+            | "swap_sell"
+            | "transfer_in"
+            | "transfer_out"
+            | "multi_user_buy"
+            | "multi_user_sell"
+            | "thesis_created"
+    ) {
+        return Err("unsupported Fomo alert type".to_string());
+    }
+    let (chain, network_slug, is_solana) = fomo_network(&input.network_id)
+        .ok_or_else(|| "unsupported Fomo alert network".to_string())?;
+    let token_address = input.token_address.trim().to_string();
+    let valid_token_address = if is_solana {
+        is_likely_solana_pubkey(&token_address)
+    } else {
+        is_likely_evm_token_address(&token_address)
+    };
+    if !valid_token_address {
+        return Err("invalid Fomo alert token address".to_string());
+    }
+    let validate_amount = |value: Option<f64>| {
+        value
+            .map(|amount| {
+                (amount.is_finite() && (0.0..=1.0e18).contains(&amount))
+                    .then_some(amount)
+                    .ok_or_else(|| "invalid Fomo alert amount".to_string())
+            })
+            .transpose()
+    };
+    let created_at_ms = input.created_at_ms;
+    if created_at_ms < 1_500_000_000_000 || created_at_ms > now_ms().saturating_add(86_400_000) {
+        return Err("invalid Fomo alert timestamp".to_string());
+    }
+    let profile_picture_url = validated_fomo_optional_text(input.profile_picture_url, 2_048)?
+        .map(|value| {
+            let parsed = tauri::Url::parse(&value)
+                .map_err(|_| "invalid Fomo profile image URL".to_string())?;
+            if parsed.scheme() != "https"
+                || parsed.host_str().is_none()
+                || url_has_authority_credentials(&parsed)
+            {
+                return Err("invalid Fomo profile image URL".to_string());
+            }
+            Ok(parsed.to_string())
+        })
+        .transpose()?;
+    let user_handle = validated_fomo_optional_text(input.user_handle, 80)?
+        .map(|value| {
+            normalized_fomo_handle(&value).ok_or_else(|| "invalid Fomo user handle".to_string())
+        })
+        .transpose()?;
+    let trade_id = validated_fomo_optional_text(input.trade_id, 128)?;
+    if trade_id.as_deref().is_some_and(|value| {
+        !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    }) {
+        return Err("invalid Fomo trade ID".to_string());
+    }
+    let thesis = validated_fomo_optional_text(input.thesis, 4_000)?;
+    let thesis_id = validated_fomo_optional_text(input.thesis_id, 128)?;
+    if event_type == "thesis_created" && thesis.is_none() {
+        return Err("Fomo thesis text is required".to_string());
+    }
+    if thesis_id.as_deref().is_some_and(|value| {
+        !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b':' | b'.'))
+    }) {
+        return Err("invalid Fomo thesis ID".to_string());
+    }
+    let mut source_url = tauri::Url::parse(&format!(
+        "https://fomo.family/tokens/{network_slug}/{token_address}"
+    ))
+    .map_err(|error| format!("failed to build Fomo source URL: {error}"))?;
+    if event_type == "thesis_created" {
+        source_url
+            .query_pairs_mut()
+            .append_pair("thesisId", thesis_id.as_deref().unwrap_or(&id));
+    } else {
+        source_url.query_pairs_mut().append_pair(
+            if trade_id.is_some() {
+                "tradeId"
+            } else {
+                "alertId"
+            },
+            trade_id.as_deref().unwrap_or(&id),
+        );
+    }
+
+    Ok(DappFomoAlertEventItem {
+        id,
+        event_type,
+        chain: chain.to_string(),
+        token_address,
+        ticker: validated_fomo_optional_text(input.ticker, 32)?,
+        user_handle,
+        display_name: validated_fomo_optional_text(input.display_name, 120)?,
+        profile_picture_url,
+        follower_count: input.follower_count.filter(|count| *count <= 1_000_000_000),
+        trade_id,
+        usd_amount: validate_amount(input.usd_amount)?,
+        market_cap: validate_amount(input.market_cap)?,
+        trader_count: input
+            .trader_count
+            .filter(|count| *count > 0 && *count <= 100_000),
+        thesis,
+        thesis_id,
+        source_url: source_url.to_string(),
+        created_at_ms,
+    })
+}
+
+#[tauri::command]
+fn dapp_submit_fomo_alerts(
+    webview: DesktopWebview,
+    app: DesktopAppHandle,
+    payload: DappSubmitFomoAlertsRequest,
+) -> Result<(), String> {
+    let webview_label = webview.label().to_string();
+    let tab_id = dapp_tab_id_from_label(&webview_label)
+        .ok_or_else(|| "Fomo alerts can only be submitted from dapp tabs".to_string())?;
+    if tab_id != FOMO_ALERTS_TAB_ID {
+        return Err("Fomo alerts can only be submitted from the Fomo Alerts tab".to_string());
+    }
+    let page_url = parse_dapp_browser_url(&payload.url)?;
+    if !is_fomo_https_url(&page_url) {
+        return Err("Fomo alerts can only be submitted by fomo.family".to_string());
+    }
+    if payload.alerts.len() > 200 {
+        return Err("too many Fomo alerts in one submission".to_string());
+    }
+    let alerts = payload
+        .alerts
+        .into_iter()
+        .map(validated_fomo_alert)
+        .collect::<Result<Vec<_>, _>>()?;
+    if alerts.is_empty() {
+        return Ok(());
+    }
+    app.emit_to(
+        "main",
+        DAPP_FOMO_ALERTS_EVENT,
+        DappFomoAlertsEvent {
+            tab_id,
+            alerts,
+            captured_at_ms: now_ms(),
+        },
+    )
+    .map_err(|error| format!("failed to emit Fomo alerts: {error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn dapp_submit_fomo_auth(
+    webview: DesktopWebview,
+    app: DesktopAppHandle,
+    payload: DappSubmitFomoAuthRequest,
+) -> Result<(), String> {
+    let webview_label = webview.label().to_string();
+    let tab_id = dapp_tab_id_from_label(&webview_label)
+        .ok_or_else(|| "Fomo auth can only be submitted from dapp tabs".to_string())?;
+    if tab_id != FOMO_ALERTS_TAB_ID {
+        return Err("Fomo auth can only be submitted from the Fomo Alerts tab".to_string());
+    }
+    let page_url = parse_dapp_browser_url(&payload.url)?;
+    if !is_fomo_https_url(&page_url) {
+        return Err("Fomo auth can only be submitted by fomo.family".to_string());
+    }
+    app.emit_to(
+        "main",
+        DAPP_FOMO_AUTH_EVENT,
+        DappFomoAuthEvent {
+            tab_id,
+            authenticated: payload.authenticated,
+            url: page_url.to_string(),
+            captured_at_ms: now_ms(),
+        },
+    )
+    .map_err(|error| format!("failed to emit Fomo auth status: {error}"))?;
+    Ok(())
+}
+
+fn validated_fomo_stream_event(
+    payload: DappSubmitFomoStreamRequest,
+    captured_at_ms: u64,
+) -> Result<DappFomoStreamEvent, String> {
+    let page_url = parse_dapp_browser_url(&payload.url)?;
+    if !is_fomo_https_url(&page_url) {
+        return Err("Fomo stream status can only be submitted by fomo.family".to_string());
+    }
+    if !matches!(
+        payload.status.as_str(),
+        "connecting" | "connected" | "reconnecting" | "offline"
+    ) {
+        return Err("invalid Fomo stream status".to_string());
+    }
+    if payload.attempt > 16 {
+        return Err("invalid Fomo stream recovery attempt".to_string());
+    }
+    let last_activity_at_ms = payload
+        .last_activity_at_ms
+        .filter(|timestamp| *timestamp <= captured_at_ms.saturating_add(60_000));
+    let retry_at_ms = payload.retry_at_ms.filter(|timestamp| {
+        *timestamp >= captured_at_ms.saturating_sub(60_000)
+            && *timestamp <= captured_at_ms.saturating_add(6 * 60_000)
+    });
+    Ok(DappFomoStreamEvent {
+        tab_id: FOMO_ALERTS_TAB_ID.to_string(),
+        status: payload.status,
+        last_activity_at_ms,
+        retry_at_ms,
+        attempt: payload.attempt,
+        captured_at_ms,
+    })
+}
+
+#[tauri::command]
+fn dapp_submit_fomo_stream(
+    webview: DesktopWebview,
+    app: DesktopAppHandle,
+    payload: DappSubmitFomoStreamRequest,
+) -> Result<(), String> {
+    let webview_label = webview.label().to_string();
+    let tab_id = dapp_tab_id_from_label(&webview_label)
+        .ok_or_else(|| "Fomo stream status can only be submitted from dapp tabs".to_string())?;
+    if tab_id != FOMO_ALERTS_TAB_ID {
+        return Err(
+            "Fomo stream status can only be submitted from the Fomo Alerts tab".to_string(),
+        );
+    }
+    let captured_at_ms = now_ms();
+    let event = validated_fomo_stream_event(payload, captured_at_ms)?;
+    app.emit_to("main", DAPP_FOMO_STREAM_EVENT, event)
+        .map_err(|error| format!("failed to emit Fomo stream status: {error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn dapp_request_fomo_profile(
+    app: DesktopAppHandle,
+    request_id: String,
+    handle: String,
+) -> Result<(), String> {
+    if request_id.is_empty()
+        || request_id.len() > 100
+        || !request_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err("invalid Fomo profile request ID".to_string());
+    }
+    let handle =
+        normalized_fomo_handle(&handle).ok_or_else(|| "invalid Fomo profile handle".to_string())?;
+    let label = dapp_tab_label(FOMO_ALERTS_TAB_ID)?;
+    let webview = app
+        .get_webview(&label)
+        .ok_or_else(|| "Fomo Alerts tab is not open".to_string())?;
+    let detail = json!({ "requestId": request_id, "handle": handle });
+    let script = format!(
+        "window.dispatchEvent(new CustomEvent('__fnzsafe_fomo_profile_request', {{ detail: {} }}));",
+        detail
+    );
+    webview
+        .eval(&script)
+        .map_err(|error| format!("failed to request Fomo profile: {error}"))
+}
+
+#[tauri::command]
+fn dapp_submit_fomo_profile(
+    webview: DesktopWebview,
+    app: DesktopAppHandle,
+    payload: DappSubmitFomoProfileRequest,
+) -> Result<(), String> {
+    let webview_label = webview.label().to_string();
+    let tab_id = dapp_tab_id_from_label(&webview_label)
+        .ok_or_else(|| "Fomo profiles can only be submitted from dapp tabs".to_string())?;
+    if tab_id != FOMO_ALERTS_TAB_ID {
+        return Err("Fomo profiles can only be submitted from the Fomo Alerts tab".to_string());
+    }
+    let page_url = parse_dapp_browser_url(&payload.url)?;
+    if !is_fomo_https_url(&page_url) {
+        return Err("Fomo profiles can only be submitted by fomo.family".to_string());
+    }
+    if payload.request_id.is_empty()
+        || payload.request_id.len() > 100
+        || !payload
+            .request_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err("invalid Fomo profile request ID".to_string());
+    }
+    let requested_handle = normalized_fomo_handle(&payload.requested_handle)
+        .ok_or_else(|| "invalid requested Fomo profile handle".to_string())?;
+    let profile = payload
+        .profile
+        .map(|profile| {
+            let user_handle = normalized_fomo_handle(&profile.user_handle)
+                .ok_or_else(|| "invalid Fomo profile handle".to_string())?;
+            if user_handle != requested_handle || profile.followers > 1_000_000_000 {
+                return Err("unexpected Fomo profile response".to_string());
+            }
+            let profile_picture_url =
+                validated_fomo_optional_text(profile.profile_picture_url, 2_048)?
+                    .map(|value| {
+                        let parsed = tauri::Url::parse(&value)
+                            .map_err(|_| "invalid Fomo profile image URL".to_string())?;
+                        if parsed.scheme() != "https"
+                            || parsed.host_str().is_none()
+                            || url_has_authority_credentials(&parsed)
+                        {
+                            return Err("invalid Fomo profile image URL".to_string());
+                        }
+                        Ok(parsed.to_string())
+                    })
+                    .transpose()?;
+            Ok(DappCapturedFomoProfile {
+                user_handle,
+                display_name: validated_fomo_optional_text(profile.display_name, 120)?,
+                profile_picture_url,
+                followers: profile.followers,
+                following: profile.following.filter(|value| *value <= 1_000_000_000),
+            })
+        })
+        .transpose()?;
+    app.emit_to(
+        "main",
+        DAPP_FOMO_PROFILE_EVENT,
+        DappFomoProfileEvent {
+            request_id: payload.request_id,
+            requested_handle,
+            status_code: payload.status_code,
+            profile,
+            captured_at_ms: now_ms(),
+        },
+    )
+    .map_err(|error| format!("failed to emit Fomo profile: {error}"))?;
     Ok(())
 }
 
@@ -4403,6 +5378,11 @@ pub fn run() {
             dapp_close_tab,
             dapp_request_tab_text,
             dapp_submit_page_text,
+            dapp_submit_fomo_alerts,
+            dapp_submit_fomo_auth,
+            dapp_submit_fomo_stream,
+            dapp_request_fomo_profile,
+            dapp_submit_fomo_profile,
             browser_profile::browser_chrome_profiles,
             browser_profile::browser_import_chrome,
             browser_profile::browser_passwords_list,
@@ -4590,6 +5570,189 @@ mod tests {
         );
         assert_eq!(fs::read(first).unwrap(), b"first");
         assert_eq!(fs::read(second).unwrap(), b"second");
+    }
+
+    #[test]
+    fn fomo_alert_validation_builds_a_scoped_source_url() {
+        let alert = validated_fomo_alert(DappCapturedFomoAlert {
+            id: "alert-1".to_string(),
+            event_type: "swap_buy".to_string(),
+            network_id: "4663".to_string(),
+            token_address: "0x7dbf38976f6d3b9c529e7d9484a71898b409ee6a".to_string(),
+            ticker: Some("ZZZ".to_string()),
+            user_handle: Some("chefjin".to_string()),
+            display_name: None,
+            profile_picture_url: None,
+            follower_count: Some(12_300),
+            trade_id: Some("trade-1".to_string()),
+            usd_amount: Some(8_000.0),
+            market_cap: Some(18_900_000.0),
+            trader_count: None,
+            thesis: None,
+            thesis_id: None,
+            created_at_ms: now_ms(),
+        })
+        .unwrap();
+
+        assert_eq!(alert.chain, "Robinhood");
+        assert_eq!(alert.event_type, "swap_buy");
+        assert_eq!(alert.trade_id.as_deref(), Some("trade-1"));
+        assert_eq!(alert.follower_count, Some(12_300));
+        assert_eq!(
+            alert.source_url,
+            "https://fomo.family/tokens/robinhood/0x7dbf38976f6d3b9c529e7d9484a71898b409ee6a?tradeId=trade-1"
+        );
+    }
+
+    #[test]
+    fn fomo_thesis_validation_requires_text_and_builds_a_thesis_url() {
+        let thesis = validated_fomo_alert(DappCapturedFomoAlert {
+            id: "feed-42".to_string(),
+            event_type: "thesis_created".to_string(),
+            network_id: "4663".to_string(),
+            token_address: "0x7dbf38976f6d3b9c529e7d9484a71898b409ee6a".to_string(),
+            ticker: Some("ZZZ".to_string()),
+            user_handle: Some("Long_Fomo_Profile_Handle_123".to_string()),
+            display_name: Some("Fomo Researcher".to_string()),
+            profile_picture_url: None,
+            follower_count: None,
+            trade_id: None,
+            usd_amount: None,
+            market_cap: None,
+            trader_count: None,
+            thesis: Some("A bounded thesis body".to_string()),
+            thesis_id: Some("comment-42".to_string()),
+            created_at_ms: now_ms(),
+        })
+        .unwrap();
+
+        assert_eq!(thesis.event_type, "thesis_created");
+        assert_eq!(thesis.thesis.as_deref(), Some("A bounded thesis body"));
+        assert_eq!(thesis.thesis_id.as_deref(), Some("comment-42"));
+        assert_eq!(
+            thesis.source_url,
+            "https://fomo.family/tokens/robinhood/0x7dbf38976f6d3b9c529e7d9484a71898b409ee6a?thesisId=comment-42"
+        );
+    }
+
+    #[test]
+    fn fomo_alert_validation_rejects_unknown_types_and_bad_addresses() {
+        let input = |event_type: &str, token_address: &str| DappCapturedFomoAlert {
+            id: "alert-1".to_string(),
+            event_type: event_type.to_string(),
+            network_id: "4663".to_string(),
+            token_address: token_address.to_string(),
+            ticker: None,
+            user_handle: None,
+            display_name: None,
+            profile_picture_url: None,
+            follower_count: None,
+            trade_id: None,
+            usd_amount: None,
+            market_cap: None,
+            trader_count: None,
+            thesis: None,
+            thesis_id: None,
+            created_at_ms: now_ms(),
+        };
+
+        assert!(validated_fomo_alert(input(
+            "thesis",
+            "0x7dbf38976f6d3b9c529e7d9484a71898b409ee6a"
+        ))
+        .is_err());
+        assert!(validated_fomo_alert(input("swap_buy", "0x1234")).is_err());
+    }
+
+    #[test]
+    fn fomo_auth_events_only_accept_https_fomo_hosts() {
+        assert!(is_fomo_https_url(
+            &tauri::Url::parse("https://fomo.family/").unwrap()
+        ));
+        assert!(is_fomo_https_url(
+            &tauri::Url::parse("https://prod-api.fomo.family/feed/tradingActivity").unwrap()
+        ));
+        assert!(!is_fomo_https_url(
+            &tauri::Url::parse("http://fomo.family/").unwrap()
+        ));
+        assert!(!is_fomo_https_url(
+            &tauri::Url::parse("https://fomo.family.example.com/").unwrap()
+        ));
+    }
+
+    #[test]
+    fn fomo_stream_events_validate_status_and_bound_client_timestamps() {
+        let captured_at_ms = 1_800_000;
+        let event = validated_fomo_stream_event(
+            DappSubmitFomoStreamRequest {
+                url: "https://fomo.family/tokens/robinhood/0x7dbf38976f6d3b9c529e7d9484a71898b409ee6a".to_string(),
+                status: "reconnecting".to_string(),
+                last_activity_at_ms: Some(captured_at_ms - 30_000),
+                retry_at_ms: Some(captured_at_ms + 15_000),
+                attempt: 2,
+            },
+            captured_at_ms,
+        )
+        .unwrap();
+
+        assert_eq!(event.tab_id, FOMO_ALERTS_TAB_ID);
+        assert_eq!(event.status, "reconnecting");
+        assert_eq!(event.last_activity_at_ms, Some(captured_at_ms - 30_000));
+        assert_eq!(event.retry_at_ms, Some(captured_at_ms + 15_000));
+        assert_eq!(event.attempt, 2);
+
+        assert!(validated_fomo_stream_event(
+            DappSubmitFomoStreamRequest {
+                url: "https://example.com/".to_string(),
+                status: "connected".to_string(),
+                last_activity_at_ms: None,
+                retry_at_ms: None,
+                attempt: 0,
+            },
+            captured_at_ms,
+        )
+        .is_err());
+        assert!(validated_fomo_stream_event(
+            DappSubmitFomoStreamRequest {
+                url: "https://fomo.family/".to_string(),
+                status: "healthy".to_string(),
+                last_activity_at_ms: None,
+                retry_at_ms: None,
+                attempt: 0,
+            },
+            captured_at_ms,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn fomo_profile_handles_are_normalized_without_using_x_limits() {
+        assert_eq!(
+            normalized_fomo_handle("@Long_Fomo_Profile_Handle_123"),
+            Some("long_fomo_profile_handle_123".to_string())
+        );
+        assert_eq!(normalized_fomo_handle("bad-handle"), None);
+        assert_eq!(normalized_fomo_handle(""), None);
+    }
+
+    #[test]
+    fn fomo_auth_popups_are_limited_to_expected_providers() {
+        for url in [
+            "about:blank",
+            "https://auth.privy.io/api/v1/oauth/init",
+            "https://accounts.google.com/o/oauth2/v2/auth",
+            "https://appleid.apple.com/auth/authorize",
+        ] {
+            assert!(is_fomo_auth_popup_url(&tauri::Url::parse(url).unwrap()));
+        }
+        for url in [
+            "http://auth.privy.io/api/v1/oauth/init",
+            "https://privy.io.example.com/",
+            "https://accounts.google.com.example.com/",
+            "https://example.com/",
+        ] {
+            assert!(!is_fomo_auth_popup_url(&tauri::Url::parse(url).unwrap()));
+        }
     }
 
     #[test]

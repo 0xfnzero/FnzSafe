@@ -19,12 +19,18 @@ const MAX_INGEST_TWEETS: usize = 1_000;
 const MAX_INGEST_SIGNALS: usize = 1_000;
 const MAX_LIST_SIGNALS: usize = 1_000;
 const MAX_LIST_TOKENS: usize = 1_000;
+const STALE_LOW_CAP_TOKEN_AGE_MS: i64 = 12 * 60 * 60 * 1_000;
+const STALE_LOW_CAP_TOKEN_MARKET_CAP_USD: f64 = 30_000.0;
 const MAX_MARKET_REFRESH_TOKENS: usize = 100;
 const MARKET_REFRESH_INTERVAL_MS: i64 = 5 * 60 * 1_000;
 const MAX_SIGNAL_TOKEN_SYMBOLS: usize = 32;
 const MAX_RESOLVE_SIGNALS: usize = 200;
 const MAX_RESOLVE_QUERIES: usize = 24;
 const MAX_DEX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+const MAX_GECKO_TOKEN_BATCH: usize = 30;
+const MAX_GECKO_RESPONSE_BYTES: usize = 512 * 1024;
+const MAX_GECKO_CONCURRENT_REQUESTS: usize = 4;
+const GECKO_ENRICHMENT_TIMEOUT: Duration = Duration::from_secs(12);
 const MAX_RPC_RESPONSE_BYTES: usize = 64 * 1024;
 const MAX_RESOLVER_MARKET_USD: f64 = 1_000_000_000_000_000.0;
 const TOKEN_RESOLUTION_WINDOW_MS: i64 = 7 * 24 * 60 * 60 * 1_000;
@@ -147,6 +153,10 @@ pub struct ResearchKolInput {
     #[serde(default)]
     pub followers_label: Option<String>,
     #[serde(default)]
+    pub fomo_followers_label: Option<String>,
+    #[serde(default)]
+    pub fomo_followers_updated_at: Option<String>,
+    #[serde(default)]
     pub following_label: Option<String>,
     #[serde(default)]
     pub location: Option<String>,
@@ -156,6 +166,10 @@ pub struct ResearchKolInput {
     pub joined_label: Option<String>,
     #[serde(default)]
     pub verified: bool,
+    #[serde(default)]
+    pub has_x_source: bool,
+    #[serde(default)]
+    pub has_fomo_source: bool,
     pub added_at: String,
     #[serde(default)]
     pub updated_at: Option<String>,
@@ -353,11 +367,15 @@ pub struct ResearchKolRecord {
     pub avatar_url: Option<String>,
     pub bio: Option<String>,
     pub followers_label: Option<String>,
+    pub fomo_followers_label: Option<String>,
+    pub fomo_followers_updated_at: Option<String>,
     pub following_label: Option<String>,
     pub location: Option<String>,
     pub website: Option<String>,
     pub joined_label: Option<String>,
     pub verified: bool,
+    pub has_x_source: bool,
+    pub has_fomo_source: bool,
     pub added_at: String,
     pub updated_at: Option<String>,
 }
@@ -417,10 +435,18 @@ pub struct ResearchTokenListItem {
     pub id: i64,
     pub symbol: String,
     pub name: Option<String>,
+    pub logo_url: Option<String>,
     pub chain: String,
     pub contract_address: String,
     pub price_usd: Option<f64>,
+    pub volume_5m_usd: Option<f64>,
+    pub volume_1h_usd: Option<f64>,
+    pub volume_6h_usd: Option<f64>,
     pub volume_24h_usd: Option<f64>,
+    pub price_change_5m_percent: Option<f64>,
+    pub price_change_1h_percent: Option<f64>,
+    pub price_change_6h_percent: Option<f64>,
+    pub price_change_24h_percent: Option<f64>,
     pub liquidity_usd: Option<f64>,
     pub market_cap_usd: Option<f64>,
     pub market_source: Option<String>,
@@ -553,11 +579,15 @@ fn initialize_schema(connection: &Connection) -> Result<(), String> {
                 avatar_url TEXT,
                 bio TEXT,
                 followers_label TEXT,
+                fomo_followers_label TEXT,
+                fomo_followers_updated_at TEXT,
                 following_label TEXT,
                 location TEXT,
                 website TEXT,
                 joined_label TEXT,
                 verified INTEGER NOT NULL DEFAULT 0,
+                has_x_source INTEGER NOT NULL DEFAULT 1,
+                has_fomo_source INTEGER NOT NULL DEFAULT 0,
                 is_kol INTEGER NOT NULL DEFAULT 0,
                 added_at TEXT NOT NULL,
                 updated_at TEXT
@@ -647,12 +677,27 @@ fn initialize_schema(connection: &Connection) -> Result<(), String> {
                 token_key TEXT NOT NULL,
                 captured_at_ms INTEGER NOT NULL,
                 price_usd REAL,
+                volume_5m_usd REAL,
+                volume_1h_usd REAL,
+                volume_6h_usd REAL,
                 volume_24h_usd REAL,
+                price_change_5m_percent REAL,
+                price_change_1h_percent REAL,
+                price_change_6h_percent REAL,
+                price_change_24h_percent REAL,
                 liquidity_usd REAL,
                 market_cap_usd REAL,
                 holders INTEGER,
                 source TEXT,
                 PRIMARY KEY(chain, token_key, captured_at_ms)
+            );
+            CREATE TABLE IF NOT EXISTS research_token_metadata (
+                chain TEXT NOT NULL,
+                token_key TEXT NOT NULL,
+                logo_url TEXT,
+                source TEXT NOT NULL,
+                updated_at_ms INTEGER NOT NULL,
+                PRIMARY KEY(chain, token_key)
             );
             CREATE TABLE IF NOT EXISTS research_embeddings (
                 content_hash TEXT PRIMARY KEY,
@@ -683,11 +728,99 @@ fn initialize_schema(connection: &Connection) -> Result<(), String> {
             "#,
         )
         .map_err(|error| format!("failed to initialize research schema: {error}"))?;
+    ensure_research_author_source_columns(connection)?;
+    ensure_market_snapshot_period_columns(connection)?;
     connection
         .execute_batch(
             "CREATE VIRTUAL TABLE IF NOT EXISTS research_tweets_fts USING fts5(tweet_key UNINDEXED, author_handle, text, tokenize='unicode61');",
         )
         .map_err(|error| format!("failed to initialize research full-text index: {error}"))?;
+    Ok(())
+}
+
+fn ensure_research_author_source_columns(connection: &Connection) -> Result<(), String> {
+    let mut statement = connection
+        .prepare("PRAGMA table_info(research_authors)")
+        .map_err(|error| format!("failed to inspect research authors: {error}"))?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|error| format!("failed to inspect research author columns: {error}"))?
+        .collect::<Result<HashSet<_>, _>>()
+        .map_err(|error| format!("failed to read research author columns: {error}"))?;
+    drop(statement);
+    for (column, sql) in [
+        (
+            "fomo_followers_label",
+            "ALTER TABLE research_authors ADD COLUMN fomo_followers_label TEXT",
+        ),
+        (
+            "fomo_followers_updated_at",
+            "ALTER TABLE research_authors ADD COLUMN fomo_followers_updated_at TEXT",
+        ),
+        (
+            "has_x_source",
+            "ALTER TABLE research_authors ADD COLUMN has_x_source INTEGER NOT NULL DEFAULT 1",
+        ),
+        (
+            "has_fomo_source",
+            "ALTER TABLE research_authors ADD COLUMN has_fomo_source INTEGER NOT NULL DEFAULT 0",
+        ),
+    ] {
+        if !columns.contains(column) {
+            connection
+                .execute(sql, [])
+                .map_err(|error| format!("failed to add research_authors.{column}: {error}"))?;
+        }
+    }
+    Ok(())
+}
+
+fn ensure_market_snapshot_period_columns(connection: &Connection) -> Result<(), String> {
+    let mut statement = connection
+        .prepare("PRAGMA table_info(research_market_snapshots)")
+        .map_err(|error| format!("failed to inspect research market snapshots: {error}"))?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|error| format!("failed to inspect research market snapshot columns: {error}"))?
+        .collect::<Result<HashSet<_>, _>>()
+        .map_err(|error| format!("failed to read research market snapshot columns: {error}"))?;
+    drop(statement);
+    for (column, sql) in [
+        (
+            "volume_5m_usd",
+            "ALTER TABLE research_market_snapshots ADD COLUMN volume_5m_usd REAL",
+        ),
+        (
+            "volume_1h_usd",
+            "ALTER TABLE research_market_snapshots ADD COLUMN volume_1h_usd REAL",
+        ),
+        (
+            "volume_6h_usd",
+            "ALTER TABLE research_market_snapshots ADD COLUMN volume_6h_usd REAL",
+        ),
+        (
+            "price_change_5m_percent",
+            "ALTER TABLE research_market_snapshots ADD COLUMN price_change_5m_percent REAL",
+        ),
+        (
+            "price_change_1h_percent",
+            "ALTER TABLE research_market_snapshots ADD COLUMN price_change_1h_percent REAL",
+        ),
+        (
+            "price_change_6h_percent",
+            "ALTER TABLE research_market_snapshots ADD COLUMN price_change_6h_percent REAL",
+        ),
+        (
+            "price_change_24h_percent",
+            "ALTER TABLE research_market_snapshots ADD COLUMN price_change_24h_percent REAL",
+        ),
+    ] {
+        if !columns.contains(column) {
+            connection.execute(sql, []).map_err(|error| {
+                format!("failed to add research_market_snapshots.{column}: {error}")
+            })?;
+        }
+    }
     Ok(())
 }
 
@@ -806,6 +939,24 @@ fn normalize_handle(value: &str) -> Option<String> {
     .then_some(handle)
 }
 
+fn normalize_fomo_handle(value: &str) -> Option<String> {
+    let handle = value.trim().trim_start_matches('@').to_ascii_lowercase();
+    (!handle.is_empty()
+        && handle.len() <= 40
+        && handle
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '_'))
+    .then_some(handle)
+}
+
+fn normalize_kol_handle(kol: &ResearchKolInput) -> Option<String> {
+    if kol.has_fomo_source && !kol.has_x_source {
+        normalize_fomo_handle(&kol.handle)
+    } else {
+        normalize_handle(&kol.handle)
+    }
+}
+
 fn tweet_identity_from_source_url(value: &str) -> Option<(String, String)> {
     let url = reqwest::Url::parse(value.trim()).ok()?;
     if url.scheme() != "https"
@@ -844,14 +995,47 @@ fn tweet_id_from_source_url(value: &str) -> Option<String> {
     tweet_identity_from_source_url(value).map(|(_, tweet_id)| tweet_id)
 }
 
+fn fomo_signal_source_url(value: &str) -> Option<reqwest::Url> {
+    let url = reqwest::Url::parse(value.trim()).ok()?;
+    let host = url.host_str()?.to_ascii_lowercase();
+    let segments = url.path_segments()?.collect::<Vec<_>>();
+    (url.scheme() == "https"
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.port_or_known_default() == Some(443)
+        && (host == "fomo.family" || host.ends_with(".fomo.family"))
+        && segments.len() == 3
+        && segments.first() == Some(&"tokens")
+        && !segments[1].is_empty()
+        && !segments[2].is_empty())
+    .then_some(url)
+}
+
+fn normalize_signal_author_handle(author_handle: &str, source_url: Option<&str>) -> Option<String> {
+    if source_url.and_then(fomo_signal_source_url).is_some() {
+        normalize_fomo_handle(author_handle)
+    } else {
+        normalize_handle(author_handle)
+    }
+}
+
 fn validate_tweet_identity(
     author_handle: &str,
     tweet_id: Option<&str>,
     source_url: Option<&str>,
 ) -> Result<(), String> {
+    let tweet_id = tweet_id.map(str::trim).filter(|value| !value.is_empty());
+    if source_url.and_then(fomo_signal_source_url).is_some() {
+        normalize_fomo_handle(author_handle)
+            .ok_or_else(|| "invalid Fomo author handle".to_string())?;
+        return if tweet_id.is_none() {
+            Ok(())
+        } else {
+            Err("Fomo signal cannot use an X/Twitter tweet ID".to_string())
+        };
+    }
     let author_handle =
         normalize_handle(author_handle).ok_or_else(|| "invalid tweet author handle".to_string())?;
-    let tweet_id = tweet_id.map(str::trim).filter(|value| !value.is_empty());
     if tweet_id.is_some_and(|value| {
         value.len() > 32 || !value.chars().all(|character| character.is_ascii_digit())
     }) {
@@ -875,6 +1059,29 @@ fn validate_tweet_identity(
         if tweet_id.is_some_and(|tweet_id| tweet_id != source_id) {
             return Err("tweet ID does not match source URL".to_string());
         }
+    }
+    Ok(())
+}
+
+fn validate_fomo_signal_contract(signal: &ResearchSignalInput) -> Result<(), String> {
+    let Some(source_url) = signal.source_url.as_deref() else {
+        return Ok(());
+    };
+    let Some(url) = fomo_signal_source_url(source_url) else {
+        return Ok(());
+    };
+    let contract = signal
+        .contract_address
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "Fomo signal requires a token contract address".to_string())?;
+    let source_contract = url
+        .path_segments()
+        .and_then(|segments| segments.last())
+        .unwrap_or_default();
+    if !source_contract.eq_ignore_ascii_case(contract) {
+        return Err("Fomo signal contract does not match source URL".to_string());
     }
     Ok(())
 }
@@ -1338,12 +1545,25 @@ fn save_market_snapshot(
         .execute(
             r#"
             INSERT INTO research_market_snapshots (
-                chain, token_key, captured_at_ms, price_usd, volume_24h_usd,
+                chain, token_key, captured_at_ms, price_usd,
+                volume_5m_usd, volume_1h_usd, volume_6h_usd, volume_24h_usd,
+                price_change_5m_percent, price_change_1h_percent,
+                price_change_6h_percent, price_change_24h_percent,
                 liquidity_usd, market_cap_usd, source
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
+                ?9, ?10, ?11, ?12, ?13, ?14, ?15
+            )
             ON CONFLICT(chain, token_key, captured_at_ms) DO UPDATE SET
                 price_usd = COALESCE(excluded.price_usd, research_market_snapshots.price_usd),
+                volume_5m_usd = COALESCE(excluded.volume_5m_usd, research_market_snapshots.volume_5m_usd),
+                volume_1h_usd = COALESCE(excluded.volume_1h_usd, research_market_snapshots.volume_1h_usd),
+                volume_6h_usd = COALESCE(excluded.volume_6h_usd, research_market_snapshots.volume_6h_usd),
                 volume_24h_usd = COALESCE(excluded.volume_24h_usd, research_market_snapshots.volume_24h_usd),
+                price_change_5m_percent = COALESCE(excluded.price_change_5m_percent, research_market_snapshots.price_change_5m_percent),
+                price_change_1h_percent = COALESCE(excluded.price_change_1h_percent, research_market_snapshots.price_change_1h_percent),
+                price_change_6h_percent = COALESCE(excluded.price_change_6h_percent, research_market_snapshots.price_change_6h_percent),
+                price_change_24h_percent = COALESCE(excluded.price_change_24h_percent, research_market_snapshots.price_change_24h_percent),
                 liquidity_usd = COALESCE(excluded.liquidity_usd, research_market_snapshots.liquidity_usd),
                 market_cap_usd = COALESCE(excluded.market_cap_usd, research_market_snapshots.market_cap_usd),
                 source = COALESCE(excluded.source, research_market_snapshots.source)
@@ -1353,13 +1573,42 @@ fn save_market_snapshot(
                 contract_token_key(&candidate.address),
                 captured_at_ms,
                 available_market_value(candidate.price_usd),
+                available_market_value(candidate.volume_5m_usd),
+                available_market_value(candidate.volume_1h_usd),
+                available_market_value(candidate.volume_6h_usd),
                 available_market_value(candidate.volume_24h_usd),
+                candidate.price_change_5m_percent,
+                candidate.price_change_1h_percent,
+                candidate.price_change_6h_percent,
+                candidate.price_change_24h_percent,
                 available_market_value(candidate.liquidity_usd),
                 available_market_value(candidate.market_cap_usd),
                 candidate.market_source.as_deref().or(Some("DexScreener")),
             ],
         )
         .map_err(|error| format!("failed to save research market snapshot: {error}"))?;
+    connection
+        .execute(
+            r#"
+            INSERT INTO research_token_metadata (chain, token_key, logo_url, source, updated_at_ms)
+            VALUES (?1, ?2, ?3, ?4, ?5)
+            ON CONFLICT(chain, token_key) DO UPDATE SET
+                logo_url = COALESCE(excluded.logo_url, research_token_metadata.logo_url),
+                source = CASE
+                    WHEN excluded.logo_url IS NOT NULL THEN excluded.source
+                    ELSE research_token_metadata.source
+                END,
+                updated_at_ms = MAX(research_token_metadata.updated_at_ms, excluded.updated_at_ms)
+            "#,
+            params![
+                normalize_research_chain(&candidate.chain),
+                contract_token_key(&candidate.address),
+                candidate.logo_url.as_deref(),
+                logo_metadata_source(candidate.logo_url.as_deref()),
+                captured_at_ms,
+            ],
+        )
+        .map_err(|error| format!("failed to save research token metadata: {error}"))?;
     Ok(())
 }
 
@@ -1592,14 +1841,16 @@ fn validate_ingest_request(request: &ResearchIngestRequest) -> Result<(), String
             signal.tweet_id.as_deref(),
             signal.source_url.as_deref(),
         )?;
+        validate_fomo_signal_contract(signal)?;
         if signal.text.trim().is_empty() || exceeds_char_limit(&signal.text, 4_000) {
             return Err("invalid token signal text".to_string());
         }
         validate_signal_identity(&signal.chain, signal.contract_address.as_deref())?;
-        if signal
-            .token_symbols
-            .iter()
-            .any(|symbol| normalize_token_symbol(symbol).is_none())
+        if signal.contract_address.is_none()
+            && signal
+                .token_symbols
+                .iter()
+                .any(|symbol| normalize_token_symbol(symbol).is_none())
         {
             return Err("invalid token symbol in research signal".to_string());
         }
@@ -1608,24 +1859,30 @@ fn validate_ingest_request(request: &ResearchIngestRequest) -> Result<(), String
 }
 
 fn upsert_kol(connection: &Connection, kol: &ResearchKolInput) -> Result<(), String> {
-    let handle = normalize_handle(&kol.handle).ok_or_else(|| "invalid KOL handle".to_string())?;
+    let handle =
+        normalize_kol_handle(kol).ok_or_else(|| "invalid KOL handle for source".to_string())?;
     connection
         .execute(
             r#"
             INSERT INTO research_authors (
-                handle, display_name, avatar_url, bio, followers_label, following_label,
-                location, website, joined_label, verified, is_kol, added_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, ?11, ?12)
+                handle, display_name, avatar_url, bio, followers_label, fomo_followers_label,
+                fomo_followers_updated_at, following_label, location, website, joined_label,
+                verified, has_x_source, has_fomo_source, is_kol, added_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 1, ?15, ?16)
             ON CONFLICT(handle) DO UPDATE SET
                 display_name = COALESCE(excluded.display_name, research_authors.display_name),
                 avatar_url = COALESCE(excluded.avatar_url, research_authors.avatar_url),
                 bio = COALESCE(excluded.bio, research_authors.bio),
                 followers_label = COALESCE(excluded.followers_label, research_authors.followers_label),
+                fomo_followers_label = COALESCE(excluded.fomo_followers_label, research_authors.fomo_followers_label),
+                fomo_followers_updated_at = COALESCE(excluded.fomo_followers_updated_at, research_authors.fomo_followers_updated_at),
                 following_label = COALESCE(excluded.following_label, research_authors.following_label),
                 location = COALESCE(excluded.location, research_authors.location),
                 website = COALESCE(excluded.website, research_authors.website),
                 joined_label = COALESCE(excluded.joined_label, research_authors.joined_label),
                 verified = MAX(research_authors.verified, excluded.verified),
+                has_x_source = excluded.has_x_source,
+                has_fomo_source = excluded.has_fomo_source,
                 is_kol = 1,
                 updated_at = COALESCE(excluded.updated_at, research_authors.updated_at)
             "#,
@@ -1635,11 +1892,15 @@ fn upsert_kol(connection: &Connection, kol: &ResearchKolInput) -> Result<(), Str
                 optional_clipped(kol.avatar_url.as_deref(), 2_048),
                 optional_clipped(kol.bio.as_deref(), 400),
                 optional_clipped(kol.followers_label.as_deref(), 80),
+                optional_clipped(kol.fomo_followers_label.as_deref(), 80),
+                optional_clipped(kol.fomo_followers_updated_at.as_deref(), 64),
                 optional_clipped(kol.following_label.as_deref(), 80),
                 optional_clipped(kol.location.as_deref(), 120),
                 optional_clipped(kol.website.as_deref(), 512),
                 optional_clipped(kol.joined_label.as_deref(), 120),
                 i64::from(kol.verified),
+                i64::from(kol.has_x_source),
+                i64::from(kol.has_fomo_source),
                 clipped(&kol.added_at, 64),
                 optional_clipped(kol.updated_at.as_deref(), 64),
             ],
@@ -1658,8 +1919,9 @@ fn upsert_tweet(
         Some(&tweet.tweet_id),
         tweet.source_url.as_deref(),
     )?;
-    let author_handle = normalize_handle(&tweet.author_handle)
-        .ok_or_else(|| "invalid tweet author handle".to_string())?;
+    let author_handle =
+        normalize_signal_author_handle(&tweet.author_handle, tweet.source_url.as_deref())
+            .ok_or_else(|| "invalid tweet author handle".to_string())?;
     let text = clipped(&tweet.text, 4_000);
     if text.is_empty() {
         return Err("tweet text is empty".to_string());
@@ -1806,12 +2068,22 @@ struct DexScreenerPair {
     liquidity: DexScreenerLiquidity,
     #[serde(default)]
     volume: DexScreenerVolume,
+    #[serde(default)]
+    price_change: DexScreenerPriceChange,
     price_usd: Option<String>,
     #[serde(default)]
     dex_id: String,
     market_cap: Option<f64>,
     fdv: Option<f64>,
     pair_created_at: Option<i64>,
+    #[serde(default)]
+    info: DexScreenerInfo,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DexScreenerInfo {
+    image_url: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -1831,7 +2103,37 @@ struct DexScreenerLiquidity {
 
 #[derive(Clone, Debug, Default, Deserialize)]
 struct DexScreenerVolume {
+    m5: Option<f64>,
+    h1: Option<f64>,
+    h6: Option<f64>,
     h24: Option<f64>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct DexScreenerPriceChange {
+    m5: Option<f64>,
+    h1: Option<f64>,
+    h6: Option<f64>,
+    h24: Option<f64>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct GeckoTokenListResponse {
+    #[serde(default)]
+    data: Vec<GeckoTokenData>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct GeckoTokenData {
+    #[serde(default)]
+    attributes: GeckoTokenAttributes,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct GeckoTokenAttributes {
+    #[serde(default)]
+    address: String,
+    image_url: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1883,9 +2185,17 @@ struct ResolverCandidate {
     address: String,
     symbol: String,
     name: Option<String>,
+    logo_url: Option<String>,
     price_usd: f64,
     liquidity_usd: f64,
+    volume_5m_usd: f64,
+    volume_1h_usd: f64,
+    volume_6h_usd: f64,
     volume_24h_usd: f64,
+    price_change_5m_percent: Option<f64>,
+    price_change_1h_percent: Option<f64>,
+    price_change_6h_percent: Option<f64>,
+    price_change_24h_percent: Option<f64>,
     market_cap_usd: f64,
     market_source: Option<String>,
     pair_created_at_ms: Option<i64>,
@@ -1903,6 +2213,144 @@ fn normalized_market_usd(value: Option<f64>) -> f64 {
         .filter(|value| value.is_finite())
         .unwrap_or_default()
         .clamp(0.0, MAX_RESOLVER_MARKET_USD)
+}
+
+fn normalized_price_change(value: Option<f64>) -> Option<f64> {
+    value
+        .filter(|value| value.is_finite())
+        .map(|value| value.clamp(-1_000_000.0, 1_000_000.0))
+}
+
+fn normalized_logo_url(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    if value.is_empty() || value.len() > 2_048 {
+        return None;
+    }
+    let url = reqwest::Url::parse(value).ok()?;
+    let host = url.host_str()?;
+    let trusted_host = ["coingecko.com", "dexscreener.com"]
+        .iter()
+        .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")));
+    (url.scheme() == "https"
+        && url.username().is_empty()
+        && url.password().is_none()
+        && trusted_host)
+        .then(|| url.to_string())
+}
+
+fn gecko_network(chain: &str) -> Option<&'static str> {
+    match chain {
+        "Robinhood" => Some("robinhood"),
+        "Ethereum" => Some("eth"),
+        "BSC" => Some("bsc"),
+        "Solana" => Some("solana"),
+        "Base" => Some("base"),
+        "Arbitrum" => Some("arbitrum"),
+        "Optimism" => Some("optimism"),
+        "Polygon" => Some("polygon_pos"),
+        "Avalanche" => Some("avax"),
+        _ => None,
+    }
+}
+
+fn logo_metadata_source(logo_url: Option<&str>) -> &'static str {
+    let host = logo_url
+        .and_then(|value| reqwest::Url::parse(value).ok())
+        .and_then(|url| url.host_str().map(str::to_owned));
+    match host.as_deref() {
+        Some("coin-images.coingecko.com") => "GeckoTerminal",
+        _ => "DexScreener",
+    }
+}
+
+async fn enrich_missing_token_logos(
+    client: &reqwest::Client,
+    candidates: &mut [ResolverCandidate],
+) {
+    let mut addresses_by_network = HashMap::<&'static str, HashSet<String>>::new();
+    for candidate in candidates
+        .iter()
+        .filter(|candidate| candidate.logo_url.is_none())
+    {
+        let Some(network) = gecko_network(&candidate.chain) else {
+            continue;
+        };
+        let address = contract_token_key(&candidate.address);
+        addresses_by_network
+            .entry(network)
+            .or_default()
+            .insert(address);
+    }
+
+    let mut logos = HashMap::<(&'static str, String), String>::new();
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_GECKO_CONCURRENT_REQUESTS));
+    let mut tasks = tokio::task::JoinSet::new();
+    for (network, addresses) in addresses_by_network {
+        let addresses = addresses.into_iter().collect::<Vec<_>>();
+        for batch in addresses.chunks(MAX_GECKO_TOKEN_BATCH) {
+            let client = client.clone();
+            let semaphore = Arc::clone(&semaphore);
+            let addresses = batch.to_vec();
+            tasks.spawn(async move {
+                let _permit = semaphore.acquire_owned().await.ok()?;
+                let response = client
+                    .get(format!(
+                        "https://api.geckoterminal.com/api/v2/networks/{network}/tokens/multi/{}",
+                        addresses.join(",")
+                    ))
+                    .send()
+                    .await
+                    .ok()?;
+                let response = parse_bounded_json::<GeckoTokenListResponse>(
+                    response,
+                    "GeckoTerminal",
+                    MAX_GECKO_RESPONSE_BYTES,
+                )
+                .await
+                .ok()?;
+                Some(
+                    response
+                        .data
+                        .into_iter()
+                        .filter_map(|token| {
+                            normalized_logo_url(token.attributes.image_url.as_deref()).map(
+                                |logo_url| {
+                                    (
+                                        (network, contract_token_key(&token.attributes.address)),
+                                        logo_url,
+                                    )
+                                },
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            });
+        }
+    }
+    let deadline = tokio::time::Instant::now() + GECKO_ENRICHMENT_TIMEOUT;
+    loop {
+        match tokio::time::timeout_at(deadline, tasks.join_next()).await {
+            Ok(Some(Ok(Some(entries)))) => logos.extend(entries),
+            Ok(Some(_)) => continue,
+            Ok(None) => break,
+            Err(_) => {
+                tasks.abort_all();
+                break;
+            }
+        }
+    }
+
+    for candidate in candidates
+        .iter_mut()
+        .filter(|candidate| candidate.logo_url.is_none())
+    {
+        let Some(network) = gecko_network(&candidate.chain) else {
+            continue;
+        };
+        candidate.logo_url = logos
+            .get(&(network, contract_token_key(&candidate.address)))
+            .cloned();
+    }
 }
 
 fn signal_observed_at(signal: &ResearchTokenResolveSignalInput) -> i64 {
@@ -1988,6 +2436,13 @@ async fn fetch_dex_candidates(
     let response =
         parse_bounded_json::<DexScreenerResponse>(response, "DexScreener", MAX_DEX_RESPONSE_BYTES)
             .await?;
+    Ok(dex_candidates_from_response(response, query))
+}
+
+fn dex_candidates_from_response(
+    response: DexScreenerResponse,
+    query: &ResolverQuery,
+) -> Vec<ResolverCandidate> {
     let mut candidates = HashMap::<(String, String), ResolverCandidate>::new();
     for pair in response.pairs.unwrap_or_default().into_iter().take(100) {
         let Some((chain, chain_id)) = dex_chain(&pair.chain_id) else {
@@ -1999,7 +2454,8 @@ async fn fetch_dex_candidates(
         } else {
             normalized_market_usd(pair.fdv)
         };
-        for (token, market_cap_usd, price_usd) in [
+        let pair_logo_url = normalized_logo_url(pair.info.image_url.as_deref());
+        for (token, market_cap_usd, price_usd, logo_url, price_change) in [
             (
                 &pair.base_token,
                 base_market_cap_usd,
@@ -2008,8 +2464,10 @@ async fn fetch_dex_candidates(
                     .and_then(|value| value.parse::<f64>().ok())
                     .map(|value| normalized_market_usd(Some(value)))
                     .unwrap_or_default(),
+                pair_logo_url.as_deref(),
+                Some(&pair.price_change),
             ),
-            (&pair.quote_token, 0.0, 0.0),
+            (&pair.quote_token, 0.0, 0.0, None, None),
         ] {
             let valid_address = if chain == "Solana" {
                 is_solana_token_address(&token.address)
@@ -2039,9 +2497,21 @@ async fn fetch_dex_candidates(
                     address: clipped(&token.address, 128),
                     symbol: normalized_symbol.clone(),
                     name: optional_clipped(Some(&token.name), 160),
+                    logo_url: logo_url.map(str::to_string),
                     price_usd,
                     liquidity_usd: 0.0,
+                    volume_5m_usd: 0.0,
+                    volume_1h_usd: 0.0,
+                    volume_6h_usd: 0.0,
                     volume_24h_usd: 0.0,
+                    price_change_5m_percent: price_change
+                        .and_then(|change| normalized_price_change(change.m5)),
+                    price_change_1h_percent: price_change
+                        .and_then(|change| normalized_price_change(change.h1)),
+                    price_change_6h_percent: price_change
+                        .and_then(|change| normalized_price_change(change.h6)),
+                    price_change_24h_percent: price_change
+                        .and_then(|change| normalized_price_change(change.h24)),
                     market_cap_usd: 0.0,
                     market_source: optional_clipped(Some(&pair.dex_id), 64),
                     pair_created_at_ms: pair.pair_created_at,
@@ -2057,13 +2527,33 @@ async fn fetch_dex_candidates(
             if pair_liquidity_usd >= candidate.liquidity_usd {
                 candidate.market_source = optional_clipped(Some(&pair.dex_id), 64)
                     .or_else(|| candidate.market_source.clone());
+                candidate.logo_url = logo_url
+                    .map(str::to_string)
+                    .or_else(|| candidate.logo_url.clone());
                 if price_usd > 0.0 {
                     candidate.price_usd = price_usd;
                 }
+                candidate.price_change_5m_percent =
+                    price_change.and_then(|change| normalized_price_change(change.m5));
+                candidate.price_change_1h_percent =
+                    price_change.and_then(|change| normalized_price_change(change.h1));
+                candidate.price_change_6h_percent =
+                    price_change.and_then(|change| normalized_price_change(change.h6));
+                candidate.price_change_24h_percent =
+                    price_change.and_then(|change| normalized_price_change(change.h24));
             } else if candidate.price_usd == 0.0 && price_usd > 0.0 {
                 candidate.price_usd = price_usd;
             }
             candidate.liquidity_usd = candidate.liquidity_usd.max(pair_liquidity_usd);
+            candidate.volume_5m_usd = (candidate.volume_5m_usd
+                + normalized_market_usd(pair.volume.m5))
+            .min(MAX_RESOLVER_MARKET_USD);
+            candidate.volume_1h_usd = (candidate.volume_1h_usd
+                + normalized_market_usd(pair.volume.h1))
+            .min(MAX_RESOLVER_MARKET_USD);
+            candidate.volume_6h_usd = (candidate.volume_6h_usd
+                + normalized_market_usd(pair.volume.h6))
+            .min(MAX_RESOLVER_MARKET_USD);
             candidate.volume_24h_usd = (candidate.volume_24h_usd
                 + normalized_market_usd(pair.volume.h24))
             .min(MAX_RESOLVER_MARKET_USD);
@@ -2075,7 +2565,7 @@ async fn fetch_dex_candidates(
                 };
         }
     }
-    Ok(candidates.into_values().collect())
+    candidates.into_values().collect()
 }
 
 fn decode_evm_text(value: &str) -> Option<String> {
@@ -2204,9 +2694,17 @@ async fn fetch_priority_rpc_candidate(
         address: address.to_string(),
         symbol,
         name,
+        logo_url: None,
         price_usd: 0.0,
         liquidity_usd: 0.0,
+        volume_5m_usd: 0.0,
+        volume_1h_usd: 0.0,
+        volume_6h_usd: 0.0,
         volume_24h_usd: 0.0,
+        price_change_5m_percent: None,
+        price_change_1h_percent: None,
+        price_change_6h_percent: None,
+        price_change_24h_percent: None,
         market_cap_usd: 0.0,
         market_source: None,
         pair_created_at_ms: None,
@@ -2364,8 +2862,11 @@ fn load_local_resolver_candidates(
             ),
             latest_market AS (
                 SELECT market.chain, market.token_key, market.price_usd,
-                       market.volume_24h_usd, market.liquidity_usd,
-                       market.market_cap_usd, market.source
+                       market.volume_1h_usd, market.volume_6h_usd, market.volume_24h_usd,
+                       market.price_change_1h_percent, market.price_change_6h_percent,
+                       market.price_change_24h_percent, market.liquidity_usd,
+                       market.market_cap_usd, market.source,
+                       market.volume_5m_usd, market.price_change_5m_percent
                 FROM research_market_snapshots market
                 JOIN (
                     SELECT chain, token_key, MAX(captured_at_ms) AS captured_at_ms
@@ -2379,13 +2880,20 @@ fn load_local_resolver_candidates(
             SELECT rt.id, rt.chain, rt.chain_id, rt.contract_address, rt.symbol, rt.name, rt.source,
                    t.author_handle, m.tweet_key, m.captured_at_ms,
                    COALESCE(stats.confirmed_mentions, 0), stats.latest_confirmed_at_ms,
-                   market.price_usd, market.volume_24h_usd, market.liquidity_usd,
-                   market.market_cap_usd, market.source
+                   market.price_usd, market.volume_1h_usd, market.volume_6h_usd,
+                   market.volume_24h_usd, market.price_change_1h_percent,
+                   market.price_change_6h_percent, market.price_change_24h_percent,
+                   market.liquidity_usd, market.market_cap_usd, market.source,
+                   metadata.logo_url, market.volume_5m_usd,
+                   market.price_change_5m_percent
             FROM research_tokens rt
             LEFT JOIN resolution_stats stats ON stats.token_id = rt.id
             LEFT JOIN latest_market market
               ON market.chain = rt.chain
              AND market.token_key = rt.normalized_address
+            LEFT JOIN research_token_metadata metadata
+              ON metadata.chain = rt.chain
+             AND metadata.token_key = rt.normalized_address
             LEFT JOIN research_token_resolutions bound
               ON bound.token_id = rt.id
              AND bound.status = 'resolved'
@@ -2418,7 +2926,15 @@ fn load_local_resolver_candidates(
                 row.get::<_, Option<f64>>(13)?,
                 row.get::<_, Option<f64>>(14)?,
                 row.get::<_, Option<f64>>(15)?,
-                row.get::<_, Option<String>>(16)?,
+                row.get::<_, Option<f64>>(16)?,
+                row.get::<_, Option<f64>>(17)?,
+                row.get::<_, Option<f64>>(18)?,
+                row.get::<_, Option<f64>>(19)?,
+                row.get::<_, Option<f64>>(20)?,
+                row.get::<_, Option<String>>(21)?,
+                row.get::<_, Option<String>>(22)?,
+                row.get::<_, Option<f64>>(23)?,
+                row.get::<_, Option<f64>>(24)?,
             ))
         })
         .map_err(|error| format!("failed to query local token candidates: {error}"))?;
@@ -2438,10 +2954,18 @@ fn load_local_resolver_candidates(
             confirmed_mentions,
             latest_confirmed_at_ms,
             price_usd,
+            volume_1h_usd,
+            volume_6h_usd,
             volume_24h_usd,
+            price_change_1h_percent,
+            price_change_6h_percent,
+            price_change_24h_percent,
             liquidity_usd,
             market_cap_usd,
             market_source,
+            logo_url,
+            volume_5m_usd,
+            price_change_5m_percent,
         ) = row.map_err(|error| format!("failed to read local token candidate: {error}"))?;
         let candidate = candidates
             .entry((chain.clone(), contract_token_key(&address)))
@@ -2452,9 +2976,17 @@ fn load_local_resolver_candidates(
                 address,
                 symbol,
                 name,
+                logo_url: normalized_logo_url(logo_url.as_deref()),
                 price_usd: normalized_market_usd(price_usd),
                 liquidity_usd: normalized_market_usd(liquidity_usd),
+                volume_5m_usd: normalized_market_usd(volume_5m_usd),
+                volume_1h_usd: normalized_market_usd(volume_1h_usd),
+                volume_6h_usd: normalized_market_usd(volume_6h_usd),
                 volume_24h_usd: normalized_market_usd(volume_24h_usd),
+                price_change_5m_percent: normalized_price_change(price_change_5m_percent),
+                price_change_1h_percent: normalized_price_change(price_change_1h_percent),
+                price_change_6h_percent: normalized_price_change(price_change_6h_percent),
+                price_change_24h_percent: normalized_price_change(price_change_24h_percent),
                 market_cap_usd: normalized_market_usd(market_cap_usd),
                 market_source,
                 pair_created_at_ms: None,
@@ -2519,13 +3051,32 @@ fn merge_resolver_candidates(
             entry.price_usd = candidate.price_usd;
         }
         entry.liquidity_usd = entry.liquidity_usd.max(candidate.liquidity_usd);
+        entry.volume_5m_usd = entry.volume_5m_usd.max(candidate.volume_5m_usd);
+        entry.volume_1h_usd = entry.volume_1h_usd.max(candidate.volume_1h_usd);
+        entry.volume_6h_usd = entry.volume_6h_usd.max(candidate.volume_6h_usd);
         entry.volume_24h_usd = entry.volume_24h_usd.max(candidate.volume_24h_usd);
+        entry.price_change_5m_percent = candidate
+            .price_change_5m_percent
+            .or(entry.price_change_5m_percent);
+        entry.price_change_1h_percent = candidate
+            .price_change_1h_percent
+            .or(entry.price_change_1h_percent);
+        entry.price_change_6h_percent = candidate
+            .price_change_6h_percent
+            .or(entry.price_change_6h_percent);
+        entry.price_change_24h_percent = candidate
+            .price_change_24h_percent
+            .or(entry.price_change_24h_percent);
         entry.market_cap_usd = entry.market_cap_usd.max(candidate.market_cap_usd);
         entry.market_source = candidate
             .market_source
             .clone()
             .or_else(|| entry.market_source.clone());
         entry.name = entry.name.clone().or_else(|| candidate.name.clone());
+        entry.logo_url = candidate
+            .logo_url
+            .clone()
+            .or_else(|| entry.logo_url.clone());
         entry.evidence.extend(candidate.evidence.clone());
     }
     for candidate in merged.values_mut() {
@@ -3308,7 +3859,9 @@ fn ingest(
     let mut mentions_upserted = 0usize;
     for signal in &request.signals {
         let signal_at_ms = signal.detected_at_ms.unwrap_or(request.captured_at_ms);
-        let author_handle = normalize_handle(&signal.author_handle).unwrap_or_default();
+        let author_handle =
+            normalize_signal_author_handle(&signal.author_handle, signal.source_url.as_deref())
+                .unwrap_or_default();
         let key = signal
             .source_url
             .as_ref()
@@ -3407,7 +3960,7 @@ fn ingest(
                     |row| row.get(0),
                 )
                 .map_err(|error| format!("failed to read saved token mention: {error}"))?;
-            if let (Some(contract), Some(symbol)) = (contract.as_deref(), token_symbol.as_deref()) {
+            if let Some(contract) = contract.as_deref() {
                 let has_specific_chain = !matches!(chain.as_str(), "Unknown" | "Unknown EVM");
                 if has_specific_chain {
                     let token_id = upsert_research_token(
@@ -3416,7 +3969,7 @@ fn ingest(
                             chain: &chain,
                             chain_id: research_chain_id(&chain),
                             address: contract,
-                            symbol: Some(symbol),
+                            symbol: token_symbol.as_deref(),
                             name: None,
                             source: "tweet-explicit",
                             confidence: 0.95,
@@ -3496,8 +4049,9 @@ pub fn research_list_kols(
     let mut statement = connection
         .prepare(
             r#"
-            SELECT handle, display_name, avatar_url, bio, followers_label, following_label,
-                   location, website, joined_label, verified, added_at, updated_at
+            SELECT handle, display_name, avatar_url, bio, followers_label, fomo_followers_label,
+                   fomo_followers_updated_at, following_label, location, website, joined_label,
+                   verified, has_x_source, has_fomo_source, added_at, updated_at
             FROM research_authors WHERE is_kol = 1
             ORDER BY lower(COALESCE(display_name, handle)), handle
             "#,
@@ -3511,13 +4065,17 @@ pub fn research_list_kols(
                 avatar_url: row.get(2)?,
                 bio: row.get(3)?,
                 followers_label: row.get(4)?,
-                following_label: row.get(5)?,
-                location: row.get(6)?,
-                website: row.get(7)?,
-                joined_label: row.get(8)?,
-                verified: row.get::<_, i64>(9)? != 0,
-                added_at: row.get(10)?,
-                updated_at: row.get(11)?,
+                fomo_followers_label: row.get(5)?,
+                fomo_followers_updated_at: row.get(6)?,
+                following_label: row.get(7)?,
+                location: row.get(8)?,
+                website: row.get(9)?,
+                joined_label: row.get(10)?,
+                verified: row.get::<_, i64>(11)? != 0,
+                has_x_source: row.get::<_, i64>(12)? != 0,
+                has_fomo_source: row.get::<_, i64>(13)? != 0,
+                added_at: row.get(14)?,
+                updated_at: row.get(15)?,
             })
         })
         .map_err(|error| format!("failed to query KOL list: {error}"))?
@@ -3617,12 +4175,20 @@ fn list_research_tokens(connection: &Connection) -> Result<Vec<ResearchTokenList
                 WHERE rr.status = 'resolved' AND rr.token_id IS NOT NULL
                 GROUP BY rr.token_id
             )
-            SELECT rt.id, COALESCE(rt.symbol, ''), rt.name, rt.chain, rt.contract_address,
-                   market.price_usd, market.volume_24h_usd, market.liquidity_usd,
-                   market.market_cap_usd, market.source, market.captured_at_ms,
-                   stats.mention_count, stats.kol_mention_count, stats.latest_mention_at_ms
+            SELECT rt.id, COALESCE(rt.symbol, ''), rt.name, metadata.logo_url,
+                   rt.chain, rt.contract_address,
+                   market.price_usd, market.volume_1h_usd, market.volume_6h_usd,
+                   market.volume_24h_usd, market.price_change_1h_percent,
+                   market.price_change_6h_percent, market.price_change_24h_percent,
+                   market.liquidity_usd, market.market_cap_usd, market.source,
+                   market.captured_at_ms,
+                   stats.mention_count, stats.kol_mention_count, stats.latest_mention_at_ms,
+                   market.volume_5m_usd, market.price_change_5m_percent
             FROM mention_stats stats
             JOIN research_tokens rt ON rt.id = stats.token_id
+            LEFT JOIN research_token_metadata metadata
+              ON metadata.chain = rt.chain
+             AND metadata.token_key = rt.normalized_address
             LEFT JOIN research_market_snapshots market
               ON market.chain = rt.chain
              AND market.token_key = rt.normalized_address
@@ -3633,30 +4199,49 @@ fn list_research_tokens(connection: &Connection) -> Result<Vec<ResearchTokenList
                    AND latest.token_key = rt.normalized_address
              )
             WHERE rt.contract_address != ''
+              AND (market.market_cap_usd IS NULL
+                   OR market.market_cap_usd >= ?2
+                   OR stats.latest_mention_at_ms >= ?3)
             ORDER BY stats.latest_mention_at_ms DESC, stats.mention_count DESC, rt.id DESC
             LIMIT ?1
             "#,
         )
         .map_err(|error| format!("failed to prepare research token list: {error}"))?;
     let tokens = statement
-        .query_map([MAX_LIST_TOKENS as i64], |row| {
-            Ok(ResearchTokenListItem {
-                id: row.get(0)?,
-                symbol: row.get(1)?,
-                name: row.get(2)?,
-                chain: row.get(3)?,
-                contract_address: row.get(4)?,
-                price_usd: row.get(5)?,
-                volume_24h_usd: row.get(6)?,
-                liquidity_usd: row.get(7)?,
-                market_cap_usd: row.get(8)?,
-                market_source: row.get(9)?,
-                market_updated_at_ms: row.get(10)?,
-                mention_count: row.get(11)?,
-                kol_mention_count: row.get(12)?,
-                latest_mention_at_ms: row.get(13)?,
-            })
-        })
+        .query_map(
+            params![
+                MAX_LIST_TOKENS as i64,
+                STALE_LOW_CAP_TOKEN_MARKET_CAP_USD,
+                now_ms().saturating_sub(STALE_LOW_CAP_TOKEN_AGE_MS),
+            ],
+            |row| {
+                let price_usd = row.get::<_, Option<f64>>(6)?;
+                Ok(ResearchTokenListItem {
+                    id: row.get(0)?,
+                    symbol: row.get(1)?,
+                    name: row.get(2)?,
+                    logo_url: normalized_logo_url(row.get::<_, Option<String>>(3)?.as_deref()),
+                    chain: row.get(4)?,
+                    contract_address: row.get(5)?,
+                    price_usd,
+                    volume_5m_usd: row.get(20)?,
+                    volume_1h_usd: row.get(7)?,
+                    volume_6h_usd: row.get(8)?,
+                    volume_24h_usd: row.get(9)?,
+                    price_change_5m_percent: row.get(21)?,
+                    price_change_1h_percent: row.get(10)?,
+                    price_change_6h_percent: row.get(11)?,
+                    price_change_24h_percent: row.get(12)?,
+                    liquidity_usd: row.get(13)?,
+                    market_cap_usd: row.get(14)?,
+                    market_source: row.get(15)?,
+                    market_updated_at_ms: row.get(16)?,
+                    mention_count: row.get(17)?,
+                    kol_mention_count: row.get(18)?,
+                    latest_mention_at_ms: row.get(19)?,
+                })
+            },
+        )
         .map_err(|error| format!("failed to query research token list: {error}"))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| format!("failed to read research token list: {error}"))?;
@@ -3687,8 +4272,11 @@ pub async fn research_refresh_token_markets(
                 JOIN research_token_resolutions rr ON rr.token_id = rt.id AND rr.status = 'resolved'
                 LEFT JOIN research_market_snapshots market
                   ON market.chain = rt.chain AND market.token_key = rt.normalized_address
+                LEFT JOIN research_token_metadata metadata
+                  ON metadata.chain = rt.chain AND metadata.token_key = rt.normalized_address
                 GROUP BY rt.id
                 HAVING COALESCE(MAX(market.captured_at_ms), 0) < ?1
+                    OR COALESCE(MAX(metadata.updated_at_ms), 0) < ?1
                 ORDER BY MAX(rr.resolved_at_ms) DESC
                 LIMIT ?2
                 "#,
@@ -3734,6 +4322,7 @@ pub async fn research_refresh_token_markets(
             }
         }
     }
+    enrich_missing_token_logos(&client, &mut candidates).await;
     if !candidates.is_empty() {
         let mut connection = store.open()?;
         initialize_schema(&connection)?;
@@ -3798,7 +4387,7 @@ pub fn research_remove_kol(
     store: tauri::State<'_, ResearchStore>,
     handle: String,
 ) -> Result<(), String> {
-    let handle = normalize_handle(&handle).ok_or_else(|| "invalid KOL handle".to_string())?;
+    let handle = normalize_fomo_handle(&handle).ok_or_else(|| "invalid KOL handle".to_string())?;
     let connection = store.open()?;
     connection
         .execute(
@@ -4487,6 +5076,229 @@ pub async fn research_ai_chat(
 mod tests {
     use super::*;
 
+    #[test]
+    fn upgrades_existing_market_snapshot_schema_with_period_metrics() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE research_market_snapshots (
+                    chain TEXT NOT NULL,
+                    token_key TEXT NOT NULL,
+                    captured_at_ms INTEGER NOT NULL,
+                    price_usd REAL,
+                    volume_24h_usd REAL,
+                    liquidity_usd REAL,
+                    market_cap_usd REAL,
+                    holders INTEGER,
+                    source TEXT,
+                    PRIMARY KEY(chain, token_key, captured_at_ms)
+                );
+                "#,
+            )
+            .unwrap();
+
+        initialize_schema(&connection).unwrap();
+
+        let mut statement = connection
+            .prepare("PRAGMA table_info(research_market_snapshots)")
+            .unwrap();
+        let columns = statement
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<HashSet<_>, _>>()
+            .unwrap();
+        for column in [
+            "volume_5m_usd",
+            "volume_1h_usd",
+            "volume_6h_usd",
+            "price_change_5m_percent",
+            "price_change_1h_percent",
+            "price_change_6h_percent",
+            "price_change_24h_percent",
+        ] {
+            assert!(columns.contains(column), "missing migrated column {column}");
+        }
+    }
+
+    #[test]
+    fn persists_platform_specific_kol_sources_and_fomo_followers() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = open_database(&directory.path().join("research.sqlite3")).unwrap();
+        initialize_schema(&connection).unwrap();
+        let handle = "fomo_user_with_long_handle";
+        upsert_kol(
+            &connection,
+            &ResearchKolInput {
+                handle: handle.to_string(),
+                display_name: Some("Fomo User".to_string()),
+                avatar_url: None,
+                bio: None,
+                followers_label: None,
+                fomo_followers_label: Some("12.3K Followers".to_string()),
+                fomo_followers_updated_at: Some("2026-09-05T00:01:30Z".to_string()),
+                following_label: None,
+                location: None,
+                website: None,
+                joined_label: None,
+                verified: false,
+                has_x_source: false,
+                has_fomo_source: true,
+                added_at: "2026-09-05T00:00:00Z".to_string(),
+                updated_at: Some("2026-09-05T00:01:30Z".to_string()),
+            },
+        )
+        .unwrap();
+
+        let stored = connection
+            .query_row(
+                "SELECT followers_label, fomo_followers_label, has_x_source, has_fomo_source FROM research_authors WHERE handle = ?1",
+                [handle],
+                |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, i64>(2)?, row.get::<_, i64>(3)?)),
+            )
+            .unwrap();
+        assert_eq!(stored, (None, Some("12.3K Followers".to_string()), 0, 1));
+
+        let mut x_kol = ResearchKolInput {
+            handle: handle.to_string(),
+            display_name: None,
+            avatar_url: None,
+            bio: None,
+            followers_label: None,
+            fomo_followers_label: None,
+            fomo_followers_updated_at: None,
+            following_label: None,
+            location: None,
+            website: None,
+            joined_label: None,
+            verified: false,
+            has_x_source: true,
+            has_fomo_source: false,
+            added_at: "2026-09-05T00:00:00Z".to_string(),
+            updated_at: None,
+        };
+        assert!(upsert_kol(&connection, &x_kol).is_err());
+        x_kol.handle = "valid_x_handle".to_string();
+        assert!(upsert_kol(&connection, &x_kol).is_ok());
+    }
+
+    #[test]
+    fn aggregates_period_volumes_and_uses_the_most_liquid_pair_change() {
+        let address = "0x1111111111111111111111111111111111111111";
+        let response: DexScreenerResponse = serde_json::from_value(serde_json::json!({
+            "pairs": [
+                {
+                    "chainId": "bsc",
+                    "dexId": "low-liquidity-dex",
+                    "baseToken": { "address": address, "name": "Token", "symbol": "TKN" },
+                    "quoteToken": { "address": "0x2222222222222222222222222222222222222222", "name": "USD", "symbol": "USD" },
+                    "priceUsd": "1.25",
+                    "liquidity": { "usd": 1_000.0 },
+                    "volume": { "m5": 2.0, "h1": 10.0, "h6": 60.0, "h24": 100.0 },
+                    "priceChange": { "m5": 0.5, "h1": 1.0, "h6": 2.0, "h24": 3.0 }
+                },
+                {
+                    "chainId": "bsc",
+                    "dexId": "high-liquidity-dex",
+                    "baseToken": { "address": address, "name": "Token", "symbol": "TKN" },
+                    "quoteToken": { "address": "0x3333333333333333333333333333333333333333", "name": "USD", "symbol": "USD" },
+                    "priceUsd": "1.50",
+                    "liquidity": { "usd": 5_000.0 },
+                    "volume": { "m5": 3.0, "h1": 20.0, "h6": 70.0, "h24": 200.0 },
+                    "priceChange": { "m5": -0.75, "h1": -4.0, "h6": 5.0, "h24": 6.0 }
+                }
+            ]
+        }))
+        .unwrap();
+        let candidates = dex_candidates_from_response(
+            response,
+            &ResolverQuery::Address {
+                address: address.to_string(),
+                chain_hint: Some("BSC".to_string()),
+            },
+        );
+
+        assert_eq!(candidates.len(), 1);
+        let candidate = &candidates[0];
+        assert_eq!(candidate.volume_5m_usd, 5.0);
+        assert_eq!(candidate.volume_1h_usd, 30.0);
+        assert_eq!(candidate.volume_6h_usd, 130.0);
+        assert_eq!(candidate.volume_24h_usd, 300.0);
+        assert_eq!(candidate.price_usd, 1.5);
+        assert_eq!(candidate.price_change_5m_percent, Some(-0.75));
+        assert_eq!(candidate.price_change_1h_percent, Some(-4.0));
+        assert_eq!(candidate.price_change_6h_percent, Some(5.0));
+        assert_eq!(candidate.price_change_24h_percent, Some(6.0));
+        assert_eq!(
+            candidate.market_source.as_deref(),
+            Some("high-liquidity-dex")
+        );
+    }
+
+    #[test]
+    fn accepts_only_safe_https_token_logo_urls() {
+        let response: DexScreenerResponse = serde_json::from_value(serde_json::json!({
+            "pairs": [{
+                "chainId": "robinhood",
+                "baseToken": { "address": "0x1", "name": "Token", "symbol": "TKN" },
+                "info": { "imageUrl": "https://cdn.dexscreener.com/token.png" }
+            }]
+        }))
+        .unwrap();
+        let pairs = response.pairs.unwrap();
+        let logo_url = pairs[0].info.image_url.as_deref();
+        assert_eq!(
+            normalized_logo_url(logo_url).as_deref(),
+            Some("https://cdn.dexscreener.com/token.png")
+        );
+        assert_eq!(
+            normalized_logo_url(Some("http://example.com/token.png")),
+            None
+        );
+        assert_eq!(
+            normalized_logo_url(Some("https://user:secret@example.com/token.png")),
+            None
+        );
+        assert_eq!(
+            normalized_logo_url(Some("https://127.0.0.1/token.png")),
+            None
+        );
+        assert_eq!(
+            normalized_logo_url(Some("https://tracker.example/token.png")),
+            None
+        );
+        assert_eq!(
+            normalized_logo_url(Some("https://dd.dexscreener.com/token.png")).as_deref(),
+            Some("https://dd.dexscreener.com/token.png")
+        );
+        assert_eq!(gecko_network("Robinhood"), Some("robinhood"));
+        assert_eq!(gecko_network("Unknown"), None);
+        assert_eq!(
+            logo_metadata_source(Some(
+                "https://coin-images.coingecko.com/coins/images/token.png"
+            )),
+            "GeckoTerminal"
+        );
+    }
+
+    #[test]
+    fn parses_gecko_token_logo_metadata() {
+        let response: GeckoTokenListResponse = serde_json::from_value(serde_json::json!({
+            "data": [{
+                "attributes": {
+                    "address": "0x05a3d1cd21d0c88145e82600e62e7e496e0f222b",
+                    "image_url": "https://coin-images.coingecko.com/coins/images/amc.png"
+                }
+            }]
+        }))
+        .unwrap();
+        assert_eq!(response.data.len(), 1);
+        assert_eq!(
+            normalized_logo_url(response.data[0].attributes.image_url.as_deref()).as_deref(),
+            Some("https://coin-images.coingecko.com/coins/images/amc.png")
+        );
+    }
+
     fn explicit_token_request(tweet_id: &str, captured_at_ms: i64) -> ResearchIngestRequest {
         let source_url = format!("https://x.com/analyst/status/{tweet_id}");
         ResearchIngestRequest {
@@ -4498,11 +5310,15 @@ mod tests {
                 avatar_url: None,
                 bio: None,
                 followers_label: None,
+                fomo_followers_label: None,
+                fomo_followers_updated_at: None,
                 following_label: None,
                 location: None,
                 website: None,
                 joined_label: None,
                 verified: false,
+                has_x_source: true,
+                has_fomo_source: false,
                 added_at: "2026-09-04T00:00:00Z".to_string(),
                 updated_at: None,
             }],
@@ -4530,6 +5346,102 @@ mod tests {
         }
     }
 
+    #[test]
+    fn fomo_signal_with_invalid_ticker_enters_token_list_by_contract() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = ResearchStore::new(directory.path().join("research.sqlite3")).unwrap();
+        let mut connection = store.open().unwrap();
+        let address = "0x7dbf38976f6d3b9c529e7d9484a71898b409ee6a";
+        let author = "long_fomo_profile_handle_123";
+        let captured_at_ms = now_ms();
+        let request = ResearchIngestRequest {
+            source_url: String::new(),
+            captured_at_ms,
+            kols: Vec::new(),
+            tweets: Vec::new(),
+            signals: vec![ResearchSignalInput {
+                tweet_id: None,
+                author_handle: author.to_string(),
+                text: "Buy token on Robinhood".to_string(),
+                chain: "Robinhood".to_string(),
+                contract_address: Some(address.to_string()),
+                token_symbols: vec!["币".to_string()],
+                source_url: Some(format!(
+                    "https://fomo.family/tokens/robinhood/{address}?tradeId=trade-1"
+                )),
+                published_at: None,
+                detected_at_ms: Some(captured_at_ms),
+            }],
+            backfill_complete: false,
+        };
+
+        let result = ingest(&mut connection, &request).unwrap();
+        assert_eq!(result.mentions_upserted, 1);
+        let tokens = list_research_tokens(&connection).unwrap();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].contract_address, address);
+        assert_eq!(tokens[0].symbol, "");
+        let signals = list_recent_signals(&connection, captured_at_ms.saturating_add(1)).unwrap();
+        assert_eq!(signals[0].author, author);
+
+        let mut forged = request;
+        forged.signals[0].source_url = Some(
+            "https://fomo.family/tokens/robinhood/0x1111111111111111111111111111111111111111"
+                .to_string(),
+        );
+        assert!(validate_ingest_request(&forged).is_err());
+    }
+
+    #[test]
+    fn token_list_hides_only_stale_low_market_cap_tokens() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = ResearchStore::new(directory.path().join("research.sqlite3")).unwrap();
+        let mut connection = store.open().unwrap();
+        initialize_schema(&connection).unwrap();
+        let current_time_ms = now_ms();
+        let stale_time_ms = current_time_ms - STALE_LOW_CAP_TOKEN_AGE_MS - 1;
+        let cases = [
+            (
+                "8101",
+                "0x1111111111111111111111111111111111111111",
+                stale_time_ms,
+                29_999.0,
+            ),
+            (
+                "8102",
+                "0x2222222222222222222222222222222222222222",
+                stale_time_ms,
+                30_000.0,
+            ),
+            (
+                "8103",
+                "0x3333333333333333333333333333333333333333",
+                current_time_ms,
+                10_000.0,
+            ),
+        ];
+        for (tweet_id, address, captured_at_ms, market_cap_usd) in cases {
+            let mut request = explicit_token_request(tweet_id, captured_at_ms);
+            request.signals[0].contract_address = Some(address.to_string());
+            ingest(&mut connection, &request).unwrap();
+            connection
+                .execute(
+                    "INSERT INTO research_market_snapshots (chain, token_key, captured_at_ms, market_cap_usd, source) VALUES ('Robinhood', ?1, ?2, ?3, 'test')",
+                    params![address, current_time_ms, market_cap_usd],
+                )
+                .unwrap();
+        }
+
+        let addresses = list_research_tokens(&connection)
+            .unwrap()
+            .into_iter()
+            .map(|token| token.contract_address)
+            .collect::<HashSet<_>>();
+        assert!(!addresses.contains("0x1111111111111111111111111111111111111111"));
+        assert!(addresses.contains("0x2222222222222222222222222222222222222222"));
+        assert!(addresses.contains("0x3333333333333333333333333333333333333333"));
+    }
+
     fn confirmed_candidate(
         chain: &str,
         chain_id: u64,
@@ -4544,9 +5456,17 @@ mod tests {
             address: address.to_string(),
             symbol: symbol.to_string(),
             name: None,
+            logo_url: None,
             price_usd: 0.0,
             liquidity_usd: 0.0,
+            volume_5m_usd: 0.0,
+            volume_1h_usd: 0.0,
+            volume_6h_usd: 0.0,
             volume_24h_usd: 0.0,
+            price_change_5m_percent: None,
+            price_change_1h_percent: None,
+            price_change_6h_percent: None,
+            price_change_24h_percent: None,
             market_cap_usd: 0.0,
             market_source: None,
             pair_created_at_ms: None,
@@ -4734,32 +5654,38 @@ mod tests {
                 [],
             )
             .unwrap();
-        save_market_snapshot(
-            &connection,
-            &ResolverCandidate {
-                token_id: None,
-                chain: "Robinhood".to_string(),
-                chain_id: Some(4_663),
-                address: "0x1111111111111111111111111111111111111111".to_string(),
-                symbol: "PONS".to_string(),
-                name: Some("Pons Token".to_string()),
-                price_usd: 0.25,
-                liquidity_usd: 125_000.0,
-                volume_24h_usd: 75_000.0,
-                market_cap_usd: 2_500_000.0,
-                market_source: Some("uniswap".to_string()),
-                pair_created_at_ms: None,
-                from_dex: true,
-                from_rpc: false,
-                confirmed_mentions: 0,
-                latest_confirmed_at_ms: None,
-                symbol_conflicted: false,
-                query_incomplete: false,
-                evidence: Vec::new(),
-            },
-            captured_at_ms,
-        )
-        .unwrap();
+        let mut candidate = ResolverCandidate {
+            token_id: None,
+            chain: "Robinhood".to_string(),
+            chain_id: Some(4_663),
+            address: "0x1111111111111111111111111111111111111111".to_string(),
+            symbol: "PONS".to_string(),
+            name: Some("Pons Token".to_string()),
+            logo_url: Some("https://coin-images.coingecko.com/coins/images/pons.png".to_string()),
+            price_usd: 0.25,
+            liquidity_usd: 125_000.0,
+            volume_5m_usd: 750.0,
+            volume_1h_usd: 5_000.0,
+            volume_6h_usd: 25_000.0,
+            volume_24h_usd: 75_000.0,
+            price_change_5m_percent: Some(0.75),
+            price_change_1h_percent: Some(-1.25),
+            price_change_6h_percent: Some(3.5),
+            price_change_24h_percent: Some(8.75),
+            market_cap_usd: 2_500_000.0,
+            market_source: Some("uniswap".to_string()),
+            pair_created_at_ms: None,
+            from_dex: true,
+            from_rpc: false,
+            confirmed_mentions: 0,
+            latest_confirmed_at_ms: None,
+            symbol_conflicted: false,
+            query_incomplete: false,
+            evidence: Vec::new(),
+        };
+        save_market_snapshot(&connection, &candidate, captured_at_ms).unwrap();
+        candidate.logo_url = None;
+        save_market_snapshot(&connection, &candidate, captured_at_ms + 1).unwrap();
 
         let resolver_candidate = load_local_resolver_candidates(&connection)
             .unwrap()
@@ -4768,7 +5694,14 @@ mod tests {
             .unwrap();
         assert_eq!(resolver_candidate.price_usd, 0.25);
         assert_eq!(resolver_candidate.liquidity_usd, 125_000.0);
+        assert_eq!(resolver_candidate.volume_5m_usd, 750.0);
+        assert_eq!(resolver_candidate.volume_1h_usd, 5_000.0);
+        assert_eq!(resolver_candidate.volume_6h_usd, 25_000.0);
         assert_eq!(resolver_candidate.volume_24h_usd, 75_000.0);
+        assert_eq!(resolver_candidate.price_change_5m_percent, Some(0.75));
+        assert_eq!(resolver_candidate.price_change_1h_percent, Some(-1.25));
+        assert_eq!(resolver_candidate.price_change_6h_percent, Some(3.5));
+        assert_eq!(resolver_candidate.price_change_24h_percent, Some(8.75));
         assert_eq!(resolver_candidate.market_cap_usd, 2_500_000.0);
 
         let tokens = list_research_tokens(&connection).unwrap();
@@ -4778,7 +5711,27 @@ mod tests {
             "0x1111111111111111111111111111111111111111"
         );
         assert_eq!(tokens[0].name.as_deref(), Some("Pons Token"));
+        assert_eq!(
+            tokens[0].logo_url.as_deref(),
+            Some("https://coin-images.coingecko.com/coins/images/pons.png")
+        );
+        let logo_source: String = connection
+            .query_row(
+                "SELECT source FROM research_token_metadata WHERE chain = 'Robinhood'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(logo_source, "GeckoTerminal");
         assert_eq!(tokens[0].price_usd, Some(0.25));
+        assert_eq!(tokens[0].volume_5m_usd, Some(750.0));
+        assert_eq!(tokens[0].volume_1h_usd, Some(5_000.0));
+        assert_eq!(tokens[0].volume_6h_usd, Some(25_000.0));
+        assert_eq!(tokens[0].volume_24h_usd, Some(75_000.0));
+        assert_eq!(tokens[0].price_change_5m_percent, Some(0.75));
+        assert_eq!(tokens[0].price_change_1h_percent, Some(-1.25));
+        assert_eq!(tokens[0].price_change_6h_percent, Some(3.5));
+        assert_eq!(tokens[0].price_change_24h_percent, Some(8.75));
         assert_eq!(tokens[0].market_source.as_deref(), Some("uniswap"));
         assert_eq!(tokens[0].mention_count, 1);
         assert_eq!(tokens[0].kol_mention_count, 1);
@@ -4843,11 +5796,15 @@ mod tests {
                 avatar_url: None,
                 bio: None,
                 followers_label: None,
+                fomo_followers_label: None,
+                fomo_followers_updated_at: None,
                 following_label: None,
                 location: None,
                 website: None,
                 joined_label: None,
                 verified: true,
+                has_x_source: true,
+                has_fomo_source: false,
                 added_at: "2026-09-02T00:00:00Z".to_string(),
                 updated_at: None,
             }],
@@ -5041,11 +5998,15 @@ mod tests {
                     avatar_url: None,
                     bio: None,
                     followers_label: None,
+                    fomo_followers_label: None,
+                    fomo_followers_updated_at: None,
                     following_label: None,
                     location: None,
                     website: None,
                     joined_label: None,
                     verified: false,
+                    has_x_source: true,
+                    has_fomo_source: false,
                     added_at: "2026-09-03T00:00:00Z".to_string(),
                     updated_at: None,
                 }],
@@ -5129,11 +6090,15 @@ mod tests {
                 avatar_url: None,
                 bio: None,
                 followers_label: None,
+                fomo_followers_label: None,
+                fomo_followers_updated_at: None,
                 following_label: None,
                 location: None,
                 website: None,
                 joined_label: None,
                 verified: false,
+                has_x_source: true,
+                has_fomo_source: false,
                 added_at: "2026-09-02T00:00:00Z".to_string(),
                 updated_at: None,
             },
@@ -5380,11 +6345,15 @@ mod tests {
                 avatar_url: None,
                 bio: None,
                 followers_label: None,
+                fomo_followers_label: None,
+                fomo_followers_updated_at: None,
                 following_label: None,
                 location: None,
                 website: None,
                 joined_label: None,
                 verified: false,
+                has_x_source: true,
+                has_fomo_source: false,
                 added_at: "2026-09-03T00:00:00Z".to_string(),
                 updated_at: None,
             }],
@@ -5550,11 +6519,15 @@ mod tests {
                     avatar_url: None,
                     bio: None,
                     followers_label: None,
+                    fomo_followers_label: None,
+                    fomo_followers_updated_at: None,
                     following_label: None,
                     location: None,
                     website: None,
                     joined_label: None,
                     verified: false,
+                    has_x_source: true,
+                    has_fomo_source: false,
                     added_at: "2026-09-03T00:00:00Z".to_string(),
                     updated_at: None,
                 }],
@@ -5718,9 +6691,17 @@ mod tests {
             address: "0x1111111111111111111111111111111111111111".to_string(),
             symbol: "PONS".to_string(),
             name: None,
+            logo_url: None,
             price_usd: 0.0,
             liquidity_usd: 0.0,
+            volume_5m_usd: 0.0,
+            volume_1h_usd: 0.0,
+            volume_6h_usd: 0.0,
             volume_24h_usd: 0.0,
+            price_change_5m_percent: None,
+            price_change_1h_percent: None,
+            price_change_6h_percent: None,
+            price_change_24h_percent: None,
             market_cap_usd: 0.0,
             market_source: None,
             pair_created_at_ms: None,
@@ -5797,9 +6778,17 @@ mod tests {
             address: "0x1111111111111111111111111111111111111111".to_string(),
             symbol: "PONS".to_string(),
             name: None,
+            logo_url: None,
             price_usd: 0.0,
             liquidity_usd: 1_000_000.0,
+            volume_5m_usd: 0.0,
+            volume_1h_usd: 0.0,
+            volume_6h_usd: 0.0,
             volume_24h_usd: 100_000.0,
+            price_change_5m_percent: None,
+            price_change_1h_percent: None,
+            price_change_6h_percent: None,
+            price_change_24h_percent: None,
             market_cap_usd: 5_000_000.0,
             market_source: None,
             pair_created_at_ms,
@@ -5828,9 +6817,17 @@ mod tests {
             address: "0x1111111111111111111111111111111111111111".to_string(),
             symbol: "PONS".to_string(),
             name: None,
+            logo_url: None,
             price_usd: 0.0,
             liquidity_usd: 100_000.0,
+            volume_5m_usd: 0.0,
+            volume_1h_usd: 0.0,
+            volume_6h_usd: 0.0,
             volume_24h_usd,
+            price_change_5m_percent: None,
+            price_change_1h_percent: None,
+            price_change_6h_percent: None,
+            price_change_24h_percent: None,
             market_cap_usd,
             market_source: None,
             pair_created_at_ms: Some(pair_created_at_ms),
@@ -5882,9 +6879,17 @@ mod tests {
             address: "0x1111111111111111111111111111111111111111".to_string(),
             symbol: "AI".to_string(),
             name: None,
+            logo_url: None,
             price_usd: 0.0,
             liquidity_usd: 0.0,
+            volume_5m_usd: 0.0,
+            volume_1h_usd: 0.0,
+            volume_6h_usd: 0.0,
             volume_24h_usd: 0.0,
+            price_change_5m_percent: None,
+            price_change_1h_percent: None,
+            price_change_6h_percent: None,
+            price_change_24h_percent: None,
             market_cap_usd: 1_000_000_000.0,
             market_source: None,
             pair_created_at_ms: Some(observed_at_ms - 365 * 24 * 60 * 60 * 1_000),
@@ -5927,9 +6932,17 @@ mod tests {
             address: "0x1111111111111111111111111111111111111111".to_string(),
             symbol: symbol.to_string(),
             name: None,
+            logo_url: None,
             price_usd: 0.0,
             liquidity_usd: 0.0,
+            volume_5m_usd: 0.0,
+            volume_1h_usd: 0.0,
+            volume_6h_usd: 0.0,
             volume_24h_usd: 0.0,
+            price_change_5m_percent: None,
+            price_change_1h_percent: None,
+            price_change_6h_percent: None,
+            price_change_24h_percent: None,
             market_cap_usd: 0.0,
             market_source: None,
             pair_created_at_ms: None,
@@ -5977,9 +6990,17 @@ mod tests {
             address: address.to_string(),
             symbol: "PONS".to_string(),
             name: None,
+            logo_url: None,
             price_usd: 0.0,
             liquidity_usd: 0.0,
+            volume_5m_usd: 0.0,
+            volume_1h_usd: 0.0,
+            volume_6h_usd: 0.0,
             volume_24h_usd: 0.0,
+            price_change_5m_percent: None,
+            price_change_1h_percent: None,
+            price_change_6h_percent: None,
+            price_change_24h_percent: None,
             market_cap_usd: 0.0,
             market_source: None,
             pair_created_at_ms: None,
@@ -6038,9 +7059,17 @@ mod tests {
             address: "0x1111111111111111111111111111111111111111".to_string(),
             symbol: "PONS".to_string(),
             name: None,
+            logo_url: None,
             price_usd: 0.0,
             liquidity_usd: 0.0,
+            volume_5m_usd: 0.0,
+            volume_1h_usd: 0.0,
+            volume_6h_usd: 0.0,
             volume_24h_usd: 0.0,
+            price_change_5m_percent: None,
+            price_change_1h_percent: None,
+            price_change_6h_percent: None,
+            price_change_24h_percent: None,
             market_cap_usd: 0.0,
             market_source: None,
             pair_created_at_ms: None,
@@ -6096,9 +7125,17 @@ mod tests {
             address: "0x1111111111111111111111111111111111111111".to_string(),
             symbol: symbol.to_string(),
             name: None,
+            logo_url: None,
             price_usd: 0.0,
             liquidity_usd: 1_000.0,
+            volume_5m_usd: 0.0,
+            volume_1h_usd: 0.0,
+            volume_6h_usd: 0.0,
             volume_24h_usd: 100.0,
+            price_change_5m_percent: None,
+            price_change_1h_percent: None,
+            price_change_6h_percent: None,
+            price_change_24h_percent: None,
             market_cap_usd: 0.0,
             market_source: None,
             pair_created_at_ms: None,
@@ -6143,9 +7180,17 @@ mod tests {
             address: address.to_string(),
             symbol: "PONS".to_string(),
             name: None,
+            logo_url: None,
             price_usd: 0.0,
             liquidity_usd: 0.0,
+            volume_5m_usd: 0.0,
+            volume_1h_usd: 0.0,
+            volume_6h_usd: 0.0,
             volume_24h_usd: 0.0,
+            price_change_5m_percent: None,
+            price_change_1h_percent: None,
+            price_change_6h_percent: None,
+            price_change_24h_percent: None,
             market_cap_usd: 0.0,
             market_source: None,
             pair_created_at_ms: None,
@@ -6175,9 +7220,17 @@ mod tests {
                 address: address.to_string(),
                 symbol: "CHIPS".to_string(),
                 name: None,
+                logo_url: None,
                 price_usd: 0.0,
                 liquidity_usd,
+                volume_5m_usd: 0.0,
+                volume_1h_usd: 0.0,
+                volume_6h_usd: 0.0,
                 volume_24h_usd,
+                price_change_5m_percent: None,
+                price_change_1h_percent: None,
+                price_change_6h_percent: None,
+                price_change_24h_percent: None,
                 market_cap_usd,
                 market_source: None,
                 pair_created_at_ms: None,
@@ -6217,9 +7270,17 @@ mod tests {
             address: "0x1111111111111111111111111111111111111111".to_string(),
             symbol: "AI".to_string(),
             name: None,
+            logo_url: None,
             price_usd: 0.0,
             liquidity_usd: PRIORITY_SYMBOL_MIN_LIQUIDITY_USD,
+            volume_5m_usd: 0.0,
+            volume_1h_usd: 0.0,
+            volume_6h_usd: 0.0,
             volume_24h_usd: PRIORITY_SYMBOL_MIN_VOLUME_24H_USD,
+            price_change_5m_percent: None,
+            price_change_1h_percent: None,
+            price_change_6h_percent: None,
+            price_change_24h_percent: None,
             market_cap_usd: 100_000.0,
             market_source: None,
             pair_created_at_ms: None,
@@ -6240,6 +7301,8 @@ mod tests {
         ));
         let inactive_robinhood = ResolverCandidate {
             liquidity_usd: 0.0,
+            volume_1h_usd: 0.0,
+            volume_6h_usd: 0.0,
             volume_24h_usd: 0.0,
             ..candidate.clone()
         };
@@ -6261,6 +7324,8 @@ mod tests {
         let conflicted_robinhood = ResolverCandidate {
             symbol_conflicted: true,
             liquidity_usd: PRIORITY_SYMBOL_MIN_LIQUIDITY_USD * 10.0,
+            volume_1h_usd: 0.0,
+            volume_6h_usd: 0.0,
             volume_24h_usd: PRIORITY_SYMBOL_MIN_VOLUME_24H_USD * 10.0,
             ..inactive_robinhood
         };
@@ -6300,9 +7365,17 @@ mod tests {
             address: "0x1111111111111111111111111111111111111111".to_string(),
             symbol: "PONS".to_string(),
             name: None,
+            logo_url: None,
             price_usd: 0.0,
             liquidity_usd: 0.0,
+            volume_5m_usd: 0.0,
+            volume_1h_usd: 0.0,
+            volume_6h_usd: 0.0,
             volume_24h_usd: 0.0,
+            price_change_5m_percent: None,
+            price_change_1h_percent: None,
+            price_change_6h_percent: None,
+            price_change_24h_percent: None,
             market_cap_usd: 0.0,
             market_source: None,
             pair_created_at_ms: None,

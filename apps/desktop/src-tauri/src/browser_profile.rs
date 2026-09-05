@@ -1,10 +1,10 @@
 use aes::Aes128;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use cbc::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
 use pbkdf2::pbkdf2_hmac;
@@ -12,6 +12,8 @@ use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
+#[cfg(target_os = "macos")]
+use std::{collections::HashMap, sync::Mutex};
 use std::{
     collections::HashSet,
     fs,
@@ -28,6 +30,12 @@ use zeroize::{Zeroize, Zeroizing};
 
 const BROWSER_CREDENTIAL_SERVICE: &str = "dev.fnzero-safe.browser.credentials.v1";
 const BROWSER_CREDENTIALS_FILE: &str = "browser-credentials.json";
+#[cfg(target_os = "macos")]
+const BROWSER_PASSWORD_VAULT_SERVICE: &str = "dev.fnzero-safe.browser.credentials.v2";
+#[cfg(target_os = "macos")]
+const BROWSER_PASSWORD_VAULT_ACCOUNT: &str = "encrypted-vault-key";
+#[cfg(target_os = "macos")]
+const BROWSER_PASSWORD_VAULT_FILE: &str = "browser-passwords.v2.json";
 const CHROME_EPOCH_OFFSET_SECONDS: i64 = 11_644_473_600;
 const MAX_IMPORT_COOKIES: usize = 100_000;
 const MAX_IMPORT_PASSWORDS: usize = 20_000;
@@ -81,7 +89,37 @@ struct StoredBrowserCredential {
     updated_at_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     protected_password: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    vaulted: bool,
 }
+
+#[cfg(target_os = "macos")]
+#[derive(Debug, Deserialize, Serialize)]
+struct PasswordVault {
+    passwords: HashMap<String, String>,
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for PasswordVault {
+    fn drop(&mut self) {
+        for password in self.passwords.values_mut() {
+            password.zeroize();
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Debug, Deserialize, Serialize)]
+struct EncryptedPasswordVault {
+    version: u8,
+    nonce: String,
+    ciphertext: String,
+}
+
+#[cfg(target_os = "macos")]
+static PASSWORD_VAULT_KEY_CACHE: Mutex<Option<Zeroizing<Vec<u8>>>> = Mutex::new(None);
+#[cfg(target_os = "macos")]
+static PASSWORD_VAULT_OPERATION_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Clone, Debug, Serialize)]
 pub struct BrowserCredentialSummary {
@@ -791,6 +829,146 @@ fn save_credentials(
     }
 }
 
+#[cfg(target_os = "macos")]
+fn password_vault_path(app: &crate::DesktopAppHandle) -> Result<PathBuf, String> {
+    Ok(credentials_path(app)?.with_file_name(BROWSER_PASSWORD_VAULT_FILE))
+}
+
+#[cfg(target_os = "macos")]
+fn password_vault_key() -> Result<Zeroizing<Vec<u8>>, String> {
+    use rand::RngCore;
+    use security_framework::passwords::{generic_password, set_generic_password, PasswordOptions};
+    const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
+
+    let mut cached = PASSWORD_VAULT_KEY_CACHE
+        .lock()
+        .map_err(|_| "browser password vault key cache is unavailable".to_string())?;
+    if let Some(key) = cached.as_ref() {
+        return Ok(Zeroizing::new(key.to_vec()));
+    }
+
+    let key = match generic_password(PasswordOptions::new_generic_password(
+        BROWSER_PASSWORD_VAULT_SERVICE,
+        BROWSER_PASSWORD_VAULT_ACCOUNT,
+    )) {
+        Ok(key) => key,
+        Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => {
+            let mut key = vec![0_u8; 32];
+            rand::rngs::OsRng.fill_bytes(&mut key);
+            set_generic_password(
+                BROWSER_PASSWORD_VAULT_SERVICE,
+                BROWSER_PASSWORD_VAULT_ACCOUNT,
+                &key,
+            )
+            .map_err(|error| {
+                key.zeroize();
+                format!("failed to save browser password vault key in Keychain: {error}")
+            })?;
+            key
+        }
+        Err(error) => {
+            return Err(format!(
+                "failed to read browser password vault key from Keychain: {error}"
+            ))
+        }
+    };
+    if key.len() != 32 {
+        return Err("browser password vault key has an invalid length".to_string());
+    }
+    *cached = Some(Zeroizing::new(key.clone()));
+    Ok(Zeroizing::new(key))
+}
+
+#[cfg(target_os = "macos")]
+fn encode_password_vault(vault: &PasswordVault, key: &[u8]) -> Result<Vec<u8>, String> {
+    use rand::RngCore;
+
+    let plaintext = Zeroizing::new(
+        serde_json::to_vec(vault)
+            .map_err(|error| format!("failed to encode browser password vault: {error}"))?,
+    );
+    let mut nonce = [0_u8; 12];
+    rand::rngs::OsRng.fill_bytes(&mut nonce);
+    let ciphertext = Aes256Gcm::new_from_slice(key)
+        .map_err(|_| "browser password vault key has an invalid length".to_string())?
+        .encrypt(Nonce::from_slice(&nonce), plaintext.as_ref())
+        .map_err(|_| "failed to encrypt browser password vault".to_string())?;
+    serde_json::to_vec(&EncryptedPasswordVault {
+        version: 2,
+        nonce: BASE64.encode(nonce),
+        ciphertext: BASE64.encode(ciphertext),
+    })
+    .map_err(|error| format!("failed to encode encrypted browser password vault: {error}"))
+}
+
+#[cfg(target_os = "macos")]
+fn decode_password_vault(bytes: &[u8], key: &[u8]) -> Result<PasswordVault, String> {
+    let encrypted: EncryptedPasswordVault = serde_json::from_slice(bytes)
+        .map_err(|error| format!("invalid browser password vault: {error}"))?;
+    if encrypted.version != 2 {
+        return Err("unsupported browser password vault version".to_string());
+    }
+    let nonce = BASE64
+        .decode(encrypted.nonce)
+        .map_err(|error| format!("invalid browser password vault nonce: {error}"))?;
+    if nonce.len() != 12 {
+        return Err("browser password vault nonce has an invalid length".to_string());
+    }
+    let ciphertext = BASE64
+        .decode(encrypted.ciphertext)
+        .map_err(|error| format!("invalid browser password vault ciphertext: {error}"))?;
+    let plaintext = Zeroizing::new(
+        Aes256Gcm::new_from_slice(key)
+            .map_err(|_| "browser password vault key has an invalid length".to_string())?
+            .decrypt(Nonce::from_slice(&nonce), ciphertext.as_ref())
+            .map_err(|_| "failed to decrypt browser password vault".to_string())?,
+    );
+    serde_json::from_slice(&plaintext)
+        .map_err(|error| format!("invalid browser password vault contents: {error}"))
+}
+
+#[cfg(target_os = "macos")]
+fn load_password_vault(app: &crate::DesktopAppHandle, key: &[u8]) -> Result<PasswordVault, String> {
+    let path = password_vault_path(app)?;
+    if !path.is_file() {
+        return Ok(PasswordVault {
+            passwords: HashMap::new(),
+        });
+    }
+    let bytes = fs::read(path)
+        .map_err(|error| format!("failed to read browser password vault: {error}"))?;
+    decode_password_vault(&bytes, key)
+}
+
+#[cfg(target_os = "macos")]
+fn save_password_vault(
+    app: &crate::DesktopAppHandle,
+    vault: &PasswordVault,
+    key: &[u8],
+) -> Result<(), String> {
+    let path = password_vault_path(app)?;
+    let temporary = path.with_extension("json.tmp");
+    let bytes = encode_password_vault(vault, key)?;
+    fs::write(&temporary, bytes)
+        .map_err(|error| format!("failed to save browser password vault: {error}"))?;
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))
+        .map_err(|error| format!("failed to protect browser password vault: {error}"))?;
+    fs::rename(&temporary, &path)
+        .map_err(|error| format!("failed to replace browser password vault: {error}"))
+}
+
+#[cfg(target_os = "macos")]
+fn restore_password_vault_file(path: &Path, original: Option<&[u8]>) -> Result<(), String> {
+    match original {
+        Some(bytes) => fs::write(path, bytes)
+            .map_err(|error| format!("failed to restore browser password vault: {error}")),
+        None if path.is_file() => fs::remove_file(path)
+            .map_err(|error| format!("failed to remove new browser password vault: {error}")),
+        None => Ok(()),
+    }
+}
+
 fn credential_id(origin: &str, username: &str) -> String {
     format!(
         "{:x}",
@@ -815,7 +993,23 @@ fn store_password(id: &str, password: &str) -> Result<Option<String>, String> {
 }
 
 #[cfg(target_os = "macos")]
-fn load_password(credential: &StoredBrowserCredential) -> Result<String, String> {
+fn load_password(
+    app: &crate::DesktopAppHandle,
+    credential: &StoredBrowserCredential,
+) -> Result<String, String> {
+    if credential.vaulted {
+        let _operation = PASSWORD_VAULT_OPERATION_LOCK
+            .lock()
+            .map_err(|_| "browser password vault is unavailable".to_string())?;
+        let key = password_vault_key()?;
+        let vault = load_password_vault(app, &key)?;
+        return vault
+            .passwords
+            .get(&credential.id)
+            .cloned()
+            .ok_or_else(|| "browser password is unavailable".to_string());
+    }
+
     use security_framework::passwords::{generic_password, PasswordOptions};
     let value = generic_password(PasswordOptions::new_generic_password(
         BROWSER_CREDENTIAL_SERVICE,
@@ -826,7 +1020,20 @@ fn load_password(credential: &StoredBrowserCredential) -> Result<String, String>
 }
 
 #[cfg(target_os = "macos")]
-fn delete_password(credential: &StoredBrowserCredential) -> Result<(), String> {
+fn delete_password(
+    app: &crate::DesktopAppHandle,
+    credential: &StoredBrowserCredential,
+) -> Result<(), String> {
+    if credential.vaulted {
+        let _operation = PASSWORD_VAULT_OPERATION_LOCK
+            .lock()
+            .map_err(|_| "browser password vault is unavailable".to_string())?;
+        let key = password_vault_key()?;
+        let mut vault = load_password_vault(app, &key)?;
+        vault.passwords.remove(&credential.id);
+        return save_password_vault(app, &vault, &key);
+    }
+
     use security_framework::passwords::delete_generic_password;
     const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
     match delete_generic_password(BROWSER_CREDENTIAL_SERVICE, &credential.id) {
@@ -844,7 +1051,10 @@ fn store_password(_id: &str, password: &str) -> Result<Option<String>, String> {
 }
 
 #[cfg(target_os = "windows")]
-fn load_password(credential: &StoredBrowserCredential) -> Result<String, String> {
+fn load_password(
+    _app: &crate::DesktopAppHandle,
+    credential: &StoredBrowserCredential,
+) -> Result<String, String> {
     let protected = credential
         .protected_password
         .as_deref()
@@ -857,7 +1067,10 @@ fn load_password(credential: &StoredBrowserCredential) -> Result<String, String>
 }
 
 #[cfg(target_os = "windows")]
-fn delete_password(_credential: &StoredBrowserCredential) -> Result<(), String> {
+fn delete_password(
+    _app: &crate::DesktopAppHandle,
+    _credential: &StoredBrowserCredential,
+) -> Result<(), String> {
     Ok(())
 }
 
@@ -866,11 +1079,17 @@ fn store_password(_id: &str, _password: &str) -> Result<Option<String>, String> 
     Err("browser password storage is unsupported".to_string())
 }
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn load_password(_credential: &StoredBrowserCredential) -> Result<String, String> {
+fn load_password(
+    _app: &crate::DesktopAppHandle,
+    _credential: &StoredBrowserCredential,
+) -> Result<String, String> {
     Err("browser password storage is unsupported".to_string())
 }
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn delete_password(_credential: &StoredBrowserCredential) -> Result<(), String> {
+fn delete_password(
+    _app: &crate::DesktopAppHandle,
+    _credential: &StoredBrowserCredential,
+) -> Result<(), String> {
     Ok(())
 }
 
@@ -880,6 +1099,7 @@ struct PasswordSecretBackup {
 }
 
 fn backup_password_secret(
+    app: &crate::DesktopAppHandle,
     credential: Option<&StoredBrowserCredential>,
     id: &str,
 ) -> Result<PasswordSecretBackup, String> {
@@ -891,11 +1111,12 @@ fn backup_password_secret(
             username: String::new(),
             updated_at_ms: 0,
             protected_password: None,
+            vaulted: false,
         });
     let password = if credential.origin.is_empty() {
         None
     } else {
-        Some(Zeroizing::new(load_password(&credential)?))
+        Some(Zeroizing::new(load_password(app, &credential)?))
     };
     Ok(PasswordSecretBackup {
         credential,
@@ -903,12 +1124,40 @@ fn backup_password_secret(
     })
 }
 
-fn restore_password_secrets(backups: &[PasswordSecretBackup]) -> Result<(), String> {
+fn restore_password_secrets(
+    app: &crate::DesktopAppHandle,
+    backups: &[PasswordSecretBackup],
+) -> Result<(), String> {
     let mut first_error = None;
     for backup in backups.iter().rev() {
+        #[cfg(target_os = "macos")]
+        let result = if backup.credential.vaulted {
+            let _operation = PASSWORD_VAULT_OPERATION_LOCK
+                .lock()
+                .map_err(|_| "browser password vault is unavailable".to_string())?;
+            let key = password_vault_key()?;
+            let mut vault = load_password_vault(app, &key)?;
+            match backup.password.as_deref() {
+                Some(password) => {
+                    vault
+                        .passwords
+                        .insert(backup.credential.id.clone(), password.to_string());
+                }
+                None => {
+                    vault.passwords.remove(&backup.credential.id);
+                }
+            }
+            save_password_vault(app, &vault, &key)
+        } else {
+            match backup.password.as_deref() {
+                Some(password) => store_password(&backup.credential.id, password).map(|_| ()),
+                None => delete_password(app, &backup.credential),
+            }
+        };
+        #[cfg(not(target_os = "macos"))]
         let result = match backup.password.as_deref() {
             Some(password) => store_password(&backup.credential.id, password).map(|_| ()),
-            None => delete_password(&backup.credential),
+            None => delete_password(app, &backup.credential),
         };
         if first_error.is_none() {
             first_error = result.err();
@@ -924,6 +1173,67 @@ fn rollback_error(primary: String, rollback: Result<(), String>) -> String {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn import_passwords(
+    app: &crate::DesktopAppHandle,
+    imported: Vec<ImportedPassword>,
+) -> Result<usize, String> {
+    if imported.is_empty() {
+        return Ok(0);
+    }
+    let _operation = PASSWORD_VAULT_OPERATION_LOCK
+        .lock()
+        .map_err(|_| "browser password vault is unavailable".to_string())?;
+    let key = password_vault_key()?;
+    let path = password_vault_path(app)?;
+    let original_vault = if path.is_file() {
+        Some(
+            fs::read(&path)
+                .map_err(|error| format!("failed to back up browser password vault: {error}"))?,
+        )
+    } else {
+        None
+    };
+    let mut vault = load_password_vault(app, &key)?;
+    let mut stored = load_credentials(app)?;
+    let mut seen = HashSet::new();
+    let imported = imported
+        .into_iter()
+        .filter(|password| seen.insert(credential_id(&password.origin, &password.username)))
+        .collect::<Vec<_>>();
+    let count = imported.len();
+
+    for password in imported {
+        let id = credential_id(&password.origin, &password.username);
+        vault
+            .passwords
+            .insert(id.clone(), password.password.clone());
+        let record = StoredBrowserCredential {
+            id: id.clone(),
+            origin: password.origin.clone(),
+            username: password.username.clone(),
+            updated_at_ms: password.updated_at_ms,
+            protected_password: None,
+            vaulted: true,
+        };
+        if let Some(existing) = stored.iter_mut().find(|item| item.id == id) {
+            *existing = record;
+        } else {
+            stored.push(record);
+        }
+    }
+    stored.sort_by_key(|item| std::cmp::Reverse(item.updated_at_ms));
+    save_password_vault(app, &vault, &key)?;
+    save_credentials(app, &stored).map_err(|error| {
+        rollback_error(
+            error,
+            restore_password_vault_file(&path, original_vault.as_deref()),
+        )
+    })?;
+    Ok(count)
+}
+
+#[cfg(not(target_os = "macos"))]
 fn import_passwords(
     app: &crate::DesktopAppHandle,
     imported: Vec<ImportedPassword>,
@@ -939,16 +1249,17 @@ fn import_passwords(
     for password in imported {
         let id = credential_id(&password.origin, &password.username);
         let existing = stored.iter().find(|item| item.id == id);
-        let backup = backup_password_secret(existing, &id)?;
+        let backup = backup_password_secret(app, existing, &id)?;
         backups.push(backup);
         let protected_password = store_password(&id, &password.password)
-            .map_err(|error| rollback_error(error, restore_password_secrets(&backups)))?;
+            .map_err(|error| rollback_error(error, restore_password_secrets(app, &backups)))?;
         let record = StoredBrowserCredential {
             id: id.clone(),
             origin: password.origin.clone(),
             username: password.username.clone(),
             updated_at_ms: password.updated_at_ms,
             protected_password,
+            vaulted: false,
         };
         if let Some(existing) = stored.iter_mut().find(|item| item.id == id) {
             *existing = record;
@@ -959,7 +1270,7 @@ fn import_passwords(
     }
     stored.sort_by_key(|item| std::cmp::Reverse(item.updated_at_ms));
     save_credentials(app, &stored)
-        .map_err(|error| rollback_error(error, restore_password_secrets(&backups)))?;
+        .map_err(|error| rollback_error(error, restore_password_secrets(app, &backups)))?;
     Ok(count)
 }
 
@@ -1175,7 +1486,11 @@ pub async fn browser_import_chrome(
         0
     };
     cookies_skipped += cookie_count.saturating_sub(cookies_imported);
-    let passwords_imported = import_passwords(&app, passwords)?;
+    let passwords_imported = if request.passwords {
+        import_passwords(&app, passwords)?
+    } else {
+        0
+    };
     Ok(ChromeImportResult {
         cookies_imported,
         passwords_imported,
@@ -1213,10 +1528,10 @@ pub fn browser_password_delete(
         .position(|item| item.id == credential_id)
         .ok_or_else(|| "browser password was not found".to_string())?;
     let credential = credentials.remove(position);
-    let backup = backup_password_secret(Some(&credential), &credential.id)?;
+    let backup = backup_password_secret(&app, Some(&credential), &credential.id)?;
     save_credentials(&app, &credentials)?;
-    if let Err(error) = delete_password(&credential) {
-        let secret_rollback = restore_password_secrets(&[backup]);
+    if let Err(error) = delete_password(&app, &credential) {
+        let secret_rollback = restore_password_secrets(&app, &[backup]);
         let metadata_rollback = save_credentials(&app, &original);
         return Err(rollback_error(
             rollback_error(error, secret_rollback),
@@ -1231,12 +1546,12 @@ pub fn browser_passwords_clear(app: crate::DesktopAppHandle) -> Result<(), Strin
     let credentials = load_credentials(&app)?;
     let backups = credentials
         .iter()
-        .map(|credential| backup_password_secret(Some(credential), &credential.id))
+        .map(|credential| backup_password_secret(&app, Some(credential), &credential.id))
         .collect::<Result<Vec<_>, _>>()?;
     save_credentials(&app, &[])?;
     for credential in &credentials {
-        if let Err(error) = delete_password(credential) {
-            let secret_rollback = restore_password_secrets(&backups);
+        if let Err(error) = delete_password(&app, credential) {
+            let secret_rollback = restore_password_secrets(&app, &backups);
             let metadata_rollback = save_credentials(&app, &credentials);
             return Err(rollback_error(
                 rollback_error(error, secret_rollback),
@@ -1272,7 +1587,7 @@ pub fn browser_autofill(
             username: None,
         });
     };
-    let password = load_password(&credential)?;
+    let password = load_password(&app, &credential)?;
     let username_json =
         serde_json::to_string(&credential.username).map_err(|error| error.to_string())?;
     let password_json = serde_json::to_string(&password).map_err(|error| error.to_string())?;
@@ -1447,6 +1762,55 @@ pub fn browser_take_screenshot() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    fn test_password_vault() -> PasswordVault {
+        PasswordVault {
+            passwords: HashMap::from([
+                ("first-id".to_string(), "first-secret".to_string()),
+                ("second-id".to_string(), "second-secret".to_string()),
+            ]),
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn password_vault_round_trips_without_plaintext() {
+        let key = [7_u8; 32];
+        let encrypted = encode_password_vault(&test_password_vault(), &key).expect("encrypt vault");
+        assert!(!String::from_utf8_lossy(&encrypted).contains("first-secret"));
+
+        let decrypted = decode_password_vault(&encrypted, &key).expect("decrypt vault");
+        assert_eq!(
+            decrypted.passwords.get("first-id").map(String::as_str),
+            Some("first-secret")
+        );
+        assert_eq!(
+            decrypted.passwords.get("second-id").map(String::as_str),
+            Some("second-secret")
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn password_vault_rejects_the_wrong_key() {
+        let encrypted =
+            encode_password_vault(&test_password_vault(), &[7_u8; 32]).expect("encrypt vault");
+        assert!(decode_password_vault(&encrypted, &[8_u8; 32]).is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn existing_credential_metadata_defaults_to_legacy_keychain_storage() {
+        let credential: StoredBrowserCredential = serde_json::from_value(serde_json::json!({
+            "id": "legacy-id",
+            "origin": "https://example.com",
+            "username": "person@example.com",
+            "updated_at_ms": 1
+        }))
+        .expect("legacy credential metadata");
+        assert!(!credential.vaulted);
+    }
 
     #[test]
     fn profile_ids_cannot_escape_chrome_root() {

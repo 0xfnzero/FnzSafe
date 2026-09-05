@@ -1301,6 +1301,7 @@ dependencies = [
  "rand_core 0.6.4",
  "serde",
  "unicode-normalization",
+ "zeroize",
 ]
 
 [[package]]
@@ -3416,6 +3417,7 @@ dependencies = [
  "argon2",
  "base64 0.22.1",
  "bincode",
+ "bip39",
  "bs58",
  "chrono",
  "clap",
@@ -3435,6 +3437,7 @@ dependencies = [
  "sol-trade-sdk",
  "solana-client",
  "solana-commitment-config",
+ "solana-derivation-path",
  "solana-message 3.1.0",
  "solana-sdk",
  "tokio",

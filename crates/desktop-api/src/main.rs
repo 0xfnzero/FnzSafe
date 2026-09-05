@@ -74,9 +74,6 @@ use solana_sdk::pubkey::Pubkey;
 use solana_sdk::sanitize::Sanitize;
 use solana_sdk::signature::Signer;
 use solana_sdk::signature::{Keypair, Signature};
-use solana_sdk::signer::keypair::{
-    generate_seed_from_seed_phrase_and_passphrase, keypair_from_seed_and_derivation_path,
-};
 use solana_sdk::transaction::{Transaction, VersionedTransaction};
 use solana_system_interface::MAX_PERMITTED_DATA_LENGTH;
 use solana_transaction_status_client_types::{
@@ -609,7 +606,9 @@ fn maybe_auto_migrate_saved_wallet_keystore(
             return None;
         }
     };
-    let migrated = match with_keystore_metadata(&migrated, Some(&wallet.name)) {
+    let migrated = match preserve_keystore_metadata(&wallet.keystore_json, &migrated)
+        .and_then(|migrated| with_keystore_metadata(&migrated, Some(&wallet.name)))
+    {
         Ok(json) => json,
         Err(error) => {
             tracing::warn!(
@@ -620,7 +619,12 @@ fn maybe_auto_migrate_saved_wallet_keystore(
             return None;
         }
     };
-    let updated = match wallet_store::upsert(migrated, public_key, Some(wallet.name.clone())) {
+    let updated = match wallet_store::replace_keystore_atomically(
+        &wallet.id,
+        &public_key,
+        &wallet.keystore_json,
+        migrated,
+    ) {
         Ok(wallet) => wallet,
         Err(error) => {
             tracing::warn!(
@@ -667,6 +671,9 @@ fn keypair_from_saved_wallet_with_password(
     let keypair = match version {
         KeystoreVersion::V2 => {
             KeyManager::keypair_from_encrypted_json_v2(&wallet.keystore_json, password)
+        }
+        KeystoreVersion::V3 => {
+            KeyManager::keypair_from_encrypted_json(&wallet.keystore_json, password)
         }
         KeystoreVersion::LegacyV1 => {
             KeyManager::keypair_from_encrypted_json(&wallet.keystore_json, password)
@@ -1097,6 +1104,40 @@ fn keystore_metadata_encrypted_mnemonic(keystore_json: &str) -> Option<String> {
     keystore_metadata_value(keystore_json, "encrypted_mnemonic")
 }
 
+fn verified_mnemonic_from_keystore_json(
+    keystore_json: &str,
+    password: &str,
+    expected_public_key: &Pubkey,
+) -> Result<Option<Zeroizing<String>>, ApiError> {
+    if KeyManager::keystore_version(keystore_json).map_err(|message| ApiError { message })?
+        == KeystoreVersion::V3
+    {
+        return KeyManager::mnemonic_from_encrypted_json(keystore_json, password)
+            .map(Some)
+            .map_err(|message| ApiError { message });
+    }
+    let Some(encrypted) = keystore_metadata_encrypted_mnemonic(keystore_json) else {
+        return Ok(None);
+    };
+    let decrypted = Zeroizing::new(
+        KeyManager::decrypt_secret_with_password(&encrypted, password)
+            .map_err(|message| ApiError { message })?,
+    );
+    let mnemonic = Zeroizing::new(normalize_mnemonic_phrase(&decrypted)?);
+    let derivation_path = keystore_metadata_value(keystore_json, "mnemonic_derivation_path")
+        .ok_or_else(|| ApiError {
+            message: "旧助记词 keystore 缺少 Solana 派生路径，无法验证钱包身份".to_string(),
+        })?;
+    let derived = KeyManager::keypair_from_mnemonic(&mnemonic, &derivation_path)
+        .map_err(|message| ApiError { message })?;
+    if derived.pubkey() != *expected_public_key {
+        return Err(ApiError {
+            message: "助记词与 Solana keystore 公钥不匹配".to_string(),
+        });
+    }
+    Ok(Some(mnemonic))
+}
+
 fn with_keystore_metadata_extra(
     keystore_json: &str,
     name: Option<&str>,
@@ -1111,7 +1152,6 @@ fn with_keystore_metadata_extra(
             message: "Invalid JSON format".to_string(),
         });
     };
-
     let mut metadata = object
         .get("metadata")
         .and_then(Value::as_object)
@@ -1155,6 +1195,25 @@ fn with_keystore_metadata_extra(
 
 fn with_keystore_metadata(keystore_json: &str, name: Option<&str>) -> Result<String, ApiError> {
     with_keystore_metadata_extra(keystore_json, name, None, None)
+}
+
+fn preserve_keystore_metadata(source_json: &str, target_json: &str) -> Result<String, ApiError> {
+    let source: Value = serde_json::from_str(source_json).map_err(|_| ApiError {
+        message: "Invalid source Keystore JSON".to_string(),
+    })?;
+    let Some(metadata) = source.get("metadata").and_then(Value::as_object) else {
+        return Ok(target_json.to_string());
+    };
+    let mut target: Value = serde_json::from_str(target_json).map_err(|_| ApiError {
+        message: "Invalid target Keystore JSON".to_string(),
+    })?;
+    let target_object = target.as_object_mut().ok_or_else(|| ApiError {
+        message: "Invalid target Keystore JSON".to_string(),
+    })?;
+    target_object.insert("metadata".to_string(), Value::Object(metadata.clone()));
+    serde_json::to_string(&target).map_err(|error| ApiError {
+        message: format!("序列化 Keystore metadata 失败: {error}"),
+    })
 }
 
 fn with_universal_wallet_metadata(
@@ -1234,6 +1293,25 @@ fn validate_universal_evm_identity(
     Ok(())
 }
 
+fn validate_universal_evm_mnemonic_identity(
+    universal_keystore_json: &str,
+    evm_wallet: &app_services::EvmWalletSummary,
+    mnemonic: &str,
+) -> Result<(), ApiError> {
+    validate_universal_evm_identity(universal_keystore_json, evm_wallet)?;
+    let expected_address = app_services::evm_wallet_address_from_mnemonic(
+        mnemonic,
+        evm_wallet.derivation_path.as_deref(),
+    )
+    .map_err(api_error_from_app_service)?;
+    if !expected_address.eq_ignore_ascii_case(&evm_wallet.address) {
+        return Err(ApiError {
+            message: "内嵌 EVM 钱包不是由此 Keystore 的助记词派生".to_string(),
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod universal_wallet_tests {
     use super::*;
@@ -1243,8 +1321,9 @@ mod universal_wallet_tests {
 
     #[test]
     fn derives_and_unlocks_solana_and_evm_accounts_from_one_mnemonic() {
-        let (solana_path, solana_path_label) = normalize_mnemonic_derivation_path(None).unwrap();
-        let solana_keypair = keypair_from_mnemonic_phrase(TEST_MNEMONIC, &solana_path).unwrap();
+        let solana_path_label = normalize_mnemonic_derivation_path(None).unwrap();
+        let solana_keypair =
+            keypair_from_mnemonic_phrase(TEST_MNEMONIC, &solana_path_label).unwrap();
         let solana_keystore =
             KeyManager::keypair_to_encrypted_json(&solana_keypair, TEST_PASSWORD).unwrap();
         let solana_keystore = with_keystore_metadata_extra(
@@ -1293,6 +1372,15 @@ mod universal_wallet_tests {
         );
         validate_universal_evm_identity(&universal_keystore, &unlocked_evm).unwrap();
 
+        const OTHER_MNEMONIC: &str =
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        assert!(validate_universal_evm_mnemonic_identity(
+            &universal_keystore,
+            &unlocked_evm,
+            OTHER_MNEMONIC,
+        )
+        .is_err());
+
         let mut tampered: Value = serde_json::from_str(&universal_keystore).unwrap();
         tampered["metadata"]["evm_address"] =
             Value::String("0x0000000000000000000000000000000000000000".to_string());
@@ -1325,30 +1413,23 @@ fn normalize_mnemonic_phrase(phrase: &str) -> Result<String, ApiError> {
     Ok(normalized)
 }
 
-fn normalize_mnemonic_derivation_path(
-    value: Option<&str>,
-) -> Result<(DerivationPath, String), ApiError> {
+fn normalize_mnemonic_derivation_path(value: Option<&str>) -> Result<String, ApiError> {
     let path = value
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or(DEFAULT_MNEMONIC_DERIVATION_PATH);
-    let derivation_path =
-        DerivationPath::from_absolute_path_str(path).map_err(|error| ApiError {
-            message: format!("派生路径无效: {error}"),
-        })?;
-    Ok((derivation_path, path.to_string()))
+    DerivationPath::from_absolute_path_str(path).map_err(|error| ApiError {
+        message: format!("派生路径无效: {error}"),
+    })?;
+    Ok(path.to_string())
 }
 
 fn keypair_from_mnemonic_phrase(
     mnemonic: &str,
-    derivation_path: &DerivationPath,
+    derivation_path: &str,
 ) -> Result<Keypair, ApiError> {
-    let seed = generate_seed_from_seed_phrase_and_passphrase(mnemonic, "");
-    keypair_from_seed_and_derivation_path(&seed, Some(derivation_path.clone())).map_err(|error| {
-        ApiError {
-            message: format!("从助记词派生钱包失败: {error}"),
-        }
-    })
+    KeyManager::keypair_from_mnemonic(mnemonic, derivation_path)
+        .map_err(|message| ApiError { message })
 }
 
 fn validate_wallet_id(wallet_id: &str) -> Result<(), ApiError> {
@@ -4674,23 +4755,24 @@ async fn create_mnemonic_keystore(
 ) -> Result<Json<CreateMnemonicKeystoreResponse>, ApiError> {
     require_nonempty(req.password.as_str(), "密码")?;
     let name = validate_optional_label(req.name.take(), "钱包名称")?;
-    let (derivation_path, derivation_path_label) =
-        normalize_mnemonic_derivation_path(req.derivation_path.as_deref())?;
+    let derivation_path_label = normalize_mnemonic_derivation_path(req.derivation_path.as_deref())?;
     let response = run_keystore_task(move || {
         let mnemonic = Mnemonic::generate_in(Language::English, 12)
             .map_err(|error| ApiError {
                 message: format!("生成助记词失败: {error}"),
             })?
             .to_string();
-        let keypair = keypair_from_mnemonic_phrase(&mnemonic, &derivation_path)?;
-        let encrypted_mnemonic = KeyManager::encrypt_secret_with_password(&mnemonic, &req.password)
-            .map_err(|message| ApiError { message })?;
-        let keystore_json = KeyManager::keypair_to_encrypted_json(&keypair, &req.password)
-            .map_err(|message| ApiError { message })?;
+        let keypair = keypair_from_mnemonic_phrase(&mnemonic, &derivation_path_label)?;
+        let keystore_json = KeyManager::mnemonic_to_encrypted_json(
+            &mnemonic,
+            &derivation_path_label,
+            &req.password,
+        )
+        .map_err(|message| ApiError { message })?;
         let keystore_json = with_keystore_metadata_extra(
             &keystore_json,
             name.as_deref(),
-            Some(&encrypted_mnemonic),
+            None,
             Some(&derivation_path_label),
         )?;
         Ok(CreateMnemonicKeystoreResponse {
@@ -4709,19 +4791,20 @@ async fn import_mnemonic_keystore(
 ) -> Result<Json<ImportMnemonicKeystoreResponse>, ApiError> {
     require_nonempty(req.password.as_str(), "密码")?;
     let name = validate_optional_label(req.name.take(), "钱包名称")?;
-    let mnemonic = normalize_mnemonic_phrase(&req.mnemonic)?;
-    let (derivation_path, derivation_path_label) =
-        normalize_mnemonic_derivation_path(req.derivation_path.as_deref())?;
+    let mnemonic = Zeroizing::new(normalize_mnemonic_phrase(&req.mnemonic)?);
+    let derivation_path_label = normalize_mnemonic_derivation_path(req.derivation_path.as_deref())?;
     let response = run_keystore_task(move || {
-        let keypair = keypair_from_mnemonic_phrase(&mnemonic, &derivation_path)?;
-        let encrypted_mnemonic = KeyManager::encrypt_secret_with_password(&mnemonic, &req.password)
-            .map_err(|message| ApiError { message })?;
-        let keystore_json = KeyManager::keypair_to_encrypted_json(&keypair, &req.password)
-            .map_err(|message| ApiError { message })?;
+        let keypair = keypair_from_mnemonic_phrase(&mnemonic, &derivation_path_label)?;
+        let keystore_json = KeyManager::mnemonic_to_encrypted_json(
+            &mnemonic,
+            &derivation_path_label,
+            &req.password,
+        )
+        .map_err(|message| ApiError { message })?;
         let keystore_json = with_keystore_metadata_extra(
             &keystore_json,
             name.as_deref(),
-            Some(&encrypted_mnemonic),
+            None,
             Some(&derivation_path_label),
         )?;
         Ok(ImportMnemonicKeystoreResponse {
@@ -4928,23 +5011,24 @@ async fn create_universal_wallet(
     require_nonempty(req.password.as_str(), "密码")?;
     let password = Zeroizing::new(std::mem::take(&mut req.password));
     let (response, wallet_id, public_key, session_secrets) = run_keystore_task(move || {
-        let (solana_derivation_path, solana_derivation_path_label) =
-            normalize_mnemonic_derivation_path(None)?;
+        let solana_derivation_path_label = normalize_mnemonic_derivation_path(None)?;
         let mnemonic = Mnemonic::generate_in(Language::English, 12)
             .map_err(|error| ApiError {
                 message: format!("生成助记词失败: {error}"),
             })?
             .to_string();
-        let solana_keypair = keypair_from_mnemonic_phrase(&mnemonic, &solana_derivation_path)?;
-        let encrypted_mnemonic = KeyManager::encrypt_secret_with_password(&mnemonic, &password)
-            .map_err(|message| ApiError { message })?;
-        let solana_keystore_json =
-            KeyManager::keypair_to_encrypted_json(&solana_keypair, &password)
-                .map_err(|message| ApiError { message })?;
+        let solana_keypair =
+            keypair_from_mnemonic_phrase(&mnemonic, &solana_derivation_path_label)?;
+        let solana_keystore_json = KeyManager::mnemonic_to_encrypted_json(
+            &mnemonic,
+            &solana_derivation_path_label,
+            &password,
+        )
+        .map_err(|message| ApiError { message })?;
         let solana_keystore_json = with_keystore_metadata_extra(
             &solana_keystore_json,
             Some(&name),
-            Some(&encrypted_mnemonic),
+            None,
             Some(&solana_derivation_path_label),
         )?;
         let evm =
@@ -5053,22 +5137,82 @@ async fn save_keystore_wallet(
                 message: format!("keystore 校验失败: {error}"),
             })?;
         let keystore_json = if version == KeystoreVersion::LegacyV1 {
-            KeyManager::keypair_to_encrypted_json(&keypair, &req.password).map_err(|error| {
-                ApiError {
+            let migrated = KeyManager::keypair_to_encrypted_json(&keypair, &req.password).map_err(
+                |error| ApiError {
                     message: format!("Legacy keystore 校验成功，但自动迁移为 v2 失败: {error}"),
-                }
-            })?
+                },
+            )?;
+            preserve_keystore_metadata(&req.keystore_json, &migrated)?
         } else {
             req.keystore_json.clone()
         };
-        let keystore_json = with_keystore_metadata(&keystore_json, name.as_deref())?;
+        let mut keystore_json = with_keystore_metadata(&keystore_json, name.as_deref())?;
+        let mut evm_private_key = None;
+        if let Some(mnemonic) =
+            verified_mnemonic_from_keystore_json(&keystore_json, &req.password, &keypair.pubkey())
+                .map_err(|error| ApiError {
+                message: format!("助记词 keystore 解密失败: {}", error.message),
+            })?
+        {
+            if let Some(existing_evm_keystore) =
+                keystore_metadata_value(&keystore_json, "evm_keystore_json")
+            {
+                let (evm_wallet, private_key) = app_services::evm_wallet_unlock_private_key(
+                    app_services::EvmUnlockWalletRequest {
+                        keystore_json: existing_evm_keystore,
+                        password: req.password.clone(),
+                    },
+                )
+                .map_err(api_error_from_app_service)?;
+                validate_universal_evm_mnemonic_identity(&keystore_json, &evm_wallet, &mnemonic)?;
+                evm_private_key = Some(private_key);
+            } else {
+                let wallet_name = name
+                    .clone()
+                    .or_else(|| keystore_metadata_name(&keystore_json))
+                    .unwrap_or_else(|| "Wallet".to_string());
+                let evm = app_services::evm_wallet_import_mnemonic(
+                    app_services::EvmImportMnemonicRequest {
+                        name: wallet_name,
+                        mnemonic: mnemonic.to_string(),
+                        derivation_path: keystore_metadata_value(
+                            &keystore_json,
+                            "evm_derivation_path",
+                        ),
+                        password: req.password.clone(),
+                    },
+                )
+                .map_err(api_error_from_app_service)?;
+                let (unlocked_evm, private_key) = app_services::evm_wallet_unlock_private_key(
+                    app_services::EvmUnlockWalletRequest {
+                        keystore_json: evm.keystore_json.clone(),
+                        password: req.password.clone(),
+                    },
+                )
+                .map_err(api_error_from_app_service)?;
+                if unlocked_evm.address != evm.wallet.address {
+                    return Err(ApiError {
+                        message: "助记词派生的 EVM 钱包地址校验失败".to_string(),
+                    });
+                }
+                keystore_json = with_universal_wallet_metadata(
+                    &keystore_json,
+                    &evm.wallet,
+                    &evm.keystore_json,
+                )?;
+                evm_private_key = Some(private_key);
+            }
+        }
         let wallet = wallet_store::upsert(keystore_json, keypair.pubkey().to_string(), name)
             .map_err(|message| ApiError { message })?;
         let wallet_id = wallet.id.clone();
         let public_key = wallet.public_key.clone();
         let keypair_bytes = Zeroizing::new(keypair.to_bytes());
-        let session_secrets = WalletSessionSecrets::new(keypair_bytes.as_ref(), None)
-            .map_err(|message| ApiError { message })?;
+        let session_secrets = WalletSessionSecrets::new(
+            keypair_bytes.as_ref(),
+            evm_private_key.as_ref().map(|key| key.as_slice()),
+        )
+        .map_err(|message| ApiError { message })?;
         Ok((
             SaveKeystoreWalletResponse {
                 wallet: wallet.into(),
@@ -5271,21 +5415,25 @@ fn reencrypt_saved_wallet_material(
         .cloned()
         .unwrap_or_default();
 
-    let mnemonic = metadata
-        .get("encrypted_mnemonic")
+    let mnemonic = verified_mnemonic_from_keystore_json(
+        &wallet.keystore_json,
+        current_password,
+        &keypair.pubkey(),
+    )
+    .map_err(|_| ApiError {
+        message: "当前密码无法解密或验证钱包助记词".to_string(),
+    })?;
+    let mnemonic_derivation_path = old_document
+        .get("derivation_path")
         .and_then(Value::as_str)
-        .map(|encrypted| {
-            KeyManager::decrypt_secret_with_password(encrypted, current_password)
-                .map(Zeroizing::new)
-                .map_err(|_| ApiError {
-                    message: "当前密码无法解密钱包助记词".to_string(),
-                })
+        .or_else(|| {
+            metadata
+                .get("mnemonic_derivation_path")
+                .and_then(Value::as_str)
         })
-        .transpose()?;
-    if let Some(mnemonic) = mnemonic.as_deref() {
-        let encrypted = KeyManager::encrypt_secret_with_password(mnemonic, new_password)
-            .map_err(|message| ApiError { message })?;
-        metadata.insert("encrypted_mnemonic".to_string(), Value::String(encrypted));
+        .map(ToOwned::to_owned);
+    if mnemonic.is_some() {
+        metadata.remove("encrypted_mnemonic");
     }
 
     if let Some(old_evm_keystore) = metadata
@@ -5299,7 +5447,15 @@ fn reencrypt_saved_wallet_material(
                 password: current_password.to_string(),
             })
             .map_err(api_error_from_app_service)?;
-        validate_universal_evm_identity(&wallet.keystore_json, &old_evm_wallet)?;
+        if let Some(mnemonic) = mnemonic.as_deref() {
+            validate_universal_evm_mnemonic_identity(
+                &wallet.keystore_json,
+                &old_evm_wallet,
+                mnemonic,
+            )?;
+        } else {
+            validate_universal_evm_identity(&wallet.keystore_json, &old_evm_wallet)?;
+        }
         let expected_address = old_evm_wallet.address.to_ascii_lowercase();
         let reencrypted = if let Some(mnemonic) = mnemonic.as_deref() {
             app_services::evm_wallet_import_mnemonic(app_services::EvmImportMnemonicRequest {
@@ -5339,8 +5495,18 @@ fn reencrypt_saved_wallet_material(
         );
     }
 
-    let new_keystore = KeyManager::keypair_to_encrypted_json(&keypair, new_password)
-        .map_err(|message| ApiError { message })?;
+    let new_keystore = if let Some(mnemonic) = mnemonic.as_deref() {
+        let derivation_path = mnemonic_derivation_path
+            .as_deref()
+            .ok_or_else(|| ApiError {
+                message: "助记词 keystore 缺少 Solana 派生路径".to_string(),
+            })?;
+        KeyManager::mnemonic_to_encrypted_json(mnemonic, derivation_path, new_password)
+            .map_err(|message| ApiError { message })?
+    } else {
+        KeyManager::keypair_to_encrypted_json(&keypair, new_password)
+            .map_err(|message| ApiError { message })?
+    };
     let mut new_document: Value =
         serde_json::from_str(&new_keystore).map_err(|error| ApiError {
             message: format!("新 Keystore 格式无效: {error}"),
@@ -5401,8 +5567,73 @@ mod wallet_password_change_tests {
     }
 
     #[test]
+    fn legacy_migration_preserves_mnemonic_and_universal_metadata() {
+        let derivation_path = normalize_mnemonic_derivation_path(None).unwrap();
+        let keypair = keypair_from_mnemonic_phrase(MNEMONIC, &derivation_path).unwrap();
+        let legacy_key = fnzero_safe::generate_encryption_key_simple(OLD_PASSWORD);
+        let encrypted_private_key =
+            fnzero_safe::encrypt_key(&keypair.to_base58_string(), &legacy_key).unwrap();
+        let encrypted_mnemonic =
+            KeyManager::encrypt_secret_with_password(MNEMONIC, OLD_PASSWORD).unwrap();
+        let legacy = serde_json::json!({
+            "version": 1,
+            "public_key": keypair.pubkey().to_string(),
+            "encrypted_private_key": encrypted_private_key,
+            "metadata": {
+                "encrypted_mnemonic": encrypted_mnemonic,
+                "mnemonic_derivation_path": derivation_path,
+                "wallet_kind": "universal",
+                "evm_wallet_id": "evm-wallet-id"
+            }
+        })
+        .to_string();
+        let migrated =
+            KeyManager::migrate_encrypted_json_to_v2(&legacy, OLD_PASSWORD, OLD_PASSWORD).unwrap();
+        let migrated = preserve_keystore_metadata(&legacy, &migrated).unwrap();
+
+        assert_eq!(
+            keystore_metadata_value(&migrated, "mnemonic_derivation_path").as_deref(),
+            Some(DEFAULT_MNEMONIC_DERIVATION_PATH)
+        );
+        assert_eq!(
+            keystore_metadata_value(&migrated, "wallet_kind").as_deref(),
+            Some("universal")
+        );
+        assert_eq!(
+            keystore_metadata_value(&migrated, "evm_wallet_id").as_deref(),
+            Some("evm-wallet-id")
+        );
+        assert_eq!(
+            verified_mnemonic_from_keystore_json(&migrated, OLD_PASSWORD, &keypair.pubkey())
+                .unwrap()
+                .unwrap()
+                .as_str(),
+            MNEMONIC
+        );
+
+        let wallet = saved_wallet(legacy, &keypair);
+        let reencrypted =
+            reencrypt_saved_wallet_material(&wallet, OLD_PASSWORD, NEW_PASSWORD).unwrap();
+        assert_eq!(
+            KeyManager::keystore_version(&reencrypted).unwrap(),
+            KeystoreVersion::V3
+        );
+        assert_eq!(
+            keystore_metadata_value(&reencrypted, "wallet_kind").as_deref(),
+            Some("universal")
+        );
+        assert_eq!(
+            KeyManager::mnemonic_from_encrypted_json(&reencrypted, NEW_PASSWORD)
+                .unwrap()
+                .as_str(),
+            MNEMONIC
+        );
+    }
+
+    #[test]
     fn reencrypts_saved_mnemonic_and_rejects_wrong_current_password() {
-        let keypair = Keypair::new();
+        let derivation_path_label = normalize_mnemonic_derivation_path(None).unwrap();
+        let keypair = keypair_from_mnemonic_phrase(MNEMONIC, &derivation_path_label).unwrap();
         let encrypted_mnemonic =
             KeyManager::encrypt_secret_with_password(MNEMONIC, OLD_PASSWORD).unwrap();
         let base = KeyManager::keypair_to_encrypted_json(&keypair, OLD_PASSWORD).unwrap();
@@ -5410,24 +5641,50 @@ mod wallet_password_change_tests {
             &base,
             Some("Primary"),
             Some(&encrypted_mnemonic),
-            Some("m/44'/501'/0'/0'"),
+            Some(&derivation_path_label),
         )
         .unwrap();
         let wallet = saved_wallet(keystore, &keypair);
         assert!(reencrypt_saved_wallet_material(&wallet, "wrong-password", NEW_PASSWORD).is_err());
         let changed = reencrypt_saved_wallet_material(&wallet, OLD_PASSWORD, NEW_PASSWORD).unwrap();
-        let encrypted = keystore_metadata_encrypted_mnemonic(&changed).unwrap();
-        assert!(KeyManager::decrypt_secret_with_password(&encrypted, OLD_PASSWORD).is_err());
         assert_eq!(
-            KeyManager::decrypt_secret_with_password(&encrypted, NEW_PASSWORD).unwrap(),
+            KeyManager::keystore_version(&changed).unwrap(),
+            KeystoreVersion::V3
+        );
+        assert!(KeyManager::mnemonic_from_encrypted_json(&changed, OLD_PASSWORD).is_err());
+        assert_eq!(
+            KeyManager::mnemonic_from_encrypted_json(&changed, NEW_PASSWORD)
+                .unwrap()
+                .as_str(),
             MNEMONIC
         );
+        assert!(keystore_metadata_encrypted_mnemonic(&changed).is_none());
+    }
+
+    #[test]
+    fn rejects_legacy_mnemonic_metadata_for_a_different_solana_key() {
+        let keypair = Keypair::new();
+        let encrypted_mnemonic =
+            KeyManager::encrypt_secret_with_password(MNEMONIC, OLD_PASSWORD).unwrap();
+        let base = KeyManager::keypair_to_encrypted_json(&keypair, OLD_PASSWORD).unwrap();
+        let keystore = with_keystore_metadata_extra(
+            &base,
+            Some("Mismatched"),
+            Some(&encrypted_mnemonic),
+            Some(DEFAULT_MNEMONIC_DERIVATION_PATH),
+        )
+        .unwrap();
+
+        let error =
+            verified_mnemonic_from_keystore_json(&keystore, OLD_PASSWORD, &keypair.pubkey())
+                .unwrap_err();
+        assert!(error.message.contains("不匹配"));
     }
 
     #[test]
     fn atomically_prepares_all_universal_wallet_secrets_and_preserves_addresses() {
-        let (solana_path, solana_path_label) = normalize_mnemonic_derivation_path(None).unwrap();
-        let solana_keypair = keypair_from_mnemonic_phrase(MNEMONIC, &solana_path).unwrap();
+        let solana_path_label = normalize_mnemonic_derivation_path(None).unwrap();
+        let solana_keypair = keypair_from_mnemonic_phrase(MNEMONIC, &solana_path_label).unwrap();
         let encrypted_mnemonic =
             KeyManager::encrypt_secret_with_password(MNEMONIC, OLD_PASSWORD).unwrap();
         let solana = KeyManager::keypair_to_encrypted_json(&solana_keypair, OLD_PASSWORD).unwrap();
@@ -5477,8 +5734,8 @@ mod wallet_password_change_tests {
 
     #[test]
     fn universal_password_change_rejects_missing_evm_identity_metadata() {
-        let (solana_path, solana_path_label) = normalize_mnemonic_derivation_path(None).unwrap();
-        let solana_keypair = keypair_from_mnemonic_phrase(MNEMONIC, &solana_path).unwrap();
+        let solana_path_label = normalize_mnemonic_derivation_path(None).unwrap();
+        let solana_keypair = keypair_from_mnemonic_phrase(MNEMONIC, &solana_path_label).unwrap();
         let encrypted_mnemonic =
             KeyManager::encrypt_secret_with_password(MNEMONIC, OLD_PASSWORD).unwrap();
         let solana = KeyManager::keypair_to_encrypted_json(&solana_keypair, OLD_PASSWORD).unwrap();
@@ -5568,29 +5825,23 @@ async fn migrate_wallet_keystore(
     require_nonempty(&req.new_password, "新钱包密码")?;
     let wallet = wallet_store::find(&wallet_id).map_err(|message| ApiError { message })?;
     let updated = run_keystore_task(move || {
-        let (migrated, verified_public_key) =
-            KeyManager::migrate_encrypted_json_to_v2_with_public_key(
-                &wallet.keystore_json,
-                &req.current_password,
-                &req.new_password,
-            )
-            .map_err(|error| ApiError {
-                message: format!("Legacy keystore 迁移失败: {error}"),
-            })?;
-        if verified_public_key != wallet.public_key {
+        if KeyManager::keystore_version(&wallet.keystore_json).map_err(|error| ApiError {
+            message: format!("Legacy keystore 迁移失败: {error}"),
+        })? != KeystoreVersion::LegacyV1
+        {
             return Err(ApiError {
-                message: "Legacy keystore 实际解出的钱包地址与已保存记录不一致".to_string(),
+                message: "只有 Legacy v1 keystore 需要执行迁移".to_string(),
             });
         }
-        let migrated = with_keystore_metadata(&migrated, Some(&wallet.name))?;
-        let updated =
-            wallet_store::upsert(migrated, verified_public_key, Some(wallet.name.clone()))
-                .map_err(|message| ApiError { message })?;
-        if updated.id != wallet.id || updated.public_key != wallet.public_key {
-            return Err(ApiError {
-                message: "Keystore 迁移后的钱包身份不一致".to_string(),
-            });
-        }
+        let migrated =
+            reencrypt_saved_wallet_material(&wallet, &req.current_password, &req.new_password)?;
+        let updated = wallet_store::replace_keystore_atomically(
+            &wallet.id,
+            &wallet.public_key,
+            &wallet.keystore_json,
+            migrated,
+        )
+        .map_err(|message| ApiError { message })?;
         checkpoint_sensitive_rewrite_best_effort("Legacy wallet migration", &updated.id);
         Ok(updated)
     })
@@ -5633,21 +5884,24 @@ async fn export_wallet_mnemonic(
             message: "导出助记词需要提供密码".to_string(),
         });
     }
-    let (_, wallet) = keypair_from_saved_wallet_with_password(&wallet_id, &req.password, "钱包")?;
-    let encrypted_mnemonic =
-        keystore_metadata_encrypted_mnemonic(&wallet.keystore_json).ok_or_else(|| ApiError {
-            message: "这个钱包没有保存助记词记录；当前版本创建或导入的普通 keystore 只保存加密私钥，无法从私钥反推出助记词。".to_string(),
-        })?;
-    let mnemonic = KeyManager::decrypt_secret_with_password(&encrypted_mnemonic, &req.password)
-        .map_err(|error| ApiError {
-            message: format!("解密助记词失败: {error}"),
-        })?;
+    let (keypair, wallet) =
+        keypair_from_saved_wallet_with_password(&wallet_id, &req.password, "钱包")?;
+    let mnemonic = verified_mnemonic_from_keystore_json(
+        &wallet.keystore_json,
+        &req.password,
+        &keypair.pubkey(),
+    )?
+    .ok_or_else(|| ApiError {
+        message: "这是私钥 keystore，没有保存助记词，无法从私钥反推出助记词。".to_string(),
+    })?;
     if mnemonic.split_whitespace().count() < 12 {
         return Err(ApiError {
             message: "助记词记录格式无效".to_string(),
         });
     }
-    Ok(Json(ExportWalletMnemonicResponse { mnemonic }))
+    Ok(Json(ExportWalletMnemonicResponse {
+        mnemonic: mnemonic.to_string(),
+    }))
 }
 
 // ============= Wallet Management (U, 7) =============

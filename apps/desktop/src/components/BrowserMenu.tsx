@@ -256,6 +256,10 @@ export function BrowserMenu({
   useEffect(() => {
     const unlisteners: UnlistenFn[] = [];
     let cancelled = false;
+    const safelyUnlisten = (cleanup: UnlistenFn | undefined) => {
+      if (typeof cleanup !== "function") return;
+      void Promise.resolve().then(() => cleanup()).catch(() => undefined);
+    };
     Promise.all([
       listen<DappTabUrlEvent>("dapp://tab-url", (event) => {
         if (!event.payload.loaded) return;
@@ -277,12 +281,12 @@ export function BrowserMenu({
         });
       }),
     ]).then((cleanups) => {
-      if (cancelled) cleanups.forEach((cleanup) => cleanup());
-      else unlisteners.push(...cleanups);
+      if (cancelled) cleanups.forEach(safelyUnlisten);
+      else unlisteners.push(...cleanups.filter((cleanup): cleanup is UnlistenFn => typeof cleanup === "function"));
     }).catch(() => undefined);
     return () => {
       cancelled = true;
-      unlisteners.forEach((cleanup) => cleanup());
+      unlisteners.splice(0).forEach(safelyUnlisten);
     };
   }, [applyAutofill, settings.saveHistory]);
 

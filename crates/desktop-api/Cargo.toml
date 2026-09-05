@@ -46,7 +46,7 @@ uuid = { version = "1", features = ["v4"] }
 aes-gcm = "0.10"
 aws-lc-rs = { version = "=1.17.3", default-features = false, features = ["non-fips"] }
 base64 = "0.22"
-bip39 = { version = "2", features = ["rand"] }
+bip39 = { version = "2", features = ["rand", "zeroize"] }
 bincode = "1.3"
 pem-rfc7468 = { version = "0.7", features = ["std"] }
 sha2 = "0.10"

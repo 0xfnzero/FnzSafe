@@ -5,6 +5,7 @@ import {
   compactTweetTokenSignals,
   expandAddresslessTokenSignals,
   filterRecentTweetSignals,
+  filterTweetTokenSignalsByAuthor,
   groupTweetSignalsByTweet,
   hasValidTweetSignalIdentity,
   isTokenResolutionTarget,
@@ -16,6 +17,23 @@ import {
   tokenResolutionRetryDelayMs,
   tokenSignalObservation,
 } from "./twitterSignals.ts";
+
+test("filters X and Fomo signals by their exact account handle", () => {
+  const signals = [{ id: "x", author: "@shared", signalSource: "x" }, {
+    id: "fomo-shared", author: "@shared", signalSource: "fomo",
+  }, {
+    id: "fomo-long", author: "@Long_Fomo_Profile_Handle_123", signalSource: "fomo",
+  }];
+
+  assert.deepEqual(
+    filterTweetTokenSignalsByAuthor(signals, "@shared").map(({ id }) => id),
+    ["x", "fomo-shared"],
+  );
+  assert.deepEqual(
+    filterTweetTokenSignalsByAuthor(signals, "@long_fomo_profile_handle_123").map(({ id }) => id),
+    ["fomo-long"],
+  );
+});
 
 test("splits legacy addressless aggregates into independently resolvable signals", () => {
   const expanded = expandAddresslessTokenSignals([{
@@ -123,6 +141,58 @@ test("keeps identical text from different tweet URLs separate", () => {
   ]);
 
   assert.equal(groups.length, 2);
+});
+
+test("keeps separate Fomo trades on the same token", () => {
+  const baseUrl = "https://fomo.family/tokens/robinhood/0x7dbf38976f6d3b9c529e7d9484a71898b409ee6a";
+  const groups = groupTweetSignalsByTweet([
+    { id: "one", author: "@trader", tweetText: "Buy $8K $ZZZ", sourceUrl: `${baseUrl}?tradeId=trade-1` },
+    { id: "two", author: "@trader", tweetText: "Buy $8K $ZZZ", sourceUrl: `${baseUrl}?tradeId=trade-2` },
+  ]);
+
+  assert.equal(groups.length, 2);
+});
+
+test("keeps separate Fomo theses on the same token", () => {
+  const baseUrl = "https://fomo.family/tokens/robinhood/0x7dbf38976f6d3b9c529e7d9484a71898b409ee6a";
+  const groups = groupTweetSignalsByTweet([
+    { id: "one", author: "@trader", tweetText: "same thesis", sourceUrl: `${baseUrl}?thesisId=comment-1` },
+    { id: "two", author: "@trader", tweetText: "same thesis", sourceUrl: `${baseUrl}?thesisId=comment-2` },
+  ]);
+
+  assert.equal(groups.length, 2);
+});
+
+test("preserves captured Fomo metadata when SQLite returns the same signal", () => {
+  const sourceUrl = "https://fomo.family/tokens/robinhood/0x1111111111111111111111111111111111111111?tradeId=one";
+  const [merged] = mergeTweetTokenSignals([{
+    id: "fomo:one",
+    author: "@chefjin",
+    authorName: "Chef Jin",
+    tweetText: "Buy $8K $ZZZ on Robinhood",
+    chain: "Robinhood",
+    contractAddress: "0x1111111111111111111111111111111111111111",
+    sourceUrl,
+    detectedAt: "2026-09-05T00:00:00.000Z",
+    signalSource: "fomo",
+    fomoEventType: "swap_buy",
+    tradeDirection: "buy",
+    followerCount: 12_345,
+  }], [{
+    id: "sqlite:one",
+    author: "Fomo trader",
+    tweetText: "Buy $8K $ZZZ on Robinhood",
+    chain: "Robinhood",
+    contractAddress: "0x1111111111111111111111111111111111111111",
+    sourceUrl,
+    detectedAt: "2026-09-05T00:00:01.000Z",
+    signalSource: "fomo",
+  }]);
+
+  assert.equal(merged.id, "fomo:one");
+  assert.equal(merged.author, "@chefjin");
+  assert.equal(merged.tradeDirection, "buy");
+  assert.equal(merged.followerCount, 12_345);
 });
 
 test("groups the same status across Twitter host aliases and URL decorations", () => {
@@ -322,6 +392,32 @@ test("preserves bounded automatic token resolution metadata", () => {
   });
 });
 
+test("preserves bounded Fomo signal metadata", () => {
+  const [signal] = parseStoredTwitterSignals([{
+    id: "fomo:signal-1",
+    author: "@trader",
+    tweetText: "Buy $8K $ZZZ",
+    chain: "Robinhood",
+    contractAddress: "0x7dbf38976f6d3b9c529e7d9484a71898b409ee6a",
+    detectedAt: "2026-09-05T00:00:00.000Z",
+    signalSource: "fomo",
+    fomoEventType: "swap_buy",
+    tradeDirection: "buy",
+    usdAmount: 8_000,
+    marketCapUsd: 18_900_000,
+    traderCount: 1.9,
+    followerCount: 12_345.9,
+  }]);
+
+  assert.equal(signal.signalSource, "fomo");
+  assert.equal(signal.fomoEventType, "swap_buy");
+  assert.equal(signal.tradeDirection, "buy");
+  assert.equal(signal.usdAmount, 8_000);
+  assert.equal(signal.marketCapUsd, 18_900_000);
+  assert.equal(signal.traderCount, 1);
+  assert.equal(signal.followerCount, 12_345);
+});
+
 test("falls back safely for legacy inferred signals without observation metadata", () => {
   assert.deepEqual(tokenSignalObservation({
     id: "legacy",
@@ -399,6 +495,16 @@ test("rejects malformed tweet identity before batching storage or resolution", (
     sourceUrl: "https://x.com/another/status/42",
   }), false);
   assert.equal(hasValidTweetSignalIdentity({ ...base, sourceUrl: "https://example.com/status/42" }), false);
+  const fomo = {
+    ...base,
+    signalSource: "fomo",
+    author: "Fomo trader",
+    contractAddress: "0x7dbf38976f6d3b9c529e7d9484a71898b409ee6a",
+    sourceUrl: "https://fomo.family/tokens/robinhood/0x7dbf38976f6d3b9c529e7d9484a71898b409ee6a?tradeId=1",
+  };
+  assert.equal(hasValidTweetSignalIdentity(fomo), true);
+  assert.equal(isTokenResolutionTarget(fomo), false);
+  assert.equal(hasValidTweetSignalIdentity({ ...fomo, sourceUrl: "https://fomo.family/tokens/robinhood/0x1111111111111111111111111111111111111111" }), false);
 });
 
 test("backs off longer while waiting for a new token to appear", () => {

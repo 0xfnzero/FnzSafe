@@ -19,9 +19,6 @@ use solana_sdk::{
     instruction::Instruction,
     sanitize::Sanitize,
     signature::Signature,
-    signer::keypair::{
-        generate_seed_from_seed_phrase_and_passphrase, keypair_from_seed_and_derivation_path,
-    },
     transaction::{Transaction, VersionedTransaction},
 };
 use std::fmt::Write as _;
@@ -1699,33 +1696,26 @@ fn normalize_mnemonic_phrase(phrase: &str) -> AppServiceResult<String> {
     Ok(normalized)
 }
 
-fn normalize_mnemonic_derivation_path(
-    value: Option<&str>,
-) -> AppServiceResult<(DerivationPath, String)> {
+fn normalize_mnemonic_derivation_path(value: Option<&str>) -> AppServiceResult<String> {
     let path = value
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or(DEFAULT_MNEMONIC_DERIVATION_PATH);
-    let derivation_path = DerivationPath::from_absolute_path_str(path).map_err(|error| {
+    DerivationPath::from_absolute_path_str(path).map_err(|error| {
         AppServiceError::mobile(
             MobileErrorCode::InvalidInput,
             format!("Invalid derivation path: {error}"),
         )
     })?;
-    Ok((derivation_path, path.to_string()))
+    Ok(path.to_string())
 }
 
 fn keypair_from_mnemonic_phrase(
     mnemonic: &str,
-    derivation_path: &DerivationPath,
+    derivation_path: &str,
 ) -> AppServiceResult<Keypair> {
-    let seed = generate_seed_from_seed_phrase_and_passphrase(mnemonic, "");
-    keypair_from_seed_and_derivation_path(&seed, Some(derivation_path.clone())).map_err(|error| {
-        AppServiceError::mobile(
-            MobileErrorCode::InvalidInput,
-            format!("Failed to derive wallet from mnemonic: {error}"),
-        )
-    })
+    KeyManager::keypair_from_mnemonic(mnemonic, derivation_path)
+        .map_err(|message| AppServiceError::mobile(MobileErrorCode::InvalidInput, message))
 }
 
 fn with_mobile_keystore_metadata(
@@ -1759,17 +1749,6 @@ fn with_mobile_keystore_metadata(
     metadata.insert(
         "wallet_name".to_string(),
         serde_json::Value::String(wallet_name.to_string()),
-    );
-    metadata.insert(
-        "secret_type".to_string(),
-        serde_json::Value::String(
-            if encrypted_mnemonic.is_some() {
-                "mnemonic"
-            } else {
-                "private_key"
-            }
-            .to_string(),
-        ),
     );
     if let Some(encrypted_mnemonic) = encrypted_mnemonic {
         metadata.insert(
@@ -1850,6 +1829,13 @@ pub fn evm_wallet_import_mnemonic(
     .map_err(map_evm_error)
 }
 
+pub fn evm_wallet_address_from_mnemonic(
+    mnemonic: &str,
+    derivation_path: Option<&str>,
+) -> AppServiceResult<String> {
+    evm::address_from_mnemonic(mnemonic, derivation_path).map_err(map_evm_error)
+}
+
 pub fn evm_wallet_import_keystore(
     req: EvmImportKeystoreRequest,
 ) -> AppServiceResult<EvmWalletKeystore> {
@@ -1890,9 +1876,9 @@ pub fn evm_wallet_export_private_key(
         keystore_json: req.keystore_json,
         password: req.password,
     })
-    .map(|value| EvmExportPrivateKeyResponse {
-        address: value.address.clone(),
-        private_key_hex: value.private_key_hex.clone(),
+    .map(|mut value| EvmExportPrivateKeyResponse {
+        address: std::mem::take(&mut value.address),
+        private_key_hex: std::mem::take(&mut value.private_key_hex),
     })
     .map_err(map_evm_error)
 }
@@ -1940,25 +1926,21 @@ pub fn import_private_key(req: ImportPrivateKeyRequest) -> AppServiceResult<Wall
     })
 }
 
-pub fn import_mnemonic(req: ImportMnemonicRequest) -> AppServiceResult<WalletKeystore> {
+pub fn import_mnemonic(mut req: ImportMnemonicRequest) -> AppServiceResult<WalletKeystore> {
     let name = require_non_empty(&req.name, "wallet name")?;
-    require_non_empty(&req.password, "wallet password")?;
-    let mnemonic = normalize_mnemonic_phrase(&req.mnemonic)?;
-    let (derivation_path, derivation_path_label) =
-        normalize_mnemonic_derivation_path(req.derivation_path.as_deref())?;
+    let mnemonic_input = Zeroizing::new(std::mem::take(&mut req.mnemonic));
+    let password = Zeroizing::new(std::mem::take(&mut req.password));
+    require_non_empty(&password, "wallet password")?;
+    let mnemonic = Zeroizing::new(normalize_mnemonic_phrase(&mnemonic_input)?);
+    let derivation_path_label = normalize_mnemonic_derivation_path(req.derivation_path.as_deref())?;
 
-    let keypair = keypair_from_mnemonic_phrase(&mnemonic, &derivation_path)?;
+    let keypair = keypair_from_mnemonic_phrase(&mnemonic, &derivation_path_label)?;
     let public_key = keypair.pubkey().to_string();
-    let encrypted_mnemonic = KeyManager::encrypt_secret_with_password(&mnemonic, &req.password)
-        .map_err(|message| AppServiceError::mobile(MobileErrorCode::InvalidInput, message))?;
-    let keystore_json = KeyManager::keypair_to_encrypted_json(&keypair, &req.password)
-        .map_err(|message| AppServiceError::mobile(MobileErrorCode::InvalidInput, message))?;
-    let keystore_json = with_mobile_keystore_metadata(
-        &keystore_json,
-        &name,
-        Some(&encrypted_mnemonic),
-        Some(&derivation_path_label),
-    )?;
+    let keystore_json =
+        KeyManager::mnemonic_to_encrypted_json(&mnemonic, &derivation_path_label, &password)
+            .map_err(|message| AppServiceError::mobile(MobileErrorCode::InvalidInput, message))?;
+    let keystore_json =
+        with_mobile_keystore_metadata(&keystore_json, &name, None, Some(&derivation_path_label))?;
 
     Ok(WalletKeystore {
         wallet: WalletSummary {
@@ -3098,15 +3080,11 @@ mod tests {
         .unwrap();
 
         let document: serde_json::Value = serde_json::from_str(&imported.keystore_json).unwrap();
-        let metadata = document.get("metadata").unwrap();
-        assert_eq!(metadata.get("secret_type").unwrap(), "mnemonic");
-        let encrypted_mnemonic = metadata
-            .get("encrypted_mnemonic")
-            .and_then(serde_json::Value::as_str)
-            .unwrap();
+        assert_eq!(document.get("secret_type").unwrap(), "mnemonic");
         assert_eq!(
-            KeyManager::decrypt_secret_with_password(encrypted_mnemonic, "strong-password")
-                .unwrap(),
+            KeyManager::mnemonic_from_encrypted_json(&imported.keystore_json, "strong-password")
+                .unwrap()
+                .as_str(),
             MNEMONIC
         );
 

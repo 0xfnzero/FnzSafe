@@ -12,7 +12,7 @@ alloy-primitives = { version = "=0.8.26", features = ["serde"] }
 argon2 = { version = "0.5", features = ["zeroize"] }
 base64 = "0.22"
 bip32 = { version = "0.5", features = ["secp256k1"] }
-bip39 = "2"
+bip39 = { version = "2", features = ["zeroize"] }
 hex = "0.4"
 k256 = { version = "0.13", features = ["ecdsa", "sha256"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }

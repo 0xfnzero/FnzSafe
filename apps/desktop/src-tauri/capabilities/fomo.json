@@ -1,0 +1,22 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "fomo-alerts",
+  "description": "Narrow capture permissions for the embedded Fomo Alerts tab.",
+  "webviews": [
+    "dapp-tab-twitter-fomo-alerts"
+  ],
+  "local": false,
+  "remote": {
+    "urls": [
+      "https://fomo.family/*",
+      "https://*.fomo.family/*"
+    ]
+  },
+  "permissions": [
+    "core:default",
+    "allow-submit-fomo-alerts",
+    "allow-submit-fomo-auth",
+    "allow-submit-fomo-stream",
+    "allow-submit-fomo-profile"
+  ]
+}

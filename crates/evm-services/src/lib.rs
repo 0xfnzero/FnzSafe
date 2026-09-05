@@ -23,12 +23,19 @@ use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 
 const DEFAULT_EVM_DERIVATION_PATH: &str = "m/44'/60'/0'/0/0";
-const KEYSTORE_VERSION: u8 = 1;
+const LEGACY_KEYSTORE_VERSION: u8 = 1;
+const KEYSTORE_VERSION: u8 = 2;
+const KEYSTORE_SECRET_MNEMONIC: &str = "mnemonic";
+const KEYSTORE_SECRET_PRIVATE_KEY: &str = "private_key";
 const KEYSTORE_KDF: &str = "argon2id";
 const KEYSTORE_CIPHER: &str = "aes-256-gcm";
 const KEYSTORE_AAD_DOMAIN: &[u8] = b"fnzero-safe-evm-keystore";
 const KEYSTORE_SALT_BYTES: usize = 16;
 const KEYSTORE_NONCE_BYTES: usize = 12;
+const KEYSTORE_TAG_BYTES: usize = 16;
+const MAX_KEYSTORE_JSON_BYTES: usize = 128 * 1024;
+const MAX_KEYSTORE_SECRET_BYTES: usize = 1024;
+const MAX_KEYSTORE_PASSWORD_BYTES: usize = 1024;
 const PRIVATE_KEY_BYTES: usize = 32;
 const ARGON2_MEMORY_KIB: u32 = 64 * 1024;
 const ARGON2_ITERATIONS: u32 = 3;
@@ -331,10 +338,17 @@ zeroize_fields_on_drop!(EvmDappSignSubmitRequest, keystore_json, password);
 struct EvmKeystore {
     version: u8,
     wallet_family: String,
+    #[serde(default = "default_keystore_secret_type")]
+    secret_type: String,
     address: String,
     derivation_path: Option<String>,
     crypto: EvmKeystoreCrypto,
     metadata: EvmKeystoreMetadata,
+}
+
+struct DecryptedEvmKeystore {
+    signing_key: SigningKey,
+    keystore: EvmKeystore,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -357,6 +371,10 @@ struct EvmKeystoreKdfParams {
 #[derive(Debug, Deserialize, Serialize)]
 struct EvmKeystoreMetadata {
     wallet_name: String,
+}
+
+fn default_keystore_secret_type() -> String {
+    KEYSTORE_SECRET_PRIVATE_KEY.to_string()
 }
 
 #[derive(Debug, Deserialize)]
@@ -520,7 +538,7 @@ pub fn import_private_key(req: EvmImportPrivateKeyRequest) -> EvmResult<EvmWalle
 pub fn import_mnemonic(req: EvmImportMnemonicRequest) -> EvmResult<EvmWalletKeystore> {
     let name = require_non_empty(&req.name, "wallet name")?;
     require_non_empty(&req.password, "wallet password")?;
-    let mnemonic = normalize_mnemonic_phrase(&req.mnemonic)?;
+    let mnemonic = Zeroizing::new(normalize_mnemonic_phrase(&req.mnemonic)?);
     let derivation_path = req
         .derivation_path
         .as_deref()
@@ -529,21 +547,39 @@ pub fn import_mnemonic(req: EvmImportMnemonicRequest) -> EvmResult<EvmWalletKeys
         .unwrap_or(DEFAULT_EVM_DERIVATION_PATH)
         .to_string();
     let signing_key = signing_key_from_mnemonic(&mnemonic, &derivation_path)?;
-    wallet_from_signing_key(name, signing_key, &req.password, Some(derivation_path))
+    let address = address_from_signing_key(&signing_key);
+    let keystore_json = encrypt_keystore(
+        &signing_key,
+        mnemonic.as_bytes(),
+        KEYSTORE_SECRET_MNEMONIC,
+        &req.password,
+        &name,
+        Some(derivation_path.clone()),
+    )?;
+    Ok(EvmWalletKeystore {
+        wallet: wallet_summary(name, address, Some(derivation_path)),
+        keystore_json,
+    })
+}
+
+pub fn address_from_mnemonic(mnemonic: &str, derivation_path: Option<&str>) -> EvmResult<String> {
+    let mnemonic = Zeroizing::new(normalize_mnemonic_phrase(mnemonic)?);
+    let derivation_path = derivation_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(DEFAULT_EVM_DERIVATION_PATH);
+    let signing_key = signing_key_from_mnemonic(&mnemonic, derivation_path)?;
+    Ok(address_from_signing_key(&signing_key))
 }
 
 pub fn import_keystore(req: EvmImportKeystoreRequest) -> EvmResult<EvmWalletKeystore> {
     let name = require_non_empty(&req.name, "wallet name")?;
-    let signing_key = decrypt_keystore(&req.keystore_json, &req.password)?;
-    let mut keystore: EvmKeystore = serde_json::from_str(&req.keystore_json)
-        .map_err(|_| EvmServiceError::InvalidInput("Invalid EVM keystore JSON".to_string()))?;
+    let DecryptedEvmKeystore {
+        signing_key,
+        mut keystore,
+    } = decrypt_keystore(&req.keystore_json, &req.password)?;
     keystore.metadata.wallet_name = name.clone();
     let address = address_from_signing_key(&signing_key);
-    if !address_eq(&address, &keystore.address) {
-        return Err(EvmServiceError::InvalidInput(
-            "Keystore address does not match decrypted private key".to_string(),
-        ));
-    }
     let keystore_json = serde_json::to_string(&keystore).map_err(|_| {
         EvmServiceError::InvalidInput("Failed to encode EVM keystore JSON".to_string())
     })?;
@@ -570,15 +606,11 @@ pub fn unlock_private_key(
 }
 
 fn unlock_signing_key(req: &EvmUnlockWalletRequest) -> EvmResult<(EvmWalletSummary, SigningKey)> {
-    let signing_key = decrypt_keystore(&req.keystore_json, &req.password)?;
-    let keystore: EvmKeystore = serde_json::from_str(&req.keystore_json)
-        .map_err(|_| EvmServiceError::InvalidInput("Invalid EVM keystore JSON".to_string()))?;
+    let DecryptedEvmKeystore {
+        signing_key,
+        keystore,
+    } = decrypt_keystore(&req.keystore_json, &req.password)?;
     let address = address_from_signing_key(&signing_key);
-    if !address_eq(&address, &keystore.address) {
-        return Err(EvmServiceError::InvalidInput(
-            "Keystore address does not match decrypted private key".to_string(),
-        ));
-    }
     let wallet = wallet_summary(
         keystore.metadata.wallet_name,
         address,
@@ -590,7 +622,7 @@ fn unlock_signing_key(req: &EvmUnlockWalletRequest) -> EvmResult<(EvmWalletSumma
 pub fn export_private_key(
     req: EvmExportPrivateKeyRequest,
 ) -> EvmResult<EvmExportPrivateKeyResponse> {
-    let signing_key = decrypt_keystore(&req.keystore_json, &req.password)?;
+    let signing_key = decrypt_keystore(&req.keystore_json, &req.password)?.signing_key;
     Ok(EvmExportPrivateKeyResponse {
         address: address_from_signing_key(&signing_key),
         private_key_hex: format!("0x{}", hex::encode(signing_key.to_bytes())),
@@ -716,7 +748,9 @@ pub fn preview_payment(req: EvmPaymentPreviewRequest) -> EvmResult<EvmPaymentPre
 }
 
 pub fn submit_payment(req: EvmPaymentSubmitRequest) -> EvmResult<EvmTransactionSubmitResult> {
-    submit_payment_with_key_loader(&req, || decrypt_keystore(&req.keystore_json, &req.password))
+    submit_payment_with_key_loader(&req, || {
+        decrypt_keystore(&req.keystore_json, &req.password).map(|decrypted| decrypted.signing_key)
+    })
 }
 
 pub fn submit_payment_with_private_key(
@@ -864,7 +898,7 @@ pub fn preview_dapp_signing(req: EvmDappSignPreviewRequest) -> EvmResult<EvmDapp
 
 pub fn submit_dapp_signing(req: EvmDappSignSubmitRequest) -> EvmResult<EvmDappSignSubmitResult> {
     submit_dapp_signing_with_key_loader(&req, || {
-        decrypt_keystore(&req.keystore_json, &req.password)
+        decrypt_keystore(&req.keystore_json, &req.password).map(|decrypted| decrypted.signing_key)
     })
 }
 
@@ -1111,7 +1145,15 @@ fn wallet_from_signing_key(
     derivation_path: Option<String>,
 ) -> EvmResult<EvmWalletKeystore> {
     let address = address_from_signing_key(&signing_key);
-    let keystore_json = encrypt_keystore(&signing_key, password, &name, derivation_path.clone())?;
+    let private_key = signing_key.to_bytes();
+    let keystore_json = encrypt_keystore(
+        &signing_key,
+        private_key.as_slice(),
+        KEYSTORE_SECRET_PRIVATE_KEY,
+        password,
+        &name,
+        derivation_path.clone(),
+    )?;
     Ok(EvmWalletKeystore {
         wallet: wallet_summary(name, address, derivation_path),
         keystore_json,
@@ -1155,7 +1197,7 @@ fn signing_key_from_mnemonic(mnemonic: &str, derivation_path: &str) -> EvmResult
     let path = bip32::DerivationPath::from_str(derivation_path).map_err(|error| {
         EvmServiceError::InvalidInput(format!("Invalid derivation path: {error}"))
     })?;
-    let seed = mnemonic.to_seed("");
+    let seed = Zeroizing::new(mnemonic.to_seed(""));
     let xprv = bip32::XPrv::derive_from_path(seed.as_slice(), &path).map_err(|error| {
         EvmServiceError::InvalidInput(format!("Failed to derive EVM key: {error}"))
     })?;
@@ -1220,6 +1262,8 @@ fn address_bytes(address: &str) -> EvmResult<[u8; 20]> {
 
 fn encrypt_keystore(
     signing_key: &SigningKey,
+    secret: &[u8],
+    secret_type: &str,
     password: &str,
     wallet_name: &str,
     derivation_path: Option<String>,
@@ -1234,13 +1278,12 @@ fn encrypt_keystore(
     let cipher = Aes256Gcm::new_from_slice(key.as_slice()).map_err(|_| {
         EvmServiceError::InvalidInput("AES-256-GCM initialization failed".to_string())
     })?;
-    let plaintext = signing_key.to_bytes();
-    let aad = keystore_aad(&address);
+    let aad = keystore_aad_v2(&address, secret_type, derivation_path.as_deref());
     let ciphertext = cipher
         .encrypt(
             &nonce,
             Payload {
-                msg: plaintext.as_slice(),
+                msg: secret,
                 aad: &aad,
             },
         )
@@ -1248,6 +1291,7 @@ fn encrypt_keystore(
     serde_json::to_string(&EvmKeystore {
         version: KEYSTORE_VERSION,
         wallet_family: "evm".to_string(),
+        secret_type: secret_type.to_string(),
         address,
         derivation_path,
         crypto: EvmKeystoreCrypto {
@@ -1269,14 +1313,46 @@ fn encrypt_keystore(
     .map_err(|_| EvmServiceError::InvalidInput("Failed to encode EVM keystore JSON".to_string()))
 }
 
-fn decrypt_keystore(keystore_json: &str, password: &str) -> EvmResult<SigningKey> {
+fn decrypt_keystore(keystore_json: &str, password: &str) -> EvmResult<DecryptedEvmKeystore> {
+    if keystore_json.len() > MAX_KEYSTORE_JSON_BYTES {
+        return Err(EvmServiceError::InvalidInput(
+            "EVM keystore JSON is too large".to_string(),
+        ));
+    }
     require_non_empty(keystore_json, "keystore json")?;
     require_non_empty(password, "wallet password")?;
-    let keystore: EvmKeystore = serde_json::from_str(keystore_json)
+    let document: serde_json::Value = serde_json::from_str(keystore_json)
         .map_err(|_| EvmServiceError::InvalidInput("Invalid EVM keystore JSON".to_string()))?;
-    if keystore.version != KEYSTORE_VERSION || keystore.wallet_family != "evm" {
+    let has_explicit_secret_type = document
+        .get("secret_type")
+        .and_then(serde_json::Value::as_str)
+        .is_some();
+    let keystore: EvmKeystore = serde_json::from_value(document)
+        .map_err(|_| EvmServiceError::InvalidInput("Invalid EVM keystore JSON".to_string()))?;
+    if !matches!(keystore.version, LEGACY_KEYSTORE_VERSION | KEYSTORE_VERSION)
+        || keystore.wallet_family != "evm"
+    {
         return Err(EvmServiceError::InvalidInput(
             "Unsupported EVM keystore version".to_string(),
+        ));
+    }
+    if keystore.version == KEYSTORE_VERSION && !has_explicit_secret_type {
+        return Err(EvmServiceError::InvalidInput(
+            "EVM v2 keystore is missing secret_type".to_string(),
+        ));
+    }
+    if keystore.version == LEGACY_KEYSTORE_VERSION
+        && keystore.secret_type != KEYSTORE_SECRET_PRIVATE_KEY
+    {
+        return Err(EvmServiceError::InvalidInput(
+            "Legacy EVM keystore must contain a private key".to_string(),
+        ));
+    }
+    if keystore.secret_type != KEYSTORE_SECRET_PRIVATE_KEY
+        && keystore.secret_type != KEYSTORE_SECRET_MNEMONIC
+    {
+        return Err(EvmServiceError::InvalidInput(
+            "Unsupported EVM keystore secret type".to_string(),
         ));
     }
     if keystore.crypto.kdf != KEYSTORE_KDF || keystore.crypto.cipher != KEYSTORE_CIPHER {
@@ -1284,28 +1360,51 @@ fn decrypt_keystore(keystore_json: &str, password: &str) -> EvmResult<SigningKey
             "Unsupported EVM keystore crypto".to_string(),
         ));
     }
+    if keystore.crypto.kdf_params.memory_kib != ARGON2_MEMORY_KIB
+        || keystore.crypto.kdf_params.iterations != ARGON2_ITERATIONS
+        || keystore.crypto.kdf_params.parallelism != ARGON2_PARALLELISM
+    {
+        return Err(EvmServiceError::InvalidInput(
+            "Unsupported EVM keystore KDF parameters".to_string(),
+        ));
+    }
     let salt: [u8; KEYSTORE_SALT_BYTES] = BASE64
-        .decode(keystore.crypto.kdf_params.salt)
+        .decode(keystore.crypto.kdf_params.salt.as_bytes())
         .map_err(|_| EvmServiceError::InvalidInput("Keystore salt is invalid".to_string()))?
         .try_into()
         .map_err(|_| {
             EvmServiceError::InvalidInput("Keystore salt length is invalid".to_string())
         })?;
     let nonce_bytes: [u8; KEYSTORE_NONCE_BYTES] = BASE64
-        .decode(keystore.crypto.nonce)
+        .decode(keystore.crypto.nonce.as_bytes())
         .map_err(|_| EvmServiceError::InvalidInput("Keystore nonce is invalid".to_string()))?
         .try_into()
         .map_err(|_| {
             EvmServiceError::InvalidInput("Keystore nonce length is invalid".to_string())
         })?;
     let ciphertext = BASE64
-        .decode(keystore.crypto.ciphertext)
+        .decode(keystore.crypto.ciphertext.as_bytes())
         .map_err(|_| EvmServiceError::InvalidInput("Keystore ciphertext is invalid".to_string()))?;
+    if ciphertext.len() <= KEYSTORE_TAG_BYTES
+        || ciphertext.len() > MAX_KEYSTORE_SECRET_BYTES + KEYSTORE_TAG_BYTES
+    {
+        return Err(EvmServiceError::InvalidInput(
+            "Keystore ciphertext length is invalid".to_string(),
+        ));
+    }
     let key = derive_key(password, &salt)?;
     let cipher = Aes256Gcm::new_from_slice(key.as_slice()).map_err(|_| {
         EvmServiceError::InvalidInput("AES-256-GCM initialization failed".to_string())
     })?;
-    let aad = keystore_aad(&keystore.address);
+    let aad = if keystore.version == LEGACY_KEYSTORE_VERSION {
+        keystore_aad_v1(&keystore.address)
+    } else {
+        keystore_aad_v2(
+            &keystore.address,
+            &keystore.secret_type,
+            keystore.derivation_path.as_deref(),
+        )
+    };
     let nonce = aes_gcm::Nonce::from(nonce_bytes);
     let plaintext = Zeroizing::new(
         cipher
@@ -1318,13 +1417,40 @@ fn decrypt_keystore(keystore_json: &str, password: &str) -> EvmResult<SigningKey
             )
             .map_err(|_| EvmServiceError::WrongPassword)?,
     );
-    if plaintext.len() != PRIVATE_KEY_BYTES {
-        return Err(EvmServiceError::WrongPassword);
+    let signing_key = if keystore.secret_type == KEYSTORE_SECRET_PRIVATE_KEY {
+        if plaintext.len() != PRIVATE_KEY_BYTES {
+            return Err(EvmServiceError::WrongPassword);
+        }
+        SigningKey::from_slice(plaintext.as_slice()).map_err(|_| EvmServiceError::WrongPassword)?
+    } else {
+        let mnemonic = std::str::from_utf8(plaintext.as_slice()).map_err(|_| {
+            EvmServiceError::InvalidInput("Decrypted mnemonic is not valid UTF-8".to_string())
+        })?;
+        let derivation_path = keystore.derivation_path.as_deref().ok_or_else(|| {
+            EvmServiceError::InvalidInput(
+                "Mnemonic keystore is missing its derivation path".to_string(),
+            )
+        })?;
+        signing_key_from_mnemonic(mnemonic, derivation_path)?
+    };
+    let derived_address = address_from_signing_key(&signing_key);
+    if !address_eq(&derived_address, &keystore.address) {
+        return Err(EvmServiceError::InvalidInput(
+            "Keystore address does not match decrypted secret".to_string(),
+        ));
     }
-    SigningKey::from_slice(plaintext.as_slice()).map_err(|_| EvmServiceError::WrongPassword)
+    Ok(DecryptedEvmKeystore {
+        signing_key,
+        keystore,
+    })
 }
 
 fn derive_key(password: &str, salt: &[u8; KEYSTORE_SALT_BYTES]) -> EvmResult<Zeroizing<[u8; 32]>> {
+    if password.len() > MAX_KEYSTORE_PASSWORD_BYTES {
+        return Err(EvmServiceError::InvalidInput(
+            "EVM keystore password is too long".to_string(),
+        ));
+    }
     let params = Params::new(
         ARGON2_MEMORY_KIB,
         ARGON2_ITERATIONS,
@@ -1340,11 +1466,30 @@ fn derive_key(password: &str, salt: &[u8; KEYSTORE_SALT_BYTES]) -> EvmResult<Zer
     Ok(key)
 }
 
-fn keystore_aad(address: &str) -> Vec<u8> {
+fn keystore_aad_v1(address: &str) -> Vec<u8> {
     let mut aad = Vec::with_capacity(KEYSTORE_AAD_DOMAIN.len() + address.len() + 2);
     aad.extend_from_slice(KEYSTORE_AAD_DOMAIN);
     aad.push(0);
     aad.extend_from_slice(address.as_bytes());
+    aad
+}
+
+fn keystore_aad_v2(address: &str, secret_type: &str, derivation_path: Option<&str>) -> Vec<u8> {
+    let derivation_path = derivation_path.unwrap_or_default();
+    let mut aad = Vec::with_capacity(
+        KEYSTORE_AAD_DOMAIN.len() + address.len() + secret_type.len() + derivation_path.len() + 8,
+    );
+    aad.extend_from_slice(KEYSTORE_AAD_DOMAIN);
+    aad.push(0);
+    aad.push(KEYSTORE_VERSION);
+    aad.push(0);
+    aad.extend_from_slice(b"evm");
+    aad.push(0);
+    aad.extend_from_slice(address.as_bytes());
+    aad.push(0);
+    aad.extend_from_slice(secret_type.as_bytes());
+    aad.push(0);
+    aad.extend_from_slice(derivation_path.as_bytes());
     aad
 }
 
@@ -2786,6 +2931,47 @@ mod tests {
     const DEV_PRIVATE_KEY: &str =
         "0x0000000000000000000000000000000000000000000000000000000000000001";
 
+    fn legacy_private_key_keystore(password: &str) -> String {
+        let signing_key = signing_key_from_hex(DEV_PRIVATE_KEY).unwrap();
+        let address = address_from_signing_key(&signing_key);
+        let mut salt = [0u8; KEYSTORE_SALT_BYTES];
+        let mut rng = AeadOsRng;
+        aes_gcm::aead::rand_core::RngCore::fill_bytes(&mut rng, &mut salt);
+        let nonce = Aes256Gcm::generate_nonce(&mut rng);
+        let key = derive_key(password, &salt).unwrap();
+        let cipher = Aes256Gcm::new_from_slice(key.as_slice()).unwrap();
+        let private_key = signing_key.to_bytes();
+        let ciphertext = cipher
+            .encrypt(
+                &nonce,
+                Payload {
+                    msg: private_key.as_slice(),
+                    aad: &keystore_aad_v1(&address),
+                },
+            )
+            .unwrap();
+        serde_json::json!({
+            "version": LEGACY_KEYSTORE_VERSION,
+            "wallet_family": "evm",
+            "address": address,
+            "derivation_path": null,
+            "crypto": {
+                "kdf": KEYSTORE_KDF,
+                "kdf_params": {
+                    "memory_kib": ARGON2_MEMORY_KIB,
+                    "iterations": ARGON2_ITERATIONS,
+                    "parallelism": ARGON2_PARALLELISM,
+                    "salt": BASE64.encode(salt),
+                },
+                "cipher": KEYSTORE_CIPHER,
+                "nonce": BASE64.encode(nonce),
+                "ciphertext": BASE64.encode(ciphertext),
+            },
+            "metadata": { "wallet_name": "Legacy EVM" },
+        })
+        .to_string()
+    }
+
     #[test]
     fn includes_robinhood_chain_mainnet() {
         let robinhood = builtin_chains()
@@ -2834,6 +3020,8 @@ mod tests {
             password: "strong-password".to_string(),
         })
         .unwrap();
+        let document: serde_json::Value = serde_json::from_str(&created.keystore_json).unwrap();
+        assert_eq!(document.get("secret_type").unwrap(), "private_key");
         let unlocked = unlock_wallet(EvmUnlockWalletRequest {
             keystore_json: created.keystore_json,
             password: "strong-password".to_string(),
@@ -2843,6 +3031,178 @@ mod tests {
             unlocked.address,
             "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf"
         );
+    }
+
+    #[test]
+    fn mnemonic_keystore_restores_the_derived_account() {
+        const MNEMONIC: &str = "test test test test test test test test test test test junk";
+        let created = import_mnemonic(EvmImportMnemonicRequest {
+            name: "Mnemonic EVM".to_string(),
+            mnemonic: MNEMONIC.to_string(),
+            derivation_path: None,
+            password: "strong-password".to_string(),
+        })
+        .unwrap();
+        assert!(!created.keystore_json.contains(MNEMONIC));
+        let document: serde_json::Value = serde_json::from_str(&created.keystore_json).unwrap();
+        assert_eq!(document.get("version").unwrap(), KEYSTORE_VERSION);
+        assert_eq!(document.get("secret_type").unwrap(), "mnemonic");
+
+        let restored = import_keystore(EvmImportKeystoreRequest {
+            name: "Restored EVM".to_string(),
+            keystore_json: created.keystore_json,
+            password: "strong-password".to_string(),
+        })
+        .unwrap();
+        assert_eq!(restored.wallet.address, created.wallet.address);
+        assert_eq!(
+            restored.wallet.derivation_path.as_deref(),
+            Some(DEFAULT_EVM_DERIVATION_PATH)
+        );
+        let restored_document: serde_json::Value =
+            serde_json::from_str(&restored.keystore_json).unwrap();
+        assert_eq!(restored_document.get("secret_type").unwrap(), "mnemonic");
+    }
+
+    #[test]
+    fn mnemonic_keystore_rejects_authenticated_metadata_tampering() {
+        const MNEMONIC: &str = "test test test test test test test test test test test junk";
+        let created = import_mnemonic(EvmImportMnemonicRequest {
+            name: "Mnemonic EVM".to_string(),
+            mnemonic: MNEMONIC.to_string(),
+            derivation_path: None,
+            password: "strong-password".to_string(),
+        })
+        .unwrap();
+        let mut document: serde_json::Value = serde_json::from_str(&created.keystore_json).unwrap();
+
+        document["derivation_path"] = serde_json::Value::String("m/44'/60'/0'/0/1".to_string());
+        assert!(export_private_key(EvmExportPrivateKeyRequest {
+            keystore_json: document.to_string(),
+            password: "strong-password".to_string(),
+        })
+        .is_err());
+
+        let mut document: serde_json::Value = serde_json::from_str(&created.keystore_json).unwrap();
+        document["secret_type"] = serde_json::Value::String("private_key".to_string());
+        assert!(unlock_wallet(EvmUnlockWalletRequest {
+            keystore_json: document.to_string(),
+            password: "strong-password".to_string(),
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn private_key_keystore_without_secret_type_remains_compatible() {
+        let unlocked = unlock_wallet(EvmUnlockWalletRequest {
+            keystore_json: legacy_private_key_keystore("strong-password"),
+            password: "strong-password".to_string(),
+        })
+        .unwrap();
+        assert_eq!(
+            unlocked.address,
+            "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf"
+        );
+    }
+
+    #[test]
+    fn legacy_keystore_rejects_mnemonic_type_confusion() {
+        let mut document: serde_json::Value =
+            serde_json::from_str(&legacy_private_key_keystore("strong-password")).unwrap();
+        document["secret_type"] = serde_json::Value::String("mnemonic".to_string());
+        document["derivation_path"] =
+            serde_json::Value::String(DEFAULT_EVM_DERIVATION_PATH.to_string());
+
+        assert!(matches!(
+            decrypt_keystore(&document.to_string(), "strong-password"),
+            Err(EvmServiceError::InvalidInput(message))
+                if message == "Legacy EVM keystore must contain a private key"
+        ));
+    }
+
+    #[test]
+    fn rejects_oversized_keystore_passwords_before_kdf() {
+        let created = import_private_key(EvmImportPrivateKeyRequest {
+            name: "EVM".to_string(),
+            private_key_hex: DEV_PRIVATE_KEY.to_string(),
+            password: "strong-password".to_string(),
+        })
+        .unwrap();
+        let oversized = "x".repeat(MAX_KEYSTORE_PASSWORD_BYTES + 1);
+
+        assert!(matches!(
+            decrypt_keystore(&created.keystore_json, &oversized),
+            Err(EvmServiceError::InvalidInput(message))
+                if message == "EVM keystore password is too long"
+        ));
+        assert!(matches!(
+            import_private_key(EvmImportPrivateKeyRequest {
+                name: "EVM".to_string(),
+                private_key_hex: DEV_PRIVATE_KEY.to_string(),
+                password: oversized,
+            }),
+            Err(EvmServiceError::InvalidInput(message))
+                if message == "EVM keystore password is too long"
+        ));
+    }
+
+    #[test]
+    fn rejects_oversized_keystore_json_before_parsing() {
+        let oversized = " ".repeat(MAX_KEYSTORE_JSON_BYTES + 1);
+        assert!(matches!(
+            decrypt_keystore(&oversized, "strong-password"),
+            Err(EvmServiceError::InvalidInput(message))
+                if message == "EVM keystore JSON is too large"
+        ));
+    }
+
+    #[test]
+    fn rejects_unapproved_keystore_kdf_parameters() {
+        let created = import_private_key(EvmImportPrivateKeyRequest {
+            name: "EVM".to_string(),
+            private_key_hex: DEV_PRIVATE_KEY.to_string(),
+            password: "strong-password".to_string(),
+        })
+        .unwrap();
+
+        for (field, value) in [
+            ("memory_kib", ARGON2_MEMORY_KIB + 1),
+            ("iterations", ARGON2_ITERATIONS + 1),
+            ("parallelism", ARGON2_PARALLELISM + 1),
+        ] {
+            let mut document: serde_json::Value =
+                serde_json::from_str(&created.keystore_json).unwrap();
+            document["crypto"]["kdf_params"][field] = serde_json::json!(value);
+            assert!(matches!(
+                decrypt_keystore(&document.to_string(), "strong-password"),
+                Err(EvmServiceError::InvalidInput(message))
+                    if message == "Unsupported EVM keystore KDF parameters"
+            ));
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_keystore_ciphertext_lengths() {
+        let created = import_private_key(EvmImportPrivateKeyRequest {
+            name: "EVM".to_string(),
+            private_key_hex: DEV_PRIVATE_KEY.to_string(),
+            password: "strong-password".to_string(),
+        })
+        .unwrap();
+
+        for ciphertext in [
+            vec![0; KEYSTORE_TAG_BYTES],
+            vec![0; MAX_KEYSTORE_SECRET_BYTES + KEYSTORE_TAG_BYTES + 1],
+        ] {
+            let mut document: serde_json::Value =
+                serde_json::from_str(&created.keystore_json).unwrap();
+            document["crypto"]["ciphertext"] = serde_json::Value::String(BASE64.encode(ciphertext));
+            assert!(matches!(
+                decrypt_keystore(&document.to_string(), "strong-password"),
+                Err(EvmServiceError::InvalidInput(message))
+                    if message == "Keystore ciphertext length is invalid"
+            ));
+        }
     }
 
     #[test]

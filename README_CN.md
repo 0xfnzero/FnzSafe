@@ -478,7 +478,7 @@ make package
 
 1. **本地优先 API**：桌面端 API 绑定 loopback，受保护路由需要本地 API token。
 2. **敏感请求加密**：包含密码和 secret 的 JSON 请求在跨本地 Web/API 边界前会先加密。
-3. **Keystore 优先**：已保存钱包存储的是加密 keystore JSON，不保存明文私钥。
+3. **类型明确的 Keystore**：v3 助记词 Keystore 加密保存 BIP-39 助记词，解锁时再派生 Solana/EVM 密钥；v2 私钥 Keystore 只加密一个账户私钥。旧 v1/v2 文件仍可导入。
 4. **移动端私有存储**：移动端 keystore 文件保存在 App 私有目录；钱包元数据和生物识别设置使用 secure storage。
 5. **生物识别确认**：移动端签名动作可以由系统生物识别二次确认保护；桌面端 Touch ID 使用 macOS Keychain 访问控制。
 6. **显式签名确认**：转账、dApp 签名、交易发送、Squads 操作都必须进入确认页。
