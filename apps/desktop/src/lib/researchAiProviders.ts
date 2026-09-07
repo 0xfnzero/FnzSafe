@@ -17,6 +17,19 @@ export interface ResearchAiProviderPreset {
   requiresApiKey: boolean;
 }
 
+export interface ResearchAiPreferences {
+  kind: ResearchAiProviderKind;
+  endpoint: string;
+  model: string;
+}
+
+interface ResearchAiPreferenceStorage {
+  getItem: (key: string) => string | null;
+}
+
+export const RESEARCH_AI_STORAGE_KEY = "fnzero-safe.research-ai.v1";
+export const LEGACY_TWITTER_RESEARCH_AI_STORAGE_KEY = "fnzero-safe.twitter-research-ai.v1";
+
 export const RESEARCH_AI_PROVIDER_PRESETS: readonly ResearchAiProviderPreset[] = [
   { kind: "local", label: "", endpoint: "", model: "", requiresApiKey: false },
   { kind: "deepseek", label: "DeepSeek", endpoint: "https://api.deepseek.com", model: "deepseek-chat", requiresApiKey: true },
@@ -35,4 +48,30 @@ export function researchAiProviderPreset(kind: ResearchAiProviderKind): Research
 
 export function isResearchAiProviderKind(value: unknown): value is ResearchAiProviderKind {
   return typeof value === "string" && RESEARCH_AI_PROVIDER_PRESETS.some((preset) => preset.kind === value);
+}
+
+export function readResearchAiPreferences(storage: ResearchAiPreferenceStorage): ResearchAiPreferences | null {
+  for (const key of [RESEARCH_AI_STORAGE_KEY, LEGACY_TWITTER_RESEARCH_AI_STORAGE_KEY]) {
+    try {
+      const raw = storage.getItem(key);
+      if (!raw) continue;
+      const value = JSON.parse(raw) as Record<string, unknown>;
+      if (!value || typeof value !== "object" || Array.isArray(value) || !isResearchAiProviderKind(value.kind)) {
+        continue;
+      }
+      const preset = researchAiProviderPreset(value.kind);
+      return {
+        kind: value.kind,
+        endpoint: typeof value.endpoint === "string" && value.endpoint.length <= 2_048
+          ? value.endpoint
+          : preset.endpoint,
+        model: typeof value.model === "string" && value.model.length <= 120
+          ? value.model
+          : preset.model,
+      };
+    } catch {
+      // Try the legacy key when the current preference record is unreadable.
+    }
+  }
+  return null;
 }

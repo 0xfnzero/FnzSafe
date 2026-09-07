@@ -47,6 +47,8 @@ const MAX_PROGRAM_SO_BASE64_BYTES: usize = MAX_PROGRAM_SO_BYTES.div_ceil(3) * 4;
 const MAX_PROXY_BODY_BYTES: usize = MAX_PROGRAM_SO_BASE64_BYTES + 1024 * 1024;
 const MAX_DOWNLOAD_FILE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_SECURE_PUBLIC_KEY_PEM_BYTES: usize = 2 * 1024;
+const MAX_SIGNAL_TRANSLATION_BYTES: usize = 16 * 1024;
+const MAX_SIGNAL_TRANSLATION_RESPONSE_BYTES: usize = 256 * 1024;
 const PROGRAM_DEPLOY_PROXY_TIMEOUT_SECS: u64 = 60 * 60;
 const MAX_PROGRAM_OPERATION_PROXY_TIMEOUT_SECS: u64 = 24 * 60 * 60;
 const SECURE_BODY_HEADER: &str = "x-fnzero-safe-secure-body";
@@ -62,6 +64,7 @@ const DAPP_FOMO_AUTH_EVENT: &str = "dapp://fomo-auth";
 const DAPP_FOMO_STREAM_EVENT: &str = "dapp://fomo-stream";
 const DAPP_FOMO_PROFILE_EVENT: &str = "dapp://fomo-profile";
 const FOMO_ALERTS_TAB_ID: &str = "twitter-fomo-alerts";
+const TWITTER_CAPTURE_TAB_ID: &str = "twitter-signal-capture";
 const DAPP_DOWNLOAD_EVENT: &str = "dapp://download";
 const DAPP_CONNECT_REQUEST_EVENT: &str = "dapp://connect-request";
 const DAPP_REQUEST_TTL_MS: u64 = 3 * 60 * 1000;
@@ -543,6 +546,14 @@ struct DappSubmitFomoStreamRequest {
     url: String,
     status: String,
     #[serde(default)]
+    activity_source: Option<String>,
+    #[serde(default)]
+    observed_item_count: Option<u32>,
+    #[serde(default)]
+    normalized_alert_count: Option<u32>,
+    #[serde(default)]
+    observed_types: Option<String>,
+    #[serde(default)]
     last_activity_at_ms: Option<u64>,
     #[serde(default)]
     retry_at_ms: Option<u64>,
@@ -670,6 +681,18 @@ struct DappDownloadEvent {
 struct ProxyResponse {
     status: u16,
     body: String,
+}
+
+#[derive(Deserialize)]
+struct SignalTranslationRequest {
+    text: String,
+    target_language: String,
+}
+
+#[derive(Serialize)]
+struct SignalTranslationResponse {
+    translated_text: String,
+    source_language: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1134,6 +1157,97 @@ async fn proxy_api_request(
     let body = resp.text().await.map_err(|e| e.to_string())?;
 
     Ok(ProxyResponse { status, body })
+}
+
+fn parse_google_translation(
+    payload: &serde_json::Value,
+) -> Result<SignalTranslationResponse, String> {
+    let translated_text = payload
+        .get(0)
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|segment| segment.get(0).and_then(serde_json::Value::as_str))
+        .collect::<String>()
+        .trim()
+        .to_string();
+    if translated_text.is_empty() {
+        return Err("Google Translate returned an empty translation".to_string());
+    }
+    let source_language = payload
+        .get(2)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && value.len() <= 16)
+        .map(str::to_string);
+    Ok(SignalTranslationResponse {
+        translated_text,
+        source_language,
+    })
+}
+
+#[tauri::command]
+async fn translate_signal_text(
+    request: SignalTranslationRequest,
+) -> Result<SignalTranslationResponse, String> {
+    let text = request.text.trim();
+    if text.is_empty()
+        || text.len() > MAX_SIGNAL_TRANSLATION_BYTES
+        || text.chars().count() > 4_000
+        || text
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+    {
+        return Err("invalid translation text".to_string());
+    }
+    let target_language = match request.target_language.as_str() {
+        "zh-CN" => "zh-CN",
+        "en" => "en",
+        _ => return Err("unsupported translation language".to_string()),
+    };
+    let mut url = reqwest::Url::parse("https://translate.googleapis.com/translate_a/single")
+        .map_err(|error| format!("failed to build Google Translate URL: {error}"))?;
+    url.query_pairs_mut()
+        .append_pair("client", "gtx")
+        .append_pair("sl", "auto")
+        .append_pair("tl", target_language)
+        .append_pair("dt", "t");
+    let response = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .user_agent(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36",
+        )
+        .build()
+        .map_err(|error| format!("failed to initialize Google Translate: {error}"))?
+        .post(url)
+        .header("Accept", "application/json")
+        .header("Accept-Language", "en-US,en;q=0.9")
+        .form(&[("q", text)])
+        .send()
+        .await
+        .map_err(|error| format!("Google Translate request failed: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Google Translate returned HTTP {}",
+            response.status().as_u16()
+        ));
+    }
+    let body = response
+        .bytes()
+        .await
+        .map_err(|error| format!("failed to read Google Translate response: {error}"))?;
+    if body.len() > MAX_SIGNAL_TRANSLATION_RESPONSE_BYTES {
+        return Err("Google Translate response is too large".to_string());
+    }
+    let payload: serde_json::Value = serde_json::from_slice(&body)
+        .map_err(|error| format!("invalid Google Translate response: {error}"))?;
+    let translation = parse_google_translation(&payload)?;
+    log::info!(
+        "translated signal text with Google (target={target_language}, input_bytes={}, output_bytes={})",
+        text.len(),
+        translation.translated_text.len()
+    );
+    Ok(translation)
 }
 
 fn raw_url_has_authority_credentials(value: &str) -> bool {
@@ -2679,6 +2793,7 @@ fn fomo_alert_capture_script() -> &'static str {
     "swap_buy", "swap_sell", "transfer_in", "transfer_out", "multi_user_buy", "multi_user_sell", "thesis_created",
   ]);
   const pending = new Map();
+  const submittedAlertIds = new Set();
   let flushTimer = null;
   let authState = null;
   let loginTriggered = false;
@@ -2694,6 +2809,7 @@ fn fomo_alert_capture_script() -> &'static str {
   let lastStreamReportAt = 0;
   let lastStreamReportSignature = "";
   let streamReportRetryTimer = null;
+  let feedPollInFlight = false;
 
   try {
     recoveryAttempt = Math.min(16, Math.max(0, Number.parseInt(sessionStorage.getItem(recoveryStorageKey) || "0", 10) || 0));
@@ -2725,9 +2841,9 @@ fn fomo_alert_capture_script() -> &'static str {
     }
   };
 
-  async function reportStream(status, retryAt = 0, force = false) {
+  async function reportStream(status, retryAt = 0, force = false, activitySource = "", telemetry = null) {
     const now = Date.now();
-    const signature = `${status}:${retryAt || 0}:${recoveryAttempt}`;
+    const signature = `${status}:${retryAt || 0}:${recoveryAttempt}:${activitySource}:${telemetry?.observedItemCount ?? ""}:${telemetry?.normalizedAlertCount ?? ""}:${telemetry?.observedTypes ?? ""}`;
     if (!force && signature === lastStreamReportSignature && now - lastStreamReportAt < 30_000) return;
     const invoke = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
     if (typeof invoke !== "function") {
@@ -2744,6 +2860,10 @@ fn fomo_alert_capture_script() -> &'static str {
         payload: {
           status,
           url: window.location.href,
+          activity_source: activitySource || null,
+          observed_item_count: telemetry?.observedItemCount ?? null,
+          normalized_alert_count: telemetry?.normalizedAlertCount ?? null,
+          observed_types: telemetry?.observedTypes || null,
           last_activity_at_ms: lastStreamActivityAt || null,
           retry_at_ms: retryAt || null,
           attempt: recoveryAttempt,
@@ -2761,7 +2881,7 @@ fn fomo_alert_capture_script() -> &'static str {
     }
   }
 
-  function markStreamActivity(healthyStream = true) {
+  function markStreamActivity(healthyStream = true, activitySource = "trading_data") {
     lastStreamActivityAt = Date.now();
     if (healthyStream) {
       cancelRecovery();
@@ -2770,7 +2890,7 @@ fn fomo_alert_capture_script() -> &'static str {
         try { sessionStorage.removeItem(recoveryStorageKey); } catch (_) {}
       }
     }
-    if (healthyStream || !streamSocketObserved) void reportStream("connected");
+    if (healthyStream || !streamSocketObserved) void reportStream("connected", 0, false, activitySource);
   }
 
   function scheduleStreamRecovery(force = false) {
@@ -2826,9 +2946,9 @@ fn fomo_alert_capture_script() -> &'static str {
       return;
     }
     const loginButton = buttons.find((button) => text(button) === "Login");
-    if (loginButton && window.location.pathname === "/") {
+    if (loginButton) {
       void reportAuth(false);
-      if (!loginTriggered) {
+      if (window.location.pathname === "/" && !loginTriggered) {
         loginTriggered = true;
         loginButton.click();
       }
@@ -2892,13 +3012,47 @@ fn fomo_alert_capture_script() -> &'static str {
 
   function collectAlerts(value, depth = 0) {
     if (depth > 5 || value == null) return [];
+    if (typeof value === "string" && value.length <= 2_000_000) {
+      try { return collectAlerts(JSON.parse(value), depth + 1); } catch (_) { return []; }
+    }
     if (Array.isArray(value)) return value.slice(0, 500).flatMap((item) => collectAlerts(item, depth + 1));
     const item = record(value);
     if (!item) return [];
     const alert = normalizeAlert(item);
     if (alert) return [alert];
-    return ["responseObject", "items", "payload", "data", "pages"]
+    return ["responseObject", "items", "payload", "data", "pages", "events", "feed", "result"]
       .flatMap((key) => collectAlerts(item[key], depth + 1));
+  }
+
+  function inspectAlertPayload(value, depth = 0, stats = { observedItemCount: 0, observedTypes: new Set() }) {
+    if (depth > 5 || value == null) return stats;
+    if (typeof value === "string" && value.length <= 2_000_000) {
+      try { return inspectAlertPayload(JSON.parse(value), depth + 1, stats); } catch (_) { return stats; }
+    }
+    if (Array.isArray(value)) {
+      value.slice(0, 500).forEach((item) => inspectAlertPayload(item, depth + 1, stats));
+      return stats;
+    }
+    const item = record(value);
+    if (!item) return stats;
+    const type = clean(item.type, 32);
+    if (clean(item.id, 128) && type) {
+      stats.observedItemCount += 1;
+      stats.observedTypes.add(type);
+      return stats;
+    }
+    ["responseObject", "items", "payload", "data", "pages", "events", "feed", "result"]
+      .forEach((key) => inspectAlertPayload(item[key], depth + 1, stats));
+    return stats;
+  }
+
+  function alertPayloadTelemetry(value) {
+    const stats = inspectAlertPayload(value);
+    return {
+      observedItemCount: Math.min(10_000, stats.observedItemCount),
+      normalizedAlertCount: collectAlerts(value).length,
+      observedTypes: Array.from(stats.observedTypes).sort().slice(0, 20).join(",").slice(0, 512),
+    };
   }
 
   async function flush() {
@@ -2913,6 +3067,13 @@ fn fomo_alert_capture_script() -> &'static str {
     alerts.forEach((alert) => pending.delete(alert.id));
     try {
       await invoke("dapp_submit_fomo_alerts", { payload: { alerts, url: window.location.href } });
+      for (const alert of alerts) {
+        submittedAlertIds.add(alert.id);
+        if (submittedAlertIds.size > 2_000) {
+          const oldest = submittedAlertIds.values().next().value;
+          if (oldest) submittedAlertIds.delete(oldest);
+        }
+      }
     } catch (_) {
       alerts.forEach((alert) => pending.set(alert.id, alert));
       flushTimer = window.setTimeout(flush, 2000);
@@ -2920,7 +3081,9 @@ fn fomo_alert_capture_script() -> &'static str {
   }
 
   function enqueue(value) {
-    for (const alert of collectAlerts(value)) pending.set(alert.id, alert);
+    for (const alert of collectAlerts(value)) {
+      if (!submittedAlertIds.has(alert.id)) pending.set(alert.id, alert);
+    }
     if (pending.size > 0 && flushTimer === null) flushTimer = window.setTimeout(flush, 50);
   }
 
@@ -2938,7 +3101,9 @@ fn fomo_alert_capture_script() -> &'static str {
           );
           const authorization = headers.get("Authorization") || "";
           if (/^Bearer\s+\S+$/i.test(authorization) && authorization.length <= 8_192) {
+            const authorizationChanged = fomoAuthorization !== authorization;
             fomoAuthorization = authorization;
+            if (authorizationChanged) window.setTimeout(() => void pollLatestFomoFeed(), 0);
           }
           const supportedChains = headers.get("X-Supported-Chains") || "";
           if (supportedChains.length <= 2_048) fomoSupportedChains = supportedChains;
@@ -2949,8 +3114,12 @@ fn fomo_alert_capture_script() -> &'static str {
           if (response.status === 401 || response.status === 403) void reportAuth(false);
           else if (response.ok) {
             void reportAuth(true);
-            markStreamActivity(false);
-            response.clone().json().then(enqueue).catch(() => {});
+            response.clone().json().then((payload) => {
+              const telemetry = alertPayloadTelemetry(payload);
+              markStreamActivity(false, "feed_response");
+              void reportStream("connected", 0, true, "feed_response", telemetry);
+              enqueue(payload);
+            }).catch(() => {});
           }
         }
       } catch (_) {}
@@ -3002,6 +3171,35 @@ fn fomo_alert_capture_script() -> &'static str {
         });
       } catch (_) {}
     });
+
+    async function pollLatestFomoFeed() {
+      if (feedPollInFlight || !navigator.onLine || !fomoAuthorization) return;
+      feedPollInFlight = true;
+      try {
+        const headers = { Authorization: fomoAuthorization, Accept: "application/json" };
+        if (fomoSupportedChains) headers["X-Supported-Chains"] = fomoSupportedChains;
+        const response = await nativeFetch(
+          "https://prod-api.fomo.family/feed/tradingActivity?limit=50",
+          { method: "GET", credentials: "include", headers, signal: AbortSignal.timeout(15_000) },
+        );
+        if (response.status === 401 || response.status === 403) {
+          void reportAuth(false);
+        } else if (response.ok) {
+          void reportAuth(true);
+          const payload = await response.json().catch(() => null);
+          const telemetry = alertPayloadTelemetry(payload);
+          markStreamActivity(false, "feed_poll");
+          void reportStream("connected", 0, true, "feed_poll", telemetry);
+          enqueue(payload);
+        }
+      } catch (_) {
+        if (!navigator.onLine) void reportStream("offline", 0, true);
+      } finally {
+        feedPollInFlight = false;
+      }
+    }
+
+    window.setInterval(() => void pollLatestFomoFeed(), 60_000);
   }
 
   const NativeWebSocket = window.WebSocket;
@@ -3018,7 +3216,7 @@ fn fomo_alert_capture_script() -> &'static str {
           this.addEventListener("open", () => {
             cancelRecovery();
             lastStreamActivityAt = Date.now();
-            void reportStream("connected", 0, true);
+            void reportStream("connected", 0, true, "socket_open");
           });
           this.addEventListener("close", () => {
             streamSockets.delete(this);
@@ -3029,13 +3227,13 @@ fn fomo_alert_capture_script() -> &'static str {
         }
         this.addEventListener("message", async (event) => {
           try {
-            if (isFomoStream) markStreamActivity();
             let payload = event.data;
             if (payload instanceof Blob) payload = await payload.text();
             else if (payload instanceof ArrayBuffer) payload = new TextDecoder().decode(payload);
             if (typeof payload !== "string" || payload.length > 2_000_000) return;
             const message = JSON.parse(payload);
             if (message?.type === "data" && message?.topicType === "trading_activity") {
+              markStreamActivity(true, "trading_data");
               void reportAuth(true);
               enqueue(message.payload);
             }
@@ -3113,6 +3311,7 @@ fn dapp_open_tab(
     height: f64,
     hidden: Option<bool>,
 ) -> Result<(), String> {
+    let keep_running_in_background = tab_id.trim() == FOMO_ALERTS_TAB_ID;
     let label = dapp_tab_label(&tab_id)?;
     let url = parse_dapp_browser_url(&url)?;
     let dapp = app_id.as_deref().and_then(allowed_dapp);
@@ -3282,7 +3481,7 @@ fn dapp_open_tab(
     webview
         .set_bounds(bounds)
         .map_err(|error| format!("failed to position dapp tab: {error}"))?;
-    if hidden.unwrap_or(false) {
+    if hidden.unwrap_or(false) && !keep_running_in_background {
         webview
             .hide()
             .map_err(|error| format!("failed to hide dapp tab: {error}"))?;
@@ -3347,6 +3546,18 @@ fn dapp_navigate_tab(
     webview
         .navigate(url)
         .map_err(|error| format!("failed to navigate dapp tab: {error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn dapp_reload_tab(app: DesktopAppHandle, tab_id: String) -> Result<(), String> {
+    let label = dapp_tab_label(&tab_id)?;
+    let webview = app
+        .get_webview(&label)
+        .ok_or_else(|| "dapp tab is not open".to_string())?;
+    webview
+        .reload()
+        .map_err(|error| format!("failed to reload dapp tab: {error}"))?;
     Ok(())
 }
 
@@ -3418,6 +3629,8 @@ fn dapp_set_active_tab(
     height: f64,
 ) -> Result<(), String> {
     let active_label = tab_id.as_deref().map(dapp_tab_label).transpose()?;
+    let fomo_background_label = dapp_tab_label(FOMO_ALERTS_TAB_ID)?;
+    let fomo_background_bounds = dapp_webview_bounds(-20_000.0, -20_000.0, 1_280.0, 900.0)?;
     let bounds = if active_label.is_some() {
         Some(dapp_webview_bounds(x, y, width, height)?)
     } else {
@@ -3437,6 +3650,9 @@ fn dapp_set_active_tab(
             }
             if active_label.as_deref() == Some(label.as_str()) {
                 active_webview = Some(webview);
+            } else if label == fomo_background_label {
+                let _ = webview.set_bounds(fomo_background_bounds);
+                let _ = webview.show();
             } else {
                 let _ = webview.hide();
             }
@@ -3529,6 +3745,7 @@ async fn dapp_request_tab_text(
     let scan_result = async {
     let should_advance = advance.unwrap_or(false);
     let advance = if should_advance { "true" } else { "false" };
+    let manage_twitter_home = tab_id.trim() == TWITTER_CAPTURE_TAB_ID;
     let request_id_json = serde_json::to_string(&request_id)
         .map_err(|error| format!("failed to encode page text request id: {error}"))?;
     let initialize_script = format!(
@@ -3648,7 +3865,39 @@ async fn dapp_request_tab_text(
     }};
 
     const cutoffMs = Date.now() - (3 * 24 * 60 * 60 * 1000);
-    const scan = {{ requestId, isTwitter, latestOnly: {latest_only}, cutoffMs, oldTweetKeys: new Set(), reachedCutoff: false, reachedEnd: false, stalledEndPasses: 0, lastProgressKey: "", collectedTweets: new Map(), latestNodes: [], profile: collectProfile(), detectTwitterAuth }};
+    const scan = {{ requestId, isTwitter, manageTwitterHome: {manage_twitter_home}, latestOnly: {latest_only}, cutoffMs, oldTweetKeys: new Set(), reachedCutoff: false, reachedEnd: false, stalledEndPasses: 0, lastProgressKey: "", collectedTweets: new Map(), avatarByHandle: new Map(), latestNodes: [], profile: collectProfile(), detectTwitterAuth }};
+    const prepareTwitterHomeTimeline = () => {{
+      if (!scan.isTwitter || !scan.manageTwitterHome || window.location.pathname.toLowerCase() !== "/home") return false;
+      const primary = document.querySelector("main [data-testid='primaryColumn']") || document.querySelector("main");
+      if (!primary) return false;
+      const tabList = primary.querySelector("[role='tablist']");
+      const tabs = tabList ? Array.from(tabList.querySelectorAll("[role='tab']")) : [];
+      const followingLabels = new Set(["following", "正在关注", "关注", "フォロー中", "팔로우 중"]);
+      const followingTab = tabs.find((tab) => followingLabels.has(clean(tab.innerText || tab.textContent, 80).toLowerCase())) ||
+        (tabs.length === 2 ? tabs[1] : null);
+      if (followingTab instanceof HTMLElement && followingTab.getAttribute("aria-selected") !== "true") {{
+        followingTab.click();
+        window.scrollTo({{ top: 0, left: 0, behavior: "auto" }});
+        return true;
+      }}
+
+      const newPostsPattern = /^(?:(?:show|see|view|load)(?:\s+\d+)?\s+(?:new\s+)?posts?|(?:显示|查看|加载)(?:\s*\d+\s*条?)?\s*(?:新)?(?:推文|帖子))$/iu;
+      const controls = Array.from(primary.querySelectorAll("button, [role='button']"));
+      const newPostsControl = controls.find((control) => {{
+        const label = clean(control.getAttribute("aria-label") || control.innerText || control.textContent, 80)
+          .replace(/\s+/gu, " ")
+          .trim();
+        if (!newPostsPattern.test(label)) return false;
+        const bounds = control.getBoundingClientRect();
+        return bounds.width > 0 && bounds.height > 0;
+      }});
+      if (newPostsControl instanceof HTMLElement) {{
+        newPostsControl.click();
+        window.scrollTo({{ top: 0, left: 0, behavior: "auto" }});
+        return true;
+      }}
+      return false;
+    }};
     const expandTweetTexts = () => {{
       if (!isTwitter) return;
       const tweetNodes = Array.from(document.querySelectorAll("article[data-testid='tweet'], [data-testid='tweet']"));
@@ -3679,6 +3928,7 @@ async fn dapp_request_tab_text(
           statusAnchors.find((anchor) => absoluteTwitterStatusUrl(anchor.getAttribute("href") || ""));
         const sourceUrl = absoluteTwitterStatusUrl(statusAnchor?.getAttribute("href") || "");
         const statusMatch = sourceUrl.match(/^https?:\/\/[^/]+\/([A-Za-z0-9_]{{1,15}})\/status\/(\d+)/i);
+        const authorHandle = clean(statusMatch?.[1], 15).toLowerCase();
         const textNode = node.querySelector("[data-testid='tweetText']");
         const serialized = textNode ? serializeTweetText(textNode) : null;
         const text = clean(
@@ -3696,12 +3946,14 @@ async fn dapp_request_tab_text(
         );
         const avatar = node.querySelector("[data-testid='Tweet-User-Avatar'] img[src]") ||
           node.querySelector("img[src*='pbs.twimg.com/profile_images/']");
+        const avatarUrl = clean(avatar?.currentSrc || avatar?.getAttribute("src"), 2048);
+        if (authorHandle && avatarUrl) scan.avatarByHandle.set(authorHandle, avatarUrl);
         const tweet = {{
           tweet_id: clean(statusMatch?.[2], 32),
           author,
           author_name: authorName,
-          author_handle: clean(statusMatch?.[1], 15).toLowerCase(),
-          avatar_url: clean(avatar?.currentSrc || avatar?.getAttribute("src"), 2048) || null,
+          author_handle: authorHandle,
+          avatar_url: avatarUrl || scan.avatarByHandle.get(authorHandle) || null,
           text,
           links: serialized?.links || [],
           source_url: sourceUrl || null,
@@ -3724,8 +3976,10 @@ async fn dapp_request_tab_text(
     scan.expandTweetTexts = expandTweetTexts;
     scan.collectTweets = collectTweets;
     scan.collectProfile = collectProfile;
+    scan.prepareTwitterHomeTimeline = prepareTwitterHomeTimeline;
     window.__FNZERO_TWEET_SCAN__ = scan;
     if ({advance} && isTwitter && !{resume_backfill}) window.scrollTo({{ top: 0, left: 0, behavior: "auto" }});
+    if ({advance}) prepareTwitterHomeTimeline();
     if (!{advance}) {{
       expandTweetTexts();
       collectTweets();
@@ -3737,12 +3991,17 @@ async fn dapp_request_tab_text(
     webview
         .eval(&initialize_script)
         .map_err(|error| format!("failed to initialize dapp page scan: {error}"))?;
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    tokio::time::sleep(Duration::from_millis(if manage_twitter_home {
+        900
+    } else {
+        300
+    }))
+    .await;
 
     if should_advance {
         // Hidden Chromium pages throttle JavaScript timers. Pace the traversal
         // from Rust so scanning remains bounded while the monitor tab is shown.
-        let total_passes = if latest_only { 5 } else { 45 };
+        let total_passes = if latest_only { 8 } else { 45 };
         for pass in 1..total_passes {
             tokio::time::sleep(Duration::from_millis(400)).await;
             let should_scroll = if pass < total_passes - 1 {
@@ -3756,6 +4015,13 @@ async fn dapp_request_tab_text(
   try {{
     const scan = window.__FNZERO_TWEET_SCAN__;
     if (!scan || scan.requestId !== {request_id_json}) return;
+    if (scan.prepareTwitterHomeTimeline()) {{
+      scan.collectedTweets.clear();
+      scan.oldTweetKeys.clear();
+      scan.reachedCutoff = false;
+      scan.reachedEnd = false;
+      return;
+    }}
     scan.expandTweetTexts();
     scan.collectTweets();
     if ({should_scroll} && scan.isTwitter && !scan.reachedCutoff && scan.collectedTweets.size < 1000) {{
@@ -3791,6 +4057,9 @@ async fn dapp_request_tab_text(
         return Number.isFinite(publishedAtMs) && publishedAtMs >= scan.cutoffMs && publishedAtMs <= capturedAtMs;
       }})
       .sort((left, right) => Date.parse(right.published_at || 0) - Date.parse(left.published_at || 0))
+      .map((tweet) => tweet.avatar_url || !tweet.author_handle
+        ? tweet
+        : {{ ...tweet, avatar_url: scan.avatarByHandle.get(tweet.author_handle) || null }})
       .slice(0, 1000);
     const readableNodes = tweets.length > 0 || scan.isTwitter
       ? []
@@ -4069,7 +4338,11 @@ fn validated_fomo_optional_text(
     if value.is_empty() {
         return Ok(None);
     }
-    if value.chars().count() > limit || value.chars().any(char::is_control) {
+    if value.chars().count() > limit
+        || value
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+    {
         return Err("invalid Fomo alert text field".to_string());
     }
     Ok(Some(value))
@@ -4182,16 +4455,20 @@ fn validated_fomo_alert(input: DappCapturedFomoAlert) -> Result<DappFomoAlertEve
     if event_type == "thesis_created" {
         source_url
             .query_pairs_mut()
-            .append_pair("thesisId", thesis_id.as_deref().unwrap_or(&id));
+            .append_pair("thesisId", thesis_id.as_deref().unwrap_or(&id))
+            .append_pair("eventType", &event_type);
     } else {
-        source_url.query_pairs_mut().append_pair(
-            if trade_id.is_some() {
-                "tradeId"
-            } else {
-                "alertId"
-            },
-            trade_id.as_deref().unwrap_or(&id),
-        );
+        source_url
+            .query_pairs_mut()
+            .append_pair(
+                if trade_id.is_some() {
+                    "tradeId"
+                } else {
+                    "alertId"
+                },
+                trade_id.as_deref().unwrap_or(&id),
+            )
+            .append_pair("eventType", &event_type);
     }
 
     Ok(DappFomoAlertEventItem {
@@ -4217,10 +4494,122 @@ fn validated_fomo_alert(input: DappCapturedFomoAlert) -> Result<DappFomoAlertEve
     })
 }
 
+fn format_fomo_usd(value: Option<f64>) -> Option<String> {
+    let value = value?;
+    let (scaled, suffix, decimals) = if value >= 1_000_000_000_000.0 {
+        (value / 1_000_000_000_000.0, "T", 1)
+    } else if value >= 1_000_000_000.0 {
+        (value / 1_000_000_000.0, "B", 1)
+    } else if value >= 1_000_000.0 {
+        (value / 1_000_000.0, "M", 1)
+    } else if value >= 1_000.0 {
+        (value / 1_000.0, "K", 1)
+    } else {
+        (value, "", 2)
+    };
+    let mut formatted = format!("{scaled:.decimals$}");
+    while formatted.contains('.') && formatted.ends_with('0') {
+        formatted.pop();
+    }
+    if formatted.ends_with('.') {
+        formatted.pop();
+    }
+    Some(format!("{formatted}{suffix}"))
+}
+
+fn fomo_alert_research_text(alert: &DappFomoAlertEventItem) -> String {
+    if alert.event_type == "thesis_created" {
+        return alert.thesis.clone().unwrap_or_default();
+    }
+    let action = match alert.event_type.as_str() {
+        "swap_buy" | "multi_user_buy" => "Buy",
+        "swap_sell" | "multi_user_sell" => "Sell",
+        "transfer_in" => "Transfer in",
+        _ => "Transfer out",
+    };
+    let mut parts = Vec::new();
+    if alert.event_type.starts_with("multi_user_") {
+        if let Some(count) = alert.trader_count {
+            parts.push(format!("{count} traders:"));
+        }
+    }
+    parts.push(action.to_string());
+    if let Some(amount) = format_fomo_usd(alert.usd_amount) {
+        parts.push(format!("${amount}"));
+    }
+    parts.push(
+        alert
+            .ticker
+            .as_deref()
+            .map(|ticker| format!("${}", ticker.trim_start_matches('$').to_ascii_uppercase()))
+            .unwrap_or_else(|| "token".to_string()),
+    );
+    if let Some(market_cap) = format_fomo_usd(alert.market_cap) {
+        parts.push(format!("at ${market_cap} market cap"));
+    }
+    parts.push(format!("on {}", alert.chain));
+    parts.join(" ")
+}
+
+fn fomo_research_ingest_request(
+    alerts: &[DappFomoAlertEventItem],
+    captured_at_ms: u64,
+) -> research_store::ResearchIngestRequest {
+    let signals = alerts
+        .iter()
+        .map(|alert| research_store::ResearchSignalInput {
+            tweet_id: None,
+            author_handle: alert
+                .user_handle
+                .clone()
+                .unwrap_or_else(|| "fomo_alerts".to_string()),
+            text: fomo_alert_research_text(alert),
+            chain: alert.chain.clone(),
+            contract_address: Some(alert.token_address.clone()),
+            token_symbols: alert
+                .ticker
+                .as_deref()
+                .map(|ticker| {
+                    vec![format!(
+                        "${}",
+                        ticker.trim_start_matches('$').to_ascii_uppercase()
+                    )]
+                })
+                .unwrap_or_default(),
+            source_url: Some(alert.source_url.clone()),
+            published_at: None,
+            detected_at_ms: i64::try_from(alert.created_at_ms).ok(),
+        })
+        .collect();
+    research_store::ResearchIngestRequest {
+        source_url: String::new(),
+        captured_at_ms: i64::try_from(captured_at_ms).unwrap_or(i64::MAX),
+        kols: Vec::new(),
+        tweets: Vec::new(),
+        signals,
+        backfill_complete: false,
+    }
+}
+
+fn validated_fomo_alert_batch(
+    inputs: Vec<DappCapturedFomoAlert>,
+) -> (Vec<DappFomoAlertEventItem>, Vec<String>) {
+    let mut alerts = Vec::with_capacity(inputs.len());
+    let mut errors = Vec::new();
+    for input in inputs {
+        match validated_fomo_alert(input) {
+            Ok(alert) => alerts.push(alert),
+            Err(error) => errors.push(error),
+        }
+    }
+    (alerts, errors)
+}
+
 #[tauri::command]
 fn dapp_submit_fomo_alerts(
     webview: DesktopWebview,
     app: DesktopAppHandle,
+    research_store: tauri::State<'_, research_store::ResearchStore>,
     payload: DappSubmitFomoAlertsRequest,
 ) -> Result<(), String> {
     let webview_label = webview.label().to_string();
@@ -4236,13 +4625,29 @@ fn dapp_submit_fomo_alerts(
     if payload.alerts.len() > 200 {
         return Err("too many Fomo alerts in one submission".to_string());
     }
-    let alerts = payload
-        .alerts
-        .into_iter()
-        .map(validated_fomo_alert)
-        .collect::<Result<Vec<_>, _>>()?;
+    let submitted_count = payload.alerts.len();
+    let (alerts, validation_errors) = validated_fomo_alert_batch(payload.alerts);
+    for error in &validation_errors {
+        log::warn!("ignored invalid Fomo alert: {error}");
+    }
+    if !validation_errors.is_empty() {
+        log::warn!(
+            "ignored {} of {submitted_count} Fomo alerts in one submission",
+            validation_errors.len()
+        );
+    }
     if alerts.is_empty() {
         return Ok(());
+    }
+    let alert_count = alerts.len();
+    let newest_created_at_ms = alerts.iter().map(|alert| alert.created_at_ms).max();
+    log::info!(
+        "received {alert_count} Fomo alerts (newest_created_at_ms={newest_created_at_ms:?})"
+    );
+    let captured_at_ms = now_ms();
+    let ingest_request = fomo_research_ingest_request(&alerts, captured_at_ms);
+    if let Err(error) = research_store.ingest_request(&ingest_request) {
+        log::error!("failed to persist {alert_count} Fomo alerts: {error}");
     }
     app.emit_to(
         "main",
@@ -4250,7 +4655,7 @@ fn dapp_submit_fomo_alerts(
         DappFomoAlertsEvent {
             tab_id,
             alerts,
-            captured_at_ms: now_ms(),
+            captured_at_ms,
         },
     )
     .map_err(|error| format!("failed to emit Fomo alerts: {error}"))?;
@@ -4273,6 +4678,11 @@ fn dapp_submit_fomo_auth(
     if !is_fomo_https_url(&page_url) {
         return Err("Fomo auth can only be submitted by fomo.family".to_string());
     }
+    log::info!(
+        "received Fomo auth status (authenticated={}, path={})",
+        payload.authenticated,
+        page_url.path()
+    );
     app.emit_to(
         "main",
         DAPP_FOMO_AUTH_EVENT,
@@ -4336,7 +4746,39 @@ fn dapp_submit_fomo_stream(
         );
     }
     let captured_at_ms = now_ms();
+    let activity_source_value = payload.activity_source.clone();
+    let activity_source = activity_source_value
+        .as_deref()
+        .filter(|source| {
+            matches!(
+                *source,
+                "feed_response" | "feed_poll" | "socket_open" | "trading_data"
+            )
+        })
+        .unwrap_or("unspecified")
+        .to_string();
+    let observed_item_count = payload.observed_item_count.filter(|count| *count <= 10_000);
+    let normalized_alert_count = payload
+        .normalized_alert_count
+        .filter(|count| *count <= 10_000);
+    let observed_types_value = payload.observed_types.clone();
+    let observed_types = observed_types_value.as_deref().filter(|types| {
+        types.len() <= 512
+            && types.chars().all(|character| {
+                character.is_ascii_lowercase() || character == '_' || character == ','
+            })
+    });
     let event = validated_fomo_stream_event(payload, captured_at_ms)?;
+    log::info!(
+        "received Fomo stream status (status={}, source={}, observed_items={:?}, normalized_alerts={:?}, observed_types={:?}, last_activity_at_ms={:?}, attempt={})",
+        event.status,
+        activity_source,
+        observed_item_count,
+        normalized_alert_count,
+        observed_types,
+        event.last_activity_at_ms,
+        event.attempt
+    );
     app.emit_to("main", DAPP_FOMO_STREAM_EVENT, event)
         .map_err(|error| format!("failed to emit Fomo stream status: {error}"))?;
     Ok(())
@@ -5360,20 +5802,27 @@ pub fn run() {
         // CEF 151.3.12 crashes at address 0x10 when an Alloy-style webview
         // reports an SPA soft navigation (chromiumembedded/cef#4234). Neither
         // Chrome UI reading mode nor soft-navigation metrics are used here.
-        .command_line_args([(
-            "disable-features",
-            Some("ImmersiveReadAnything,SoftNavigationDetection"),
-        )])
+        .command_line_args([
+            (
+                "--disable-features",
+                Some("ImmersiveReadAnything,SoftNavigationDetection"),
+            ),
+            ("--disable-background-timer-throttling", None),
+            ("--disable-renderer-backgrounding", None),
+            ("--disable-backgrounding-occluded-windows", None),
+        ])
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_single_instance::Builder::new().build())
         .manage(DappBridgeState::default())
         .manage(DesktopApiProcess::new(desktop_api_pid_file.clone()))
         .invoke_handler(tauri::generate_handler![
             proxy_api_request,
+            translate_signal_text,
             open_external_url,
             open_url_in_chrome,
             dapp_open_tab,
             dapp_navigate_tab,
+            dapp_reload_tab,
             dapp_set_active_tab,
             dapp_close_tab,
             dapp_request_tab_text,
@@ -5402,6 +5851,8 @@ pub fn run() {
             app_store::dapp_permission_revoke,
             app_store::settings_diagnostics,
             research_store::research_ingest,
+            research_store::research_list_defillama_rankings,
+            research_store::research_put_defillama_rankings,
             research_store::research_resolve_tokens,
             research_store::research_scan_cursor,
             research_store::research_list_kols,
@@ -5513,6 +5964,23 @@ mod tests {
     }
 
     #[test]
+    fn google_translation_response_joins_text_segments() {
+        let response = parse_google_translation(&json!([
+            [
+                ["该代币", "This token"],
+                ["势头强劲。", "has strong momentum."]
+            ],
+            null,
+            "en"
+        ]))
+        .unwrap();
+
+        assert_eq!(response.translated_text, "该代币势头强劲。");
+        assert_eq!(response.source_language.as_deref(), Some("en"));
+        assert!(parse_google_translation(&json!([[], null, "en"])).is_err());
+    }
+
+    #[test]
     fn telegram_links_are_converted_to_native_app_routes() {
         let invite = "https://t.me/+Abc_123-xyz".parse::<tauri::Url>().unwrap();
         let channel = "https://t.me/fnzero/42".parse::<tauri::Url>().unwrap();
@@ -5600,8 +6068,17 @@ mod tests {
         assert_eq!(alert.follower_count, Some(12_300));
         assert_eq!(
             alert.source_url,
-            "https://fomo.family/tokens/robinhood/0x7dbf38976f6d3b9c529e7d9484a71898b409ee6a?tradeId=trade-1"
+            "https://fomo.family/tokens/robinhood/0x7dbf38976f6d3b9c529e7d9484a71898b409ee6a?tradeId=trade-1&eventType=swap_buy"
         );
+
+        let request = fomo_research_ingest_request(&[alert], now_ms());
+        assert_eq!(request.signals.len(), 1);
+        assert_eq!(
+            request.signals[0].text,
+            "Buy $8K $ZZZ at $18.9M market cap on Robinhood"
+        );
+        assert_eq!(request.signals[0].author_handle, "chefjin");
+        assert_eq!(request.signals[0].token_symbols, ["$ZZZ"]);
     }
 
     #[test]
@@ -5620,19 +6097,33 @@ mod tests {
             usd_amount: None,
             market_cap: None,
             trader_count: None,
-            thesis: Some("A bounded thesis body".to_string()),
+            thesis: Some("A bounded thesis\nwith\tmultiple lines".to_string()),
             thesis_id: Some("comment-42".to_string()),
             created_at_ms: now_ms(),
         })
         .unwrap();
 
         assert_eq!(thesis.event_type, "thesis_created");
-        assert_eq!(thesis.thesis.as_deref(), Some("A bounded thesis body"));
+        assert_eq!(
+            thesis.thesis.as_deref(),
+            Some("A bounded thesis\nwith\tmultiple lines")
+        );
         assert_eq!(thesis.thesis_id.as_deref(), Some("comment-42"));
         assert_eq!(
             thesis.source_url,
-            "https://fomo.family/tokens/robinhood/0x7dbf38976f6d3b9c529e7d9484a71898b409ee6a?thesisId=comment-42"
+            "https://fomo.family/tokens/robinhood/0x7dbf38976f6d3b9c529e7d9484a71898b409ee6a?thesisId=comment-42&eventType=thesis_created"
         );
+    }
+
+    #[test]
+    fn fomo_text_validation_allows_layout_whitespace_but_rejects_other_controls() {
+        assert_eq!(
+            validated_fomo_optional_text(Some("line one\nline two\tvalue".to_string()), 80)
+                .unwrap()
+                .as_deref(),
+            Some("line one\nline two\tvalue")
+        );
+        assert!(validated_fomo_optional_text(Some("unsafe\u{0000}value".to_string()), 80).is_err());
     }
 
     #[test]
@@ -5662,6 +6153,13 @@ mod tests {
         ))
         .is_err());
         assert!(validated_fomo_alert(input("swap_buy", "0x1234")).is_err());
+
+        let (valid_alerts, errors) = validated_fomo_alert_batch(vec![
+            input("swap_buy", "0x7dbf38976f6d3b9c529e7d9484a71898b409ee6a"),
+            input("swap_buy", "0x1234"),
+        ]);
+        assert_eq!(valid_alerts.len(), 1);
+        assert_eq!(errors.len(), 1);
     }
 
     #[test]
@@ -5687,6 +6185,10 @@ mod tests {
             DappSubmitFomoStreamRequest {
                 url: "https://fomo.family/tokens/robinhood/0x7dbf38976f6d3b9c529e7d9484a71898b409ee6a".to_string(),
                 status: "reconnecting".to_string(),
+                activity_source: None,
+                observed_item_count: None,
+                normalized_alert_count: None,
+                observed_types: None,
                 last_activity_at_ms: Some(captured_at_ms - 30_000),
                 retry_at_ms: Some(captured_at_ms + 15_000),
                 attempt: 2,
@@ -5705,6 +6207,10 @@ mod tests {
             DappSubmitFomoStreamRequest {
                 url: "https://example.com/".to_string(),
                 status: "connected".to_string(),
+                activity_source: None,
+                observed_item_count: None,
+                normalized_alert_count: None,
+                observed_types: None,
                 last_activity_at_ms: None,
                 retry_at_ms: None,
                 attempt: 0,
@@ -5716,6 +6222,10 @@ mod tests {
             DappSubmitFomoStreamRequest {
                 url: "https://fomo.family/".to_string(),
                 status: "healthy".to_string(),
+                activity_source: None,
+                observed_item_count: None,
+                normalized_alert_count: None,
+                observed_types: None,
                 last_activity_at_ms: None,
                 retry_at_ms: None,
                 attempt: 0,

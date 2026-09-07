@@ -73,7 +73,7 @@ interface TwitterTokenListProps {
   labels: TwitterTokenListLabels;
   onRefresh: () => void;
   onCopy: (address: string, copyId: string) => void;
-  onOpen: (url: string) => void;
+  onOpen: (url: string, chain?: string) => void;
   onOpenExternal: (url: string) => void;
 }
 
@@ -320,7 +320,7 @@ export function TwitterTokenList({
                   chain: token.chain,
                   contractAddress: token.contract_address,
                 });
-                const swapUrl = fomoActionUrls.swapUrl || signalSwapUrl({
+                const swapUrl = signalSwapUrl({
                   chain: token.chain,
                   contractAddress: token.contract_address,
                 });
@@ -393,7 +393,7 @@ export function TwitterTokenList({
                         </button>
                         <button
                           type="button"
-                          onClick={() => swapUrl && onOpen(swapUrl)}
+                          onClick={() => swapUrl && onOpen(swapUrl, token.chain)}
                           disabled={!swapUrl}
                           className="inline-flex h-7 shrink-0 items-center justify-center gap-1 rounded-md bg-emerald-300 px-2 text-[11px] font-semibold text-zinc-950 hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-40"
                           title={swapUrl ? labels.openSwap : labels.swapUnavailable}

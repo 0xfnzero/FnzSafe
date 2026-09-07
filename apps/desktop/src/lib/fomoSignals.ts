@@ -64,6 +64,25 @@ const FOMO_NETWORK_SLUGS = new Map<string, string>([
 const FOMO_TOKEN_PATH_RE = /^\/tokens\/(solana|ethereum|bnb|base|monad|robinhood|hyperliquid)\/([^/]+)\/?$/u;
 const EVM_TOKEN_ADDRESS_RE = /^0x[a-f0-9]{40}$/iu;
 const SOLANA_TOKEN_ADDRESS_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/u;
+const EVM_WALLET_CHAIN_IDS = new Map<string, number>([
+  ["Ethereum", 1],
+  ["BSC", 56],
+  ["Polygon", 137],
+  ["Base", 8_453],
+  ["Monad", 10_143],
+  ["Robinhood", 4_663],
+  ["HyperEVM", 1_337],
+]);
+
+export type WalletNetworkTarget =
+  | { family: "solana"; chain: "Solana" }
+  | { family: "evm"; chain: string; chainId: number };
+
+export function walletNetworkForChain(chain: string): WalletNetworkTarget | undefined {
+  if (chain === "Solana") return { family: "solana", chain: "Solana" };
+  const chainId = EVM_WALLET_CHAIN_IDS.get(chain);
+  return chainId === undefined ? undefined : { family: "evm", chain, chainId };
+}
 
 function cleanString(value: unknown, maxLength: number): string | undefined {
   if (typeof value !== "string") return undefined;
@@ -140,12 +159,19 @@ export function signalSwapUrl(input: {
   chain: string;
   contractAddress?: string;
 }): string | undefined {
-  if (input.signalSource === "fomo") return fomoTokenActionUrls(input).swapUrl;
   const contractAddress = input.contractAddress?.trim();
-  if (input.chain !== "Solana" || !contractAddress || !SOLANA_TOKEN_ADDRESS_RE.test(contractAddress)) {
-    return undefined;
+  if (!contractAddress) return undefined;
+
+  if (input.chain === "Solana" && SOLANA_TOKEN_ADDRESS_RE.test(contractAddress)) {
+    return `https://jup.ag/swap/SOL-${encodeURIComponent(contractAddress)}`;
   }
-  return `https://jup.ag/swap/SOL-${encodeURIComponent(contractAddress)}`;
+  if (input.chain === "BSC" && EVM_TOKEN_ADDRESS_RE.test(contractAddress)) {
+    return `https://pancakeswap.finance/swap?chain=bsc&inputCurrency=BNB&outputCurrency=${encodeURIComponent(contractAddress)}`;
+  }
+  if (input.chain === "Robinhood" && EVM_TOKEN_ADDRESS_RE.test(contractAddress)) {
+    return `https://1inch.com/swap?src=4663:ETH&dst=4663:${encodeURIComponent(contractAddress)}`;
+  }
+  return undefined;
 }
 
 export function fomoAlertDirection(type: FomoTradeAlertType): FomoSignalDirection {

@@ -71,13 +71,17 @@ import {
   Database,
   Info,
   Code2,
+  LogIn,
   LogOut,
+  Languages,
 } from "lucide-react";
 import LanguageSwitcher from '@/components/LanguageSwitcher';
 import { AiSkillMarket } from "@/components/AiSkillMarket";
 import { FieldHelp } from "@/components/FieldHelp";
 import { SavedWalletPicker } from "@/components/SavedWalletPicker";
 import { TwitterTokenList, type ResearchTokenListItem } from "@/components/TwitterTokenList";
+import { DefiLlamaStatsPanel } from "@/components/DefiLlamaStatsPanel";
+import { ResearchAiConfiguration } from "@/components/ResearchAiConfiguration";
 import { SettingsCenterLayout, type SettingsNavigationItem } from "@/components/SettingsCenterLayout";
 import { useSecureKeyboardInput } from "@/hooks/useSecureKeyboardInput";
 import {
@@ -98,18 +102,21 @@ import {
   type AiSkillLocale,
 } from "@/lib/aiSkillCatalog";
 import {
-  isResearchAiProviderKind,
+  RESEARCH_AI_STORAGE_KEY,
+  readResearchAiPreferences,
   researchAiProviderPreset,
   type ResearchAiProviderKind,
 } from "@/lib/researchAiProviders";
 import {
   canonicalTweetSourceIdentity,
+  compareTwitterTweetIds,
   filterTweetTokenSignalsByAuthor,
   filterRecentTweetSignals,
   groupTweetSignalsByTweet,
   hasValidTweetSignalIdentity,
   isTokenResolutionTarget,
   mergeTweetTokenSignals,
+  newestTwitterTweetId,
   normalizeTweetSignalText,
   paginateTweetSignalGroups,
   parseStoredTwitterSignals,
@@ -119,10 +126,12 @@ import {
   TWITTER_SIGNAL_RECENT_DAYS,
 } from "@/lib/twitterSignals";
 import {
-  fomoAlertTextParts,
+  FOMO_ALERT_TYPES,
+  fomoAlertDirection,
   fomoTokenActionUrls,
   parseCapturedFomoAlerts,
   signalSwapUrl,
+  walletNetworkForChain,
   type CapturedFomoAlert,
   type FomoAlertType,
   type FomoSignalDirection,
@@ -133,6 +142,10 @@ import {
   tweetTokenCandidateIdentity,
   type TweetSignalChain as DetectedTweetSignalChain,
 } from "@/lib/twitterChainDetection";
+import {
+  signalTranslationTarget,
+  type SignalTranslationTarget,
+} from "@/lib/signalTranslation";
 import {
   appendTwitterKol,
   createTwitterKolProfile,
@@ -1320,7 +1333,21 @@ type FomoStreamStatus = "unknown" | "connecting" | "connected" | "reconnecting" 
 type TwitterCaptureIntent = "auto" | "manual";
 type TwitterMonitorView = "signals" | "tokens" | "kols" | "ai";
 type SignalSourceFilter = "all" | "x" | "fomo";
+type SignalTradeFilter = "all" | "buy" | "sell";
 type KolSourceFilter = "all" | "x" | "fomo";
+type SignalTranslationStatus = "loading" | "success" | "error";
+interface SignalTranslationState {
+  sourceText: string;
+  targetLanguage: SignalTranslationTarget;
+  status: SignalTranslationStatus;
+  translatedText?: string;
+  sourceLanguage?: string;
+  visible: boolean;
+}
+interface SignalTranslationResponse {
+  translated_text: string;
+  source_language?: string | null;
+}
 interface TwitterCaptureTabState {
   webviewOpen: boolean;
   loading: boolean;
@@ -1539,9 +1566,13 @@ const FOMO_KOL_PROFILE_ENRICHMENT_INTERVAL_MS = 90_000;
 const FOMO_KOL_PROFILE_ENRICHMENT_RETRY_MS = 5 * 60_000;
 const TWITTER_CAPTURE_HOME_URL = "https://x.com/home";
 const TWITTER_LOGIN_URL = "https://x.com/i/flow/login";
+const TWITTER_STALE_SCAN_LIMIT = 3;
+const TWITTER_STALE_TWEET_AGE_MS = 10 * 60_000;
+const TWITTER_CAPTURE_RECOVERY_COOLDOWN_MS = 10 * 60_000;
 const FOMO_ALERTS_TAB_ID = "twitter-fomo-alerts";
 const FOMO_REFERRAL_URL = "https://fomo.family/r/xyz_fnzero";
 const FOMO_ALERTS_URL = "https://fomo.family/tokens/robinhood/0x7dbf38976f6d3b9c529e7d9484a71898b409ee6a";
+const FOMO_STREAM_STALE_MS = 180_000;
 const TWITTER_BROWSER_HOME_TAB: DappBrowserTab = {
   id: TWITTER_BROWSER_HOME_TAB_ID,
   title: "推文监控",
@@ -1633,6 +1664,7 @@ interface ResearchTokenSummary {
 }
 
 interface ResearchScanCursor {
+  last_tweet_id?: string | null;
   backfill_complete: boolean;
 }
 
@@ -1721,7 +1753,6 @@ function dappForUrl(url: string): DappCatalogItem | undefined {
 }
 
 const TWITTER_SIGNAL_STORAGE_KEY = "fnzero-safe.twitter-signals.v1";
-const TWITTER_RESEARCH_AI_STORAGE_KEY = "fnzero-safe.twitter-research-ai.v1";
 const DEFAULT_TWITTER_SIGNAL_INTERVAL_SEC = 60;
 const TWITTER_TOKEN_RESOLUTION_BATCH_SIZE = 24;
 const MAX_TWITTER_SIGNAL_SOURCE_CHARS = 250_000;
@@ -1931,6 +1962,15 @@ function researchSignalRecordToTweetTokenSignal(record: ResearchSignalRecord): T
       && sourceUrl.pathname.startsWith("/tokens/"));
     if (isFomoSignal && sourceUrl?.searchParams.has("thesisId")) {
       fomoEventType = "thesis_created";
+    } else if (isFomoSignal) {
+      const storedEventType = sourceUrl?.searchParams.get("eventType");
+      if (storedEventType && FOMO_ALERT_TYPES.includes(storedEventType as FomoAlertType)) {
+        fomoEventType = storedEventType as FomoAlertType;
+      } else if (/^Buy\b/u.test(record.tweet_text)) {
+        fomoEventType = "swap_buy";
+      } else if (/^Sell\b/u.test(record.tweet_text)) {
+        fomoEventType = "swap_sell";
+      }
     }
   } catch {
     // Rust already validates stored source URLs; malformed legacy values remain ordinary signals.
@@ -1957,6 +1997,9 @@ function researchSignalRecordToTweetTokenSignal(record: ResearchSignalRecord): T
     resolutionSource: record.resolution_source || undefined,
     signalSource: isFomoSignal ? "fomo" : "x",
     fomoEventType,
+    tradeDirection: fomoEventType && fomoEventType !== "thesis_created"
+      ? fomoAlertDirection(fomoEventType)
+      : undefined,
   });
 }
 
@@ -2016,6 +2059,7 @@ function filterTweetTokenSignals(
 
 const TWEET_SIGNAL_TEXT_TOKEN_RE = /(https?:\/\/[^\s，。！？；：）】》]+|(?:www\.)?(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?\.)+[A-Za-z]{2,24}(?:\/[^\s，。！？；：）】》]*)?|@[A-Za-z0-9_]{1,15}|#[\p{L}\p{N}_]+|\$[A-Za-z][A-Za-z0-9_]*|0x[a-fA-F0-9]{40,64}|(?:EQ|UQ)[A-Za-z0-9_-]{46}|T[1-9A-HJ-NP-Za-km-z]{33}|[1-9A-HJ-NP-Za-km-z]{32,44})/gu;
 const FOMO_THESIS_HIGHLIGHT_RE = /(\$[A-Za-z][A-Za-z0-9_]*|0x[a-fA-F0-9]{40,64}|(?:EQ|UQ)[A-Za-z0-9_-]{46}|T[1-9A-HJ-NP-Za-km-z]{33}|[1-9A-HJ-NP-Za-km-z]{32,44}|\b\d+(?:\.\d+)?%)/gu;
+const FOMO_TRADE_HIGHLIGHT_RE = /(\b(?:Buy|Sell|Transfer in|Transfer out)\b|\bat \$\d+(?:\.\d+)?(?:[KMBT])? market cap\b|\$\d+(?:\.\d+)?(?:[KMBT])?|\$[A-Za-z][A-Za-z0-9_]*|\bon (?:Solana|Ethereum|BSC|Base|Monad|Robinhood|HyperEVM)\b)/gu;
 
 function twitterTextTokenUrl(token: string): string | undefined {
   const value = token.replace(/[.,!?;:)\]}，。！？；：）】》]+$/g, "");
@@ -2203,6 +2247,26 @@ function renderFomoThesisText(text: string, contractAddress?: string): ReactNode
   });
 }
 
+function renderFomoTradeText(text: string, direction?: FomoSignalDirection): ReactNode[] {
+  return text.split(FOMO_TRADE_HIGHLIGHT_RE).map((part, index) => {
+    if (!part) return null;
+    const className = /^(?:Buy|Sell|Transfer in|Transfer out)$/u.test(part)
+      ? direction === "buy" || direction === "transfer_in"
+        ? "font-semibold text-emerald-300"
+        : "font-semibold text-rose-300"
+      : /^at \$/u.test(part)
+        ? "font-semibold text-sky-300"
+        : /^\$\d/u.test(part)
+          ? "font-semibold text-amber-300"
+          : /^\$/u.test(part)
+            ? "font-semibold text-cyan-300"
+            : /^on /u.test(part)
+              ? "font-semibold text-violet-300"
+              : undefined;
+    return className ? <span key={`${index}-${part}`} className={className}>{part}</span> : part;
+  });
+}
+
 function TweetSignalBody({
   signal,
   expanded,
@@ -2210,6 +2274,15 @@ function TweetSignalBody({
   onOpen,
   showMoreLabel,
   showLessLabel,
+  translationTarget,
+  translation,
+  translateLabel,
+  translatingLabel,
+  translationFailedLabel,
+  hideTranslationLabel,
+  translatedByLabel,
+  onTranslate,
+  onHideTranslation,
 }: {
   signal: TweetTokenSignal;
   expanded: boolean;
@@ -2217,22 +2290,19 @@ function TweetSignalBody({
   onOpen: (url: string) => void;
   showMoreLabel: string;
   showLessLabel: string;
+  translationTarget?: SignalTranslationTarget;
+  translation?: SignalTranslationState;
+  translateLabel: string;
+  translatingLabel: string;
+  translationFailedLabel: string;
+  hideTranslationLabel: string;
+  translatedByLabel: string;
+  onTranslate: () => void;
+  onHideTranslation: () => void;
 }) {
   const textRef = useRef<HTMLParagraphElement>(null);
   const [canExpand, setCanExpand] = useState(false);
   const normalizedText = normalizeTweetSignalText(signal.tweetText);
-  const fomoTextParts = signal.signalSource === "fomo"
-    && signal.fomoEventType
-    && signal.fomoEventType !== "thesis_created"
-    ? fomoAlertTextParts({
-      type: signal.fomoEventType,
-      chain: signal.chain,
-      ticker: signal.tokenSymbols?.[0]?.replace(/^\$+/u, ""),
-      usdAmount: signal.usdAmount,
-      marketCap: signal.marketCapUsd,
-      traderCount: signal.traderCount,
-    })
-    : undefined;
 
   useEffect(() => {
     const node = textRef.current;
@@ -2254,31 +2324,10 @@ function TweetSignalBody({
         ref={textRef}
         className={`app-twitter-tweet-text mt-0.5 cursor-text select-text whitespace-pre-wrap break-words text-[15px] leading-5 text-[#e7e9ea] ${expanded ? "" : "line-clamp-3"}`}
       >
-        {fomoTextParts
-          ? fomoTextParts.map((part, index) => (
-            <span
-              key={`${part.kind}-${index}`}
-              className={part.kind === "direction"
-                ? signal.tradeDirection === "buy" || signal.tradeDirection === "transfer_in"
-                  ? "font-semibold text-emerald-300"
-                  : "font-semibold text-rose-300"
-                : part.kind === "amount"
-                  ? "font-semibold text-amber-300"
-                  : part.kind === "token"
-                    ? "font-semibold text-cyan-300"
-                    : part.kind === "market_cap"
-                      ? "font-semibold text-sky-300"
-                      : part.kind === "chain"
-                        ? "font-semibold text-violet-300"
-                        : undefined}
-            >
-              {index > 0 ? " " : ""}{part.text}
-            </span>
-          ))
-          : signal.signalSource === "fomo"
+        {signal.signalSource === "fomo"
             ? signal.fomoEventType === "thesis_created"
               ? renderFomoThesisText(normalizedText, signal.contractAddress)
-              : normalizedText
+              : renderFomoTradeText(normalizedText, signal.tradeDirection)
           : renderTweetSignalText(normalizedText, signal.contractAddress, signal.links, onOpen)}
       </p>
       {canExpand && (
@@ -2291,6 +2340,39 @@ function TweetSignalBody({
           {expanded ? showLessLabel : showMoreLabel}
           {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
         </button>
+      )}
+      {translationTarget && (
+        <div className="mt-1.5">
+          {translation?.status === "success" && translation.visible && translation.translatedText && (
+            <p className="cursor-text select-text whitespace-pre-wrap break-words border-l-2 border-sky-400/35 pl-3 text-[15px] leading-5 text-gray-300">
+              {translation.translatedText}
+            </p>
+          )}
+          <div className="mt-1 flex min-h-5 flex-wrap items-center gap-x-2 gap-y-1">
+            <button
+              type="button"
+              disabled={translation?.status === "loading"}
+              onClick={translation?.status === "success" && translation.visible
+                ? onHideTranslation
+                : onTranslate}
+              className={`inline-flex items-center gap-1 text-xs font-medium hover:underline disabled:cursor-wait disabled:no-underline ${
+                translation?.status === "error" ? "text-rose-300" : "text-[#1d9bf0]"
+              }`}
+            >
+              <Languages className={`h-3.5 w-3.5 ${translation?.status === "loading" ? "animate-pulse" : ""}`} />
+              {translation?.status === "loading"
+                ? translatingLabel
+                : translation?.status === "error"
+                  ? translationFailedLabel
+                  : translation?.status === "success" && translation.visible
+                    ? hideTranslationLabel
+                    : translateLabel}
+            </button>
+            {translation?.status === "success" && translation.visible && (
+              <span className="text-[11px] text-gray-600">{translatedByLabel}</span>
+            )}
+          </div>
+        </div>
       )}
     </>
   );
@@ -3086,6 +3168,7 @@ function defaultBackTarget(formId: string): string | null {
       return "contract-tools";
     case "dapp-store":
     case "twitter-signals":
+    case "defillama-stats":
       return null;
     case "create-nonce":
       return "nonce-workbench";
@@ -3453,6 +3536,12 @@ export default function Home() {
       network: true,
     },
     {
+      id: "defillama-stats",
+      label: tf("features.defillama-stats.title", "DeFi 数据"),
+      icon: <BarChart3 className="w-5 h-5" />,
+      network: true,
+    },
+    {
       id: "squads-workspace",
       label: t("features.workspace.title"),
       icon: <ShieldCheck className="w-5 h-5" />,
@@ -3568,7 +3657,9 @@ export default function Home() {
   const [twitterAiConfigOpen, setTwitterAiConfigOpen] = useState(false);
   const [twitterWatchedUsers, setTwitterWatchedUsers] = useState("");
   const [twitterSignals, setTwitterSignals] = useState<TweetTokenSignal[]>([]);
+  const [signalTranslations, setSignalTranslations] = useState<Record<string, SignalTranslationState>>({});
   const [signalSourceFilter, setSignalSourceFilter] = useState<SignalSourceFilter>("all");
+  const [signalTradeFilter, setSignalTradeFilter] = useState<SignalTradeFilter>("all");
   const [twitterSignalPage, setTwitterSignalPage] = useState(1);
   const [twitterCaptureTab, setTwitterCaptureTab] = useState<TwitterCaptureTabState>({
     webviewOpen: false,
@@ -3693,6 +3784,16 @@ export default function Home() {
   const twitterSignalBackfillCompleteRef = useRef(false);
   const twitterSignalBackfillStartedRef = useRef(false);
   const twitterSignalLatestReloadReadyRef = useRef(false);
+  const twitterSignalReloadTimeoutRef = useRef<number | null>(null);
+  const twitterSignalNewestTweetIdRef = useRef<string | undefined>(undefined);
+  const twitterSignalStaleScanCountRef = useRef(0);
+  const twitterCaptureRecoveryInFlightRef = useRef(false);
+  const twitterCaptureLastRecoveryAtRef = useRef(0);
+  const twitterCaptureFailureCountRef = useRef(0);
+  const recoverTwitterCaptureWebviewRef = useRef<() => void>(() => {});
+  const fomoOpenInFlightRef = useRef(false);
+  const fomoReloadInFlightRef = useRef(false);
+  const fomoReloadTimeoutRef = useRef<number | null>(null);
   const twitterKolDiscoveryOpenRef = useRef(false);
   const twitterKolDiscoveryQueueRef = useRef<string[]>([]);
   const twitterKolDiscoverySeenRef = useRef(new Set<string>());
@@ -8049,9 +8150,14 @@ export default function Home() {
   const sourceFilteredSignals = twitterSignals.filter((signal) =>
     signalSourceFilter === "all" || signalSourceOf(signal) === signalSourceFilter,
   );
+  const tradeFilteredSignals = sourceFilteredSignals.filter((signal) =>
+    signalSourceFilter !== "fomo"
+    || signalTradeFilter === "all"
+    || signal.tradeDirection === signalTradeFilter,
+  );
   const signalFilterKols = filterTwitterKolsBySource(twitterKols, signalSourceFilter);
   const visibleTwitterSignals = sortTweetSignalsNewestFirst(filterRecentTweetSignals(
-    filterTweetTokenSignals(sourceFilteredSignals, twitterWatchedUsers),
+    filterTweetTokenSignals(tradeFilteredSignals, twitterWatchedUsers),
   ));
   const twitterSignalGroups = groupTweetSignalsByTweet(visibleTwitterSignals);
   const twitterSignalPagination = paginateTweetSignalGroups(twitterSignalGroups, twitterSignalPage);
@@ -8254,6 +8360,29 @@ export default function Home() {
     }
   }, [dappBrowserBounds, effectiveRpcRequest, effectiveWallet, tf]);
 
+  const prepareDappWalletChain = useCallback((chain: string): boolean => {
+    const target = walletNetworkForChain(chain);
+    if (!target) {
+      toast.error(t("features.dapp-store.unsupportedWalletChain", { chain }));
+      return false;
+    }
+    const wallet = effectiveWallet;
+    const hasWallet = target.family === "solana"
+      ? Boolean(wallet?.public_key.trim())
+      : Boolean(wallet?.evm_address?.trim());
+    if (!wallet || !hasWallet) {
+      toast.error(t("features.dapp-store.walletRequiredForChain", { chain: target.chain }));
+      return false;
+    }
+    if (target.family === "solana") {
+      setCurrentWalletNetwork("solana");
+      saveCurrentWalletNetwork("solana");
+    } else {
+      selectEvmChain(String(target.chainId), { openChainView: false });
+    }
+    return true;
+  }, [effectiveWallet, selectEvmChain, t]);
+
   const openUrlInDappTab = useCallback((rawUrl: string, options: { dapp?: DappCatalogItem; tabId?: string; showAddressBar?: boolean } = {}) => {
     let url: string;
     try {
@@ -8362,6 +8491,75 @@ export default function Home() {
     }
   }, [effectiveRpcRequest, effectiveWallet, tf, twitterBrowserBounds, updateFomoAuthStatus]);
 
+  const ensureFomoAlertsWebview = useCallback(async () => {
+    const existing = twitterBrowserTabs.find((tab) => tab.id === FOMO_ALERTS_TAB_ID);
+    if (existing?.webviewOpen || fomoOpenInFlightRef.current || !isTauriWebview()) return;
+
+    fomoOpenInFlightRef.current = true;
+    fomoPendingAlertsRef.current = true;
+    updateFomoAuthStatus("unknown");
+    setFomoStreamStatus("connecting");
+    setFomoStreamRetryAt(null);
+    setTwitterBrowserTabs((tabs) => {
+      const tab = tabs.find((item) => item.id === FOMO_ALERTS_TAB_ID);
+      if (tab) {
+        return tabs.map((item) => item.id === FOMO_ALERTS_TAB_ID
+          ? {
+            ...item,
+            title: "Fomo",
+            url: FOMO_ALERTS_URL,
+            addressInput: FOMO_ALERTS_URL,
+            closable: false,
+            showAddressBar: true,
+            webviewOpen: true,
+            loading: true,
+          }
+          : item);
+      }
+      return [
+        ...tabs,
+        {
+          id: FOMO_ALERTS_TAB_ID,
+          title: "Fomo",
+          url: FOMO_ALERTS_URL,
+          addressInput: FOMO_ALERTS_URL,
+          closable: false,
+          showAddressBar: true,
+          walletConnected: false,
+          webviewOpen: true,
+          loading: true,
+        },
+      ];
+    });
+
+    try {
+      await invoke("dapp_open_tab", {
+        tabId: FOMO_ALERTS_TAB_ID,
+        url: FOMO_ALERTS_URL,
+        appId: null,
+        walletPublicKey: null,
+        network: effectiveRpcRequest,
+        x: -20_000,
+        y: -20_000,
+        width: 1_280,
+        height: 900,
+        hidden: false,
+      });
+    } catch (error) {
+      setTwitterBrowserTabs((tabs) => tabs.map((tab) => tab.id === FOMO_ALERTS_TAB_ID
+        ? { ...tab, webviewOpen: false, loading: false }
+        : tab));
+      updateFomoAuthStatus("error");
+      setFomoStreamStatus("unknown");
+      setTwitterSignalCaptureError(errorMessage(
+        error,
+        tf("features.twitter-signals.fomoOpenFailed", "无法启动后台 Fomo 连接"),
+      ));
+    } finally {
+      fomoOpenInFlightRef.current = false;
+    }
+  }, [effectiveRpcRequest, tf, twitterBrowserTabs, updateFomoAuthStatus]);
+
   const ensureTwitterCaptureWebview = useCallback(async (
     initialUrl = TWITTER_CAPTURE_HOME_URL,
   ) => {
@@ -8393,6 +8591,51 @@ export default function Home() {
       twitterCaptureOpenInFlightRef.current = false;
     }
   }, [effectiveRpcRequest, tf, twitterCaptureTab.webviewOpen]);
+
+  const recoverTwitterCaptureWebview = useCallback(async () => {
+    if (!isTauriWebview() || twitterCaptureRecoveryInFlightRef.current) return;
+    twitterCaptureRecoveryInFlightRef.current = true;
+    twitterCaptureOpenInFlightRef.current = true;
+    twitterCaptureLastRecoveryAtRef.current = Date.now();
+    twitterSignalLatestReloadReadyRef.current = false;
+    if (twitterSignalReloadTimeoutRef.current !== null) {
+      window.clearTimeout(twitterSignalReloadTimeoutRef.current);
+      twitterSignalReloadTimeoutRef.current = null;
+    }
+    setTwitterSignalCaptureStatus("waiting");
+    setTwitterCaptureTab({ webviewOpen: false, loading: true, url: TWITTER_CAPTURE_HOME_URL });
+    try {
+      await invoke("dapp_close_tab", { tabId: TWITTER_CAPTURE_TAB_ID }).catch(() => undefined);
+      await new Promise((resolve) => window.setTimeout(resolve, 250));
+      await invoke("dapp_open_tab", {
+        tabId: TWITTER_CAPTURE_TAB_ID,
+        url: TWITTER_CAPTURE_HOME_URL,
+        appId: null,
+        walletPublicKey: null,
+        network: effectiveRpcRequest,
+        x: -20_000,
+        y: -20_000,
+        width: 1_280,
+        height: 900,
+        hidden: true,
+      });
+      setTwitterCaptureTab((current) => ({ ...current, webviewOpen: true }));
+      setTwitterSignalCaptureError("");
+    } catch (error) {
+      setTwitterCaptureTab({ webviewOpen: false, loading: false, url: TWITTER_CAPTURE_HOME_URL });
+      setTwitterSignalCaptureStatus("error");
+      setTwitterSignalCaptureError(errorMessage(
+        error,
+        tf("features.twitter-signals.openCaptureFailed", "无法重新连接后台 X 采集页"),
+      ));
+    } finally {
+      twitterCaptureOpenInFlightRef.current = false;
+      twitterCaptureRecoveryInFlightRef.current = false;
+    }
+  }, [effectiveRpcRequest, tf]);
+  recoverTwitterCaptureWebviewRef.current = () => {
+    void recoverTwitterCaptureWebview();
+  };
 
   const scheduleTwitterKolDiscoveryAdvance = useCallback((delayMs = TWITTER_KOL_PROFILE_ENRICHMENT_INTERVAL_MS) => {
     if (twitterKolDiscoveryAdvanceTimeoutRef.current !== null) {
@@ -8525,11 +8768,7 @@ export default function Home() {
   openUrlInTwitterBrowserTabRef.current = openUrlInTwitterBrowserTab;
 
   const openDapp = async (dapp: DappCatalogItem) => {
-    const wallet = effectiveWallet;
-    if (!wallet) {
-      toast.error(tf("features.dapp-store.noWallet", "请先选择一个钱包。"));
-      return;
-    }
+    if (!prepareDappWalletChain(dapp.chain)) return;
     openUrlInDappTab(dapp.url, { dapp });
   };
 
@@ -8705,6 +8944,7 @@ export default function Home() {
       }
       twitterSignalCaptureTimeoutRef.current = window.setTimeout(() => {
         if (twitterSignalCaptureRequestIdRef.current !== requestId) return;
+        const timedOutIntent = twitterSignalCaptureIntentRef.current;
         twitterSignalCaptureTimeoutRef.current = null;
         twitterSignalCaptureRequestIdRef.current = null;
         twitterSignalCaptureInFlightRef.current = false;
@@ -8713,6 +8953,15 @@ export default function Home() {
         setTwitterSignalCaptureBusy(false);
         setTwitterSignalCaptureStatus("error");
         setTwitterSignalCaptureError(tf("features.twitter-signals.captureTimeout", "X 页面没有及时返回数据，请确认关注流已经加载完成。"));
+        if (timedOutIntent === "auto") {
+          twitterCaptureFailureCountRef.current += 1;
+          const recoveryCooledDown = Date.now() - twitterCaptureLastRecoveryAtRef.current
+            >= TWITTER_CAPTURE_RECOVERY_COOLDOWN_MS;
+          if (twitterCaptureFailureCountRef.current >= 2 && recoveryCooledDown) {
+            twitterCaptureFailureCountRef.current = 0;
+            recoverTwitterCaptureWebviewRef.current();
+          }
+        }
       }, 30_000);
       if (options.notify) {
         toast.message(tf("features.twitter-signals.captureRequested", "正在向下遍历 X 时间线并读取推文..."));
@@ -8761,7 +9010,7 @@ export default function Home() {
     });
   }, [openUrlInTwitterBrowserTab, twitterDappTab]);
 
-  const openFomoAlertsInBrowser = useCallback(() => {
+  const openFomoAlertsInBrowser = useCallback((options: { reload?: boolean } = {}) => {
     const targetUrl = fomoAuthStatusRef.current === "authenticated"
       ? FOMO_ALERTS_URL
       : FOMO_REFERRAL_URL;
@@ -8769,17 +9018,45 @@ export default function Home() {
     if (targetUrl === FOMO_REFERRAL_URL) updateFomoAuthStatus("unknown");
     const existing = twitterBrowserTabs.find((tab) => tab.id === FOMO_ALERTS_TAB_ID && tab.webviewOpen);
     if (existing) {
+      if (options.reload && fomoReloadInFlightRef.current) return;
       if (fomoAuthStatusRef.current !== "authenticated") setActiveTwitterBrowserTabId(existing.id);
       else setActiveTwitterBrowserTabId(TWITTER_BROWSER_HOME_TAB_ID);
       setTwitterBrowserTabs((tabs) => tabs.map((tab) =>
         tab.id === FOMO_ALERTS_TAB_ID ? { ...tab, closable: false, loading: true } : tab,
       ));
-      void invoke("dapp_navigate_tab", { tabId: FOMO_ALERTS_TAB_ID, url: targetUrl }).catch((error) => {
-        updateFomoAuthStatus("error");
+      if (options.reload) {
+        fomoReloadInFlightRef.current = true;
+        if (fomoReloadTimeoutRef.current !== null) window.clearTimeout(fomoReloadTimeoutRef.current);
+        fomoReloadTimeoutRef.current = window.setTimeout(() => {
+          fomoReloadTimeoutRef.current = null;
+          if (!fomoReloadInFlightRef.current) return;
+          fomoReloadInFlightRef.current = false;
+          setTwitterBrowserTabs((tabs) => tabs.map((tab) =>
+            tab.id === FOMO_ALERTS_TAB_ID ? { ...tab, loading: false } : tab,
+          ));
+          setFomoStreamStatus("reconnecting");
+          setFomoStreamRetryAt(new Date(Date.now() + 15_000).toISOString());
+        }, 30_000);
+      }
+      const reloadRequest = options.reload
+        ? invoke("dapp_reload_tab", { tabId: FOMO_ALERTS_TAB_ID })
+        : invoke("dapp_navigate_tab", { tabId: FOMO_ALERTS_TAB_ID, url: targetUrl });
+      void reloadRequest.catch((error) => {
+        fomoReloadInFlightRef.current = false;
+        if (fomoReloadTimeoutRef.current !== null) {
+          window.clearTimeout(fomoReloadTimeoutRef.current);
+          fomoReloadTimeoutRef.current = null;
+        }
         setTwitterBrowserTabs((tabs) => tabs.map((tab) =>
           tab.id === FOMO_ALERTS_TAB_ID ? { ...tab, loading: false } : tab,
         ));
-        toast.error(errorMessage(error, tf("features.twitter-signals.fomoOpenFailed", "无法打开 Fomo 登录页面")));
+        if (options.reload) {
+          setFomoStreamStatus("reconnecting");
+          setFomoStreamRetryAt(new Date(Date.now() + 15_000).toISOString());
+        } else {
+          updateFomoAuthStatus("error");
+          toast.error(errorMessage(error, tf("features.twitter-signals.fomoOpenFailed", "无法打开 Fomo 登录页面")));
+        }
       });
       return;
     }
@@ -8791,9 +9068,51 @@ export default function Home() {
     });
   }, [openUrlInTwitterBrowserTab, tf, twitterBrowserTabs, updateFomoAuthStatus]);
 
+  const refreshFomoConnection = useCallback(() => {
+    fomoReloadInFlightRef.current = false;
+    if (fomoReloadTimeoutRef.current !== null) {
+      window.clearTimeout(fomoReloadTimeoutRef.current);
+      fomoReloadTimeoutRef.current = null;
+    }
+    setFomoStreamStatus((current) => current === "offline" ? "offline" : "connecting");
+    setFomoStreamRetryAt(null);
+    openFomoAlertsInBrowser({ reload: true });
+  }, [openFomoAlertsInBrowser]);
+
+  useEffect(() => {
+    if (fomoAuthStatus !== "authenticated") return;
+    const statusObservedAt = Date.now();
+    const checkForStaleStream = () => {
+      const lastActivityAt = Date.parse(fomoStreamLastActivityAt || "");
+      const retryAt = Date.parse(fomoStreamRetryAt || "");
+      const now = Date.now();
+      if (
+        fomoStreamStatus === "connected"
+        && Number.isFinite(lastActivityAt)
+        && now - lastActivityAt <= FOMO_STREAM_STALE_MS
+      ) return;
+      if (fomoReloadInFlightRef.current || (Number.isFinite(retryAt) && retryAt > now)) return;
+      if (
+        (fomoStreamStatus === "connecting" || fomoStreamStatus === "unknown")
+        && now - statusObservedAt <= FOMO_STREAM_STALE_MS
+      ) return;
+      if (fomoStreamStatus === "offline" && !navigator.onLine) return;
+      setFomoStreamStatus("reconnecting");
+      setFomoStreamRetryAt(null);
+      openFomoAlertsInBrowser({ reload: true });
+    };
+    checkForStaleStream();
+    const timer = window.setInterval(checkForStaleStream, 15_000);
+    return () => window.clearInterval(timer);
+  }, [fomoAuthStatus, fomoStreamLastActivityAt, fomoStreamRetryAt, fomoStreamStatus, openFomoAlertsInBrowser]);
+
   const requestTwitterLogin = useCallback((intent: TwitterCaptureIntent) => {
     setTwitterSignalAutoScan(false);
     twitterSignalLatestReloadReadyRef.current = false;
+    if (twitterSignalReloadTimeoutRef.current !== null) {
+      window.clearTimeout(twitterSignalReloadTimeoutRef.current);
+      twitterSignalReloadTimeoutRef.current = null;
+    }
     setTwitterPendingCaptureIntent(intent);
     setTwitterLoginPageOpenedByPrompt(true);
     setTwitterSignalCaptureStatus("waiting");
@@ -8866,11 +9185,12 @@ export default function Home() {
     setTwitterSignalCaptureStatus("idle");
   };
 
-  const openSignalSwap = (url: string | undefined) => {
+  const openSignalSwap = (url: string | undefined, chain: string) => {
     if (!url) {
       toast.error(tf("features.twitter-signals.swapUnavailable", "当前信号没有可用的内置 Swap 页面。"));
       return;
     }
+    if (!prepareDappWalletChain(chain)) return;
     requestAnimationFrame(() => {
       openUrlInTwitterBrowserTab(url, { showAddressBar: true });
     });
@@ -8973,6 +9293,89 @@ export default function Home() {
     }
   };
 
+  const translateTwitterSignal = useCallback(async (
+    signalKey: string,
+    sourceText: string,
+    targetLanguage: SignalTranslationTarget,
+  ) => {
+    const cached = signalTranslations[signalKey];
+    if (
+      cached?.status === "success"
+      && cached.sourceText === sourceText
+      && cached.targetLanguage === targetLanguage
+      && cached.translatedText
+    ) {
+      setSignalTranslations((current) => ({
+        ...current,
+        [signalKey]: { ...cached, visible: true },
+      }));
+      return;
+    }
+    setSignalTranslations((current) => ({
+      ...current,
+      [signalKey]: {
+        sourceText,
+        targetLanguage,
+        status: "loading",
+        visible: true,
+      },
+    }));
+    try {
+      const response = await invoke<SignalTranslationResponse>("translate_signal_text", {
+        request: {
+          text: sourceText,
+          target_language: targetLanguage,
+        },
+      });
+      const translatedText = response.translated_text.trim();
+      if (!translatedText) throw new Error("Google Translate returned an empty translation");
+      setSignalTranslations((current) => {
+        const pending = current[signalKey];
+        if (pending?.sourceText !== sourceText || pending.targetLanguage !== targetLanguage) return current;
+        return {
+          ...current,
+          [signalKey]: {
+            sourceText,
+            targetLanguage,
+            status: "success",
+            translatedText,
+            sourceLanguage: response.source_language?.trim() || undefined,
+            visible: true,
+          },
+        };
+      });
+    } catch {
+      setSignalTranslations((current) => {
+        const pending = current[signalKey];
+        if (pending?.sourceText !== sourceText || pending.targetLanguage !== targetLanguage) return current;
+        return {
+          ...current,
+          [signalKey]: {
+            sourceText,
+            targetLanguage,
+            status: "error",
+            visible: true,
+          },
+        };
+      });
+    }
+  }, [signalTranslations]);
+
+  const hideTwitterSignalTranslation = useCallback((signalKey: string) => {
+    setSignalTranslations((current) => {
+      const translation = current[signalKey];
+      if (!translation) return current;
+      return {
+        ...current,
+        [signalKey]: { ...translation, visible: false },
+      };
+    });
+  }, []);
+
+  useEffect(() => {
+    setSignalTranslations({});
+  }, [aiSkillLocale]);
+
   const copyTwitterSignalJson = () => {
     const payload = JSON.stringify(visibleTwitterSignals, null, 2);
     void copyToClipboard(payload, "twitter-signals-json");
@@ -8981,12 +9384,19 @@ export default function Home() {
   const clearTwitterSignals = async () => {
     setTwitterSignalAutoScan(false);
     twitterSignalLatestReloadReadyRef.current = false;
+    if (twitterSignalReloadTimeoutRef.current !== null) {
+      window.clearTimeout(twitterSignalReloadTimeoutRef.current);
+      twitterSignalReloadTimeoutRef.current = null;
+    }
     setTwitterPendingCaptureIntent(null);
     twitterSignalCaptureRequestIdRef.current = null;
     twitterSignalCaptureIntentRef.current = null;
     twitterSignalCaptureInFlightRef.current = false;
     twitterSignalNotifyCaptureRef.current = false;
     twitterSignalBackfillStartedRef.current = false;
+    twitterSignalNewestTweetIdRef.current = undefined;
+    twitterSignalStaleScanCountRef.current = 0;
+    twitterCaptureFailureCountRef.current = 0;
     if (twitterSignalCaptureTimeoutRef.current !== null) {
       window.clearTimeout(twitterSignalCaptureTimeoutRef.current);
       twitterSignalCaptureTimeoutRef.current = null;
@@ -9116,6 +9526,67 @@ export default function Home() {
     }
   };
 
+  const resetResearchAiConversation = () => {
+    twitterAiRequestIdRef.current += 1;
+    twitterAiBusyRef.current = false;
+    setTwitterAiBusy(false);
+    setTwitterAiSessionId(null);
+    setTwitterAiResult(null);
+    setTwitterAiError("");
+  };
+
+  const changeResearchAiProvider = (kind: ResearchAiProviderKind) => {
+    const preset = researchAiProviderPreset(kind);
+    twitterAiKeyRequestIdRef.current += 1;
+    setTwitterAiKeyBusy(false);
+    setTwitterAiKeySaved(false);
+    setTwitterAiApiKey("");
+    setTwitterAiProviderKind(kind);
+    setTwitterAiEndpoint(preset.endpoint);
+    setTwitterAiModel(preset.model);
+    resetResearchAiConversation();
+  };
+
+  const changeResearchAiEndpoint = (endpoint: string) => {
+    setTwitterAiEndpoint(endpoint);
+    resetResearchAiConversation();
+  };
+
+  const changeResearchAiModel = (model: string) => {
+    setTwitterAiModel(model);
+    resetResearchAiConversation();
+  };
+
+  const renderResearchAiConfiguration = (className = "") => (
+    <ResearchAiConfiguration
+      providerKind={twitterAiProviderKind}
+      endpoint={twitterAiEndpoint}
+      model={twitterAiModel}
+      apiKey={twitterAiApiKey}
+      keySaved={twitterAiKeySaved}
+      busy={twitterAiKeyBusy}
+      labels={{
+        provider: tf("features.twitter-signals.provider", "提供方"),
+        localResearch: tf("features.twitter-signals.localResearch", "本地检索"),
+        openAiCompatible: tf("features.twitter-signals.openAiCompatible", "OpenAI 兼容"),
+        model: tf("features.twitter-signals.model", "模型"),
+        modelPlaceholder: tf("features.twitter-signals.modelPlaceholder", "输入模型名称"),
+        keyStored: tf("features.twitter-signals.keyStored", "已安全保存"),
+        keyStoredPlaceholder: tf("features.twitter-signals.keyStoredPlaceholder", "输入新 Key 可替换"),
+        keySecurePlaceholder: tf("features.twitter-signals.keySecurePlaceholder", "输入后保存到系统安全存储"),
+        saveKey: tf("features.twitter-signals.saveKey", "安全保存 API Key"),
+        removeKey: tf("features.twitter-signals.removeKey", "移除保存的 API Key"),
+      }}
+      onProviderChange={changeResearchAiProvider}
+      onEndpointChange={changeResearchAiEndpoint}
+      onModelChange={changeResearchAiModel}
+      onApiKeyChange={setTwitterAiApiKey}
+      onSaveApiKey={() => void saveTwitterAiApiKey()}
+      onDeleteApiKey={() => void deleteTwitterAiApiKey()}
+      className={className}
+    />
+  );
+
   useEffect(() => {
     let cancelled = false;
     if (!isTauriWebview()) {
@@ -9125,8 +9596,9 @@ export default function Home() {
     void invoke<ResearchScanCursor | null>("research_scan_cursor", {
       sourceUrl: TWITTER_CAPTURE_HOME_URL,
     }).then((cursor) => {
-      if (!cancelled && cursor?.backfill_complete) {
-        twitterSignalBackfillCompleteRef.current = true;
+      if (!cancelled && cursor) {
+        if (cursor.backfill_complete) twitterSignalBackfillCompleteRef.current = true;
+        twitterSignalNewestTweetIdRef.current = newestTwitterTweetId([cursor.last_tweet_id]);
       }
     }).catch(() => {
       // A missing or unreadable cursor safely falls back to a full three-day scan.
@@ -9168,6 +9640,9 @@ export default function Home() {
       if (data.signalSourceFilter === "all" || data.signalSourceFilter === "x" || data.signalSourceFilter === "fomo") {
         setSignalSourceFilter(data.signalSourceFilter);
       }
+      if (data.signalTradeFilter === "all" || data.signalTradeFilter === "buy" || data.signalTradeFilter === "sell") {
+        setSignalTradeFilter(data.signalTradeFilter);
+      }
       if (Array.isArray(data.signals)) {
         setTwitterSignals(sortTweetSignalsNewestFirst(filterRecentTweetSignals(
           parseStoredTwitterSignals(data.signals)
@@ -9189,18 +9664,41 @@ export default function Home() {
   useEffect(() => {
     if (!twitterSignalStorageHydrated || !isTauriWebview()) return;
     let cancelled = false;
-    void loadResearchTweetSignals()
-      .then((signals) => {
-        if (cancelled || signals.length === 0) return;
-        setTwitterSignals((current) => mergeTweetTokenSignals(current, signals));
-      })
-      .catch(() => {
-        // The localStorage cache remains available if the SQLite store cannot be read.
-      });
+    let syncInFlight = false;
+    const syncSignals = () => {
+      if (syncInFlight) return;
+      syncInFlight = true;
+      void loadResearchTweetSignals()
+        .then((signals) => {
+          if (cancelled || signals.length === 0) return;
+          setTwitterSignals((current) => mergeTweetTokenSignals(current, signals));
+        })
+        .catch(() => {
+          // The localStorage cache remains available if the SQLite store cannot be read.
+        })
+        .finally(() => {
+          syncInFlight = false;
+        });
+    };
+    const syncVisibleSignals = () => {
+      if (document.visibilityState === "visible") syncSignals();
+    };
+    syncSignals();
+    const timer = window.setInterval(syncVisibleSignals, 10_000);
+    window.addEventListener("focus", syncSignals);
+    document.addEventListener("visibilitychange", syncVisibleSignals);
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", syncSignals);
+      document.removeEventListener("visibilitychange", syncVisibleSignals);
     };
   }, [twitterSignalStorageHydrated]);
+
+  useEffect(() => {
+    if (!twitterSignalStorageHydrated || !isTauriWebview()) return;
+    void ensureFomoAlertsWebview();
+  }, [ensureFomoAlertsWebview, twitterSignalStorageHydrated]);
 
   const refreshResearchTokens = useCallback(async (refreshMarkets = false) => {
     if (!isTauriWebview()) {
@@ -9229,14 +9727,11 @@ export default function Home() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
-      const raw = window.localStorage.getItem(TWITTER_RESEARCH_AI_STORAGE_KEY);
-      if (!raw) return;
-      const value = JSON.parse(raw) as Record<string, unknown>;
-      if (isResearchAiProviderKind(value.kind)) {
-        setTwitterAiProviderKind(value.kind);
-      }
-      if (typeof value.endpoint === "string") setTwitterAiEndpoint(value.endpoint);
-      if (typeof value.model === "string") setTwitterAiModel(value.model);
+      const value = readResearchAiPreferences(window.localStorage);
+      if (!value) return;
+      setTwitterAiProviderKind(value.kind);
+      setTwitterAiEndpoint(value.endpoint);
+      setTwitterAiModel(value.model);
     } catch {
       // Ignore invalid non-secret AI preferences.
     } finally {
@@ -9246,7 +9741,7 @@ export default function Home() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    persistJsonAfterHydration(window.localStorage, TWITTER_RESEARCH_AI_STORAGE_KEY, {
+    persistJsonAfterHydration(window.localStorage, RESEARCH_AI_STORAGE_KEY, {
       kind: twitterAiProviderKind,
       endpoint: twitterAiEndpoint,
       model: twitterAiModel,
@@ -9263,6 +9758,7 @@ export default function Home() {
       kolFilter: twitterWatchedUsers,
       kols: twitterKols,
       signalSourceFilter,
+      signalTradeFilter,
       signals: twitterSignals,
       lastScanAt: twitterSignalLastScanAt,
       intervalSec: twitterSignalIntervalSec,
@@ -9279,6 +9775,7 @@ export default function Home() {
     twitterSignalLastScanAt,
     twitterSignalAutoScan,
     signalSourceFilter,
+    signalTradeFilter,
     twitterSignals,
     twitterKols,
     twitterSignalStorageHydrated,
@@ -9321,42 +9818,6 @@ export default function Home() {
     }, 150);
     return () => window.clearTimeout(timer);
   }, [twitterKols]);
-
-  useEffect(() => {
-    if (!isTauriWebview() || twitterSignals.length === 0) return;
-    const timer = window.setTimeout(() => {
-      const validSignals = twitterSignals.filter(hasValidTweetSignalIdentity);
-      const batches = [
-        validSignals.filter((signal) => signal.signalSource === "fomo"),
-        validSignals.filter((signal) => signal.signalSource !== "fomo"),
-      ].filter((signals) => signals.length > 0);
-      void enqueueResearchStoreOperation(async () => {
-        for (const signals of batches) {
-          await invoke("research_ingest", {
-            request: {
-              source_url: "",
-              captured_at_ms: Date.now(),
-              kols: [],
-              tweets: [],
-              signals: signals.map(tweetSignalResearchInput),
-            },
-          });
-        }
-      }).then(() => {
-        if (twitterMonitorViewRef.current !== "tokens") return;
-        return loadResearchTokens().then(setResearchTokens);
-      }).catch((error) => {
-        setResearchTokensError(errorMessage(
-          error,
-          twitterTranslateRef.current(
-            "features.twitter-signals.knowledgeSaveFailed",
-            "代币信号已显示，但写入本地知识库失败",
-          ),
-        ));
-      });
-    }, 150);
-    return () => window.clearTimeout(timer);
-  }, [twitterSignals]);
 
   useEffect(() => {
     if (!twitterSignalStorageHydrated || !isTauriWebview()) return;
@@ -9543,11 +10004,21 @@ export default function Home() {
       }
       if (twitterSignalBackfillCompleteRef.current && !twitterSignalLatestReloadReadyRef.current) {
         twitterSignalLatestReloadReadyRef.current = true;
-        void invoke("dapp_navigate_tab", {
-          tabId: TWITTER_CAPTURE_TAB_ID,
-          url: TWITTER_CAPTURE_HOME_URL,
-        }).catch((error) => {
+        setTwitterCaptureTab((current) => ({ ...current, loading: true }));
+        if (twitterSignalReloadTimeoutRef.current !== null) {
+          window.clearTimeout(twitterSignalReloadTimeoutRef.current);
+        }
+        twitterSignalReloadTimeoutRef.current = window.setTimeout(() => {
+          twitterSignalReloadTimeoutRef.current = null;
+          setTwitterCaptureTab((current) => ({ ...current, loading: false }));
+        }, 20_000);
+        void invoke("dapp_reload_tab", { tabId: TWITTER_CAPTURE_TAB_ID }).catch((error) => {
           twitterSignalLatestReloadReadyRef.current = false;
+          if (twitterSignalReloadTimeoutRef.current !== null) {
+            window.clearTimeout(twitterSignalReloadTimeoutRef.current);
+            twitterSignalReloadTimeoutRef.current = null;
+          }
+          setTwitterCaptureTab((current) => ({ ...current, loading: false }));
           setTwitterSignalCaptureStatus("error");
           setTwitterSignalCaptureError(errorMessage(
             error,
@@ -9623,6 +10094,12 @@ export default function Home() {
     twitterSignalCaptureIntentRef.current = null;
     if (twitterSignalCaptureTimeoutRef.current !== null) {
       window.clearTimeout(twitterSignalCaptureTimeoutRef.current);
+    }
+    if (twitterSignalReloadTimeoutRef.current !== null) {
+      window.clearTimeout(twitterSignalReloadTimeoutRef.current);
+    }
+    if (fomoReloadTimeoutRef.current !== null) {
+      window.clearTimeout(fomoReloadTimeoutRef.current);
     }
     if (twitterKolDiscoveryTimeoutRef.current !== null) {
       window.clearTimeout(twitterKolDiscoveryTimeoutRef.current);
@@ -9743,6 +10220,10 @@ export default function Home() {
           return;
         }
         if (event.payload.tab_id === TWITTER_CAPTURE_TAB_ID) {
+          if (event.payload.loaded && twitterSignalReloadTimeoutRef.current !== null) {
+            window.clearTimeout(twitterSignalReloadTimeoutRef.current);
+            twitterSignalReloadTimeoutRef.current = null;
+          }
           setTwitterCaptureTab({
             webviewOpen: true,
             loading: !event.payload.loaded,
@@ -9825,6 +10306,11 @@ export default function Home() {
       }),
       listen<DappFomoAlertsEvent>("dapp://fomo-alerts", (event) => {
         if (event.payload.tab_id === FOMO_ALERTS_TAB_ID) {
+          fomoReloadInFlightRef.current = false;
+          if (fomoReloadTimeoutRef.current !== null) {
+            window.clearTimeout(fomoReloadTimeoutRef.current);
+            fomoReloadTimeoutRef.current = null;
+          }
           fomoPendingAlertsRef.current = false;
           updateFomoAuthStatus("authenticated");
           setFomoStreamStatus("connected");
@@ -9838,37 +10324,9 @@ export default function Home() {
         const signals = parseCapturedFomoAlerts(event.payload.alerts, capturedAt)
           .map((signal) => normalizeTweetTokenSignal(signal as TweetTokenSignal));
         if (signals.length === 0) return;
-        const mergedKols = updateTwitterKols((current) => mergeCapturedFomoKols(current, signals, capturedAt));
+        updateTwitterKols((current) => mergeCapturedFomoKols(current, signals, capturedAt));
         setTwitterSignals((existing) => mergeTweetTokenSignals(existing, signals));
         setTwitterSignalPage(1);
-        const capturedHandles = new Set(signals
-          .map((signal) => normalizeFomoKolHandle(signal.author))
-          .filter(Boolean));
-        const capturedKols = mergedKols.filter((kol) => capturedHandles.has(kol.handle));
-        const validSignals = signals.filter(hasValidTweetSignalIdentity);
-        if (validSignals.length === 0) return;
-        void enqueueResearchStoreOperation(() => invoke("research_ingest", {
-          request: {
-            source_url: "",
-            captured_at_ms: event.payload.captured_at_ms,
-            kols: capturedKols.map(twitterKolResearchInput),
-            tweets: [],
-            signals: validSignals.map(tweetSignalResearchInput),
-          },
-        })).then(() => {
-          if (twitterMonitorViewRef.current !== "tokens") return;
-          return loadResearchTokens().then(setResearchTokens);
-        }).catch((error) => {
-          const message = errorMessage(
-            error,
-            twitterTranslateRef.current(
-              "features.twitter-signals.knowledgeSaveFailed",
-              "Fomo 代币已显示，但写入本地知识库失败",
-            ),
-          );
-          setResearchTokensError(message);
-          toast.error(message);
-        });
       }),
       listen<DappFomoAuthEvent>("dapp://fomo-auth", (event) => {
         if (event.payload.tab_id !== FOMO_ALERTS_TAB_ID) return;
@@ -9921,6 +10379,13 @@ export default function Home() {
       }),
       listen<DappFomoStreamEvent>("dapp://fomo-stream", (event) => {
         if (event.payload.tab_id !== FOMO_ALERTS_TAB_ID) return;
+        if (event.payload.status === "connected") {
+          fomoReloadInFlightRef.current = false;
+          if (fomoReloadTimeoutRef.current !== null) {
+            window.clearTimeout(fomoReloadTimeoutRef.current);
+            fomoReloadTimeoutRef.current = null;
+          }
+        }
         setFomoStreamStatus(event.payload.status);
         setFomoStreamRetryAt(
           typeof event.payload.retry_at_ms === "number" && event.payload.retry_at_ms > 0
@@ -10003,6 +10468,7 @@ export default function Home() {
           twitterSignalCaptureTimeoutRef.current = null;
         }
         setTwitterSignalCaptureBusy(false);
+        twitterCaptureFailureCountRef.current = 0;
         if (typeof event.payload.authenticated === "boolean") {
           setTwitterAuthByTabId((current) => ({
             ...current,
@@ -10032,9 +10498,17 @@ export default function Home() {
         }
         const capturedAt = new Date(event.payload.captured_at_ms);
         const hasStructuredTweets = capturedTweets.length > 0;
-        const signals = hasStructuredTweets
+        const parsedSignals = hasStructuredTweets
           ? parseCapturedTweetTokenSignals(capturedTweets, "", capturedAt)
           : parseTweetTokenSignals(text, "", capturedAt);
+        const kolByHandle = new Map(twitterKolsRef.current.map((kol) => [kol.handle, kol]));
+        const signals = parsedSignals.map((signal) => {
+          if (signal.avatarUrl || signal.signalSource === "fomo") return signal;
+          const kol = kolByHandle.get(normalizeTwitterKolHandle(signal.author));
+          return kol?.avatarUrl
+            ? { ...signal, avatarUrl: kol.avatarUrl, authorName: signal.authorName || kol.displayName }
+            : signal;
+        });
         const signalAuthorHandles = new Set(
           signals.map((signal) => normalizeTwitterKolHandle(signal.author)).filter(Boolean),
         );
@@ -10046,6 +10520,36 @@ export default function Home() {
         const capturedTweetCount = hasStructuredTweets
           ? capturedTweets.length
           : groupTweetSignalsByTweet(signals).length;
+        if (event.payload.tab_id === TWITTER_CAPTURE_TAB_ID && event.payload.backfill_complete) {
+          const newestCapturedTweetId = newestTwitterTweetId(capturedTweets.map((tweet) => tweet.tweet_id));
+          const previousTweetId = twitterSignalNewestTweetIdRef.current;
+          const sawNewTweet = compareTwitterTweetIds(newestCapturedTweetId, previousTweetId) > 0;
+          if (sawNewTweet) {
+            twitterSignalNewestTweetIdRef.current = newestCapturedTweetId;
+            twitterSignalStaleScanCountRef.current = 0;
+          } else if (previousTweetId) {
+            twitterSignalStaleScanCountRef.current += 1;
+          } else if (newestCapturedTweetId) {
+            twitterSignalNewestTweetIdRef.current = newestCapturedTweetId;
+          }
+
+          const newestPublishedAtMs = capturedTweets.reduce((latest, tweet) => {
+            const publishedAtMs = Date.parse(tweet.published_at || "");
+            return Number.isFinite(publishedAtMs) ? Math.max(latest, publishedAtMs) : latest;
+          }, 0);
+          const feedAgeMs = newestPublishedAtMs > 0
+            ? event.payload.captured_at_ms - newestPublishedAtMs
+            : Number.POSITIVE_INFINITY;
+          const recoveryCooledDown = Date.now() - twitterCaptureLastRecoveryAtRef.current
+            >= TWITTER_CAPTURE_RECOVERY_COOLDOWN_MS;
+          if (captureIntent === "auto"
+            && twitterSignalStaleScanCountRef.current >= TWITTER_STALE_SCAN_LIMIT
+            && feedAgeMs >= TWITTER_STALE_TWEET_AGE_MS
+            && recoveryCooledDown) {
+            twitterSignalStaleScanCountRef.current = 0;
+            recoverTwitterCaptureWebviewRef.current();
+          }
+        }
         setTwitterSignals((existing) => mergeTweetTokenSignals(existing, signals));
         setTwitterSignalPage(1);
         const mergedKols = updateTwitterKols((existing) => {
@@ -19413,16 +19917,6 @@ export default function Home() {
                     })}
                   </span>
                 )}
-                {(fomoAuthStatus === "unauthenticated" || fomoAuthStatus === "error") && (
-                  <button
-                    type="button"
-                    onClick={openFomoAlertsInBrowser}
-                    className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-white/15 bg-white/10 px-2.5 font-semibold text-white hover:bg-white/15"
-                  >
-                    <RefreshCw className="h-3.5 w-3.5" />
-                    {tf("features.twitter-signals.fomoRetryLogin", "重新打开登录")}
-                  </button>
-                )}
               </div>
             )}
 
@@ -19460,7 +19954,7 @@ export default function Home() {
                 <div className="inline-flex h-9 items-center rounded-md border border-white/10 bg-black/25 p-0.5">
                   {([
                     ["all", tf("features.twitter-signals.sourceAll", "全部")],
-                    ["x", "X"],
+                    ["x", "Twitter"],
                     ["fomo", "Fomo"],
                   ] as const).map(([source, label]) => (
                     <button
@@ -19469,9 +19963,6 @@ export default function Home() {
                       onClick={() => {
                         setSignalSourceFilter(source);
                         setTwitterSignalPage(1);
-                        if (source === "fomo" && fomoAuthStatusRef.current !== "authenticated") {
-                          openFomoAlertsInBrowser();
-                        }
                       }}
                       aria-pressed={signalSourceFilter === source}
                       className={`h-8 rounded px-2.5 text-xs font-semibold transition-colors ${
@@ -19484,6 +19975,39 @@ export default function Home() {
                     </button>
                   ))}
                 </div>
+                {signalSourceFilter === "fomo" && (
+                  <div
+                    className="inline-flex h-9 items-center rounded-md border border-white/10 bg-black/25 p-0.5"
+                    aria-label={tf("features.twitter-signals.tradeFilter", "交易方向")}
+                  >
+                    {([
+                      ["all", tf("features.twitter-signals.tradeAll", "全部")],
+                      ["buy", "BUY"],
+                      ["sell", "SELL"],
+                    ] as const).map(([side, label]) => (
+                      <button
+                        key={side}
+                        type="button"
+                        onClick={() => {
+                          setSignalTradeFilter(side);
+                          setTwitterSignalPage(1);
+                        }}
+                        aria-pressed={signalTradeFilter === side}
+                        className={`h-8 rounded px-2.5 text-xs font-semibold transition-colors ${
+                          signalTradeFilter === side
+                            ? side === "buy"
+                              ? "bg-emerald-300 text-zinc-950"
+                              : side === "sell"
+                                ? "bg-rose-300 text-zinc-950"
+                                : "bg-white text-zinc-950"
+                            : "text-gray-400 hover:bg-white/[0.07] hover:text-white"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <div className="min-w-[220px] flex-1 md:max-w-sm">
                   <span className="sr-only">
                     {tf("features.twitter-signals.kolFilter", "数据范围")}
@@ -19527,38 +20051,65 @@ export default function Home() {
                   </div>
                 </div>
                 {signalSourceFilter === "fomo" ? (
-                  <div
-                    aria-live="polite"
-                    title={fomoStreamStatus === "reconnecting" && fomoStreamRetryAt
-                      ? tf("features.twitter-signals.fomoRetryAt", "下次尝试 {time}", {
-                        time: new Date(fomoStreamRetryAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
-                      })
-                      : undefined}
-                    className={`inline-flex h-9 items-center gap-1.5 rounded-md border px-2.5 text-xs font-semibold ${
-                      fomoAuthStatus === "authenticated" && fomoStreamStatus === "connected"
-                        ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-200"
-                        : fomoAuthStatus === "error" || fomoStreamStatus === "offline"
-                          ? "border-rose-300/25 bg-rose-300/10 text-rose-200"
-                          : "border-amber-300/25 bg-amber-300/10 text-amber-100"
-                    }`}
-                  >
-                    {fomoAuthStatus === "authenticated" && fomoStreamStatus === "connected" ? (
-                      <CircleDot className="h-3.5 w-3.5" />
-                    ) : fomoAuthStatus === "authenticated" && fomoStreamStatus !== "offline" ? (
-                      <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Cable className="h-3.5 w-3.5" />
+                  <>
+                    {fomoAuthStatus === "authenticated" && (
+                      <div
+                        aria-live="polite"
+                        title={fomoStreamStatus === "reconnecting" && fomoStreamRetryAt
+                          ? tf("features.twitter-signals.fomoRetryAt", "下次尝试 {time}", {
+                            time: new Date(fomoStreamRetryAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+                          })
+                          : undefined}
+                        className={`inline-flex h-9 items-center gap-1.5 rounded-md border px-2.5 text-xs font-semibold ${
+                          fomoStreamStatus === "connected"
+                            ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-200"
+                            : fomoStreamStatus === "offline"
+                              ? "border-rose-300/25 bg-rose-300/10 text-rose-200"
+                              : "border-amber-300/25 bg-amber-300/10 text-amber-100"
+                        }`}
+                      >
+                        {fomoStreamStatus === "connected" ? (
+                          <CircleDot className="h-3.5 w-3.5" />
+                        ) : fomoStreamStatus !== "offline" ? (
+                          <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Cable className="h-3.5 w-3.5" />
+                        )}
+                        {fomoStreamStatus === "connected"
+                          ? tf("features.twitter-signals.fomoStreamLive", "Fomo 实时流正常")
+                          : fomoStreamStatus === "reconnecting"
+                            ? tf("features.twitter-signals.fomoStreamReconnectingShort", "Fomo 正在重连")
+                            : fomoStreamStatus === "offline"
+                              ? tf("features.twitter-signals.fomoStreamOfflineShort", "Fomo 已离线")
+                              : tf("features.twitter-signals.fomoStreamConnectingShort", "Fomo 正在连接")}
+                      </div>
                     )}
-                    {fomoAuthStatus !== "authenticated"
-                      ? tf("features.twitter-signals.fomoStreamLoginRequired", "Fomo 需要登录")
-                      : fomoStreamStatus === "connected"
-                        ? tf("features.twitter-signals.fomoStreamLive", "Fomo 实时流正常")
-                        : fomoStreamStatus === "reconnecting"
-                          ? tf("features.twitter-signals.fomoStreamReconnectingShort", "Fomo 正在重连")
-                          : fomoStreamStatus === "offline"
-                            ? tf("features.twitter-signals.fomoStreamOfflineShort", "Fomo 已离线")
-                            : tf("features.twitter-signals.fomoStreamConnectingShort", "Fomo 正在连接")}
-                  </div>
+                    {fomoAuthStatus === "unauthenticated" || fomoAuthStatus === "error" ? (
+                      <button
+                        type="button"
+                        onClick={() => openFomoAlertsInBrowser()}
+                        className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-md bg-amber-300 px-3 text-xs font-bold text-zinc-950 shadow-sm hover:bg-amber-200"
+                      >
+                        <LogIn className="h-3.5 w-3.5" />
+                        {tf("features.twitter-signals.fomoSignIn", "登录 Fomo")}
+                      </button>
+                    ) : fomoAuthStatus === "authenticated" ? (
+                      <button
+                        type="button"
+                        onClick={refreshFomoConnection}
+                        className={`inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-md border px-3 text-xs font-semibold ${
+                          fomoStreamStatus === "connected"
+                            ? "border-white/10 bg-white/[0.06] text-gray-200 hover:bg-white/10"
+                            : "border-rose-300/30 bg-rose-300/10 text-rose-100 hover:bg-rose-300/20"
+                        }`}
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" />
+                        {fomoStreamStatus === "connected"
+                          ? tf("features.twitter-signals.fomoRefreshConnection", "刷新连接")
+                          : tf("features.twitter-signals.fomoReconnect", "重新连接 Fomo")}
+                      </button>
+                    ) : null}
+                  </>
                 ) : (
                   <>
                 <label>
@@ -19588,6 +20139,10 @@ export default function Home() {
                     if (twitterSignalAutoScan) {
                       setTwitterSignalAutoScan(false);
                       twitterSignalLatestReloadReadyRef.current = false;
+                      if (twitterSignalReloadTimeoutRef.current !== null) {
+                        window.clearTimeout(twitterSignalReloadTimeoutRef.current);
+                        twitterSignalReloadTimeoutRef.current = null;
+                      }
                       setTwitterSignalCaptureStatus("idle");
                       return;
                     }
@@ -19742,6 +20297,12 @@ export default function Home() {
                     const authorFollowersLabel = isFomoSignal
                       ? authorKol?.fomoFollowersLabel?.trim() || undefined
                       : authorKol?.followersLabel?.trim() || undefined;
+                    const translationTarget = signalTranslationTarget(signal.tweetText, aiSkillLocale);
+                    const translation = translationTarget
+                      && signalTranslations[signalGroup.key]?.sourceText === signal.tweetText
+                      && signalTranslations[signalGroup.key]?.targetLanguage === translationTarget
+                      ? signalTranslations[signalGroup.key]
+                      : undefined;
                     return (
                       <article
                         key={signalGroup.key}
@@ -19857,6 +20418,19 @@ export default function Home() {
                             onOpen={openSignalTweet}
                             showMoreLabel={tf("features.twitter-signals.showMore", "显示更多")}
                             showLessLabel={tf("features.twitter-signals.showLess", "收起")}
+                            translationTarget={translationTarget}
+                            translation={translation}
+                            translateLabel={tf("features.twitter-signals.translate", "翻译")}
+                            translatingLabel={tf("features.twitter-signals.translating", "正在翻译...")}
+                            translationFailedLabel={tf("features.twitter-signals.translationFailed", "翻译失败，重试")}
+                            hideTranslationLabel={tf("features.twitter-signals.hideTranslation", "隐藏翻译")}
+                            translatedByLabel={tf("features.twitter-signals.translatedByGoogle", "由 Google 翻译")}
+                            onTranslate={() => translationTarget && void translateTwitterSignal(
+                              signalGroup.key,
+                              signal.tweetText,
+                              translationTarget,
+                            )}
+                            onHideTranslation={() => hideTwitterSignalTranslation(signalGroup.key)}
                             onToggle={() => setExpandedTwitterSignalIds((current) => {
                               const next = new Set(current);
                               if (next.has(signalGroup.key)) next.delete(signalGroup.key);
@@ -19869,28 +20443,23 @@ export default function Home() {
                           {displayedTokenSignals.map((tokenSignal, tokenIndex) => {
                             const tokenLabel = tweetSignalTokenLabel(tokenSignal);
                             const tokenSymbolLabel = tokenSignal.tokenSymbols?.join(" ").trim();
-                            const fomoActionUrls = isFomoSignal
-                              ? fomoTokenActionUrls({
-                                sourceUrl: tokenSignal.sourceUrl || signal.sourceUrl,
-                                chain: tokenSignal.chain,
-                                contractAddress: tokenSignal.contractAddress,
-                              })
-                              : {};
+                            const fomoActionUrls = fomoTokenActionUrls({
+                              sourceUrl: tokenSignal.sourceUrl || signal.sourceUrl,
+                              chain: tokenSignal.chain,
+                              contractAddress: tokenSignal.contractAddress,
+                            });
                             const swapUrl = signalSwapUrl({
                               signalSource: isFomoSignal ? "fomo" : "x",
                               sourceUrl: tokenSignal.sourceUrl || signal.sourceUrl,
                               chain: tokenSignal.chain,
                               contractAddress: tokenSignal.contractAddress,
                             });
-                            const swapRequiresWallet = !isFomoSignal && tokenSignal.chain === "Solana";
-                            const swapDisabled = !swapUrl || (swapRequiresWallet && !effectiveWallet);
+                            const swapDisabled = !swapUrl;
                             const swapTitle = !tokenSignal.contractAddress
                               ? tf("features.twitter-signals.swapRequiresContract", "仅有代币代码，需确认合约地址后才能打开 Swap。")
                               : !swapUrl
                                 ? tf("features.twitter-signals.swapUnavailable", "当前信号没有可用的内置 Swap 页面。")
-                                : swapRequiresWallet && !effectiveWallet
-                                  ? tf("features.dapp-store.noWallet", "请先选择一个钱包。")
-                                  : tf("features.twitter-signals.openSwap", "在内置浏览器打开 Swap");
+                                : tf("features.twitter-signals.openSwap", "在内置浏览器打开 Swap");
                             return (
                               <div
                                 key={tokenSignal.id}
@@ -19925,15 +20494,12 @@ export default function Home() {
                                 >
                                   {copied === `twitter-signal-${tokenSignal.id}` ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
                                 </button>
-                                {tokenIndex === 0 && isFomoSignal && (
+                                {fomoActionUrls.fomoUrl && (
                                   <button
                                     type="button"
                                     onClick={() => openFomoSignalExternally(fomoActionUrls.fomoUrl)}
-                                    disabled={!fomoActionUrls.fomoUrl}
                                     className="inline-flex h-7 shrink-0 items-center justify-center gap-1 rounded-md border border-violet-300/25 bg-violet-300/10 px-2 text-[11px] font-semibold text-violet-100 transition-colors hover:bg-violet-300/20 disabled:cursor-not-allowed disabled:opacity-40"
-                                    title={fomoActionUrls.fomoUrl
-                                      ? tf("features.twitter-signals.openFomoExternal", "在外部浏览器打开 Fomo 信号")
-                                      : tf("features.twitter-signals.fomoUrlUnavailable", "当前信号没有可用的 Fomo 页面。")}
+                                    title={tf("features.twitter-signals.openFomoExternal", "在外部浏览器打开 Fomo 信号")}
                                   >
                                     <ExternalLink className="h-3.5 w-3.5" />
                                     {tf("features.twitter-signals.fomoAction", "Fomo")}
@@ -19952,7 +20518,7 @@ export default function Home() {
                                 )}
                                 <button
                                   type="button"
-                                  onClick={() => openSignalSwap(swapUrl)}
+                                  onClick={() => openSignalSwap(swapUrl, tokenSignal.chain)}
                                   disabled={swapDisabled}
                                   className="inline-flex h-7 shrink-0 items-center justify-center gap-1 rounded-md bg-emerald-300 px-2 text-[11px] font-semibold text-zinc-950 transition-colors hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-40"
                                   title={swapTitle}
@@ -20058,8 +20624,8 @@ export default function Home() {
                 }}
                 onRefresh={() => void refreshResearchTokens(true)}
                 onCopy={(address, id) => void copyToClipboard(address, id)}
-                onOpen={openSignalTweet}
-                onOpenExternal={(url) => openFomoSignalExternally(url)}
+                onOpen={(url, chain) => chain ? openSignalSwap(url, chain) : openSignalTweet(url)}
+                onOpenExternal={openFomoSignalExternally}
               />
             ) : twitterMonitorView === "kols" ? (
               <section className="app-twitter-monitor-panel overflow-hidden rounded-lg border border-white/10 bg-white/[0.025]">
@@ -20249,118 +20815,8 @@ export default function Home() {
                 </div>
 
                 {twitterAiConfigOpen && (
-                  <div className="grid gap-2 border-b border-white/10 bg-black/15 px-3 py-3 md:grid-cols-[160px_minmax(220px,1fr)_minmax(160px,280px)_minmax(180px,320px)] md:px-4">
-                    <label>
-                      <span className="mb-1 block text-[11px] text-gray-500">{tf("features.twitter-signals.provider", "提供方")}</span>
-                      <select
-                        value={twitterAiProviderKind}
-                        onChange={(event) => {
-                          const kind = event.target.value as ResearchAiProviderKind;
-                          const preset = researchAiProviderPreset(kind);
-                          twitterAiRequestIdRef.current += 1;
-                          twitterAiKeyRequestIdRef.current += 1;
-                          twitterAiBusyRef.current = false;
-                          setTwitterAiProviderKind(kind);
-                          setTwitterAiBusy(false);
-                          setTwitterAiKeyBusy(false);
-                          setTwitterAiSessionId(null);
-                          setTwitterAiResult(null);
-                          setTwitterAiError("");
-                          setTwitterAiKeySaved(false);
-                          setTwitterAiEndpoint(preset.endpoint);
-                          setTwitterAiModel(preset.model);
-                          setTwitterAiApiKey("");
-                        }}
-                        className="h-9 w-full rounded-md border border-white/10 bg-zinc-950 px-2 text-sm text-gray-200 outline-none focus:border-sky-300/30"
-                      >
-                        <option value="local">{tf("features.twitter-signals.localResearch", "本地检索")}</option>
-                        <option value="deepseek">DeepSeek</option>
-                        <option value="gpt">GPT / OpenAI</option>
-                        <option value="grok">Grok / xAI</option>
-                        <option value="kimi">Kimi / Moonshot</option>
-                        <option value="glm">GLM / 智谱</option>
-                        <option value="minimax">MiniMax</option>
-                        <option value="openai">{tf("features.twitter-signals.openAiCompatible", "OpenAI 兼容")}</option>
-                        <option value="ollama">Ollama</option>
-                      </select>
-                    </label>
-                    {twitterAiProviderKind !== "local" && (
-                      <>
-                        <label>
-                          <span className="mb-1 block text-[11px] text-gray-500">Endpoint</span>
-                          <input
-                            value={twitterAiEndpoint}
-                            onChange={(event) => setTwitterAiEndpoint(event.target.value)}
-                            className="h-9 w-full rounded-md border border-white/10 bg-zinc-950 px-2.5 text-sm text-gray-200 outline-none placeholder:text-gray-700 focus:border-sky-300/30"
-                            placeholder={researchAiProviderPreset(twitterAiProviderKind).endpoint}
-                            spellCheck={false}
-                          />
-                        </label>
-                        <label>
-                          <span className="mb-1 block text-[11px] text-gray-500">{tf("features.twitter-signals.model", "模型")}</span>
-                          <input
-                            value={twitterAiModel}
-                            onChange={(event) => setTwitterAiModel(event.target.value)}
-                            className="h-9 w-full rounded-md border border-white/10 bg-zinc-950 px-2.5 text-sm text-gray-200 outline-none placeholder:text-gray-700 focus:border-sky-300/30"
-                            placeholder={researchAiProviderPreset(twitterAiProviderKind).model
-                              || tf("features.twitter-signals.modelPlaceholder", "输入模型名称")}
-                            spellCheck={false}
-                          />
-                        </label>
-                        {researchAiProviderPreset(twitterAiProviderKind).requiresApiKey && (
-                          <div>
-                            <div className="mb-1 flex min-h-4 items-center justify-between gap-2">
-                              <span className="text-[11px] text-gray-500">API Key</span>
-                              {twitterAiKeySaved && (
-                                <span className="inline-flex items-center gap-1 text-[10px] text-emerald-400">
-                                  <ShieldCheck className="h-3 w-3" />
-                                  {tf("features.twitter-signals.keyStored", "已安全保存")}
-                                </span>
-                              )}
-                            </div>
-                            <div className="flex gap-1.5">
-                              <input
-                                type="password"
-                                value={twitterAiApiKey}
-                                onChange={(event) => setTwitterAiApiKey(event.target.value)}
-                                className="h-9 min-w-0 flex-1 rounded-md border border-white/10 bg-zinc-950 px-2.5 text-sm text-gray-200 outline-none placeholder:text-gray-700 focus:border-sky-300/30"
-                                placeholder={twitterAiKeySaved
-                                  ? tf("features.twitter-signals.keyStoredPlaceholder", "输入新 Key 可替换")
-                                  : tf("features.twitter-signals.keySecurePlaceholder", "输入后保存到系统安全存储")}
-                                autoComplete="new-password"
-                                spellCheck={false}
-                              />
-                              <button
-                                type="button"
-                                onClick={() => void saveTwitterAiApiKey()}
-                                disabled={twitterAiKeyBusy || twitterAiApiKey.trim().length < 8}
-                                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-sky-400/20 bg-sky-400/10 text-sky-300 hover:bg-sky-400/20 disabled:cursor-not-allowed disabled:opacity-35"
-                                title={tf("features.twitter-signals.saveKey", "安全保存 API Key")}
-                                aria-label={tf("features.twitter-signals.saveKey", "安全保存 API Key")}
-                              >
-                                {twitterAiKeyBusy && !twitterAiKeySaved
-                                  ? <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                                  : <Save className="h-3.5 w-3.5" />}
-                              </button>
-                              {twitterAiKeySaved && (
-                                <button
-                                  type="button"
-                                  onClick={() => void deleteTwitterAiApiKey()}
-                                  disabled={twitterAiKeyBusy}
-                                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-red-400/15 bg-red-400/[0.06] text-red-300 hover:bg-red-400/15 disabled:cursor-not-allowed disabled:opacity-35"
-                                  title={tf("features.twitter-signals.removeKey", "移除保存的 API Key")}
-                                  aria-label={tf("features.twitter-signals.removeKey", "移除保存的 API Key")}
-                                >
-                                  {twitterAiKeyBusy
-                                    ? <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                                    : <Trash2 className="h-3.5 w-3.5" />}
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        )}
-                      </>
-                    )}
+                  <div className="border-b border-white/10 bg-black/15 px-3 py-3 md:px-4">
+                    {renderResearchAiConfiguration()}
                   </div>
                 )}
 
@@ -20560,6 +21016,62 @@ export default function Home() {
           </div>
         );
       }
+
+      case "defillama-stats":
+        return (
+          <DefiLlamaStatsPanel
+            aiProvider={{
+              kind: twitterAiProviderKind,
+              endpoint: twitterAiEndpoint,
+              model: twitterAiModel,
+              apiKey: twitterAiApiKey,
+            }}
+            aiConfiguration={renderResearchAiConfiguration()}
+            labels={{
+              title: tf("features.defillama-stats.title", "DeFi 数据"),
+              hint: tf("features.defillama-stats.hint", "基于 DefiLlama 公开数据的公链与协议交易额、收入排名，可辅助筛选优质标的。"),
+              chainVolume: tf("features.defillama-stats.chainVolume", "公链交易额"),
+              chainRevenue: tf("features.defillama-stats.chainRevenue", "收入排名"),
+              protocolVolume: tf("features.defillama-stats.protocolVolume", "协议交易额"),
+              protocolRevenue: tf("features.defillama-stats.protocolRevenue", "协议收入"),
+              aiView: tf("features.defillama-stats.aiView", "AI 分析"),
+              period24h: tf("features.defillama-stats.period24h", "24h"),
+              period7d: tf("features.defillama-stats.period7d", "7d"),
+              period30d: tf("features.defillama-stats.period30d", "30d"),
+              search: tf("features.defillama-stats.search", "搜索名称、分类或链"),
+              allCategories: tf("features.defillama-stats.allCategories", "全部分类"),
+              refresh: tf("features.defillama-stats.refresh", "刷新"),
+              refreshing: tf("features.defillama-stats.refreshing", "更新中..."),
+              updatedAt: tf("features.defillama-stats.updatedAt", "本地缓存于 {time}"),
+              loading: tf("features.defillama-stats.loading", "正在加载 DefiLlama 数据..."),
+              empty: tf("features.defillama-stats.empty", "没有匹配的排名数据"),
+              error: tf("features.defillama-stats.error", "加载 DefiLlama 数据失败"),
+              rank: tf("features.defillama-stats.rank", "#"),
+              name: tf("features.defillama-stats.name", "名称"),
+              token: tf("features.defillama-stats.token", "代币"),
+              category: tf("features.defillama-stats.category", "分类"),
+              chains: tf("features.defillama-stats.chains", "链"),
+              value: tf("features.defillama-stats.value", "金额"),
+              volume: tf("features.defillama-stats.volume", "交易额"),
+              revenue: tf("features.defillama-stats.revenue", "收入"),
+              change1d: tf("features.defillama-stats.change1d", "1d"),
+              change7d: tf("features.defillama-stats.change7d", "7d"),
+              totals: tf("features.defillama-stats.totals", "合计"),
+              source: tf("features.defillama-stats.source", "数据来源：DefiLlama"),
+              aiTitle: tf("features.defillama-stats.aiTitle", "AI 分析与决策"),
+              aiHint: tf("features.defillama-stats.aiHint", "会把当前排名摘要注入提问上下文，并结合本地 DefiLlama 工具辅助回答。"),
+              aiPlaceholder: tf("features.defillama-stats.aiPlaceholder", "例如：对比 Solana 与 Base 的 DEX 交易额与协议收入，哪些赛道更值得关注？"),
+              aiAsk: tf("features.defillama-stats.aiAsk", "提问"),
+              aiBusy: tf("features.defillama-stats.aiBusy", "分析中..."),
+              aiEmpty: tf("features.defillama-stats.aiEmpty", "输入问题后，可基于 DefiLlama 排名做筛选与决策辅助。"),
+              aiDesktopOnly: tf("features.defillama-stats.aiDesktopOnly", "AI 分析需要在桌面客户端中使用"),
+              aiFailed: tf("features.defillama-stats.aiFailed", "AI 分析失败"),
+              aiContextHint: tf("features.defillama-stats.aiContextHint", "提问会附带当前周期的排名摘要。"),
+              aiSettings: tf("features.defillama-stats.aiSettings", "模型设置"),
+              localProvider: tf("features.defillama-stats.localProvider", "本地规则"),
+            }}
+          />
+        );
 
       case "dapp-store":
         return (
@@ -20927,6 +21439,18 @@ export default function Home() {
             icon: <Database className="h-4 w-4" />,
           },
           {
+            id: "ai-models",
+            group: "ai",
+            title: tf("features.settings.aiModelsTitle", "AI 模型"),
+            description: tf("features.settings.aiModelsHint", "为研究助手和 DeFi 分析配置共享模型"),
+            summary: twitterAiProviderKind === "local"
+              ? tf("features.twitter-signals.localResearch", "本地检索")
+              : researchAiProviderPreset(twitterAiProviderKind).label
+                || tf("features.twitter-signals.openAiCompatible", "OpenAI 兼容"),
+            keywords: ["AI", "model", "provider", "endpoint", "API key", "模型", "提供方", "密钥"],
+            icon: <Bot className="h-4 w-4" />,
+          },
+          {
             id: "skills",
             group: "ai",
             title: aiSkillLocale === "zh" ? "内置技能市场" : "Built-in Skill Market",
@@ -21105,6 +21629,25 @@ export default function Home() {
                       </div>
                     ))}
                     {dappPermissions.length === 0 && <p className="p-6 text-center text-sm text-gray-500">{tf("features.settings.connectionsEmpty", "没有已授权的应用")}</p>}
+                  </section>
+                )}
+
+                {settingsSection === "ai-models" && (
+                  <section className="space-y-4 rounded-lg border border-white/10 bg-white/[0.035] p-4">
+                    <div>
+                      <h3 className="text-sm font-semibold text-gray-100">
+                        {tf("features.settings.aiModelsTitle", "AI 模型")}
+                      </h3>
+                      <p className="mt-1 text-xs leading-5 text-gray-500">
+                        {tf(
+                          "features.settings.aiModelsSharedHint",
+                          "此配置由 AI 研究助手和 DeFi 数据分析全局共享；API Key 只保存在系统安全存储中。",
+                        )}
+                      </p>
+                    </div>
+                    <div className="border-t border-white/10 pt-4">
+                      {renderResearchAiConfiguration()}
+                    </div>
                   </section>
                 )}
 
@@ -26707,7 +27250,7 @@ export default function Home() {
         : null;
 
     return (
-      <div className={formId === "dapp-store" || formId === "twitter-signals" ? "h-full min-h-0" : "space-y-4"}>
+      <div className={formId === "dapp-store" || formId === "twitter-signals" || formId === "defillama-stats" ? "h-full min-h-0" : "space-y-4"}>
         {showTokenActionHeader && (
           <div className="space-y-4 rounded-2xl border border-white/10 bg-white/5 p-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -26801,6 +27344,7 @@ export default function Home() {
         "pump-workbench": t("features.pump-workbench.title"),
         "dapp-store": tf("features.dapp-store.title", "DApp Store"),
         "twitter-signals": tf("features.twitter-signals.title", "推文线索"),
+        "defillama-stats": tf("features.defillama-stats.title", "DeFi 数据"),
         "contract-tools": tf("features.contract-tools.title", "合约工具"),
         "program-workbench": t("features.program-workbench.title"),
         "nonce-workbench": t("features.nonce-workbench.title"),
@@ -26847,7 +27391,10 @@ export default function Home() {
       } as Record<string, string>)[selectedForm] ||
       t("formUi.pickFeature")
     : t("app.welcome");
-  const isBrowserWorkspaceForm = selectedForm === "dapp-store" || selectedForm === "twitter-signals";
+  const isBrowserWorkspaceForm =
+    selectedForm === "dapp-store" ||
+    selectedForm === "twitter-signals" ||
+    selectedForm === "defillama-stats";
   const showFormHeader = selectedForm !== "wallet-list" && !isBrowserWorkspaceForm;
   const isWideWorkspaceForm = [
     "contract-tools",
@@ -26859,16 +27406,17 @@ export default function Home() {
     "external-sign",
     "dapp-store",
     "twitter-signals",
+    "defillama-stats",
     "squads-prepare-upgrade-buffer",
     "squads-program-upgrade",
   ].includes(selectedForm || "");
   const contentContainerClass = isBrowserWorkspaceForm
-    ? "h-full min-h-0 w-full p-0"
+    ? "flex h-full min-h-0 w-full flex-col p-0"
     : isWideWorkspaceForm
     ? "mx-auto w-full max-w-[1760px] p-3 space-y-3 sm:p-4 lg:p-5 lg:space-y-4 2xl:max-w-[1900px]"
     : "max-w-5xl mx-auto p-3 space-y-3 sm:p-4 lg:p-8 lg:space-y-4";
   const contentCardClass = isBrowserWorkspaceForm
-    ? "app-content-card app-dapp-card h-full min-h-0 bg-black/40"
+    ? "app-content-card app-dapp-card flex h-full min-h-0 flex-col overflow-hidden bg-black/40"
     : "app-content-card bg-black/40 backdrop-blur-xl rounded-xl border border-white/10 p-3 sm:p-4 lg:rounded-2xl lg:p-6";
   const themeOptions: ThemeOption[] = [
     { id: "light", label: t("app.themeDay"), icon: <Sun className="h-4 w-4" /> },
@@ -27123,7 +27671,7 @@ export default function Home() {
       <div className={`app-main-surface min-w-0 flex-1 bg-gradient-to-br from-black via-purple-950 to-black ${
         isBrowserWorkspaceForm ? "overflow-hidden" : "overflow-y-auto"
       }`}>
-        <div className={isBrowserWorkspaceForm ? "h-full min-h-0" : "min-h-full overflow-y-auto"}>
+        <div className={isBrowserWorkspaceForm ? "flex h-full min-h-0 flex-col" : "min-h-full overflow-y-auto"}>
           <div className={contentContainerClass}>
             <div className={contentCardClass}>
               {showFormHeader && (

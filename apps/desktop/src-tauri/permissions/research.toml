@@ -3,6 +3,8 @@ identifier = "allow-research-store"
 description = "Allow the trusted main wallet window to manage the local research knowledge base and KOL records."
 commands.allow = [
   "research_ingest",
+  "research_list_defillama_rankings",
+  "research_put_defillama_rankings",
   "research_scan_cursor",
   "research_resolve_tokens",
   "research_list_kols",

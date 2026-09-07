@@ -26,3 +26,32 @@ test("preset lookup returns the exact provider configuration", () => {
   assert.equal(providers.researchAiProviderPreset("grok").label, "Grok / xAI");
   assert.equal(providers.researchAiProviderPreset("ollama").requiresApiKey, false);
 });
+
+test("global AI preferences migrate from the legacy research key", () => {
+  const storage = {
+    getItem(key) {
+      if (key !== providers.LEGACY_TWITTER_RESEARCH_AI_STORAGE_KEY) return null;
+      return JSON.stringify({ kind: "deepseek", endpoint: "https://gateway.example/v1", model: "custom-chat" });
+    },
+  };
+  assert.deepEqual(providers.readResearchAiPreferences(storage), {
+    kind: "deepseek",
+    endpoint: "https://gateway.example/v1",
+    model: "custom-chat",
+  });
+});
+
+test("global AI preferences prefer the current key and bound stored fields", () => {
+  const values = {
+    [providers.RESEARCH_AI_STORAGE_KEY]: JSON.stringify({
+      kind: "gpt",
+      endpoint: "x".repeat(2_049),
+      model: "m".repeat(121),
+    }),
+    [providers.LEGACY_TWITTER_RESEARCH_AI_STORAGE_KEY]: JSON.stringify({ kind: "deepseek" }),
+  };
+  const result = providers.readResearchAiPreferences({ getItem: (key) => values[key] ?? null });
+  assert.equal(result.kind, "gpt");
+  assert.equal(result.endpoint, providers.researchAiProviderPreset("gpt").endpoint);
+  assert.equal(result.model, providers.researchAiProviderPreset("gpt").model);
+});

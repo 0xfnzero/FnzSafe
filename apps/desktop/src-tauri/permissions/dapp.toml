@@ -4,6 +4,11 @@ description = "Open an embedded Solana DApp browser tab."
 commands.allow = ["dapp_open_tab"]
 
 [[permission]]
+identifier = "allow-signal-translation"
+description = "Translate signal text through the restricted Google Translate command."
+commands.allow = ["translate_signal_text"]
+
+[[permission]]
 identifier = "allow-open-url-in-chrome"
 description = "Open a validated HTTPS URL in Google Chrome."
 commands.allow = ["open_url_in_chrome"]
@@ -12,6 +17,11 @@ commands.allow = ["open_url_in_chrome"]
 identifier = "allow-navigate-dapp-tab"
 description = "Navigate an embedded Solana DApp browser tab."
 commands.allow = ["dapp_navigate_tab"]
+
+[[permission]]
+identifier = "allow-reload-dapp-tab"
+description = "Reload an existing embedded DApp browser tab."
+commands.allow = ["dapp_reload_tab"]
 
 [[permission]]
 identifier = "allow-set-active-dapp-tab"

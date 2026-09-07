@@ -8,6 +8,7 @@ import {
   formatCompactUsd,
   parseCapturedFomoAlerts,
   signalSwapUrl,
+  walletNetworkForChain,
 } from "./fomoSignals.ts";
 
 test("maps Fomo buy and sell event directions", () => {
@@ -141,15 +142,51 @@ test("ignores a valid Fomo URL when it points to a different token", () => {
   });
 });
 
-test("uses Jupiter only for non-Fomo Solana swap signals", () => {
+test("builds chain-specific buy URLs with the native token as input", () => {
   const contractAddress = "8DPB5jBfDCmh6gLxP3CVXwtuVN8m9vJw8n6dQ1XjFezH";
   assert.equal(
     signalSwapUrl({ signalSource: "x", chain: "Solana", contractAddress }),
     `https://jup.ag/swap/SOL-${contractAddress}`,
   );
+  const evmContractAddress = "0x7dbf38976f6d3b9c529e7d9484a71898b409ee6a";
+  assert.equal(
+    signalSwapUrl({ signalSource: "x", chain: "BSC", contractAddress: evmContractAddress }),
+    `https://pancakeswap.finance/swap?chain=bsc&inputCurrency=BNB&outputCurrency=${evmContractAddress}`,
+  );
+  assert.equal(
+    signalSwapUrl({ signalSource: "x", chain: "Robinhood", contractAddress: evmContractAddress }),
+    `https://1inch.com/swap?src=4663:ETH&dst=4663:${evmContractAddress}`,
+  );
+});
+
+test("uses the configured chain swap for Fomo signals while preserving the Fomo page action", () => {
+  const contractAddress = "0x7dbf38976f6d3b9c529e7d9484a71898b409ee6a";
+  assert.equal(signalSwapUrl({
+    signalSource: "fomo",
+    sourceUrl: `https://fomo.family/tokens/robinhood/${contractAddress}?tradeId=trade-1`,
+    chain: "Robinhood",
+    contractAddress,
+  }), `https://1inch.com/swap?src=4663:ETH&dst=4663:${contractAddress}`);
+  assert.equal(fomoTokenActionUrls({
+    sourceUrl: `https://fomo.family/tokens/robinhood/${contractAddress}?tradeId=trade-1`,
+    chain: "Robinhood",
+    contractAddress,
+  }).fomoUrl, `https://fomo.family/tokens/robinhood/${contractAddress}?tradeId=trade-1`);
+});
+
+test("rejects unsupported chains and invalid contract addresses for swaps", () => {
   assert.equal(signalSwapUrl({
     signalSource: "x",
-    chain: "BSC",
+    chain: "Ethereum",
     contractAddress: "0x7dbf38976f6d3b9c529e7d9484a71898b409ee6a",
   }), undefined);
+  assert.equal(signalSwapUrl({ chain: "BSC", contractAddress: "0x1234" }), undefined);
+  assert.equal(signalSwapUrl({ chain: "Solana", contractAddress: "not-a-mint" }), undefined);
+});
+
+test("maps DApp chains to the matching wallet network", () => {
+  assert.deepEqual(walletNetworkForChain("Solana"), { family: "solana", chain: "Solana" });
+  assert.deepEqual(walletNetworkForChain("BSC"), { family: "evm", chain: "BSC", chainId: 56 });
+  assert.deepEqual(walletNetworkForChain("Robinhood"), { family: "evm", chain: "Robinhood", chainId: 4663 });
+  assert.equal(walletNetworkForChain("Unknown"), undefined);
 });

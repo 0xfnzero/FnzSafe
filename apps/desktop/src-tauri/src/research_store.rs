@@ -43,6 +43,13 @@ const MAX_FUTURE_CAPTURE_SKEW_MS: i64 = 5 * 60 * 1_000;
 const DSH_PROCESS_TIMEOUT: Duration = Duration::from_secs(190);
 const MAX_DSH_STDOUT_BYTES: u64 = 256 * 1024;
 const MAX_DSH_STDERR_BYTES: u64 = 64 * 1024;
+const MAX_DEFILLAMA_RANKINGS_JSON_BYTES: usize = 4 * 1024 * 1024;
+const DEFILLAMA_RANKING_VIEWS: &[&str] = &[
+    "chain-volume",
+    "chain-revenue",
+    "protocol-volume",
+    "protocol-revenue",
+];
 const RESEARCH_CHAIN_NAMES: &[&str] = &[
     "Robinhood",
     "Ethereum",
@@ -139,6 +146,15 @@ impl ResearchStore {
     fn open(&self) -> Result<Connection, String> {
         open_database(&self.database_path)
     }
+
+    pub fn ingest_request(
+        &self,
+        request: &ResearchIngestRequest,
+    ) -> Result<ResearchIngestResult, String> {
+        let mut connection = self.open()?;
+        initialize_schema(&connection)?;
+        ingest(&mut connection, request)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -233,6 +249,15 @@ pub struct ResearchIngestResult {
     pub tweets_inserted: usize,
     pub duplicate_tweets: usize,
     pub mentions_upserted: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResearchDefiLlamaRankingsRecord {
+    pub view: String,
+    pub payload_json: String,
+    pub fetched_at_ms: i64,
+    pub updated_at_ms: i64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -690,6 +715,12 @@ fn initialize_schema(connection: &Connection) -> Result<(), String> {
                 holders INTEGER,
                 source TEXT,
                 PRIMARY KEY(chain, token_key, captured_at_ms)
+            );
+            CREATE TABLE IF NOT EXISTS research_defillama_rankings (
+                view TEXT PRIMARY KEY,
+                payload_json TEXT NOT NULL,
+                fetched_at_ms INTEGER NOT NULL,
+                updated_at_ms INTEGER NOT NULL
             );
             CREATE TABLE IF NOT EXISTS research_token_metadata (
                 chain TEXT NOT NULL,
@@ -1949,7 +1980,11 @@ fn upsert_tweet(
             INSERT INTO research_tweets (
                 tweet_key, tweet_id, author_handle, author_name, avatar_url, text,
                 content_hash, source_url, published_at, captured_at_ms
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            ) VALUES (
+                ?1, ?2, ?3, ?4,
+                COALESCE(?5, (SELECT avatar_url FROM research_authors WHERE handle = ?3)),
+                ?6, ?7, ?8, ?9, ?10
+            )
             ON CONFLICT(tweet_key) DO UPDATE SET
                 tweet_id = COALESCE(excluded.tweet_id, research_tweets.tweet_id),
                 author_name = COALESCE(excluded.author_name, research_tweets.author_name),
@@ -2010,14 +2045,126 @@ fn upsert_tweet(
     Ok((key, !existed))
 }
 
+fn validate_defillama_rankings_payload(
+    view: &str,
+    payload_json: &str,
+    fetched_at_ms: i64,
+) -> Result<(), String> {
+    if !DEFILLAMA_RANKING_VIEWS.contains(&view) {
+        return Err("unsupported DefiLlama rankings view".to_string());
+    }
+    if payload_json.is_empty() || payload_json.len() > MAX_DEFILLAMA_RANKINGS_JSON_BYTES {
+        return Err("invalid DefiLlama rankings payload size".to_string());
+    }
+    if fetched_at_ms <= 0 {
+        return Err("invalid DefiLlama rankings timestamp".to_string());
+    }
+    let payload: serde_json::Value = serde_json::from_str(payload_json)
+        .map_err(|error| format!("invalid DefiLlama rankings JSON: {error}"))?;
+    let payload_view = payload
+        .get("view")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "DefiLlama rankings payload is missing its view".to_string())?;
+    if payload_view != view {
+        return Err("DefiLlama rankings payload view does not match".to_string());
+    }
+    let payload_fetched_at = payload
+        .get("fetchedAt")
+        .and_then(serde_json::Value::as_i64)
+        .ok_or_else(|| "DefiLlama rankings payload is missing its timestamp".to_string())?;
+    if payload_fetched_at != fetched_at_ms {
+        return Err("DefiLlama rankings payload timestamp does not match".to_string());
+    }
+    if !payload
+        .get("totals")
+        .is_some_and(serde_json::Value::is_object)
+        || !payload.get("rows").is_some_and(serde_json::Value::is_array)
+    {
+        return Err("DefiLlama rankings payload has an invalid shape".to_string());
+    }
+    Ok(())
+}
+
+fn put_defillama_rankings(
+    connection: &Connection,
+    view: &str,
+    payload_json: &str,
+    fetched_at_ms: i64,
+) -> Result<ResearchDefiLlamaRankingsRecord, String> {
+    validate_defillama_rankings_payload(view, payload_json, fetched_at_ms)?;
+    let updated_at_ms = now_ms();
+    connection
+        .execute(
+            r#"
+            INSERT INTO research_defillama_rankings (view, payload_json, fetched_at_ms, updated_at_ms)
+            VALUES (?1, ?2, ?3, ?4)
+            ON CONFLICT(view) DO UPDATE SET
+                payload_json = excluded.payload_json,
+                fetched_at_ms = excluded.fetched_at_ms,
+                updated_at_ms = excluded.updated_at_ms
+            "#,
+            params![view, payload_json, fetched_at_ms, updated_at_ms],
+        )
+        .map_err(|error| format!("failed to save DefiLlama rankings: {error}"))?;
+    Ok(ResearchDefiLlamaRankingsRecord {
+        view: view.to_string(),
+        payload_json: payload_json.to_string(),
+        fetched_at_ms,
+        updated_at_ms,
+    })
+}
+
+fn list_defillama_rankings(
+    connection: &Connection,
+) -> Result<Vec<ResearchDefiLlamaRankingsRecord>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT view, payload_json, fetched_at_ms, updated_at_ms \
+             FROM research_defillama_rankings ORDER BY view",
+        )
+        .map_err(|error| format!("failed to prepare DefiLlama rankings cache: {error}"))?;
+    let records = statement
+        .query_map([], |row| {
+            Ok(ResearchDefiLlamaRankingsRecord {
+                view: row.get(0)?,
+                payload_json: row.get(1)?,
+                fetched_at_ms: row.get(2)?,
+                updated_at_ms: row.get(3)?,
+            })
+        })
+        .map_err(|error| format!("failed to query DefiLlama rankings cache: {error}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("failed to read DefiLlama rankings cache: {error}"))?;
+    Ok(records)
+}
+
+#[tauri::command]
+pub fn research_list_defillama_rankings(
+    store: tauri::State<'_, ResearchStore>,
+) -> Result<Vec<ResearchDefiLlamaRankingsRecord>, String> {
+    let connection = store.open()?;
+    initialize_schema(&connection)?;
+    list_defillama_rankings(&connection)
+}
+
+#[tauri::command]
+pub fn research_put_defillama_rankings(
+    store: tauri::State<'_, ResearchStore>,
+    view: String,
+    payload_json: String,
+    fetched_at_ms: i64,
+) -> Result<ResearchDefiLlamaRankingsRecord, String> {
+    let connection = store.open()?;
+    initialize_schema(&connection)?;
+    put_defillama_rankings(&connection, &view, &payload_json, fetched_at_ms)
+}
+
 #[tauri::command]
 pub fn research_ingest(
     store: tauri::State<'_, ResearchStore>,
     request: ResearchIngestRequest,
 ) -> Result<ResearchIngestResult, String> {
-    let mut connection = store.open()?;
-    initialize_schema(&connection)?;
-    ingest(&mut connection, &request)
+    store.ingest_request(&request)
 }
 
 #[tauri::command]
@@ -4096,13 +4243,14 @@ fn list_recent_signals(
                    COALESCE(rt.chain, m.chain),
                    COALESCE(rt.contract_address, m.contract_address),
                    COALESCE(rt.symbol, m.token_symbol),
-                   t.author_handle, t.author_name, t.avatar_url, t.text,
+                   t.author_handle, t.author_name, COALESCE(t.avatar_url, a.avatar_url), t.text,
                    t.source_url, t.tweet_id, t.published_at, m.captured_at_ms,
                    rr.status, rr.confidence,
                    CASE WHEN rr.method = 'tweet-explicit' THEN NULL ELSE rr.method END,
                    m.chain, m.contract_address
             FROM research_token_mentions m
             JOIN research_tweets t ON t.tweet_key = m.tweet_key
+            LEFT JOIN research_authors a ON a.handle = t.author_handle
             LEFT JOIN research_token_resolutions rr ON rr.mention_id = m.id
             LEFT JOIN research_tokens rt ON rt.id = rr.token_id AND rr.status = 'resolved'
             WHERE COALESCE(CAST(strftime('%s', t.published_at) AS INTEGER) * 1000, m.captured_at_ms)
@@ -5076,6 +5224,72 @@ pub async fn research_ai_chat(
 mod tests {
     use super::*;
 
+    fn defillama_payload(view: &str, fetched_at_ms: i64, value: i64) -> String {
+        serde_json::json!({
+            "view": view,
+            "fetchedAt": fetched_at_ms,
+            "totals": {
+                "value24h": value,
+                "value7d": value,
+                "value30d": value
+            },
+            "rows": [{
+                "id": "solana",
+                "name": "Solana",
+                "value24h": value,
+                "value7d": value,
+                "value30d": value
+            }]
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn persists_and_replaces_defillama_rankings_snapshots() {
+        let connection = Connection::open_in_memory().unwrap();
+        initialize_schema(&connection).unwrap();
+
+        let first = defillama_payload("chain-volume", 1_700_000_000_000, 10);
+        put_defillama_rankings(&connection, "chain-volume", &first, 1_700_000_000_000).unwrap();
+        let replacement = defillama_payload("chain-volume", 1_700_000_001_000, 20);
+        put_defillama_rankings(&connection, "chain-volume", &replacement, 1_700_000_001_000)
+            .unwrap();
+
+        let records = list_defillama_rankings(&connection).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].view, "chain-volume");
+        assert_eq!(records[0].fetched_at_ms, 1_700_000_001_000);
+        assert_eq!(records[0].payload_json, replacement);
+    }
+
+    #[test]
+    fn rejects_invalid_defillama_rankings_snapshots() {
+        let connection = Connection::open_in_memory().unwrap();
+        initialize_schema(&connection).unwrap();
+        let payload = defillama_payload("chain-volume", 1_700_000_000_000, 10);
+
+        assert!(
+            put_defillama_rankings(&connection, "unknown-view", &payload, 1_700_000_000_000,)
+                .is_err()
+        );
+        assert!(
+            put_defillama_rankings(&connection, "chain-revenue", &payload, 1_700_000_000_000,)
+                .is_err()
+        );
+        assert!(
+            put_defillama_rankings(&connection, "chain-volume", "not-json", 1_700_000_000_000,)
+                .is_err()
+        );
+        assert!(put_defillama_rankings(
+            &connection,
+            "chain-volume",
+            &"x".repeat(MAX_DEFILLAMA_RANKINGS_JSON_BYTES + 1),
+            1_700_000_000_000,
+        )
+        .is_err());
+        assert!(list_defillama_rankings(&connection).unwrap().is_empty());
+    }
+
     #[test]
     fn upgrades_existing_market_snapshot_schema_with_period_metrics() {
         let connection = Connection::open_in_memory().unwrap();
@@ -5953,6 +6167,13 @@ mod tests {
         )
         .unwrap();
 
+        connection
+            .execute(
+                "UPDATE research_authors SET avatar_url = 'https://pbs.twimg.com/profile_images/123/avatar.jpg' WHERE handle = 'analyst'",
+                [],
+            )
+            .unwrap();
+
         let records = list_recent_signals(&connection, current_time_ms).unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].tweet_id.as_deref(), Some("300"));
@@ -5960,6 +6181,10 @@ mod tests {
         assert_eq!(records[0].contract_address.as_deref(), Some(address));
         assert_eq!(records[0].resolution_status.as_deref(), Some("resolved"));
         assert_eq!(records[0].resolution_source, None);
+        assert_eq!(
+            records[0].avatar_url.as_deref(),
+            Some("https://pbs.twimg.com/profile_images/123/avatar.jpg")
+        );
 
         connection
             .execute(

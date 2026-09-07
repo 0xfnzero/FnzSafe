@@ -8,10 +8,12 @@
   "permissions": [
     "core:default",
     "allow-proxy-api-request",
+    "allow-signal-translation",
     "allow-open-external-url",
     "allow-open-url-in-chrome",
     "allow-open-dapp-tab",
     "allow-navigate-dapp-tab",
+    "allow-reload-dapp-tab",
     "allow-set-active-dapp-tab",
     "allow-close-dapp-tab",
     "allow-request-dapp-tab-text",

@@ -8,6 +8,37 @@ export const TWITTER_SIGNAL_PAGE_SIZE = 100;
 const TOKEN_RESOLUTION_RETRY_MS = 30_000;
 const TOKEN_DISCOVERY_RETRY_MS = 5 * 60_000;
 
+function normalizeTwitterTweetId(value: string | null | undefined): string | undefined {
+  const trimmed = value?.trim() || "";
+  if (!/^\d+$/u.test(trimmed)) return undefined;
+  return trimmed.replace(/^0+(?=\d)/u, "");
+}
+
+export function compareTwitterTweetIds(
+  left: string | null | undefined,
+  right: string | null | undefined,
+): number {
+  const normalizedLeft = normalizeTwitterTweetId(left);
+  const normalizedRight = normalizeTwitterTweetId(right);
+  if (!normalizedLeft) return normalizedRight ? -1 : 0;
+  if (!normalizedRight) return 1;
+  if (normalizedLeft.length !== normalizedRight.length) {
+    return normalizedLeft.length - normalizedRight.length;
+  }
+  return normalizedLeft === normalizedRight ? 0 : normalizedLeft < normalizedRight ? -1 : 1;
+}
+
+export function newestTwitterTweetId(
+  values: Iterable<string | null | undefined>,
+): string | undefined {
+  let newest: string | undefined;
+  for (const value of values) {
+    const normalized = normalizeTwitterTweetId(value);
+    if (normalized && compareTwitterTweetIds(normalized, newest) > 0) newest = normalized;
+  }
+  return newest;
+}
+
 export interface StoredTwitterSignal {
   id: string;
   chain: string;

@@ -1,6 +1,6 @@
 [package]
 name = "fnzero-safe-desktop"
-version = "0.4.6"
+version = "0.4.7"
 description = "FnzSafe — Tauri desktop shell"
 authors = ["you"]
 license = "MIT"
@@ -30,7 +30,7 @@ tauri-runtime-cef = { git = "https://github.com/tauri-apps/tauri.git", tag = "ta
 tauri-plugin-deep-link = { git = "https://github.com/tauri-apps/plugins-workspace.git", rev = "1423992771e0b57582ca3b06a6adc46ec26aa784", package = "tauri-plugin-deep-link" }
 tauri-plugin-log = { git = "https://github.com/tauri-apps/plugins-workspace.git", rev = "1423992771e0b57582ca3b06a6adc46ec26aa784", package = "tauri-plugin-log" }
 tauri-plugin-single-instance = { git = "https://github.com/tauri-apps/plugins-workspace.git", rev = "1423992771e0b57582ca3b06a6adc46ec26aa784", package = "tauri-plugin-single-instance", features = ["deep-link"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
 aes-gcm = "0.10"
 aes = "0.8"
 cbc = { version = "0.1", features = ["alloc"] }

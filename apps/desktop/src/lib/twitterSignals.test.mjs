@@ -10,6 +10,7 @@ import {
   hasValidTweetSignalIdentity,
   isTokenResolutionTarget,
   mergeTweetTokenSignals,
+  newestTwitterTweetId,
   normalizeTweetSignalText,
   paginateTweetSignalGroups,
   parseStoredTwitterSignals,
@@ -17,6 +18,15 @@ import {
   tokenResolutionRetryDelayMs,
   tokenSignalObservation,
 } from "./twitterSignals.ts";
+
+test("compares Twitter snowflake IDs without losing integer precision", () => {
+  assert.equal(
+    newestTwitterTweetId(["2096895735979794769", "2096895735979794770", "00042", "invalid"]),
+    "2096895735979794770",
+  );
+  assert.equal(newestTwitterTweetId(["000", "0"]), "0");
+  assert.equal(newestTwitterTweetId([undefined, ""]), undefined);
+});
 
 test("filters X and Fomo signals by their exact account handle", () => {
   const signals = [{ id: "x", author: "@shared", signalSource: "x" }, {
@@ -516,6 +526,7 @@ test("backs off longer while waiting for a new token to appear", () => {
 
 test("keeps an inferred chain when the same unknown-address signal is captured again", () => {
   const address = "0x39dbed3a2bd333467115de45665cc57f813c4571";
+  const detectedAt = new Date().toISOString();
   const base = {
     id: "fresh",
     author: "@kol",
@@ -524,7 +535,7 @@ test("keeps an inferred chain when the same unknown-address signal is captured a
     contractAddress: address,
     tokenSymbols: ["$PONS"],
     sourceUrl: "https://x.com/kol/status/1",
-    detectedAt: "2026-09-03T00:01:00.000Z",
+    detectedAt,
   };
   const [merged] = mergeTweetTokenSignals([{
     ...base,
@@ -545,6 +556,8 @@ test("keeps an inferred chain when the same unknown-address signal is captured a
 
 test("replaces a symbol-only automatic resolution when a recapture has explicit identity", () => {
   const sourceUrl = "https://x.com/kol/status/2";
+  const previousDetectedAt = new Date(Date.now() - 60_000).toISOString();
+  const currentDetectedAt = new Date().toISOString();
   const [merged] = mergeTweetTokenSignals([{
     id: "stable",
     author: "@kol",
@@ -554,7 +567,7 @@ test("replaces a symbol-only automatic resolution when a recapture has explicit 
     observedChain: "Unknown",
     tokenSymbols: ["$PONS"],
     sourceUrl,
-    detectedAt: "2026-09-03T00:00:00.000Z",
+    detectedAt: previousDetectedAt,
     resolutionStatus: "resolved",
     resolutionConfidence: 0.9,
     resolutionSource: "DexScreener",
@@ -566,7 +579,7 @@ test("replaces a symbol-only automatic resolution when a recapture has explicit 
     contractAddress: "0x2222222222222222222222222222222222222222",
     tokenSymbols: ["$PONS"],
     sourceUrl,
-    detectedAt: "2026-09-03T00:01:00.000Z",
+    detectedAt: currentDetectedAt,
   }]);
 
   assert.equal(merged.id, "stable");

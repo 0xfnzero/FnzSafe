@@ -3447,7 +3447,7 @@ dependencies = [
 
 [[package]]
 name = "fnzero-safe-desktop"
-version = "0.4.6"
+version = "0.4.7"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -3488,7 +3488,7 @@ dependencies = [
 
 [[package]]
 name = "fnzero-safe-desktop-api"
-version = "0.4.6"
+version = "0.4.7"
 dependencies = [
  "aes-gcm",
  "agave-syscalls",

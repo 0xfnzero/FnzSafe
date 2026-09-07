@@ -9,6 +9,7 @@ export type SettingsSection =
   | "address-book"
   | "connections"
   | "browser-data"
+  | "ai-models"
   | "skills"
   | "developer"
   | "about";
