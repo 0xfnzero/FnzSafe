@@ -303,7 +303,7 @@ A: 可能的原因：
 
 - **Solana 官网**: https://solana.com
 - **Solana Explorer**: https://solscan.io
-- **FnzeroSafe GitHub**: https://github.com/0xfnzero/FnzeroSafe
+- **FnzSafe GitHub**: https://github.com/0xfnzero/FnzSafe
 
 ---
 

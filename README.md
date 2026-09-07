@@ -1,6 +1,6 @@
 <div align="center">
-  <h1>FnzSafe</h1>
-  <p><strong>A local-first Solana and EVM wallet workspace for assets, dApps, trading, signals, DeFi research, and multisig.</strong></p>
+  <h1>FnzSafe - Open-Source Solana and EVM Wallet</h1>
+  <p><strong>A local-first, self-custody crypto wallet for desktop and mobile with secure key management, dApp signing, trading signals, DeFi research, and Squads multisig.</strong></p>
   <p>
     <a href="README_CN.md">中文</a> ·
     <a href="https://github.com/0xfnzero/FnzSafe/releases/latest">Download</a> ·
@@ -15,16 +15,27 @@
   </p>
 </div>
 
-FnzSafe combines a Tauri desktop app, a Flutter mobile app, and a Rust core/CLI. Wallet secrets remain in encrypted local keystores, while the desktop client brings wallet operations and market research into one working surface.
+FnzSafe is an open-source multi-chain wallet for Solana, Ethereum, BNB Smart Chain (BSC), Base, Arbitrum, Optimism, Polygon, Avalanche, Robinhood Chain, and other EVM-compatible networks. It combines a Tauri desktop wallet, a Flutter mobile wallet, and a Rust wallet SDK/CLI. Private keys remain in encrypted local keystores while wallet operations, dApps, crypto signals, and market research share one working surface.
 
-## Features
+## Wallet Capabilities
 
-- **Wallets:** create or import Solana/EVM wallets, manage multiple accounts, inspect SOL/SPL/Token-2022 and native/ERC-20 assets, and send or receive funds.
-- **Security:** password-encrypted keystores, Touch ID/biometric confirmation, transaction previews, local API protection, and sensitive-log filtering.
-- **Trading and dApps:** built-in Solana dApp browser, wallet-aware chain switching, Jupiter/Fomo/DEX links, Pump.fun and PumpSwap tools, and user-confirmed signing.
-- **Signals:** continuously refreshed Twitter and Fomo feeds, BUY/SELL filters, token and KOL views, translation, local caching, and reconnect controls.
-- **DeFi research:** cached DefiLlama chain/protocol volume and revenue rankings plus local AI-assisted research.
-- **Advanced workflows:** Squads v4 multisig, SOL/SPL proposals, WSOL and nonce tools, Program deployment/upgrades, Rust SDK, CLI, and bot integration.
+| Area | Included capabilities |
+|---|---|
+| Wallet lifecycle | Create a universal mnemonic wallet, import a mnemonic/private key/Keystore, switch and rename accounts, export encrypted backups or private keys, change passwords, and remove local wallets |
+| Solana wallet | SOL, SPL Token, and Token-2022 balances; token metadata; receive/send flows; token actions; transaction history; mainnet, devnet, testnet, and custom RPC endpoints |
+| EVM wallet | One derived address across EVM networks; native and ERC-20 assets; EIP-1559 transfers; transaction history; built-in networks and custom EVM RPC configuration |
+| dApp wallet | Built-in Solana dApp browser, provider injection, message/transaction signing, deep links, transaction previews, automatic chain selection, and revocable connected-app permissions |
+| Wallet security | Argon2id + AES-256-GCM keystores, Touch ID/biometric confirmation, TOTP, Triple Wallet (3FA), auto-lock, sensitive-log filtering, and normal signing without returning decrypted private keys to the frontend |
+| Shared operations | SOL/SPL/ERC-20 transfers, WSOL wrap/unwrap/close, durable nonce accounts, address book, Squads v4 multisig, and SOL/SPL payment proposals |
+| Developer tools | Solana Program deploy/upgrade/build, generic function calls, external signing requests, deployment history, Rust SDK, CLI, local API, and bot integration |
+
+## Trading, Signals, and DeFi
+
+- **Chain-aware trading:** separate Fomo and Swap actions, prefilled token contracts, Jupiter routing on Solana, configured DEX routing on EVM chains, and Pump.fun/PumpSwap sell and cashback tools.
+- **Twitter and Fomo signals:** browser-backed Twitter/X collection without the Twitter API, live Fomo BUY/SELL events, KOL filters, token resolution, translation, reconnect controls, background refresh, and SQLite caching.
+- **Token intelligence:** chain, contract, price, market cap, liquidity, interval performance, mention counts, KOL counts, and direct Fomo/Swap actions.
+- **DeFi analytics:** cached DefiLlama chain/protocol volume and revenue rankings with stale-while-revalidate loading.
+- **AI research:** local evidence retrieval with configurable AI providers for signal and DeFi analysis; API keys stay in secure system storage.
 - **Platforms:** macOS and Windows desktop packages, iOS and Android apps, and an interactive Rust CLI.
 
 ## Screenshots
@@ -33,11 +44,11 @@ All screenshots below are from the desktop client with locally loaded wallet and
 
 | Wallet assets | Solana wallet | Wallet accounts |
 |---|---|---|
-| ![Wallet assets](docs/screenshots/en/01-wallet-assets.png) | ![Solana wallet](docs/screenshots/en/02-solana-wallet.png) | ![Wallet accounts](docs/screenshots/en/03-wallet-accounts.png) |
+| ![FnzSafe Solana and EVM wallet asset dashboard](docs/screenshots/en/01-wallet-assets.png) | ![FnzSafe Solana wallet with SOL and SPL token balances](docs/screenshots/en/02-solana-wallet.png) | ![FnzSafe encrypted multi-account wallet manager](docs/screenshots/en/03-wallet-accounts.png) |
 | Solana trading | DApp store | Twitter signals |
-| ![Solana trading](docs/screenshots/en/04-solana-trading.png) | ![DApp store](docs/screenshots/en/05-dapp-store.png) | ![Twitter signals](docs/screenshots/en/06-twitter-signals.png) |
+| ![FnzSafe Solana PumpSwap trading tool](docs/screenshots/en/04-solana-trading.png) | ![FnzSafe built-in Solana dApp browser and DApp store](docs/screenshots/en/05-dapp-store.png) | ![FnzSafe Twitter crypto trading signals](docs/screenshots/en/06-twitter-signals.png) |
 | Fomo stream | DeFi analytics | Token market |
-| ![Fomo stream](docs/screenshots/en/07-fomo-stream.png) | ![DeFi analytics](docs/screenshots/en/08-defi-analytics.png) | ![Token market](docs/screenshots/en/09-token-market.png) |
+| ![FnzSafe Fomo BUY and SELL crypto signal stream](docs/screenshots/en/07-fomo-stream.png) | ![FnzSafe DefiLlama DeFi analytics dashboard](docs/screenshots/en/08-defi-analytics.png) | ![FnzSafe multi-chain token market intelligence](docs/screenshots/en/09-token-market.png) |
 
 ## Requirements
 
