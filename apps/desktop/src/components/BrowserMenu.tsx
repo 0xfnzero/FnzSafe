@@ -271,7 +271,9 @@ export function BrowserMenu({
           };
           setHistory((items) => mergeBrowserHistory(items, [entry]));
         }
-        window.setTimeout(() => void applyAutofill(event.payload.tab_id), 350);
+        if (event.payload.tab_id === activeTabId) {
+          window.setTimeout(() => void applyAutofill(event.payload.tab_id), 350);
+        }
       }),
       listen<DappDownloadEvent>("dapp://download", (event) => {
         setDownloads((items) => {
@@ -288,7 +290,7 @@ export function BrowserMenu({
       cancelled = true;
       unlisteners.splice(0).forEach(safelyUnlisten);
     };
-  }, [applyAutofill, settings.saveHistory]);
+  }, [activeTabId, applyAutofill, settings.saveHistory]);
 
   const runTabAction = async (action: string, value?: string) => {
     if (!tabOpen) {

@@ -45,6 +45,11 @@ final evmChainsProvider = FutureProvider<List<EvmChainConfig>>((ref) async {
     });
 });
 
+final multichainCatalogProvider =
+    FutureProvider<List<MultiChainDescriptor>>((ref) {
+  return ref.watch(mobileBridgeProvider).multichainCatalog();
+});
+
 final activeEvmChainProvider = StateProvider<EvmChainConfig?>((ref) => null);
 
 final activeWalletProvider = StateProvider<WalletSummary?>((ref) => null);

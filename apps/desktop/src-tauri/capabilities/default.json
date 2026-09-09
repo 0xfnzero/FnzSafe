@@ -28,7 +28,7 @@
     "allow-pause-dapp-connections",
     "allow-biometric-wallet-status",
     "allow-biometric-wallet-store-password",
-    "allow-biometric-wallet-get-password",
+    "allow-biometric-wallet-unlock-all",
     "allow-biometric-wallet-delete-password",
     "allow-pick-source-directory",
     "allow-save-download-file",

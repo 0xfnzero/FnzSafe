@@ -175,6 +175,7 @@ test("keeps separate Fomo theses on the same token", () => {
 
 test("preserves captured Fomo metadata when SQLite returns the same signal", () => {
   const sourceUrl = "https://fomo.family/tokens/robinhood/0x1111111111111111111111111111111111111111?tradeId=one";
+  const detectedAt = new Date().toISOString();
   const [merged] = mergeTweetTokenSignals([{
     id: "fomo:one",
     author: "@chefjin",
@@ -183,7 +184,7 @@ test("preserves captured Fomo metadata when SQLite returns the same signal", () 
     chain: "Robinhood",
     contractAddress: "0x1111111111111111111111111111111111111111",
     sourceUrl,
-    detectedAt: "2026-09-05T00:00:00.000Z",
+    detectedAt,
     signalSource: "fomo",
     fomoEventType: "swap_buy",
     tradeDirection: "buy",
@@ -195,7 +196,7 @@ test("preserves captured Fomo metadata when SQLite returns the same signal", () 
     chain: "Robinhood",
     contractAddress: "0x1111111111111111111111111111111111111111",
     sourceUrl,
-    detectedAt: "2026-09-05T00:00:01.000Z",
+    detectedAt,
     signalSource: "fomo",
   }]);
 

@@ -178,12 +178,13 @@ function cleanup(signal = "SIGTERM") {
 runCleanupScript({ fatal: true });
 
 const token = sharedApiToken();
+const publicToken = process.env.FNZERO_SAFE_NATIVE_PROXY === "1" ? "" : token;
 const env = {
   ...process.env,
   FNZERO_SAFE_API_TOKEN: token,
-  NEXT_PUBLIC_FNZERO_SAFE_API_TOKEN: token,
+  NEXT_PUBLIC_FNZERO_SAFE_API_TOKEN: publicToken,
   SOL_SAFEKEY_API_TOKEN: token,
-  NEXT_PUBLIC_SOL_SAFEKEY_API_TOKEN: token,
+  NEXT_PUBLIC_SOL_SAFEKEY_API_TOKEN: publicToken,
   FNZERO_SAFE_DB_PATH: desktopDatabasePath(),
 };
 

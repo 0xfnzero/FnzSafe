@@ -50,6 +50,87 @@ class EvmChainConfig {
       };
 }
 
+class MultiChainNativeAsset {
+  const MultiChainNativeAsset({
+    required this.symbol,
+    required this.name,
+    required this.decimals,
+  });
+
+  final String symbol;
+  final String name;
+  final int decimals;
+}
+
+class MultiChainEndpoint {
+  const MultiChainEndpoint({required this.kind, required this.url});
+
+  final String kind;
+  final String url;
+}
+
+class MultiChainDescriptor {
+  MultiChainDescriptor({
+    required this.chainId,
+    required this.family,
+    required this.name,
+    required this.network,
+    required this.testnet,
+    required this.nativeAsset,
+    required this.defaultDerivationPath,
+    required List<String> addressFormats,
+    required List<String> capabilities,
+    required List<MultiChainEndpoint> endpoints,
+    required this.supportLevel,
+    this.explorerUrl,
+  })  : addressFormats = List.unmodifiable(addressFormats),
+        capabilities = List.unmodifiable(capabilities),
+        endpoints = List.unmodifiable(endpoints);
+
+  final String chainId;
+  final String family;
+  final String name;
+  final String network;
+  final bool testnet;
+  final MultiChainNativeAsset nativeAsset;
+  final String defaultDerivationPath;
+  final List<String> addressFormats;
+  final List<String> capabilities;
+  final List<MultiChainEndpoint> endpoints;
+  final String? explorerUrl;
+  final String supportLevel;
+
+  bool supports(String capability) => capabilities.contains(capability);
+}
+
+class MultiChainNormalizedAddress {
+  const MultiChainNormalizedAddress({
+    required this.chainId,
+    required this.accountId,
+    required this.address,
+  });
+
+  final String chainId;
+  final String accountId;
+  final String address;
+}
+
+class MultiChainDerivedAccount {
+  const MultiChainDerivedAccount({
+    required this.chainId,
+    required this.accountId,
+    required this.address,
+    required this.derivationPath,
+    this.publicKeyHex,
+  });
+
+  final String chainId;
+  final String accountId;
+  final String address;
+  final String derivationPath;
+  final String? publicKeyHex;
+}
+
 class WalletSummary {
   const WalletSummary({
     required this.id,

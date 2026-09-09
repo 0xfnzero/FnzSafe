@@ -1,6 +1,6 @@
 [package]
 name = "fnzero-safe-desktop"
-version = "0.4.7"
+version = "0.5.0"
 description = "FnzSafe — Tauri desktop shell"
 authors = ["you"]
 license = "MIT"
@@ -43,10 +43,12 @@ time = "0.3"
 cookie = "0.18"
 aws-lc-rs = { version = "=1.17.3", default-features = false, features = ["non-fips", "prebuilt-nasm"] }
 base64 = "0.22"
-bs58 = "0.5"
+bs58 = { version = "0.5", features = ["check"] }
+bitcoin = "0.32"
 pem-rfc7468 = { version = "0.7", features = ["std"] }
 rand = "0.8"
 zeroize = "1"
+libc = "0.2"
 rfd = "0.15"
 tokio = { version = "1", features = ["time", "rt"] }
 

@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>FnzSafe - 开源 Solana 与 EVM 多链钱包</h1>
+  <h1>FnzSafe - 开源多链钱包</h1>
   <p><strong>面向桌面端和移动端的本地优先、自托管加密钱包，覆盖安全密钥管理、DApp 签名、交易信号、DeFi 研究与 Squads 多签。</strong></p>
   <p>
     <a href="README.md">English</a> ·
@@ -15,7 +15,7 @@
   </p>
 </div>
 
-FnzSafe 是一个开源多链钱包，支持 Solana、Ethereum、BNB Smart Chain（BSC）、Base、Arbitrum、Optimism、Polygon、Avalanche、Robinhood Chain 及其他 EVM 兼容网络。项目由 Tauri 桌面钱包、Flutter 移动钱包和 Rust 钱包 SDK/CLI 组成；私钥保存在本地加密 Keystore 中，钱包操作、DApp、加密货币信号和市场研究集中在同一个工作界面内。
+FnzSafe 是一个开源多链钱包，支持 Solana 和 EVM 兼容网络，并提供实验性的 Bitcoin 与 TRON 账户适配器。Bitcoin 和 TRON 当前只支持账户派生与地址校验，尚不支持转账和广播。项目由 Tauri 桌面钱包、Flutter 移动钱包和 Rust 钱包 SDK/CLI 组成；私钥保存在本地加密 Keystore 中，钱包操作、DApp、加密货币信号和市场研究集中在同一个工作界面内。
 
 ## 钱包能力
 
@@ -23,7 +23,8 @@ FnzSafe 是一个开源多链钱包，支持 Solana、Ethereum、BNB Smart Chain
 |---|---|
 | 钱包生命周期 | 创建通用助记词钱包，导入助记词/私钥/Keystore，切换和重命名账户，导出加密备份或私钥，修改密码，以及删除本地钱包 |
 | Solana 钱包 | SOL、SPL Token、Token-2022 余额和元数据，收款/转账、代币操作、交易记录，以及 mainnet、devnet、testnet 和自定义 RPC |
-| EVM 钱包 | 一个派生地址用于全部 EVM 网络，原生资产与 ERC-20 资产、EIP-1559 转账、交易记录、内置网络和自定义 EVM RPC |
+| EVM 钱包 | 一个派生地址用于全部 EVM 网络，原生资产与 ERC-20 资产、EIP-1559 转账、配置后的 Etherscan V2 交易记录、内置网络和自定义 EVM RPC |
+| Bitcoin 与 TRON | 通过统一 Rust、桌面和移动链 API 提供实验性的 BIP84/BIP44 账户派生和地址校验；尚未开放交易构建与广播 |
 | DApp 钱包 | 内置 Solana DApp 浏览器、Provider 注入、消息/交易签名、Deep Link、交易预览、自动切换公链，以及可撤销的 DApp 授权 |
 | 钱包安全 | Argon2id + AES-256-GCM Keystore、Touch ID/生物识别、TOTP、三重保护钱包（3FA）、自动锁定、敏感日志过滤，日常签名不会把解密后的私钥返回前端 |
 | 通用操作 | SOL/SPL/ERC-20 转账，WSOL wrap/unwrap/关闭账户，Durable Nonce、地址簿、Squads v4 多签和 SOL/SPL 支付提案 |
@@ -68,6 +69,8 @@ make dev
 
 `make dev` 会启动 Tauri 客户端、`127.0.0.1:3840` 上的 Next.js UI，以及 `127.0.0.1:3841` 上的本地 API。使用 `make stop` 停止全部本地开发进程。
 
+启动前设置 `FNZERO_SAFE_ETHERSCAN_API_KEY`，可在 explorer 与 chain ID 匹配的内置 EVM 网络上启用 Etherscan V2 历史记录。未配置有效 Key 时，对应链描述不会声明 `transactions:history`。
+
 移动端：
 
 ```bash
@@ -97,6 +100,8 @@ make package-android
 
 `make package` 会构建当前主机支持的全部平台。签名 iOS 包需要 Apple Developer 配置；Android 正式签名需要 `apps/mobile/android/key.properties`；Windows 安装包建议在 Windows 上构建。
 
+macOS 公网发行包必须使用 `Developer ID Application` 证书签名并提交 Apple 公证；`Apple Development` 或 ad-hoc 签名会被 Gatekeeper 拦截。配置 `APPLE_SIGNING_IDENTITY`，并使用 `APPLE_ID`、`APPLE_PASSWORD`、`APPLE_TEAM_ID`，或 `APPLE_API_KEY`、`APPLE_API_ISSUER`、`APPLE_API_KEY_PATH` 提供公证凭据后，再运行 `make package-macos`。构建命令会在打包前检查配置，并在完成后验证签名、公证票据和 Gatekeeper 状态。仅供本机开发的未签名构建可直接运行 `cd apps/desktop && npm run desktop:build`，不要将其作为下载包发布。
+
 ## 验证
 
 ```bash
@@ -112,6 +117,7 @@ FnzSafe 采用本地优先架构，但钱包软件仍有真实资金风险。请
 
 ## 文档
 
+- [多链架构与支持矩阵](docs/multichain-architecture.md)
 - [移动端开发](apps/mobile/README.md)
 - [移动端 EVM 说明](docs/mobile/evm-development.md)
 - [AI 插件架构](docs/ai-plugin-architecture.md)

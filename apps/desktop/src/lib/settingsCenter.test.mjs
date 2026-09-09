@@ -78,6 +78,24 @@ test("Solana addresses must decode to exactly 32 bytes", () => {
   assert.equal(settings.normalizeAddress("solana", "not-an-address"), null);
 });
 
+test("Bitcoin and TRON address-book entries use their mainnet identities", () => {
+  assert.equal(
+    settings.normalizeAddress("bitcoin", "BC1QCR8TE4KR609GCAWUTMRZA0J4XV80JY8Z306FYU"),
+    "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu",
+  );
+  assert.equal(settings.normalizeAddress("bitcoin", "bc1-not-an-address"), null);
+  assert.equal(
+    settings.normalizeAddress("tron", "TMVQGm1qAQYVdetCeGRRkTWYYrLXuHK2HC"),
+    "TMVQGm1qAQYVdetCeGRRkTWYYrLXuHK2HC",
+  );
+  assert.equal(settings.normalizeAddress("tron", "not-a-tron-address"), null);
+  assert.equal(
+    settings.normalizeAddressNetwork("bitcoin", "BIP122:000000000019D6689C085AE165831E93"),
+    "bip122:000000000019d6689c085ae165831e93",
+  );
+  assert.equal(settings.normalizeAddressNetwork("tron", "TRON:728126428"), "tron:728126428");
+});
+
 test("network visibility and fallback always preserve an eligible EVM network", () => {
   const chains = [{ chain_id: 1, testnet: false }, { chain_id: 10, testnet: false }, { chain_id: 11155111, testnet: true }];
   const preferences = { ...settings.DEFAULT_APP_PREFERENCES, enabledEvmChainIds: [10], showTestnets: false };

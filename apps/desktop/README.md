@@ -52,6 +52,12 @@ make package-macos
 make package-windows
 ```
 
+`make package-macos` is a distribution build. It requires a `Developer ID Application`
+identity in `APPLE_SIGNING_IDENTITY` plus complete Apple notarization credentials, and
+it rejects the output unless codesign, the stapled notarization ticket, and Gatekeeper
+all validate. `Apple Development` certificates are for development only and cannot be
+used for a public download.
+
 ## Layout
 
 ```text

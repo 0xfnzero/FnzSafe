@@ -12,17 +12,24 @@ const SESSION_KEY_BYTES: usize = 32;
 const SESSION_NONCE_BYTES: usize = 12;
 const SOLANA_KEYPAIR_BYTES: usize = 64;
 const EVM_PRIVATE_KEY_BYTES: usize = 32;
+const MAX_MNEMONIC_BYTES: usize = 1_024;
 const SESSION_PAYLOAD_MAGIC: &[u8; 4] = b"FZWS";
-const SESSION_PAYLOAD_VERSION: u8 = 1;
+const SESSION_PAYLOAD_VERSION: u8 = 2;
 const SESSION_PAYLOAD_EVM_FLAG: u8 = 1;
+const SESSION_PAYLOAD_MNEMONIC_FLAG: u8 = 2;
 
 pub struct WalletSessionSecrets {
     solana_keypair: Zeroizing<[u8; SOLANA_KEYPAIR_BYTES]>,
     evm_private_key: Option<Zeroizing<[u8; EVM_PRIVATE_KEY_BYTES]>>,
+    mnemonic: Option<Zeroizing<String>>,
 }
 
 impl WalletSessionSecrets {
-    pub fn new(solana_keypair: &[u8], evm_private_key: Option<&[u8]>) -> Result<Self, String> {
+    pub fn new(
+        solana_keypair: &[u8],
+        evm_private_key: Option<&[u8]>,
+        mnemonic: Option<&str>,
+    ) -> Result<Self, String> {
         let solana_keypair = solana_keypair
             .try_into()
             .map_err(|_| "Solana session keypair must be 64 bytes".to_string())?;
@@ -34,9 +41,21 @@ impl WalletSessionSecrets {
                     .map_err(|_| "EVM session private key must be 32 bytes".to_string())
             })
             .transpose()?;
+        let mnemonic = mnemonic
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| {
+                if value.len() > MAX_MNEMONIC_BYTES {
+                    Err("wallet session mnemonic is too large".to_string())
+                } else {
+                    Ok(Zeroizing::new(value.to_string()))
+                }
+            })
+            .transpose()?;
         Ok(Self {
             solana_keypair: Zeroizing::new(solana_keypair),
             evm_private_key,
+            mnemonic,
         })
     }
 
@@ -50,20 +69,32 @@ impl WalletSessionSecrets {
             .map(|bytes| bytes.as_slice())
     }
 
+    pub fn mnemonic(&self) -> Option<&str> {
+        self.mnemonic.as_deref().map(String::as_str)
+    }
+
     fn encode(&self) -> Zeroizing<Vec<u8>> {
+        let mnemonic_len = self.mnemonic.as_ref().map_or(0, |value| value.len());
         let mut encoded = Zeroizing::new(Vec::with_capacity(
-            6 + SOLANA_KEYPAIR_BYTES
+            8 + SOLANA_KEYPAIR_BYTES
                 + self
                     .evm_private_key
                     .as_ref()
-                    .map_or(0, |_| EVM_PRIVATE_KEY_BYTES),
+                    .map_or(0, |_| EVM_PRIVATE_KEY_BYTES)
+                + mnemonic_len,
         ));
         encoded.extend_from_slice(SESSION_PAYLOAD_MAGIC);
         encoded.push(SESSION_PAYLOAD_VERSION);
-        encoded.push(u8::from(self.evm_private_key.is_some()) * SESSION_PAYLOAD_EVM_FLAG);
+        let flags = u8::from(self.evm_private_key.is_some()) * SESSION_PAYLOAD_EVM_FLAG
+            | u8::from(self.mnemonic.is_some()) * SESSION_PAYLOAD_MNEMONIC_FLAG;
+        encoded.push(flags);
         encoded.extend_from_slice(self.solana_keypair.as_ref());
         if let Some(private_key) = self.evm_private_key.as_ref() {
             encoded.extend_from_slice(private_key.as_ref());
+        }
+        if let Some(mnemonic) = self.mnemonic.as_ref() {
+            encoded.extend_from_slice(&(mnemonic.len() as u16).to_be_bytes());
+            encoded.extend_from_slice(mnemonic.as_bytes());
         }
         encoded
     }
@@ -77,23 +108,47 @@ impl WalletSessionSecrets {
             return Err("wallet session payload is invalid or unsupported".to_string());
         }
         let flags = encoded[SESSION_PAYLOAD_MAGIC.len() + 1];
-        if flags & !SESSION_PAYLOAD_EVM_FLAG != 0 {
+        let supported_flags = SESSION_PAYLOAD_EVM_FLAG | SESSION_PAYLOAD_MNEMONIC_FLAG;
+        if flags & !supported_flags != 0 {
             return Err("wallet session payload flags are unsupported".to_string());
         }
-        let expected_len = header_len
-            + SOLANA_KEYPAIR_BYTES
+        let solana_end = header_len + SOLANA_KEYPAIR_BYTES;
+        let evm_end = solana_end
             + if flags & SESSION_PAYLOAD_EVM_FLAG != 0 {
                 EVM_PRIVATE_KEY_BYTES
             } else {
                 0
             };
-        if encoded.len() != expected_len {
+        if encoded.len() < evm_end {
             return Err("wallet session payload length is invalid".to_string());
         }
-        let solana_end = header_len + SOLANA_KEYPAIR_BYTES;
+        let mnemonic = if flags & SESSION_PAYLOAD_MNEMONIC_FLAG != 0 {
+            let length_end = evm_end.saturating_add(2);
+            if encoded.len() < length_end {
+                return Err("wallet session mnemonic length is invalid".to_string());
+            }
+            let mnemonic_len =
+                u16::from_be_bytes([encoded[evm_end], encoded[evm_end + 1]]) as usize;
+            if mnemonic_len == 0
+                || mnemonic_len > MAX_MNEMONIC_BYTES
+                || encoded.len() != length_end.saturating_add(mnemonic_len)
+            {
+                return Err("wallet session mnemonic length is invalid".to_string());
+            }
+            Some(
+                std::str::from_utf8(&encoded[length_end..])
+                    .map_err(|_| "wallet session mnemonic encoding is invalid".to_string())?,
+            )
+        } else {
+            if encoded.len() != evm_end {
+                return Err("wallet session payload length is invalid".to_string());
+            }
+            None
+        };
         Self::new(
             &encoded[header_len..solana_end],
-            (flags & SESSION_PAYLOAD_EVM_FLAG != 0).then_some(&encoded[solana_end..]),
+            (flags & SESSION_PAYLOAD_EVM_FLAG != 0).then_some(&encoded[solana_end..evm_end]),
+            mnemonic,
         )
     }
 }
@@ -293,6 +348,17 @@ impl WalletSessionVault {
         sessions.clear();
         Ok(count)
     }
+
+    pub fn purge_expired(&self) -> Result<usize, String> {
+        let now = Instant::now();
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| "wallet session vault lock is poisoned".to_string())?;
+        let before = sessions.len();
+        sessions.retain(|_, session| !session.expired(now));
+        Ok(before.saturating_sub(sessions.len()))
+    }
 }
 
 fn session_aad(wallet_id: &str, identity: &str) -> String {
@@ -316,7 +382,12 @@ mod tests {
     fn secrets(seed: u8, with_evm: bool) -> WalletSessionSecrets {
         let solana = [seed; SOLANA_KEYPAIR_BYTES];
         let evm = [seed.wrapping_add(1); EVM_PRIVATE_KEY_BYTES];
-        WalletSessionSecrets::new(&solana, with_evm.then_some(evm.as_slice())).unwrap()
+        WalletSessionSecrets::new(
+            &solana,
+            with_evm.then_some(evm.as_slice()),
+            with_evm.then_some("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -337,12 +408,14 @@ mod tests {
             first_decrypted.evm_private_key(),
             Some([2; EVM_PRIVATE_KEY_BYTES].as_slice())
         );
+        assert!(first_decrypted.mnemonic().is_some());
         let second_decrypted = vault.decrypt("wallet-b", "pubkey-b").unwrap();
         assert_eq!(
             second_decrypted.solana_keypair(),
             &[2; SOLANA_KEYPAIR_BYTES]
         );
         assert_eq!(second_decrypted.evm_private_key(), None);
+        assert_eq!(second_decrypted.mnemonic(), None);
         assert!(vault.decrypt("wallet-a", "pubkey-b").is_err());
         assert!(vault.decrypt("wallet-a", "pubkey-a").is_err());
     }
@@ -415,6 +488,30 @@ mod tests {
         assert!(vault.decrypt("wallet-a", "pubkey-a").is_err());
         assert_eq!(vault.lock_all().unwrap(), 1);
         assert!(vault.decrypt("wallet-b", "pubkey-b").is_err());
+    }
+
+    #[test]
+    fn purge_expired_removes_all_stale_sessions_without_accessing_them() {
+        let vault = WalletSessionVault::default();
+        let first = secrets(8, false);
+        let second = secrets(9, true);
+        for (wallet_id, identity, secrets) in [
+            ("wallet-a", "pubkey-a", first),
+            ("wallet-b", "pubkey-b", second),
+        ] {
+            vault
+                .unlock(
+                    wallet_id,
+                    identity,
+                    &secrets,
+                    Duration::from_millis(1),
+                    Duration::from_millis(2),
+                )
+                .unwrap();
+        }
+        thread::sleep(Duration::from_millis(4));
+        assert_eq!(vault.purge_expired().unwrap(), 2);
+        assert!(vault.sessions.lock().unwrap().is_empty());
     }
 
     #[test]

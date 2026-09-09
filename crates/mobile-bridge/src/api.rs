@@ -75,6 +75,81 @@ pub struct EvmChainConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MultiChainNativeAsset {
+    pub symbol: String,
+    pub name: String,
+    pub decimals: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MultiChainEndpoint {
+    pub kind: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MultiChainDescriptor {
+    pub chain_id: String,
+    pub family: String,
+    pub name: String,
+    pub network: String,
+    pub testnet: bool,
+    pub native_asset: MultiChainNativeAsset,
+    pub default_derivation_path: String,
+    pub address_formats: Vec<String>,
+    pub capabilities: Vec<String>,
+    pub endpoints: Vec<MultiChainEndpoint>,
+    pub explorer_url: Option<String>,
+    pub support_level: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MultiChainNormalizeAddressRequest {
+    pub chain_id: String,
+    pub address: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MultiChainNormalizedAddress {
+    pub chain_id: String,
+    pub account_id: String,
+    pub address: String,
+}
+
+#[derive(Deserialize)]
+pub struct MultiChainDeriveAccountRequest {
+    pub chain_id: String,
+    pub mnemonic: String,
+    pub derivation_path: Option<String>,
+}
+
+impl std::fmt::Debug for MultiChainDeriveAccountRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MultiChainDeriveAccountRequest")
+            .field("chain_id", &self.chain_id)
+            .field("mnemonic", &"[REDACTED]")
+            .field("derivation_path", &self.derivation_path)
+            .finish()
+    }
+}
+
+impl zeroize::Zeroize for MultiChainDeriveAccountRequest {
+    fn zeroize(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.mnemonic);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MultiChainDerivedAccount {
+    pub chain_id: String,
+    pub account_id: String,
+    pub address: String,
+    pub derivation_path: String,
+    pub public_key_hex: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EvmWalletSummary {
     pub id: String,
     pub name: String,
@@ -714,6 +789,67 @@ impl From<svc::EvmChainConfig> for EvmChainConfig {
             rpc_url: value.rpc_url,
             explorer_url: value.explorer_url,
             testnet: value.testnet,
+        }
+    }
+}
+
+impl From<svc::MultiChainDescriptor> for MultiChainDescriptor {
+    fn from(value: svc::MultiChainDescriptor) -> Self {
+        Self {
+            chain_id: value.chain_id.to_string(),
+            family: value.family.to_string(),
+            name: value.name,
+            network: value.network,
+            testnet: value.testnet,
+            native_asset: MultiChainNativeAsset {
+                symbol: value.native_asset.symbol,
+                name: value.native_asset.name,
+                decimals: value.native_asset.decimals,
+            },
+            default_derivation_path: value.default_derivation_path,
+            address_formats: value.address_formats,
+            capabilities: value
+                .capabilities
+                .into_iter()
+                .map(|capability| capability.as_str().to_string())
+                .collect(),
+            endpoints: value
+                .endpoints
+                .into_iter()
+                .map(|endpoint| MultiChainEndpoint {
+                    kind: endpoint.kind,
+                    url: endpoint.url,
+                })
+                .collect(),
+            explorer_url: value.explorer_url,
+            support_level: match value.support_level {
+                svc::MultiChainSupportLevel::Experimental => "experimental",
+                svc::MultiChainSupportLevel::Beta => "beta",
+                svc::MultiChainSupportLevel::Stable => "stable",
+            }
+            .to_string(),
+        }
+    }
+}
+
+impl From<svc::MultiChainNormalizedAddress> for MultiChainNormalizedAddress {
+    fn from(value: svc::MultiChainNormalizedAddress) -> Self {
+        Self {
+            chain_id: value.chain_id.to_string(),
+            account_id: value.account_id.to_string(),
+            address: value.address,
+        }
+    }
+}
+
+impl From<svc::MultiChainDerivedAccount> for MultiChainDerivedAccount {
+    fn from(value: svc::MultiChainDerivedAccount) -> Self {
+        Self {
+            chain_id: value.chain_id.to_string(),
+            account_id: value.account_id.to_string(),
+            address: value.address,
+            derivation_path: value.derivation_path,
+            public_key_hex: value.public_key_hex,
         }
     }
 }
@@ -1613,6 +1749,50 @@ pub fn evm_chains_builtin() -> Vec<EvmChainConfig> {
     evm_builtin_chains().into_iter().map(Into::into).collect()
 }
 
+pub fn multichain_catalog_bridge() -> Result<Vec<MultiChainDescriptor>, MobileError> {
+    svc::multichain_catalog()
+        .map(|chains| {
+            chains
+                .into_iter()
+                .map(|chain| {
+                    let mut descriptor = MultiChainDescriptor::from(chain);
+                    if descriptor.family == "bitcoin" || descriptor.family == "tron" {
+                        descriptor.capabilities.retain(|capability| {
+                            capability != "assets:native_balance"
+                                && capability != "transactions:transfer"
+                        });
+                    }
+                    descriptor
+                })
+                .collect()
+        })
+        .map_err(bridge_error)
+}
+
+pub fn multichain_normalize_address_bridge(
+    request: MultiChainNormalizeAddressRequest,
+) -> Result<MultiChainNormalizedAddress, MobileError> {
+    svc::multichain_normalize_address(svc::MultiChainNormalizeAddressRequest {
+        chain_id: request.chain_id,
+        address: request.address,
+    })
+    .map(Into::into)
+    .map_err(bridge_error)
+}
+
+pub fn multichain_derive_account_bridge(
+    request: MultiChainDeriveAccountRequest,
+) -> Result<MultiChainDerivedAccount, MobileError> {
+    let mut request = zeroize::Zeroizing::new(request);
+    svc::multichain_derive_account(svc::MultiChainDeriveAccountRequest {
+        chain_id: std::mem::take(&mut request.chain_id),
+        mnemonic: std::mem::take(&mut request.mnemonic),
+        derivation_path: request.derivation_path.take(),
+    })
+    .map(Into::into)
+    .map_err(bridge_error)
+}
+
 pub fn evm_wallet_create_bridge(
     req: EvmCreateWalletRequest,
 ) -> Result<EvmWalletKeystore, MobileError> {
@@ -1853,6 +2033,7 @@ mod tests {
     fn bridge_reports_mobile_scope() {
         let capabilities = get_mobile_capabilities();
 
+        assert!(capabilities.enabled.contains(&"chain_catalog".to_string()));
         assert!(capabilities
             .enabled
             .contains(&"squads_multisig".to_string()));
@@ -1867,5 +2048,62 @@ mod tests {
 
         assert_eq!(error.code, MobileErrorCode::Unsupported);
         assert!(error.message.contains("program_deploy"));
+    }
+
+    #[test]
+    fn bridge_exposes_all_registered_chain_families() {
+        let catalog = multichain_catalog_bridge().unwrap();
+
+        assert_eq!(catalog.len(), 24);
+        for family in ["solana", "evm", "bitcoin", "tron"] {
+            assert!(catalog.iter().any(|chain| chain.family == family));
+        }
+        assert!(catalog
+            .iter()
+            .filter(|chain| { chain.family == "bitcoin" || chain.family == "tron" })
+            .all(|chain| {
+                chain.support_level == "experimental"
+                    && !chain
+                        .capabilities
+                        .iter()
+                        .any(|value| value == "assets:native_balance")
+                    && !chain
+                        .capabilities
+                        .iter()
+                        .any(|value| value == "transactions:transfer")
+            }));
+    }
+
+    #[test]
+    fn bridge_routes_bitcoin_derivation_and_tron_validation() {
+        let bitcoin = multichain_derive_account_bridge(MultiChainDeriveAccountRequest {
+            chain_id: "bip122:000000000019d6689c085ae165831e93".to_string(),
+            mnemonic: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".to_string(),
+            derivation_path: None,
+        })
+        .unwrap();
+        assert_eq!(
+            bitcoin.address,
+            "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu"
+        );
+
+        let tron = multichain_normalize_address_bridge(MultiChainNormalizeAddressRequest {
+            chain_id: "tron:728126428".to_string(),
+            address: " TMVQGm1qAQYVdetCeGRRkTWYYrLXuHK2HC ".to_string(),
+        })
+        .unwrap();
+        assert_eq!(tron.address, "TMVQGm1qAQYVdetCeGRRkTWYYrLXuHK2HC");
+    }
+
+    #[test]
+    fn multichain_derivation_request_debug_redacts_the_mnemonic() {
+        let request = MultiChainDeriveAccountRequest {
+            chain_id: "eip155:1".to_string(),
+            mnemonic: "secret mnemonic words".to_string(),
+            derivation_path: None,
+        };
+        let debug = format!("{request:?}");
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("secret mnemonic words"));
     }
 }

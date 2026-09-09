@@ -11,12 +11,18 @@ use aes_gcm::{
 use argon2::{Algorithm, Argon2, Params, Version as Argon2Version};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use bip39::{Language, Mnemonic};
+use fnzero_safe_chain_core::{
+    capabilities, capability_ids, families, validate_derivation_path_input,
+    validate_mnemonic_input, ChainAdapter, ChainDescriptor, ChainEndpoint, ChainError, ChainFamily,
+    ChainId, ChainResult, DerivedAccount, NativeAsset, SupportLevel,
+};
 use k256::{
     ecdsa::{RecoveryId, Signature, SigningKey},
     elliptic_curve::rand_core::OsRng,
 };
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
+use std::io::Read;
 use std::str::FromStr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
@@ -47,6 +53,8 @@ const ERC20_DECIMALS_SELECTOR: [u8; 4] = [0x31, 0x3c, 0xe5, 0x67];
 const ERC20_SYMBOL_SELECTOR: [u8; 4] = [0x95, 0xd8, 0x9b, 0x41];
 const ERC20_NAME_SELECTOR: [u8; 4] = [0x06, 0xfd, 0xde, 0x03];
 const DEFAULT_PRIORITY_FEE_WEI: &str = "1500000000";
+const ETHERSCAN_API_KEY_ENV: &str = "FNZERO_SAFE_ETHERSCAN_API_KEY";
+const MAX_ETHERSCAN_RESPONSE_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub enum EvmServiceError {
@@ -82,6 +90,104 @@ pub struct EvmChainConfig {
     pub rpc_url: String,
     pub explorer_url: Option<String>,
     pub testnet: bool,
+}
+
+/// Adapts one EVM network to the chain-agnostic registry.
+pub struct EvmChainAdapter {
+    descriptor: ChainDescriptor,
+}
+
+impl EvmChainAdapter {
+    pub fn new(chain: EvmChainConfig) -> ChainResult<Self> {
+        let history_api_key = etherscan_api_key();
+        Self::new_with_history_api_key(chain, history_api_key.as_deref().map(String::as_str))
+    }
+
+    fn new_with_history_api_key(
+        chain: EvmChainConfig,
+        history_api_key: Option<&str>,
+    ) -> ChainResult<Self> {
+        let chain_id = ChainId::new("eip155", &chain.chain_id.to_string())?;
+        validate_chain(&chain).map_err(|error| match error {
+            EvmServiceError::InvalidChainId => {
+                ChainError::InvalidChainId(format!("eip155:{}", chain.chain_id))
+            }
+            error => ChainError::InvalidDescriptor {
+                chain_id: chain_id.clone(),
+                reason: error.to_string(),
+            },
+        })?;
+        let mut chain_capabilities = capability_ids(&[
+            capabilities::ACCOUNT_DERIVATION,
+            capabilities::ADDRESS_VALIDATION,
+            capabilities::PRIVATE_KEY_IMPORT,
+            capabilities::NATIVE_BALANCE,
+            capabilities::FUNGIBLE_TOKENS,
+            capabilities::TRANSFER,
+            capabilities::STATUS,
+            capabilities::MESSAGE_SIGNING,
+            capabilities::DAPP_CONNECT,
+        ])?;
+        if etherscan_history_available(&chain, history_api_key) {
+            chain_capabilities.push(fnzero_safe_chain_core::CapabilityId::new(
+                capabilities::HISTORY,
+            )?);
+        }
+        Ok(Self {
+            descriptor: ChainDescriptor {
+                chain_id,
+                family: ChainFamily::new(families::EVM)?,
+                name: chain.name,
+                network: if chain.testnet { "testnet" } else { "mainnet" }.to_string(),
+                testnet: chain.testnet,
+                native_asset: NativeAsset {
+                    symbol: chain.native_symbol.clone(),
+                    name: chain.native_symbol,
+                    decimals: 18,
+                },
+                default_derivation_path: DEFAULT_EVM_DERIVATION_PATH.to_string(),
+                address_formats: vec!["hex20".to_string()],
+                capabilities: chain_capabilities,
+                endpoints: vec![ChainEndpoint {
+                    kind: "ethereum-json-rpc".to_string(),
+                    url: chain.rpc_url,
+                }],
+                explorer_url: chain.explorer_url,
+                support_level: SupportLevel::Beta,
+            },
+        })
+    }
+}
+
+impl ChainAdapter for EvmChainAdapter {
+    fn descriptor(&self) -> &ChainDescriptor {
+        &self.descriptor
+    }
+
+    fn normalize_address(&self, address: &str) -> ChainResult<String> {
+        crate::normalize_address(address, "address")
+            .map_err(|error| ChainError::InvalidAddress(error.to_string()))
+    }
+
+    fn derive_account(
+        &self,
+        mnemonic: &str,
+        derivation_path: Option<&str>,
+    ) -> ChainResult<DerivedAccount> {
+        let path = derivation_path
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(DEFAULT_EVM_DERIVATION_PATH);
+        validate_evm_adapter_path(path)?;
+        let address = address_from_mnemonic(mnemonic, Some(path))
+            .map_err(|error| ChainError::DerivationFailed(error.to_string()))?;
+        DerivedAccount::new(
+            self.descriptor.chain_id.clone(),
+            address,
+            path.to_string(),
+            None,
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -521,6 +627,13 @@ pub fn builtin_chains() -> Vec<EvmChainConfig> {
     ]
 }
 
+pub fn builtin_chain_adapters() -> ChainResult<Vec<EvmChainAdapter>> {
+    builtin_chains()
+        .into_iter()
+        .map(EvmChainAdapter::new)
+        .collect()
+}
+
 pub fn create_wallet(req: EvmCreateWalletRequest) -> EvmResult<EvmWalletKeystore> {
     let name = require_non_empty(&req.name, "wallet name")?;
     require_non_empty(&req.password, "wallet password")?;
@@ -644,6 +757,7 @@ fn load_asset_snapshot_with_history(
     include_history: bool,
 ) -> EvmResult<EvmAssetSnapshot> {
     validate_chain(&req.chain)?;
+    validate_rpc_chain_id(&req.chain)?;
     let wallet_address = normalize_address(&req.wallet_address, "wallet address")?;
     let native_balance_wei = rpc_call(
         &req.chain.rpc_url,
@@ -682,6 +796,7 @@ fn load_asset_snapshot_with_history(
 
 pub fn preview_payment(req: EvmPaymentPreviewRequest) -> EvmResult<EvmPaymentPreview> {
     validate_chain(&req.chain)?;
+    validate_rpc_chain_id(&req.chain)?;
     let wallet_address = normalize_address(&req.wallet_address, "wallet address")?;
     let recipient = normalize_address(&req.recipient, "recipient")?;
     let amount = normalize_decimal(&req.amount_wei_or_units, "amount")?;
@@ -1023,6 +1138,7 @@ where
 
 pub fn transaction_status(req: EvmTransactionStatusRequest) -> EvmResult<EvmTransactionStatus> {
     validate_chain(&req.chain)?;
+    validate_rpc_chain_id(&req.chain)?;
     let transaction_hash = normalize_tx_hash(&req.transaction_hash)?;
     let receipt = rpc_call(
         &req.chain.rpc_url,
@@ -1127,12 +1243,96 @@ fn validate_chain(chain: &EvmChainConfig) -> EvmResult<()> {
     if chain.chain_id == 0 {
         return Err(EvmServiceError::InvalidChainId);
     }
-    require_non_empty(&chain.name, "chain name")?;
-    require_non_empty(&chain.native_symbol, "native symbol")?;
+    validate_chain_label(&chain.name, "chain name", 128)?;
+    validate_chain_label(&chain.native_symbol, "native symbol", 32)?;
     let rpc_url = require_non_empty(&chain.rpc_url, "RPC URL")?;
-    if !rpc_url.starts_with("http://") && !rpc_url.starts_with("https://") {
+    if rpc_url.len() > 2_048 {
         return Err(EvmServiceError::InvalidInput(
-            "EVM RPC URL must start with http:// or https://".to_string(),
+            "EVM RPC URL must not exceed 2048 bytes".to_string(),
+        ));
+    }
+    let parsed = reqwest::Url::parse(&rpc_url).map_err(|_| {
+        EvmServiceError::InvalidInput("EVM RPC URL must be a valid HTTP(S) URL".to_string())
+    })?;
+    let host = parsed.host_str().ok_or_else(|| {
+        EvmServiceError::InvalidInput("EVM RPC URL must include a host".to_string())
+    })?;
+    let local_http = parsed.scheme() == "http" && is_loopback_host(host);
+    if rpc_url != chain.rpc_url
+        || (parsed.scheme() != "https" && !local_http)
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(EvmServiceError::InvalidInput(
+            "EVM RPC URL must use HTTPS (or loopback HTTP) without whitespace, credentials, or a fragment".to_string(),
+        ));
+    }
+    if let Some(explorer_url) = chain.explorer_url.as_deref() {
+        validate_explorer_origin(explorer_url)?;
+    }
+    Ok(())
+}
+
+fn validate_chain_label(value: &str, field: &'static str, max_bytes: usize) -> EvmResult<()> {
+    let trimmed = require_non_empty(value, field)?;
+    if trimmed != value || value.len() > max_bytes {
+        return Err(EvmServiceError::InvalidInput(format!(
+            "{field} must not contain surrounding whitespace or exceed {max_bytes} bytes"
+        )));
+    }
+    Ok(())
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost")
+        || std::net::IpAddr::from_str(host.trim_matches(['[', ']']))
+            .is_ok_and(|address| address.is_loopback())
+}
+
+fn validate_explorer_origin(explorer_url: &str) -> EvmResult<()> {
+    if explorer_url.is_empty() || explorer_url.len() > 2_048 || explorer_url.trim() != explorer_url
+    {
+        return Err(EvmServiceError::InvalidInput(
+            "EVM explorer URL must be a bounded HTTPS origin".to_string(),
+        ));
+    }
+    let parsed = reqwest::Url::parse(explorer_url).map_err(|_| {
+        EvmServiceError::InvalidInput("EVM explorer URL must be a valid HTTPS origin".to_string())
+    })?;
+    if parsed.scheme() != "https"
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || !matches!(parsed.path(), "" | "/")
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(EvmServiceError::InvalidInput(
+            "EVM explorer URL must be an HTTPS origin without credentials, path, query, or fragment"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_evm_adapter_path(path_text: &str) -> ChainResult<()> {
+    validate_derivation_path_input(path_text)?;
+    let path = bip32::DerivationPath::from_str(path_text)
+        .map_err(|error| ChainError::InvalidDerivationPath(error.to_string()))?;
+    let components = path.as_ref();
+    let valid = components.len() == 5
+        && components[0].is_hardened()
+        && components[0].index() == 44
+        && components[1].is_hardened()
+        && components[1].index() == 60
+        && components[2].is_hardened()
+        && !components[3].is_hardened()
+        && matches!(components[3].index(), 0 | 1)
+        && !components[4].is_hardened();
+    if !valid {
+        return Err(ChainError::InvalidDerivationPath(
+            "expected EVM BIP44 path m/44'/60'/account'/change/index".to_string(),
         ));
     }
     Ok(())
@@ -1177,6 +1377,9 @@ fn wallet_summary(
 }
 
 fn normalize_mnemonic_phrase(phrase: &str) -> EvmResult<String> {
+    validate_mnemonic_input(phrase).map_err(|_| {
+        EvmServiceError::InvalidInput("Mnemonic must contain at most 1024 bytes".to_string())
+    })?;
     let normalized = phrase.split_whitespace().collect::<Vec<_>>().join(" ");
     if normalized.is_empty() {
         return Err(EvmServiceError::InvalidInput(
@@ -1192,6 +1395,11 @@ fn normalize_mnemonic_phrase(phrase: &str) -> EvmResult<String> {
 }
 
 fn signing_key_from_mnemonic(mnemonic: &str, derivation_path: &str) -> EvmResult<SigningKey> {
+    validate_derivation_path_input(derivation_path).map_err(|_| {
+        EvmServiceError::InvalidInput(
+            "Derivation path must contain between 1 and 256 bytes".to_string(),
+        )
+    })?;
     let mnemonic = Mnemonic::parse_in_normalized(Language::English, mnemonic)
         .map_err(|_| EvmServiceError::InvalidInput("Mnemonic checksum failed".to_string()))?;
     let path = bip32::DerivationPath::from_str(derivation_path).map_err(|error| {
@@ -1244,11 +1452,36 @@ fn normalize_address(address: &str, field: &'static str) -> EvmResult<String> {
             "{field} must be a 20-byte EVM address"
         )));
     }
+    let has_lowercase = hex_part.bytes().any(|byte| byte.is_ascii_lowercase());
+    let has_uppercase = hex_part.bytes().any(|byte| byte.is_ascii_uppercase());
+    if has_lowercase && has_uppercase && !has_valid_eip55_checksum(hex_part) {
+        return Err(EvmServiceError::InvalidInput(format!(
+            "{field} has an invalid EIP-55 checksum"
+        )));
+    }
     Ok(format!("0x{}", hex_part.to_ascii_lowercase()))
 }
 
+fn has_valid_eip55_checksum(address: &str) -> bool {
+    let lowercase = address.to_ascii_lowercase();
+    let hash = hex::encode(keccak256(lowercase.as_bytes()));
+    address
+        .bytes()
+        .zip(hash.bytes())
+        .all(|(address_byte, hash_byte)| {
+            !address_byte.is_ascii_alphabetic()
+                || address_byte.is_ascii_uppercase() == (hash_byte >= b'8')
+        })
+}
+
 fn address_eq(left: &str, right: &str) -> bool {
-    normalize_address(left, "address").ok() == normalize_address(right, "address").ok()
+    matches!(
+        (
+            normalize_address(left, "address"),
+            normalize_address(right, "address")
+        ),
+        (Ok(left), Ok(right)) if left == right
+    )
 }
 
 fn address_bytes(address: &str) -> EvmResult<[u8; 20]> {
@@ -1528,19 +1761,36 @@ fn rpc_call(
     rpc.result.ok_or(EvmServiceError::RpcUnavailable)
 }
 
+pub fn validate_rpc_chain_id(chain: &EvmChainConfig) -> EvmResult<()> {
+    validate_chain(chain)?;
+    let reported = rpc_call(&chain.rpc_url, "eth_chainId", serde_json::json!([]))?;
+    validate_reported_chain_id(chain.chain_id, &reported)
+}
+
+fn validate_reported_chain_id(expected: u64, reported: &serde_json::Value) -> EvmResult<()> {
+    let reported = reported
+        .as_str()
+        .ok_or(EvmServiceError::InvalidChainId)
+        .and_then(hex_quantity_to_u64)?;
+    if reported != expected {
+        return Err(EvmServiceError::InvalidChainId);
+    }
+    Ok(())
+}
+
 fn load_recent_transactions(
     chain: &EvmChainConfig,
     wallet_address: &str,
 ) -> (Vec<EvmTransactionHistoryEntry>, String, Option<String>) {
-    let Some(explorer_url) = chain.explorer_url.as_deref() else {
+    if chain.explorer_url.is_none() {
         return (
             Vec::new(),
             "unsupported".to_string(),
             Some("No EVM explorer API is configured for this chain".to_string()),
         );
-    };
+    }
 
-    match load_etherscan_compatible_history(explorer_url, wallet_address) {
+    match load_etherscan_compatible_history(chain, wallet_address) {
         Ok(entries) => (entries, "ok".to_string(), None),
         Err(EvmServiceError::HistoryUnavailable) => (
             Vec::new(),
@@ -1556,10 +1806,11 @@ fn load_recent_transactions(
 }
 
 fn load_etherscan_compatible_history(
-    explorer_url: &str,
+    chain: &EvmChainConfig,
     wallet_address: &str,
 ) -> EvmResult<Vec<EvmTransactionHistoryEntry>> {
-    let api_url = etherscan_compatible_api_url(explorer_url, wallet_address)?;
+    let api_key = etherscan_api_key().ok_or(EvmServiceError::HistoryUnavailable)?;
+    let api_url = etherscan_compatible_api_url(chain, wallet_address, &api_key)?;
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(JSON_RPC_TIMEOUT_SECS))
         .build()
@@ -1568,66 +1819,96 @@ fn load_etherscan_compatible_history(
         .get(api_url)
         .send()
         .map_err(|_| EvmServiceError::RpcUnavailable)?;
-    let body = response
-        .text()
-        .map_err(|_| EvmServiceError::RpcUnavailable)?;
+    if !response.status().is_success() {
+        return Err(EvmServiceError::RpcUnavailable);
+    }
+    let body = read_etherscan_response(response)?;
     parse_etherscan_history_response(&body)
 }
 
-fn etherscan_compatible_api_url(explorer_url: &str, wallet_address: &str) -> EvmResult<String> {
+fn read_etherscan_response(reader: impl Read) -> EvmResult<String> {
+    let mut body = Vec::new();
+    reader
+        .take((MAX_ETHERSCAN_RESPONSE_BYTES + 1) as u64)
+        .read_to_end(&mut body)
+        .map_err(|_| EvmServiceError::RpcUnavailable)?;
+    if body.len() > MAX_ETHERSCAN_RESPONSE_BYTES {
+        return Err(EvmServiceError::RpcUnavailable);
+    }
+    String::from_utf8(body).map_err(|_| EvmServiceError::RpcUnavailable)
+}
+
+fn etherscan_compatible_api_url(
+    chain: &EvmChainConfig,
+    wallet_address: &str,
+    api_key: &str,
+) -> EvmResult<String> {
     let wallet_address = normalize_address(wallet_address, "wallet address")?;
-    let base = explorer_url.trim().trim_end_matches('/');
-    if base.is_empty() {
+    let explorer_url = chain
+        .explorer_url
+        .as_deref()
+        .ok_or(EvmServiceError::HistoryUnavailable)?;
+    if etherscan_chain_id(explorer_url) != Some(chain.chain_id) || !valid_etherscan_api_key(api_key)
+    {
         return Err(EvmServiceError::HistoryUnavailable);
     }
-    let api_base = if base.contains("sepolia.etherscan.io") {
-        "https://api-sepolia.etherscan.io".to_string()
-    } else if base.contains("optimistic.etherscan.io") {
-        "https://api-optimistic.etherscan.io".to_string()
-    } else if base.contains("etherscan.io") {
-        "https://api.etherscan.io".to_string()
-    } else if base.contains("bscscan.com") && !base.contains("testnet.") {
-        "https://api.bscscan.com".to_string()
-    } else if base.contains("testnet.bscscan.com") {
-        "https://api-testnet.bscscan.com".to_string()
-    } else if base.contains("polygonscan.com") && !base.contains("amoy.") {
-        "https://api.polygonscan.com".to_string()
-    } else if base.contains("amoy.polygonscan.com") {
-        "https://api-amoy.polygonscan.com".to_string()
-    } else if base.contains("arbiscan.io") {
-        "https://api.arbiscan.io".to_string()
-    } else if base.contains("basescan.org") && !base.contains("sepolia.") {
-        "https://api.basescan.org".to_string()
-    } else if base.contains("sepolia.basescan.org") {
-        "https://api-sepolia.basescan.org".to_string()
-    } else if base.contains("snowtrace.io") {
-        "https://api.snowtrace.io".to_string()
-    } else if base.contains("ftmscan.com") {
-        "https://api.ftmscan.com".to_string()
-    } else if base.contains("lineascan.build") {
-        "https://api.lineascan.build".to_string()
-    } else if base.contains("scrollscan.com") {
-        "https://api.scrollscan.com".to_string()
-    } else if base.contains("explorer.zksync.io") {
-        return Err(EvmServiceError::HistoryUnavailable);
-    } else if let Some(stripped) = base.strip_prefix("https://") {
-        if let Some(host) = stripped.strip_prefix("api.") {
-            format!("https://api.{host}")
-        } else {
-            format!("https://api.{stripped}")
-        }
-    } else if let Some(stripped) = base.strip_prefix("http://") {
-        if let Some(host) = stripped.strip_prefix("api.") {
-            format!("http://api.{host}")
-        } else {
-            format!("http://api.{stripped}")
-        }
-    } else {
-        return Err(EvmServiceError::HistoryUnavailable);
-    };
-    Ok(format!(
-        "{api_base}/api?module=account&action=txlist&address={wallet_address}&page=1&offset=10&sort=desc"
-    ))
+    let mut url = reqwest::Url::parse("https://api.etherscan.io/v2/api")
+        .map_err(|_| EvmServiceError::HistoryUnavailable)?;
+    url.query_pairs_mut()
+        .append_pair("chainid", &chain.chain_id.to_string())
+        .append_pair("module", "account")
+        .append_pair("action", "txlist")
+        .append_pair("address", &wallet_address)
+        .append_pair("page", "1")
+        .append_pair("offset", "10")
+        .append_pair("sort", "desc")
+        .append_pair("apikey", api_key);
+    Ok(url.into())
+}
+
+fn etherscan_chain_id(explorer_url: &str) -> Option<u64> {
+    validate_explorer_origin(explorer_url).ok()?;
+    let url = reqwest::Url::parse(explorer_url.trim()).ok()?;
+    match url.host_str()? {
+        "etherscan.io" => Some(1),
+        "sepolia.etherscan.io" => Some(11_155_111),
+        "optimistic.etherscan.io" => Some(10),
+        "bscscan.com" => Some(56),
+        "testnet.bscscan.com" => Some(97),
+        "polygonscan.com" => Some(137),
+        "amoy.polygonscan.com" => Some(80_002),
+        "arbiscan.io" => Some(42_161),
+        "basescan.org" => Some(8_453),
+        "sepolia.basescan.org" => Some(84_532),
+        "snowtrace.io" => Some(43_114),
+        "ftmscan.com" => Some(250),
+        "lineascan.build" => Some(59_144),
+        "scrollscan.com" => Some(534_352),
+        _ => None,
+    }
+}
+
+fn etherscan_api_key() -> Option<Zeroizing<String>> {
+    std::env::var(ETHERSCAN_API_KEY_ENV)
+        .ok()
+        .filter(|value| valid_etherscan_api_key(value))
+        .map(Zeroizing::new)
+}
+
+fn valid_etherscan_api_key(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 256
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+fn etherscan_history_available(chain: &EvmChainConfig, api_key: Option<&str>) -> bool {
+    chain
+        .explorer_url
+        .as_deref()
+        .is_some_and(|explorer| etherscan_chain_id(explorer) == Some(chain.chain_id))
+        && api_key.is_some_and(valid_etherscan_api_key)
 }
 
 fn parse_etherscan_history_response(body: &str) -> EvmResult<Vec<EvmTransactionHistoryEntry>> {
@@ -1646,19 +1927,23 @@ fn parse_etherscan_history_response(body: &str) -> EvmResult<Vec<EvmTransactionH
         }
         return Err(EvmServiceError::HistoryUnavailable);
     }
+    if response.status.as_deref() != Some("1") {
+        return Err(EvmServiceError::HistoryUnavailable);
+    }
     let items = response
         .result
         .as_array()
         .ok_or(EvmServiceError::HistoryUnavailable)?;
-    Ok(items
-        .iter()
-        .filter_map(etherscan_history_entry)
-        .take(10)
-        .collect())
+    items.iter().map(etherscan_history_entry).take(10).collect()
 }
 
-fn etherscan_history_entry(value: &serde_json::Value) -> Option<EvmTransactionHistoryEntry> {
-    let hash = value.get("hash")?.as_str()?.to_string();
+fn etherscan_history_entry(value: &serde_json::Value) -> EvmResult<EvmTransactionHistoryEntry> {
+    let hash = value
+        .get("hash")
+        .and_then(serde_json::Value::as_str)
+        .ok_or(EvmServiceError::HistoryUnavailable)
+        .and_then(normalize_tx_hash)
+        .map_err(|_| EvmServiceError::HistoryUnavailable)?;
     let block_number = value
         .get("blockNumber")
         .and_then(serde_json::Value::as_str)
@@ -1675,7 +1960,7 @@ fn etherscan_history_entry(value: &serde_json::Value) -> Option<EvmTransactionHi
         .unwrap_or("unknown")
         .to_string();
 
-    Some(EvmTransactionHistoryEntry {
+    Ok(EvmTransactionHistoryEntry {
         hash,
         block_number,
         status,
@@ -1948,6 +2233,7 @@ fn load_fee_quote(chain: &EvmChainConfig) -> EvmResult<EvmFeeQuote> {
 }
 
 fn send_raw_transaction(chain: &EvmChainConfig, raw_tx: &str) -> EvmResult<String> {
+    validate_rpc_chain_id(chain)?;
     rpc_call(
         &chain.rpc_url,
         "eth_sendRawTransaction",
@@ -2930,6 +3216,8 @@ mod tests {
 
     const DEV_PRIVATE_KEY: &str =
         "0x0000000000000000000000000000000000000000000000000000000000000001";
+    const DEV_MNEMONIC: &str =
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
     fn legacy_private_key_keystore(password: &str) -> String {
         let signing_key = signing_key_from_hex(DEV_PRIVATE_KEY).unwrap();
@@ -2970,6 +3258,150 @@ mod tests {
             "metadata": { "wallet_name": "Legacy EVM" },
         })
         .to_string()
+    }
+
+    #[test]
+    fn adapter_rejects_non_evm_derivation_paths() {
+        let adapter = EvmChainAdapter::new(builtin_chains()[0].clone()).unwrap();
+        assert!(adapter
+            .derive_account(DEV_MNEMONIC, Some("m/44'/195'/0'/0/0"))
+            .is_err());
+        assert!(adapter
+            .derive_account(DEV_MNEMONIC, Some("m/44'/60'/0'/2/0"))
+            .is_err());
+        assert!(adapter
+            .derive_account(DEV_MNEMONIC, Some("m/44'/60'/7'/1/42"))
+            .is_ok());
+        assert!(matches!(
+            adapter.derive_account(DEV_MNEMONIC, Some(&"m".repeat(257))),
+            Err(ChainError::InvalidDerivationPath(_))
+        ));
+        assert!(adapter
+            .derive_account(&"word ".repeat(1_025), None)
+            .is_err());
+    }
+
+    #[test]
+    fn adapters_only_advertise_history_when_the_backend_supports_it() {
+        let mut chains = builtin_chains().into_iter();
+        let ethereum =
+            EvmChainAdapter::new_with_history_api_key(chains.next().unwrap(), Some("test-api-key"))
+                .unwrap();
+        let zksync = EvmChainAdapter::new_with_history_api_key(
+            chains
+                .find(|chain| chain.chain_id == 324)
+                .expect("zkSync must remain in the built-in catalog"),
+            Some("test-api-key"),
+        )
+        .unwrap();
+
+        assert!(ethereum.descriptor().supports(capabilities::HISTORY));
+        assert!(!zksync.descriptor().supports(capabilities::HISTORY));
+
+        let unsupported = EvmChainAdapter::new_with_history_api_key(
+            chain(
+                999_999,
+                "Unknown EVM",
+                "ETH",
+                "https://rpc.example.com",
+                Some("https://explorer.example.com"),
+                true,
+            ),
+            Some("test-api-key"),
+        )
+        .unwrap();
+        assert!(!unsupported.descriptor().supports(capabilities::HISTORY));
+
+        let without_key =
+            EvmChainAdapter::new_with_history_api_key(builtin_chains()[0].clone(), None).unwrap();
+        assert!(!without_key.descriptor().supports(capabilities::HISTORY));
+    }
+
+    #[test]
+    fn rpc_chain_id_must_match_the_configured_chain() {
+        assert!(validate_reported_chain_id(1, &serde_json::json!("0x1")).is_ok());
+        assert!(matches!(
+            validate_reported_chain_id(1, &serde_json::json!("0xa")),
+            Err(EvmServiceError::InvalidChainId)
+        ));
+        assert!(matches!(
+            validate_reported_chain_id(1, &serde_json::json!(1)),
+            Err(EvmServiceError::InvalidChainId)
+        ));
+    }
+
+    #[test]
+    fn chain_configuration_rejects_malformed_or_ambiguous_rpc_urls() {
+        let mut config = builtin_chains()[0].clone();
+        for rpc_url in [
+            "https://",
+            " https://ethereum-rpc.publicnode.com",
+            "https://user:secret@example.com",
+            "https://example.com/#ignored-fragment",
+            "http://example.com",
+            "ftp://example.com",
+        ] {
+            config.rpc_url = rpc_url.to_string();
+            assert!(validate_chain(&config).is_err(), "accepted {rpc_url}");
+        }
+
+        config.rpc_url = "http://127.0.0.1:8545".to_string();
+        assert!(validate_chain(&config).is_ok());
+        config.rpc_url = "http://[::1]:8545".to_string();
+        assert!(validate_chain(&config).is_ok());
+    }
+
+    #[test]
+    fn adapter_preserves_chain_id_errors_and_classifies_other_config_errors() {
+        let mut config = builtin_chains()[0].clone();
+        config.chain_id = 0;
+        assert!(matches!(
+            EvmChainAdapter::new(config),
+            Err(ChainError::InvalidChainId(_))
+        ));
+
+        let mut config = builtin_chains()[0].clone();
+        config.name = " Ethereum ".to_string();
+        assert!(matches!(
+            EvmChainAdapter::new(config),
+            Err(ChainError::InvalidDescriptor { .. })
+        ));
+    }
+
+    #[test]
+    fn chain_configuration_rejects_ambiguous_explorer_urls() {
+        let mut config = builtin_chains()[0].clone();
+        for explorer_url in [
+            "http://etherscan.io",
+            "https://user@etherscan.io",
+            "https://etherscan.io/address/0x1",
+            "https://etherscan.io?network=mainnet",
+            "https://etherscan.io/#mainnet",
+        ] {
+            config.explorer_url = Some(explorer_url.to_string());
+            assert!(validate_chain(&config).is_err(), "accepted {explorer_url}");
+            assert!(etherscan_chain_id(explorer_url).is_none());
+        }
+    }
+
+    #[test]
+    fn invalid_addresses_never_compare_equal() {
+        assert!(!address_eq("not-an-address", "also-invalid"));
+    }
+
+    #[test]
+    fn mixed_case_addresses_require_a_valid_eip55_checksum() {
+        let checksummed = "0x5AEDA56215b167893e80B4fE645BA6d5Bab767DE";
+        assert_eq!(
+            normalize_address(checksummed, "address").unwrap(),
+            checksummed.to_ascii_lowercase()
+        );
+        assert!(
+            normalize_address("0x5AEDA56215b167893e80B4fE645BA6d5Bab767De", "address").is_err()
+        );
+        assert!(
+            normalize_address("0X5AEDA56215b167893e80B4fE645BA6d5Bab767DE", "address").is_err()
+        );
     }
 
     #[test]
@@ -3555,7 +3987,7 @@ mod tests {
             true,
         );
         let token = normalize_address(
-            "0xABCDEFabcdefABCDEFabcdefABCDEFabcdefabcd",
+            "0xABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCD",
             "token contract",
         )
         .unwrap();
@@ -3800,19 +4232,46 @@ mod tests {
 
     #[test]
     fn derives_known_etherscan_api_urls() {
+        let sepolia_chain = builtin_chains()
+            .into_iter()
+            .find(|chain| chain.chain_id == 11_155_111)
+            .unwrap();
         let sepolia = etherscan_compatible_api_url(
-            "https://sepolia.etherscan.io",
+            &sepolia_chain,
             "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+            "test-api-key",
         )
         .unwrap();
-        assert!(sepolia.starts_with("https://api-sepolia.etherscan.io/api?"));
+        assert!(sepolia.starts_with("https://api.etherscan.io/v2/api?chainid=11155111&"));
+        assert!(sepolia.ends_with("apikey=test-api-key"));
 
+        let optimism_chain = builtin_chains()
+            .into_iter()
+            .find(|chain| chain.chain_id == 10)
+            .unwrap();
         let optimism = etherscan_compatible_api_url(
-            "https://optimistic.etherscan.io",
+            &optimism_chain,
             "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+            "test-api-key",
         )
         .unwrap();
-        assert!(optimism.starts_with("https://api-optimistic.etherscan.io/api?"));
+        assert!(optimism.contains("chainid=10"));
+
+        let mut mismatched = builtin_chains()[0].clone();
+        mismatched.explorer_url = Some("https://bscscan.com".to_string());
+        assert!(etherscan_compatible_api_url(
+            &mismatched,
+            "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+            "test-api-key",
+        )
+        .is_err());
+        mismatched.explorer_url = Some("http://etherscan.io".to_string());
+        assert!(etherscan_compatible_api_url(
+            &mismatched,
+            "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+            "test-api-key",
+        )
+        .is_err());
     }
 
     #[test]
@@ -3846,5 +4305,37 @@ mod tests {
         });
         let entries = parse_etherscan_history_response(&body.to_string()).unwrap();
         assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn rejects_unsuccessful_or_malformed_etherscan_history() {
+        let unsuccessful = serde_json::json!({
+            "status": "0",
+            "message": "NOTOK",
+            "result": [],
+        });
+        assert!(matches!(
+            parse_etherscan_history_response(&unsuccessful.to_string()),
+            Err(EvmServiceError::HistoryUnavailable)
+        ));
+
+        let malformed = serde_json::json!({
+            "status": "1",
+            "message": "OK",
+            "result": [{ "hash": "not-a-transaction-hash", "blockNumber": "1" }],
+        });
+        assert!(matches!(
+            parse_etherscan_history_response(&malformed.to_string()),
+            Err(EvmServiceError::HistoryUnavailable)
+        ));
+    }
+
+    #[test]
+    fn bounds_etherscan_history_response_bodies() {
+        let oversized = std::io::Cursor::new(vec![b'x'; MAX_ETHERSCAN_RESPONSE_BYTES + 1]);
+        assert!(matches!(
+            read_etherscan_response(oversized),
+            Err(EvmServiceError::RpcUnavailable)
+        ));
     }
 }

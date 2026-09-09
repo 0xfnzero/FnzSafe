@@ -26,10 +26,12 @@ export interface AppPreferences {
   migrationVersion: number;
 }
 
+export type AddressBookChain = "solana" | "evm" | "bitcoin" | "tron";
+
 export interface AddressBookEntry {
   id: string;
   label: string;
-  chain: "solana" | "evm";
+  chain: AddressBookChain;
   network: string;
   address: string;
   createdAtMs: number;
@@ -192,19 +194,33 @@ export function buildLegacySettingsImport(storage: Storage): Record<string, unkn
   };
 }
 
-export function normalizeAddress(chain: "solana" | "evm", address: string): string | null {
+export function normalizeAddress(chain: AddressBookChain, address: string): string | null {
   const value = address.trim();
   if (chain === "evm") {
     return /^0x[0-9a-fA-F]{40}$/.test(value) ? value.toLowerCase() : null;
   }
+  if (chain === "bitcoin") {
+    const bech32 = /^(?:bc1)[ac-hj-np-z02-9]{11,71}$/i.test(value)
+      && (value === value.toLowerCase() || value === value.toUpperCase());
+    const base58 = /^[13][1-9A-HJ-NP-Za-km-z]{25,34}$/.test(value);
+    if (bech32) return value.toLowerCase();
+    return base58 ? value : null;
+  }
+  if (chain === "tron") {
+    return value.startsWith("T") && decodedBase58Length(value) === 25 ? value : null;
+  }
   return decodedBase58Length(value) === 32 ? value : null;
 }
 
-export function normalizeAddressNetwork(chain: "solana" | "evm", network: string): string | null {
+export function normalizeAddressNetwork(chain: AddressBookChain, network: string): string | null {
   const value = network.trim().toLowerCase();
   if (chain === "solana") {
     return value === "mainnet" || value === "devnet" || value === "testnet" ? value : null;
   }
+  if (chain === "bitcoin") {
+    return value === "bip122:000000000019d6689c085ae165831e93" ? value : null;
+  }
+  if (chain === "tron") return value === "tron:728126428" ? value : null;
   if (!/^[1-9]\d*$/.test(value)) return null;
   const chainId = Number(value);
   return Number.isSafeInteger(chainId) ? String(chainId) : null;

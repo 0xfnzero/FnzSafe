@@ -1,5 +1,8 @@
 [workspace]
 members = [
+  "crates/chain-core",
+  "crates/bitcoin-services",
+  "crates/tron-services",
   "crates/core",
   "crates/evm-services",
   "crates/app-services",
@@ -11,11 +14,15 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
+rust-version = "1.89"
 license = "MIT"
 repository = "https://github.com/0xfnzero/FnzSafe"
 
 [workspace.dependencies]
 fnzero-safe-core = { path = "crates/core", version = "0.1.8" }
+fnzero-safe-chain-core = { path = "crates/chain-core", version = "0.1.0" }
+fnzero-safe-bitcoin-services = { path = "crates/bitcoin-services", version = "0.1.0" }
+fnzero-safe-tron-services = { path = "crates/tron-services", version = "0.1.0" }
 fnzero-safe-evm-services = { path = "crates/evm-services", version = "0.1.0" }
 fnzero-safe-app-services = { path = "crates/app-services", version = "0.1.0" }
 

@@ -149,6 +149,63 @@ class GeneratedMobileBridgeBackend implements MobileBridgeBackend {
   }
 
   @override
+  Future<List<MultiChainDescriptor>> multichainCatalog() {
+    return _guard(() async {
+      await _ensureInitialized();
+      final chains = await gen.multichainCatalogBridge();
+      return List.unmodifiable([
+        for (final chain in chains) _multichainDescriptor(chain),
+      ]);
+    });
+  }
+
+  @override
+  Future<MultiChainNormalizedAddress> normalizeMultichainAddress({
+    required String chainId,
+    required String address,
+  }) {
+    return _guard(() async {
+      await _ensureInitialized();
+      final normalized = await gen.multichainNormalizeAddressBridge(
+        request: gen.MultiChainNormalizeAddressRequest(
+          chainId: chainId,
+          address: address,
+        ),
+      );
+      return MultiChainNormalizedAddress(
+        chainId: normalized.chainId,
+        accountId: normalized.accountId,
+        address: normalized.address,
+      );
+    });
+  }
+
+  @override
+  Future<MultiChainDerivedAccount> deriveMultichainAccount({
+    required String chainId,
+    required String mnemonic,
+    String? derivationPath,
+  }) {
+    return _guard(() async {
+      await _ensureInitialized();
+      final derived = await gen.multichainDeriveAccountBridge(
+        request: gen.MultiChainDeriveAccountRequest(
+          chainId: chainId,
+          mnemonic: mnemonic,
+          derivationPath: derivationPath,
+        ),
+      );
+      return MultiChainDerivedAccount(
+        chainId: derived.chainId,
+        accountId: derived.accountId,
+        address: derived.address,
+        derivationPath: derived.derivationPath,
+        publicKeyHex: derived.publicKeyHex,
+      );
+    });
+  }
+
+  @override
   Future<WalletKeystore> createEvmWallet({
     required String name,
     required String password,
@@ -1116,6 +1173,30 @@ EvmChainConfig _evmChainFromGenerated(gen.EvmChainConfig value) {
     rpcUrl: value.rpcUrl,
     explorerUrl: value.explorerUrl,
     testnet: value.testnet,
+  );
+}
+
+MultiChainDescriptor _multichainDescriptor(gen.MultiChainDescriptor value) {
+  return MultiChainDescriptor(
+    chainId: value.chainId,
+    family: value.family,
+    name: value.name,
+    network: value.network,
+    testnet: value.testnet,
+    nativeAsset: MultiChainNativeAsset(
+      symbol: value.nativeAsset.symbol,
+      name: value.nativeAsset.name,
+      decimals: value.nativeAsset.decimals,
+    ),
+    defaultDerivationPath: value.defaultDerivationPath,
+    addressFormats: value.addressFormats,
+    capabilities: value.capabilities,
+    endpoints: [
+      for (final endpoint in value.endpoints)
+        MultiChainEndpoint(kind: endpoint.kind, url: endpoint.url),
+    ],
+    explorerUrl: value.explorerUrl,
+    supportLevel: value.supportLevel,
   );
 }
 

@@ -7,6 +7,7 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use bip39::{Language, Mnemonic};
 use fnzero_safe::{KeyManager, Keypair, Pubkey, Signer};
+use fnzero_safe_chain_core as chains;
 use fnzero_safe_evm_services as evm;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -23,14 +24,16 @@ use solana_sdk::{
 };
 use std::fmt::Write as _;
 use std::str::FromStr;
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use uuid::Uuid;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 mod squads_v4;
 
 pub mod capabilities {
+    pub const CHAIN_CATALOG: &str = "chain_catalog";
     pub const WALLET_MANAGEMENT: &str = "wallet_management";
     pub const ASSETS: &str = "assets";
     pub const PAYMENTS: &str = "payments";
@@ -111,6 +114,109 @@ pub struct AppChain {
     pub testnet: bool,
 }
 
+pub use chains::{
+    AccountId as MultiChainAccountId, ChainDescriptor as MultiChainDescriptor,
+    ChainId as MultiChainId, DerivedAccount as MultiChainDerivedAccount,
+    SupportLevel as MultiChainSupportLevel,
+};
+
+struct SolanaChainAdapter {
+    descriptor: chains::ChainDescriptor,
+}
+
+impl SolanaChainAdapter {
+    fn new(app_network: AppNetwork) -> AppServiceResult<Self> {
+        let (chain_id, name, rpc_url, testnet) = match app_network {
+            AppNetwork::Mainnet => (
+                "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+                "Solana",
+                "https://api.mainnet-beta.solana.com",
+                false,
+            ),
+            AppNetwork::Devnet => (
+                "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
+                "Solana Devnet",
+                "https://api.devnet.solana.com",
+                true,
+            ),
+            AppNetwork::Testnet => (
+                "solana:4uhcVJyU9pJkvQyS88uRDiswHXSCkY3z",
+                "Solana Testnet",
+                "https://api.testnet.solana.com",
+                true,
+            ),
+        };
+        let descriptor = chains::ChainDescriptor {
+            chain_id: chains::ChainId::from_str(chain_id).map_err(map_chain_error)?,
+            family: chains::ChainFamily::new(chains::families::SOLANA).map_err(map_chain_error)?,
+            name: name.to_string(),
+            network: match app_network {
+                AppNetwork::Mainnet => "mainnet",
+                AppNetwork::Devnet => "devnet",
+                AppNetwork::Testnet => "testnet",
+            }
+            .to_string(),
+            testnet,
+            native_asset: chains::NativeAsset {
+                symbol: "SOL".to_string(),
+                name: "Solana".to_string(),
+                decimals: 9,
+            },
+            default_derivation_path: DEFAULT_MNEMONIC_DERIVATION_PATH.to_string(),
+            address_formats: vec!["base58-pubkey".to_string()],
+            capabilities: chains::capability_ids(&[
+                chains::capabilities::ACCOUNT_DERIVATION,
+                chains::capabilities::ADDRESS_VALIDATION,
+                chains::capabilities::PRIVATE_KEY_IMPORT,
+                chains::capabilities::NATIVE_BALANCE,
+                chains::capabilities::FUNGIBLE_TOKENS,
+                chains::capabilities::TRANSFER,
+                chains::capabilities::HISTORY,
+                chains::capabilities::STATUS,
+                chains::capabilities::MESSAGE_SIGNING,
+                chains::capabilities::DAPP_CONNECT,
+                chains::capabilities::MULTISIG,
+                chains::capabilities::PROGRAMS,
+            ])
+            .map_err(map_chain_error)?,
+            endpoints: vec![chains::ChainEndpoint {
+                kind: "solana-json-rpc".to_string(),
+                url: rpc_url.to_string(),
+            }],
+            explorer_url: Some("https://explorer.solana.com".to_string()),
+            support_level: chains::SupportLevel::Stable,
+        };
+        Ok(Self { descriptor })
+    }
+}
+
+impl chains::ChainAdapter for SolanaChainAdapter {
+    fn descriptor(&self) -> &chains::ChainDescriptor {
+        &self.descriptor
+    }
+
+    fn normalize_address(&self, address: &str) -> chains::ChainResult<String> {
+        Pubkey::from_str(address.trim())
+            .map(|address| address.to_string())
+            .map_err(|_| {
+                chains::ChainError::InvalidAddress("invalid Solana public key".to_string())
+            })
+    }
+
+    fn derive_account(
+        &self,
+        mnemonic: &str,
+        derivation_path: Option<&str>,
+    ) -> chains::ChainResult<chains::DerivedAccount> {
+        let path = normalize_mnemonic_derivation_path(derivation_path)
+            .map_err(|error| chains::ChainError::InvalidDerivationPath(error.to_string()))?;
+        let keypair = KeyManager::keypair_from_mnemonic(mnemonic, &path)
+            .map_err(chains::ChainError::DerivationFailed)?;
+        let address = keypair.pubkey().to_string();
+        chains::DerivedAccount::new(self.descriptor.chain_id.clone(), address, path, None)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MobileError {
     pub code: MobileErrorCode,
@@ -164,6 +270,120 @@ impl AppServiceError {
 
 pub type AppServiceResult<T> = Result<T, AppServiceError>;
 
+fn map_chain_error(error: chains::ChainError) -> AppServiceError {
+    let code = match error {
+        chains::ChainError::ChainNotFound(_) => MobileErrorCode::UnsupportedChain,
+        chains::ChainError::InvalidChainId(_) => MobileErrorCode::InvalidChainId,
+        chains::ChainError::UnsupportedCapability { .. } => MobileErrorCode::Unsupported,
+        _ => MobileErrorCode::InvalidInput,
+    };
+    AppServiceError::mobile(code, error.to_string())
+}
+
+/// Builds the compile-time adapter registry used by every application surface.
+///
+/// Custom EVM networks are registered separately from their persisted configuration; this
+/// catalog contains the built-in networks whose metadata ships with FnzSafe.
+fn build_multichain_registry() -> AppServiceResult<chains::ChainRegistry> {
+    let mut registry = chains::ChainRegistry::default();
+    for network in [AppNetwork::Mainnet, AppNetwork::Devnet, AppNetwork::Testnet] {
+        registry
+            .register(SolanaChainAdapter::new(network)?)
+            .map_err(map_chain_error)?;
+    }
+    for adapter in evm::builtin_chain_adapters().map_err(map_chain_error)? {
+        registry.register(adapter).map_err(map_chain_error)?;
+    }
+    for adapter in fnzero_safe_bitcoin_services::builtin_adapters().map_err(map_chain_error)? {
+        registry.register(adapter).map_err(map_chain_error)?;
+    }
+    for adapter in fnzero_safe_tron_services::builtin_adapters().map_err(map_chain_error)? {
+        registry.register(adapter).map_err(map_chain_error)?;
+    }
+    Ok(registry)
+}
+
+pub fn multichain_registry() -> AppServiceResult<&'static chains::ChainRegistry> {
+    static REGISTRY: OnceLock<Result<chains::ChainRegistry, String>> = OnceLock::new();
+    match REGISTRY.get_or_init(|| build_multichain_registry().map_err(|error| error.to_string())) {
+        Ok(registry) => Ok(registry),
+        Err(message) => Err(AppServiceError::Message(message.clone())),
+    }
+}
+
+pub fn multichain_catalog() -> AppServiceResult<Vec<chains::ChainDescriptor>> {
+    Ok(multichain_registry()?.descriptors())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MultiChainNormalizeAddressRequest {
+    pub chain_id: String,
+    pub address: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MultiChainNormalizedAddress {
+    pub chain_id: chains::ChainId,
+    pub account_id: chains::AccountId,
+    pub address: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MultiChainDeriveAccountRequest {
+    pub chain_id: String,
+    pub mnemonic: String,
+    pub derivation_path: Option<String>,
+}
+
+impl std::fmt::Debug for MultiChainDeriveAccountRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MultiChainDeriveAccountRequest")
+            .field("chain_id", &self.chain_id)
+            .field("mnemonic", &"[REDACTED]")
+            .field("derivation_path", &self.derivation_path)
+            .finish()
+    }
+}
+
+impl Drop for MultiChainDeriveAccountRequest {
+    fn drop(&mut self) {
+        self.mnemonic.zeroize();
+    }
+}
+
+pub fn multichain_normalize_address(
+    request: MultiChainNormalizeAddressRequest,
+) -> AppServiceResult<MultiChainNormalizedAddress> {
+    let chain_id = chains::ChainId::from_str(request.chain_id.trim()).map_err(map_chain_error)?;
+    let registry = multichain_registry()?;
+    let address = registry
+        .normalize_address(&chain_id, &request.address)
+        .map_err(map_chain_error)?;
+    let account_id = chains::AccountId::new(&chain_id, &address).map_err(map_chain_error)?;
+    Ok(MultiChainNormalizedAddress {
+        chain_id,
+        account_id,
+        address,
+    })
+}
+
+pub fn multichain_derive_account(
+    mut request: MultiChainDeriveAccountRequest,
+) -> AppServiceResult<chains::DerivedAccount> {
+    let mnemonic = Zeroizing::new(std::mem::take(&mut request.mnemonic));
+    let chain_id = chains::ChainId::from_str(request.chain_id.trim()).map_err(map_chain_error)?;
+    multichain_registry()?
+        .derive_account(
+            &chain_id,
+            mnemonic.as_str(),
+            request.derivation_path.as_deref(),
+        )
+        .map_err(map_chain_error)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SurfaceCapabilities {
     pub surface: AppSurface,
@@ -175,6 +395,7 @@ pub fn mobile_capabilities() -> SurfaceCapabilities {
     SurfaceCapabilities {
         surface: AppSurface::Mobile,
         enabled: vec![
+            capabilities::CHAIN_CATALOG,
             capabilities::WALLET_MANAGEMENT,
             capabilities::ASSETS,
             capabilities::PAYMENTS,
@@ -1701,13 +1922,25 @@ fn normalize_mnemonic_derivation_path(value: Option<&str>) -> AppServiceResult<S
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or(DEFAULT_MNEMONIC_DERIVATION_PATH);
-    DerivationPath::from_absolute_path_str(path).map_err(|error| {
+    let parsed = DerivationPath::from_absolute_path_str(path).map_err(|error| {
         AppServiceError::mobile(
             MobileErrorCode::InvalidInput,
             format!("Invalid derivation path: {error}"),
         )
     })?;
-    Ok(path.to_string())
+    let components = parsed.path();
+    let canonical = format!("{parsed:?}");
+    if canonical != path
+        || !(2..=4).contains(&components.len())
+        || components[0].to_u32() != 44
+        || components[1].to_u32() != 501
+    {
+        return Err(AppServiceError::mobile(
+            MobileErrorCode::InvalidInput,
+            "Solana derivation path must use canonical m/44'/501' with optional hardened account and change components",
+        ));
+    }
+    Ok(canonical)
 }
 
 fn keypair_from_mnemonic_phrase(
@@ -2974,6 +3207,136 @@ pub fn unsupported_mobile_program_workflow(capability: &'static str) -> AppServi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const TEST_MNEMONIC: &str =
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+    #[test]
+    fn multichain_registry_contains_four_independent_families() {
+        let registry = multichain_registry().unwrap();
+        assert!(std::ptr::eq(registry, multichain_registry().unwrap()));
+        let catalog = registry.descriptors();
+        assert_eq!(catalog.len(), 24);
+        for family in ["solana", "evm", "bitcoin", "tron"] {
+            assert!(catalog.iter().any(|chain| chain.family.as_str() == family));
+        }
+
+        let bitcoin_id =
+            chains::ChainId::from_str(fnzero_safe_bitcoin_services::BITCOIN_MAINNET_CAIP2).unwrap();
+        let bitcoin_account = registry
+            .derive_account(&bitcoin_id, TEST_MNEMONIC, None)
+            .unwrap();
+        assert_eq!(
+            bitcoin_account.address,
+            "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu"
+        );
+
+        let tron_id =
+            chains::ChainId::from_str(fnzero_safe_tron_services::TRON_MAINNET_CAIP2).unwrap();
+        let tron_account = registry
+            .derive_account(&tron_id, TEST_MNEMONIC, None)
+            .unwrap();
+        assert!(tron_account.address.starts_with('T'));
+    }
+
+    #[test]
+    fn public_multichain_account_services_route_by_caip2() {
+        let bitcoin = multichain_derive_account(MultiChainDeriveAccountRequest {
+            chain_id: fnzero_safe_bitcoin_services::BITCOIN_MAINNET_CAIP2.to_string(),
+            mnemonic: TEST_MNEMONIC.to_string(),
+            derivation_path: None,
+        })
+        .unwrap();
+        assert_eq!(
+            bitcoin.account_id.as_str(),
+            "bip122:000000000019d6689c085ae165831e93:bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu"
+        );
+
+        let tron = multichain_derive_account(MultiChainDeriveAccountRequest {
+            chain_id: fnzero_safe_tron_services::TRON_MAINNET_CAIP2.to_string(),
+            mnemonic: TEST_MNEMONIC.to_string(),
+            derivation_path: None,
+        })
+        .unwrap();
+        let normalized = multichain_normalize_address(MultiChainNormalizeAddressRequest {
+            chain_id: tron.chain_id.to_string(),
+            address: format!("  {}  ", tron.address),
+        })
+        .unwrap();
+        assert_eq!(normalized.address, tron.address);
+        assert_eq!(normalized.account_id, tron.account_id);
+
+        let error = multichain_derive_account(MultiChainDeriveAccountRequest {
+            chain_id: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp".to_string(),
+            mnemonic: TEST_MNEMONIC.to_string(),
+            derivation_path: Some("m/44'/60'/0'/0/0".to_string()),
+        })
+        .unwrap_err()
+        .to_mobile_error();
+        assert_eq!(error.code, MobileErrorCode::InvalidInput);
+        assert!(error.message.contains("m/44'/501'"));
+    }
+
+    #[test]
+    fn public_multichain_services_report_unknown_chains_structurally() {
+        let error = multichain_normalize_address(MultiChainNormalizeAddressRequest {
+            chain_id: "cosmos:cosmoshub-4".to_string(),
+            address: "cosmos1example".to_string(),
+        })
+        .unwrap_err()
+        .to_mobile_error();
+
+        assert_eq!(error.code, MobileErrorCode::UnsupportedChain);
+
+        let error = multichain_normalize_address(MultiChainNormalizeAddressRequest {
+            chain_id: "not-a-caip2-id".to_string(),
+            address: "unused".to_string(),
+        })
+        .unwrap_err()
+        .to_mobile_error();
+
+        assert_eq!(error.code, MobileErrorCode::InvalidChainId);
+    }
+
+    #[test]
+    fn multichain_identity_requests_reject_unknown_fields() {
+        let derive = serde_json::json!({
+            "chain_id": "eip155:1",
+            "mnemonic": TEST_MNEMONIC,
+            "derivationPath": "m/44'/60'/0'/0/7",
+        });
+        assert!(serde_json::from_value::<MultiChainDeriveAccountRequest>(derive).is_err());
+
+        let normalize = serde_json::json!({
+            "chain_id": "eip155:1",
+            "address": "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+            "network": "mainnet",
+        });
+        assert!(serde_json::from_value::<MultiChainNormalizeAddressRequest>(normalize).is_err());
+    }
+
+    #[test]
+    fn experimental_adapters_publish_only_implemented_wallet_capabilities() {
+        let catalog = multichain_catalog().unwrap();
+        for family in ["bitcoin", "tron"] {
+            let chains = catalog
+                .iter()
+                .filter(|chain| chain.family.as_str() == family)
+                .collect::<Vec<_>>();
+            assert!(!chains.is_empty());
+            assert!(chains.iter().all(|chain| {
+                chain.support_level == chains::SupportLevel::Experimental
+                    && chain.supports(chains::capabilities::ACCOUNT_DERIVATION)
+                    && chain.supports(chains::capabilities::ADDRESS_VALIDATION)
+                    && chain.supports(chains::capabilities::NATIVE_BALANCE)
+                    && chain.supports(chains::capabilities::TRANSFER)
+                    && !chain.supports(chains::capabilities::FUNGIBLE_TOKENS)
+                    && !chain.supports(chains::capabilities::HISTORY)
+                    && !chain.supports(chains::capabilities::STATUS)
+                    && !chain.supports(chains::capabilities::DAPP_CONNECT)
+            }));
+        }
+    }
 
     fn solana_payment_preview_for(
         wallet_public_key: &str,

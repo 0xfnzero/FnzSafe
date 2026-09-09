@@ -16,6 +16,7 @@ target
 fnzero-safe
 open-source
 build-cache
+build-cache-fnzsafe
 keystore.json
 /release/
 

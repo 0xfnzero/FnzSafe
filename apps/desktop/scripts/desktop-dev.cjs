@@ -142,9 +142,8 @@ async function main() {
   const sharedEnv = {
     ...process.env,
     FNZERO_SAFE_API_TOKEN: token,
-    NEXT_PUBLIC_FNZERO_SAFE_API_TOKEN: token,
     SOL_SAFEKEY_API_TOKEN: token,
-    NEXT_PUBLIC_SOL_SAFEKEY_API_TOKEN: token,
+    FNZERO_SAFE_NATIVE_PROXY: "1",
   };
 
   devStack = spawnManaged("dev stack", "npm", ["run", "dev:stack"], sharedEnv);

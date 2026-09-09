@@ -24,7 +24,6 @@ interface SecureSession {
   version: string;
   algorithm: string;
   public_key_pem: string;
-  api_token?: string;
 }
 
 interface ProxyRequestHeader {
@@ -188,12 +187,12 @@ function apiPathRequiresToken(cleanPath: string): boolean {
 
 async function withApiToken(cleanPath: string, init: RequestInit): Promise<RequestInit> {
   if (!apiPathRequiresToken(cleanPath)) return init;
-  const sessionToken = STATIC_API_TOKEN || (await getSecureSession()).api_token || "";
-  if (!sessionToken) {
+  if (isTauriWebview()) return init;
+  if (!STATIC_API_TOKEN) {
     throw new Error("Failed to initialize local API token.");
   }
   const headers = new Headers(init.headers);
-  headers.set("X-Fnzero-Safe-Token", sessionToken);
+  headers.set("X-Fnzero-Safe-Token", STATIC_API_TOKEN);
   return { ...init, headers };
 }
 
@@ -233,6 +232,9 @@ async function secureInitBody(
   headers: Headers,
   options: { refreshSecureSession?: boolean } = {},
 ): Promise<RequestInit> {
+  if (options.refreshSecureSession) {
+    resetSecureBodyPublicKey();
+  }
   const method = String(init.method ?? "GET").toUpperCase();
   if (!SECURE_JSON_METHODS.has(method)) {
     return init;
@@ -249,9 +251,6 @@ async function secureInitBody(
     : typeof init.body === "string"
       ? init.body
       : await new Response(init.body).text();
-  if (options.refreshSecureSession) {
-    resetSecureBodyPublicKey();
-  }
   if (!hasWebCrypto() && isTauriWebview()) {
     const nextHeaders = new Headers(headers);
     nextHeaders.set(TAURI_SECURE_PROXY_HEADER, "1");
@@ -441,7 +440,7 @@ export async function apiFetch(
     const authorizedInit = await withApiToken(cleanPath, nextInit);
     const response = await sendApiRequest(cleanPath, authorizedInit);
     const error = await responseJsonError(response);
-    if (SECURE_KEY_DECRYPT_ERRORS.has(error ?? "")) {
+    if (response.status === 401 || SECURE_KEY_DECRYPT_ERRORS.has(error ?? "")) {
       const retryInit = await secureInitBody(initialInit, headers, { refreshSecureSession: true });
       assertNoPlaintextSecretRequest(retryInit);
       const retryAuthorizedInit = await withApiToken(cleanPath, retryInit);

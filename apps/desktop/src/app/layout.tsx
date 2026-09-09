@@ -14,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "FnzSafe - Solana Wallet Management",
-  description: "Complete Solana wallet management tool with advanced security features",
+  title: "FnzSafe - Multichain Wallet",
+  description: "Secure, capability-aware wallet management across Solana, EVM, Bitcoin, and TRON networks",
 };
 
 export default function RootLayout({

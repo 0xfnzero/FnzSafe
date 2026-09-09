@@ -9,6 +9,7 @@ void main() {
 
     expect(find.text('FnzSafe'), findsOneWidget);
     expect(find.text('Mobile Wallet'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('Squads'), 200);
     expect(find.text('Squads'), findsOneWidget);
   });
 }

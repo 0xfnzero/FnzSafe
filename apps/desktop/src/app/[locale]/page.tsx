@@ -52,6 +52,7 @@ import {
   Star,
   BarChart3,
   Fingerprint,
+  Eye,
   EyeOff,
   HelpCircle,
   Minus,
@@ -85,6 +86,7 @@ import { ResearchAiConfiguration } from "@/components/ResearchAiConfiguration";
 import { SettingsCenterLayout, type SettingsNavigationItem } from "@/components/SettingsCenterLayout";
 import { useSecureKeyboardInput } from "@/hooks/useSecureKeyboardInput";
 import {
+  NativeChainSendPanel,
   UnifiedAssetList,
   WalletAddressPopover,
   WalletReceivePanel,
@@ -94,9 +96,11 @@ import {
   type WalletChainAddress,
 } from "@/components/UnifiedWallet";
 import { BrowserMenu } from "@/components/BrowserMenu";
+import { ChainDirectory } from "@/components/ChainDirectory";
 import { DEFAULT_API_PORT } from "@/lib/api";
 import { apiFetch } from "@/lib/apiFetch";
 import { persistJsonAfterHydration } from "@/lib/hydratedStorage";
+import { atomicToDecimalUnits } from "@/lib/multichain";
 import {
   AI_SKILL_CATALOG,
   type AiSkillLocale,
@@ -242,6 +246,7 @@ import {
   toggleEnabledEvmChain,
   visibleEvmChainIds,
   type AddressBookEntry,
+  type AddressBookChain,
   type AppPreferences,
   type DappPermission,
   type SanitizedDiagnostics,
@@ -249,7 +254,7 @@ import {
   type SettingsSnapshot,
 } from "@/lib/settingsCenter";
 import { LOCAL_TOKEN_METADATA, localTokenMetadata } from "@/lib/localTokenRegistry";
-import { chainLogoUri, SOLANA_CHAIN_LOGO_URI } from "@/lib/chainMetadata";
+import { chainDescriptorLogoUri, chainLogoUri, SOLANA_CHAIN_LOGO_URI } from "@/lib/chainMetadata";
 import {
   buildProgramDeploymentReceiptJson,
   compactProgramDeploymentReceiptJson,
@@ -299,6 +304,7 @@ interface SettingsStoreBootstrap {
 }
 
 const MAX_KEYSTORE_FILE_BYTES = 128 * 1024;
+const MAX_WALLET_PASSWORD_CHARS = 1024;
 const FALLBACK_PROGRAM_WRITE_CHUNK_BYTES = 800;
 const TRANSACTION_PAGE_SIZE = 20;
 const MAX_TRANSACTION_HISTORY = 100;
@@ -329,8 +335,21 @@ function errorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
+function walletUnlockErrorMessage(
+  rawError: unknown,
+  invalidPasswordMessage: string,
+  inconsistentPasswordMessage: string,
+): string {
+  const backendMessage = typeof rawError === "string" ? rawError.trim() : "";
+  if (backendMessage.includes("尚未统一密码")) return inconsistentPasswordMessage;
+  return !backendMessage || backendMessage === "钱包密码错误"
+    ? invalidPasswordMessage
+    : backendMessage;
+}
+
 function isResettableBiometricError(message: string): boolean {
   return (
+    message === "钱包密码错误" ||
     message.includes("无权读取 Keychain 凭据") ||
     message.includes("还没有为这个钱包启用 Touch ID") ||
     message.includes("not enabled Touch ID") ||
@@ -1078,7 +1097,11 @@ function dedupeProgramDeploymentHistory(
 
 type WorkspaceProposalAction = "approve" | "reject" | "execute";
 type PasswordPromptField = "password" | "master_password";
-type ExportBundleItem = "keystore" | "private-key" | "mnemonic";
+type ExportBundleItem =
+  | "private-key-keystore"
+  | "mnemonic-keystore"
+  | "private-key"
+  | "mnemonic";
 
 type ExportBundleSelection = Record<ExportBundleItem, boolean>;
 
@@ -2270,6 +2293,7 @@ function renderFomoTradeText(text: string, direction?: FomoSignalDirection): Rea
 function TweetSignalBody({
   signal,
   expanded,
+  trailingActions,
   onToggle,
   onOpen,
   showMoreLabel,
@@ -2286,6 +2310,7 @@ function TweetSignalBody({
 }: {
   signal: TweetTokenSignal;
   expanded: boolean;
+  trailingActions?: ReactNode;
   onToggle: () => void;
   onOpen: (url: string) => void;
   showMoreLabel: string;
@@ -2329,6 +2354,7 @@ function TweetSignalBody({
               ? renderFomoThesisText(normalizedText, signal.contractAddress)
               : renderFomoTradeText(normalizedText, signal.tradeDirection)
           : renderTweetSignalText(normalizedText, signal.contractAddress, signal.links, onOpen)}
+        {trailingActions}
       </p>
       {canExpand && (
         <button
@@ -2537,6 +2563,90 @@ interface DesktopEvmWalletSummary {
   derivation_path?: string | null;
 }
 
+interface WalletMultichainAccount {
+  chain_id: string;
+  family: "bitcoin" | "tron";
+  chain_name: string;
+  network: string;
+  symbol: string;
+  address: string;
+  derivation_path: string;
+  testnet: boolean;
+}
+
+interface WalletMultichainAccountsState {
+  walletId: string;
+  accounts: WalletMultichainAccount[];
+  loading: boolean;
+  error?: string;
+}
+
+interface WalletNativeBalanceState {
+  walletId: string;
+  chainId: string;
+  address: string;
+  symbol: string;
+  decimals: number;
+  balanceAtomic: string;
+  loading: boolean;
+  error?: string;
+}
+
+const BITCOIN_MAINNET_ID = "bip122:000000000019d6689c085ae165831e93";
+const TRON_MAINNET_ID = "tron:728126428";
+
+function parseWalletMultichainAccounts(value: unknown): WalletMultichainAccount[] | null {
+  if (!Array.isArray(value)) return null;
+  const accounts: WalletMultichainAccount[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+    const account = item as Partial<WalletMultichainAccount>;
+    if (
+      typeof account.chain_id !== "string"
+      || (account.family !== "bitcoin" && account.family !== "tron")
+      || typeof account.chain_name !== "string"
+      || typeof account.network !== "string"
+      || typeof account.symbol !== "string"
+      || typeof account.address !== "string"
+      || typeof account.derivation_path !== "string"
+      || typeof account.testnet !== "boolean"
+      || !account.chain_id
+      || !account.address
+    ) return null;
+    accounts.push(account as WalletMultichainAccount);
+  }
+  return accounts;
+}
+
+function walletFamilyForNetwork(value: string): "solana" | "evm" | "bitcoin" | "tron" {
+  if (value.startsWith("evm:")) return "evm";
+  if (value.startsWith("bip122:")) return "bitcoin";
+  if (value.startsWith("tron:")) return "tron";
+  return "solana";
+}
+
+function nativeBalanceKey(walletId: string, chainId: string): string {
+  return `${walletId}:${chainId}`;
+}
+
+function defaultAddressBookNetwork(
+  chain: AddressBookChain,
+  solanaNetwork: AppNetwork,
+  evmChainId: number | undefined,
+): string {
+  if (chain === "bitcoin") return BITCOIN_MAINNET_ID;
+  if (chain === "tron") return TRON_MAINNET_ID;
+  if (chain === "evm") return String(evmChainId || 1);
+  return solanaNetwork;
+}
+
+function addressBookChainLabel(entry: Pick<AddressBookEntry, "chain" | "network">): string {
+  if (entry.chain === "bitcoin") return "Bitcoin Mainnet";
+  if (entry.chain === "tron") return "TRON Mainnet";
+  if (entry.chain === "evm") return `EVM ${entry.network}`;
+  return `Solana ${entry.network}`;
+}
+
 interface DesktopEvmTokenAsset {
   contract_address: string;
   symbol: string;
@@ -2663,7 +2773,10 @@ function normalizeCurrentWalletNetwork(value: string | null | undefined): string
   if (value === "solana") return value;
   const match = value?.match(/^evm:([1-9]\d*)$/);
   const chainId = Number(match?.[1]);
-  return Number.isSafeInteger(chainId) ? `evm:${chainId}` : "solana";
+  if (Number.isSafeInteger(chainId)) return `evm:${chainId}`;
+  if (/^bip122:[a-zA-Z0-9-]{1,64}$/.test(value || "")) return value as string;
+  if (/^tron:[a-zA-Z0-9-]{1,64}$/.test(value || "")) return value as string;
+  return "solana";
 }
 
 function loadCurrentWalletNetwork(): string {
@@ -3049,6 +3162,28 @@ function walletAvatarText(wallet: SavedWallet | undefined): string {
   return (name || wallet.public_key).slice(0, 2).toUpperCase();
 }
 
+function WalletChainMark({ logoUri, fallback }: { logoUri?: string; fallback: string }) {
+  const [failedLogoUri, setFailedLogoUri] = useState<string | null>(null);
+  const showLogo = Boolean(logoUri && failedLogoUri !== logoUri);
+  const logoPadding = logoUri?.startsWith("/chain-icons/") ? "" : "p-1.5";
+  return (
+    <span
+      className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-white/10 bg-white text-xs font-bold text-black"
+      aria-hidden="true"
+    >
+      {showLogo ? (
+        // eslint-disable-next-line @next/next/no-img-element -- chain logos are bundled local assets.
+        <img
+          src={logoUri}
+          alt=""
+          className={`h-full w-full object-contain ${logoPadding}`}
+          onError={() => setFailedLogoUri(logoUri || null)}
+        />
+      ) : fallback}
+    </span>
+  );
+}
+
 function tokenDisplayName(token: WalletTokenAsset): string {
   const localMetadata = localTokenMetadata(token.mint);
   if (localMetadata) return localMetadata.name;
@@ -3148,6 +3283,8 @@ function defaultBackTarget(formId: string): string | null {
     case "wallet-send":
     case "wallet-receive":
       return "wallet-list";
+    case "native-chain-send":
+      return "wallet-send";
     case "create-wsol-ata":
     case "wrap-sol":
     case "unwrap-sol":
@@ -3200,6 +3337,36 @@ function keystoreMetadataName(keystoreJson: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function detectedKeystoreSecretType(
+  keystoreJson: string | undefined,
+): "private_key" | "mnemonic" | undefined {
+  if (!keystoreJson?.trim()) return undefined;
+  try {
+    const parsed = JSON.parse(keystoreJson) as {
+      version?: unknown;
+      secret_type?: unknown;
+      encrypted_private_key?: unknown;
+      metadata?: { encrypted_mnemonic?: unknown };
+    };
+    if (
+      (parsed.version === 3 && parsed.secret_type === "mnemonic")
+      || typeof parsed.metadata?.encrypted_mnemonic === "string"
+    ) {
+      return "mnemonic";
+    }
+    if (
+      parsed.version === 2
+      || parsed.version === 1
+      || typeof parsed.encrypted_private_key === "string"
+    ) {
+      return "private_key";
+    }
+  } catch {
+    // The backend reports the detailed format error after password submission.
+  }
+  return undefined;
 }
 
 /** 滑点百分比（如 1 表示 1%）→ 后端 basis points（×100），空则默认 1% */
@@ -3582,7 +3749,7 @@ export default function Home() {
   const [addressBookEditor, setAddressBookEditor] = useState<{
     id?: string;
     label: string;
-    chain: "solana" | "evm";
+    chain: AddressBookChain;
     network: string;
     address: string;
   } | null>(null);
@@ -3591,10 +3758,15 @@ export default function Home() {
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [applicationLocked, setApplicationLocked] = useState(false);
   const [unlockPassword, setUnlockPassword] = useState("");
+  const [unlockPasswordVisible, setUnlockPasswordVisible] = useState(false);
+  const [unlockError, setUnlockError] = useState<string | null>(null);
   const [unlockBusy, setUnlockBusy] = useState(false);
   const autoLockDeadlineRef = useRef<number | null>(null);
   const [currentWalletId, setCurrentWalletId] = useState("");
   const [currentWalletNetwork, setCurrentWalletNetwork] = useState("solana");
+  const [walletMultichainAccountsByWallet, setWalletMultichainAccountsByWallet] = useState<Record<string, WalletMultichainAccountsState>>({});
+  const [walletNativeBalances, setWalletNativeBalances] = useState<Record<string, WalletNativeBalanceState>>({});
+  const [nativeBalanceRefreshNonce, setNativeBalanceRefreshNonce] = useState(0);
   const [newRpcName, setNewRpcName] = useState("");
   const [newRpcUrl, setNewRpcUrl] = useState("");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -3607,7 +3779,8 @@ export default function Home() {
   const [exportedMnemonic, setExportedMnemonic] = useState<ExportedMnemonicPreview | null>(null);
   const [sensitiveExportTab, setSensitiveExportTab] = useState<SensitiveExportKind>("private-key");
   const [exportBundleSelection, setExportBundleSelection] = useState<ExportBundleSelection>({
-    keystore: true,
+    "private-key-keystore": true,
+    "mnemonic-keystore": false,
     "private-key": false,
     mnemonic: false,
   });
@@ -3622,7 +3795,6 @@ export default function Home() {
   const [dappConnectWalletId, setDappConnectWalletId] = useState("");
   const [dappSignRequest, setDappSignRequest] = useState<DappSignRequestEvent | null>(null);
   const [dappPassword, setDappPassword] = useState("");
-  const [dappSaveBiometric, setDappSaveBiometric] = useState(false);
   const [dappSearch, setDappSearch] = useState("");
   const [dappCategory, setDappCategory] = useState<DappCategoryId>("trend");
   const [dappSignBusy, setDappSignBusy] = useState(false);
@@ -3690,7 +3862,6 @@ export default function Home() {
   const [expandedTwitterTokenGroupIds, setExpandedTwitterTokenGroupIds] = useState<Set<string>>(() => new Set());
   const [biometricStatuses, setBiometricStatuses] = useState<Record<string, BiometricWalletStatus>>({});
   const [biometricBusyWalletId, setBiometricBusyWalletId] = useState<string | null>(null);
-  const [savePasswordToBiometric, setSavePasswordToBiometric] = useState(false);
   const [backTarget, setBackTarget] = useState<string | null>(null);
   const [passwordPrompt, setPasswordPrompt] = useState<PasswordPromptRequest | null>(null);
   const [passwordPromptValue, setPasswordPromptValue] = useState("");
@@ -3840,19 +4011,16 @@ export default function Home() {
   const applicationLockedRef = useRef(false);
   const currentWalletIdRef = useRef("");
   const selectedFormRef = useRef<string | null>(selectedForm);
-  const biometricPasswordPromptAttemptRef = useRef("");
-  const biometricDappAttemptRef = useRef("");
   const approveDappSignRequestRef = useRef<((passwordOverride?: string) => Promise<void>) | null>(null);
   const approveDappConnectRequestRef = useRef<(() => Promise<void>) | null>(null);
   const autoApprovedDappRequestIdRef = useRef<string | null>(null);
   const dappConnectResolutionInFlightRef = useRef<string | null>(null);
-  const confirmPasswordPromptRef = useRef<((passwordOverride?: string) => Promise<void>) | null>(null);
   selectedFormRef.current = selectedForm;
   const [walletAssets, setWalletAssets] = useState<WalletAssetsState | null>(null);
   const [walletSolBalanceCache, setWalletSolBalanceCache] = useState<Record<string, string>>({});
   const [walletTransactions, setWalletTransactions] = useState<WalletTransactionsState | null>(null);
   const [walletOverviewTab, setWalletOverviewTab] = useState<"assets" | "transactions">("assets");
-  const [walletChainView, setWalletChainView] = useState<"all" | "solana" | "evm">("all");
+  const [walletChainView, setWalletChainView] = useState<"all" | "solana" | "evm" | "bitcoin" | "tron" | "networks">("all");
   const [visibleTokenCount, setVisibleTokenCount] = useState(TOKEN_ASSET_PAGE_SIZE);
   const clientSettingsLoadedRef = useRef(false);
   const walletAssetsRef = useRef<WalletAssetsState | null>(null);
@@ -4527,7 +4695,6 @@ export default function Home() {
     setDappConnectWalletId("");
     setDappSignRequest(null);
     setDappPassword("");
-    setDappSaveBiometric(false);
     setDappTransactionPreview(null);
     setDappTransactionPreviewError(null);
     setDappTransactionPreviewLoading(false);
@@ -4538,11 +4705,10 @@ export default function Home() {
     setEvmTransactionStatus(null);
     setEvmBusy(false);
     setUnlockPassword("");
+    setUnlockPasswordVisible(false);
+    setUnlockError(null);
     setCreateWalletPassword("");
     setTwitterAiApiKey("");
-    setSavePasswordToBiometric(false);
-    biometricPasswordPromptAttemptRef.current = "";
-    biometricDappAttemptRef.current = "";
     autoApprovedDappRequestIdRef.current = null;
     dappConnectResolutionInFlightRef.current = null;
     programKeypairBytesRef.current?.fill(0);
@@ -4586,6 +4752,12 @@ export default function Home() {
   }, [appPreferences.autoLockMinutes, applicationLocked, lockApplication, wallets.length]);
 
   useEffect(() => {
+    if (!isTauriWebview() || walletsLoading) return;
+    const command = applicationLocked ? "dapp_pause_connections" : "dapp_resume_connections";
+    void enqueueDappConnectionOperation(() => invoke(command)).catch(() => undefined);
+  }, [applicationLocked, walletsLoading]);
+
+  useEffect(() => {
     if (applicationLocked || !currentWalletId) return;
     let checking = false;
     const reconcileSession = async () => {
@@ -4621,32 +4793,40 @@ export default function Home() {
   }, [applicationLocked, currentWalletId, lockApplication]);
 
   const unlockWithPassword = useCallback(async () => {
-    const wallet = wallets.find((item) => item.id === (currentWalletId || wallets[0]?.id));
-    if (!wallet || !unlockPassword) return;
+    if (wallets.length === 0 || !unlockPassword) return;
+    setUnlockError(null);
     setUnlockBusy(true);
     try {
-      const response = await apiFetch(`wallets/${wallet.id}/verify-password`, {
+      const response = await apiFetch("wallets/unlock-all", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ password: unlockPassword }),
       });
       const data = await response.json();
-      if (!response.ok || !data.verified || data.public_key !== wallet.public_key) {
-        throw new Error(data.error || tf("features.settings.unlockFailed", "钱包密码错误"));
+      if (!response.ok || !data.verified || data.unlocked_wallets !== wallets.length) {
+        throw new Error(walletUnlockErrorMessage(
+          data.error,
+          tf("features.settings.unlockFailed", "钱包密码错误"),
+          tf("features.settings.unlockInconsistent", "部分历史钱包尚未使用统一密码，请先完成密码迁移"),
+        ));
       }
       if (isTauriWebview()) {
         await enqueueDappConnectionOperation(() => invoke("dapp_resume_connections"));
       }
       setUnlockPassword("");
+      setUnlockPasswordVisible(false);
+      setUnlockError(null);
       applicationLockedRef.current = false;
       setApplicationLocked(false);
       autoLockDeadlineRef.current = nextAutoLockDeadline(Date.now(), appPreferences.autoLockMinutes);
     } catch (error) {
-      toast.error(errorMessage(error, tf("features.settings.unlockFailed", "钱包密码错误")));
+      const message = errorMessage(error, tf("features.settings.unlockFailed", "钱包密码错误"));
+      setUnlockError(message);
+      toast.error(message);
     } finally {
       setUnlockBusy(false);
     }
-  }, [appPreferences.autoLockMinutes, currentWalletId, tf, unlockPassword, wallets]);
+  }, [appPreferences.autoLockMinutes, tf, unlockPassword, wallets]);
 
   const saveAddressBookEntry = useCallback(async () => {
     if (!addressBookEditor) return;
@@ -4951,23 +5131,32 @@ export default function Home() {
     }
   }, [supportsBiometricWallet, t]);
 
-  const getBiometricWalletPassword = useCallback(async (wallet: SavedWallet): Promise<string | null> => {
-    if (!supportsBiometricWallet(wallet)) return null;
+  const unlockAllWithBiometricNative = useCallback(async (wallet: SavedWallet) => {
+    if (!supportsBiometricWallet(wallet)) {
+      throw new Error(t("features.biometric.authFailed"));
+    }
     const cachedStatus = biometricStatusFor(wallet);
     const status =
       cachedStatus?.configured || cachedStatus?.supported === false
         ? cachedStatus
         : await refreshBiometricWalletStatus(wallet);
-    if (!status.supported || !status.configured) return null;
+    if (!status.supported || !status.configured) {
+      throw new Error(status.reason || t("features.biometric.authFailed"));
+    }
     await waitForBiometricPromptReadiness();
     setBiometricBusyWalletId(wallet.id);
     try {
-      return await invoke<string>("biometric_wallet_get_password", {
+      const result = await invoke<{ status: number; body: string }>("biometric_wallet_unlock_all", {
         req: {
           wallet_id: wallet.id,
           public_key: wallet.public_key,
         },
       });
+      const data = JSON.parse(result.body) as Record<string, unknown>;
+      if (result.status < 200 || result.status >= 300) {
+        throw new Error(typeof data.error === "string" ? data.error : `HTTP ${result.status}`);
+      }
+      return data;
     } catch (error) {
       const message = errorMessage(error, t("features.biometric.authFailed"));
       if (isResettableBiometricError(message)) {
@@ -4980,8 +5169,7 @@ export default function Home() {
           },
         }));
       }
-      toast.error(message);
-      return null;
+      throw new Error(message);
     } finally {
       setBiometricBusyWalletId(null);
     }
@@ -4989,31 +5177,32 @@ export default function Home() {
 
   const unlockWithBiometric = useCallback(async () => {
     if (!effectiveWallet) return;
+    setUnlockError(null);
     setUnlockBusy(true);
     try {
-      const password = await getBiometricWalletPassword(effectiveWallet);
-      if (!password) return;
-      const response = await apiFetch(`wallets/${effectiveWallet.id}/verify-password`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password }),
-      });
-      const data = await response.json();
-      if (!response.ok || !data.verified || data.public_key !== effectiveWallet.public_key) {
-        throw new Error(data.error || tf("features.settings.unlockFailed", "Touch ID 解锁失败"));
+      const data = await unlockAllWithBiometricNative(effectiveWallet);
+      if (data.verified !== true || data.unlocked_wallets !== wallets.length) {
+        throw new Error(walletUnlockErrorMessage(
+          typeof data.error === "string" ? data.error : undefined,
+          tf("features.settings.unlockFailed", "Touch ID 解锁失败"),
+          tf("features.settings.unlockInconsistent", "部分历史钱包尚未使用统一密码，请先完成密码迁移"),
+        ));
       }
       if (isTauriWebview()) {
         await enqueueDappConnectionOperation(() => invoke("dapp_resume_connections"));
       }
       setApplicationLocked(false);
+      setUnlockError(null);
       applicationLockedRef.current = false;
       autoLockDeadlineRef.current = nextAutoLockDeadline(Date.now(), appPreferences.autoLockMinutes);
     } catch (error) {
-      toast.error(errorMessage(error, tf("features.settings.unlockFailed", "Touch ID 解锁失败")));
+      const message = errorMessage(error, tf("features.settings.unlockFailed", "Touch ID 解锁失败"));
+      setUnlockError(message);
+      toast.error(message);
     } finally {
       setUnlockBusy(false);
     }
-  }, [appPreferences.autoLockMinutes, effectiveWallet, getBiometricWalletPassword, tf]);
+  }, [appPreferences.autoLockMinutes, effectiveWallet, tf, unlockAllWithBiometricNative, wallets.length]);
 
   const deleteBiometricWalletPassword = useCallback(async (wallet: SavedWallet, options: { quiet?: boolean } = {}) => {
     if (!isTauriWebview()) return;
@@ -5095,7 +5284,6 @@ export default function Home() {
       }).catch(() => {});
       setDappSignRequest(request);
       setDappPassword("");
-      setDappSaveBiometric(false);
       setDappTransactionPreview(null);
       setDappTransactionPreviewError(null);
       setDappTransactionPreviewLoading(request.method !== "signMessage");
@@ -5857,7 +6045,7 @@ export default function Home() {
         publicKey: createdWallet.public_key,
         evmAddress: createdEvm.address,
       }));
-      toast.success(tf("features.create-wallet.success", "Wallet created for Solana and all EVM networks"));
+      toast.success(tf("features.create-wallet.success", "Wallet created for Solana, EVM, Bitcoin, and TRON"));
       void loadWallets();
     } catch (error) {
       const message = errorMessage(error, tf("features.create-wallet.failed", "Failed to create wallet"));
@@ -7449,11 +7637,15 @@ export default function Home() {
     });
   };
 
-  const exportKeystoreWithPassword = async (wallet: SavedWallet, password: string) => {
+  const exportKeystoreWithPassword = async (
+    wallet: SavedWallet,
+    password: string,
+    secretType: "private_key" | "mnemonic",
+  ) => {
     const response = await apiFetch(`wallets/${wallet.id}/export`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({ password, secret_type: secretType }),
     });
     const data = await response.json();
     if (!response.ok) {
@@ -7461,7 +7653,9 @@ export default function Home() {
     }
     void downloadFile(
       data.keystore_json,
-      `${safeFilename(wallet.name)}-${wallet.public_key.slice(0, 8)}-keystore.json`,
+      `${safeFilename(wallet.name)}-${wallet.public_key.slice(0, 8)}-${
+        secretType === "mnemonic" ? "mnemonic" : "private-key"
+      }-keystore.json`,
     );
   };
 
@@ -7529,7 +7723,7 @@ export default function Home() {
 
     setLoading(true);
     try {
-      await exportKeystoreWithPassword(wallet, password);
+      await exportKeystoreWithPassword(wallet, password, "private_key");
       toast.success(t("features.settings.exportSuccess"));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("features.settings.exportFailed"));
@@ -7601,8 +7795,11 @@ export default function Home() {
     let privateKeyPreview: ExportedPrivateKeyPreview | null = null;
     let mnemonicPreview: ExportedMnemonicPreview | null = null;
     try {
-      if (selection.keystore) {
-        await exportKeystoreWithPassword(wallet, password);
+      if (selection["private-key-keystore"]) {
+        await exportKeystoreWithPassword(wallet, password, "private_key");
+      }
+      if (selection["mnemonic-keystore"]) {
+        await exportKeystoreWithPassword(wallet, password, "mnemonic");
       }
       if (selection["private-key"]) {
         privateKeyPreview = await exportPrivateKeyWithPassword(wallet, password);
@@ -7635,7 +7832,8 @@ export default function Home() {
   const requestExportBundle = (wallet: SavedWallet) => {
     setPasswordPromptValue("");
     setExportBundleSelection({
-      keystore: true,
+      "private-key-keystore": true,
+      "mnemonic-keystore": false,
       "private-key": false,
       mnemonic: false,
     });
@@ -7698,7 +7896,6 @@ export default function Home() {
   const requestEnableBiometricWallet = (wallet: SavedWallet) => {
     setPasswordPromptValue("");
     setMasterPasswordPromptValue("");
-    setSavePasswordToBiometric(false);
     setPasswordPrompt({ kind: "enable-biometric", wallet, formState: { wallet_id: wallet.id } });
   };
 
@@ -9696,9 +9893,17 @@ export default function Home() {
   }, [twitterSignalStorageHydrated]);
 
   useEffect(() => {
-    if (!twitterSignalStorageHydrated || !isTauriWebview()) return;
-    void ensureFomoAlertsWebview();
-  }, [ensureFomoAlertsWebview, twitterSignalStorageHydrated]);
+    if (
+      !twitterSignalStorageHydrated
+      || !isTauriWebview()
+      || walletsLoading
+      || applicationLocked
+    ) return;
+    void enqueueDappConnectionOperation(async () => {
+      await invoke("dapp_resume_connections");
+      await ensureFomoAlertsWebview();
+    }).catch(() => undefined);
+  }, [applicationLocked, ensureFomoAlertsWebview, twitterSignalStorageHydrated, walletsLoading]);
 
   const refreshResearchTokens = useCallback(async (refreshMarkets = false) => {
     if (!isTauriWebview()) {
@@ -10810,7 +11015,6 @@ export default function Home() {
       });
       setDappSignRequest(null);
       setDappPassword("");
-      setDappSaveBiometric(false);
       setDappTransactionPreview(null);
       setDappTransactionPreviewError(null);
       setDappTransactionPreviewLoading(false);
@@ -10883,9 +11087,6 @@ export default function Home() {
         recent_blockhash: String(data.recent_blockhash || data.recentBlockhash || "").trim() || undefined,
       };
       await resolveDappSignRequest(request, result);
-      if (!passwordOverride && dappSaveBiometric && supportsBiometricWallet(wallet)) {
-        await storeBiometricWalletPassword(wallet, walletPassword);
-      }
       toast.success(
         isMessageSignature
           ? tf("features.dapp-store.messageSignSuccess", "DApp 消息已签名")
@@ -10895,7 +11096,6 @@ export default function Home() {
       );
       setDappSignRequest(null);
       setDappPassword("");
-      setDappSaveBiometric(false);
       setDappTransactionPreview(null);
       setDappTransactionPreviewError(null);
       setDappTransactionPreviewLoading(false);
@@ -10915,19 +11115,6 @@ export default function Home() {
     }
   };
 
-  const approveDappSignRequestWithBiometric = async () => {
-    const request = dappSignRequest;
-    if (!request) return;
-    const wallet = wallets.find((item) => item.public_key === request.wallet_public_key);
-    if (!wallet) {
-      toast.error(tf("features.dapp-store.walletMissing", "这个请求指定的钱包不在当前钱包列表中。"));
-      return;
-    }
-    const password = await getBiometricWalletPassword(wallet);
-    if (password) {
-      await approveDappSignRequest(password);
-    }
-  };
   approveDappSignRequestRef.current = approveDappSignRequest;
 
   useEffect(() => {
@@ -10946,54 +11133,12 @@ export default function Home() {
       toast.error(tf("features.dapp-store.walletMissing", "这个请求指定的钱包不在当前钱包列表中。"));
       setDappSignRequest(null);
       setDappPassword("");
-      setDappSaveBiometric(false);
       setDappTransactionPreview(null);
       setDappTransactionPreviewError(null);
       setDappTransactionPreviewLoading(false);
       setDappPreviewDetailsOpen(false);
     })();
   }, [dappSignRequest, tf, wallets, walletsLoading]);
-
-  useEffect(() => {
-    if (!dappSignRequest) {
-      biometricDappAttemptRef.current = "";
-      return;
-    }
-    const wallet = wallets.find((item) => item.public_key === dappSignRequest.wallet_public_key);
-    if (!wallet || !canUseBiometricWallet(wallet)) {
-      return;
-    }
-    if (dappSignBusy || biometricBusyWalletId === wallet.id) {
-      return;
-    }
-    if (dappSignRequest.method !== "signMessage") {
-      if (dappTransactionPreviewLoading || dappTransactionPreviewError || !dappTransactionPreview) {
-        return;
-      }
-      if (!dappTransactionPreview.required_signer_present) {
-        return;
-      }
-    }
-    const attemptKey = `${dappSignRequest.request_id}:${wallet.id}`;
-    if (biometricDappAttemptRef.current === attemptKey) return;
-    biometricDappAttemptRef.current = attemptKey;
-    void (async () => {
-      const password = await getBiometricWalletPassword(wallet);
-      if (password) {
-        await approveDappSignRequestRef.current?.(password);
-      }
-    })();
-  }, [
-      biometricBusyWalletId,
-      canUseBiometricWallet,
-      dappSignBusy,
-      dappSignRequest,
-      dappTransactionPreview,
-      dappTransactionPreviewError,
-      dappTransactionPreviewLoading,
-      getBiometricWalletPassword,
-      wallets,
-    ]);
 
   const clearForm = () => {
     if (selectedForm === "program-deploy") {
@@ -11193,6 +11338,7 @@ export default function Home() {
 
   const unifiedWalletLabels = useMemo<UnifiedWalletLabels>(() => ({
     accountAddresses: tf("features.unified-wallet.accountAddresses", "Wallet addresses"),
+    allNetworks: tf("features.unified-wallet.allNetworks", "All"),
     allAssets: tf("features.unified-wallet.allAssets", "Assets across networks"),
     addAndContinue: tf("features.unified-wallet.addAndContinue", "Add and continue"),
     addingAsset: tf("features.unified-wallet.addingAsset", "Checking asset..."),
@@ -11203,7 +11349,9 @@ export default function Home() {
     copy: t("common.copy"),
     copied: t("common.copied"),
     current: tf("features.unified-wallet.current", "Current"),
+    chainFamily: tf("features.unified-wallet.chainFamily", "Chain family"),
     network: tf("features.unified-wallet.network", "Network"),
+    networks: tf("features.unified-wallet.networks", "networks"),
     noEvmNetworks: tf("features.unified-wallet.noEvmNetworks", "No EVM networks are available"),
     noAssets: tf("features.unified-wallet.noAssets", "No assets available"),
     noAddresses: tf("features.unified-wallet.noAddresses", "No receiving addresses available"),
@@ -11211,6 +11359,7 @@ export default function Home() {
     qrFailed: tf("features.unified-wallet.qrFailed", "Unable to generate the QR code. Copy the address instead."),
     receiveAddress: tf("features.unified-wallet.receiveAddress", "Receive address"),
     receiveNetworkWarning: tf("features.unified-wallet.receiveNetworkWarning", "Make sure the sender uses this exact network."),
+    sharedNetworkWarning: tf("features.unified-wallet.sharedNetworkWarning", "This address is shared by enabled EVM networks. Confirm the network and token contract before sending."),
     refresh: t("features.wallet-list.refreshAssets"),
     searchAssets: tf("features.unified-wallet.searchAssets", "Search assets, networks, mint, or contract"),
     searchEmpty: tf("features.unified-wallet.searchEmpty", "No matching assets"),
@@ -11219,7 +11368,149 @@ export default function Home() {
     testnet: tf("features.unified-wallet.testnet", "testnet"),
     tracked: tf("features.unified-wallet.tracked", "Tracked"),
     untracked: tf("features.unified-wallet.untracked", "Not added"),
+    recipient: tf("features.unified-wallet.recipient", "Recipient"),
+    amount: tf("features.unified-wallet.amount", "Amount"),
+    available: tf("features.unified-wallet.available", "Available"),
+    previewSend: tf("features.unified-wallet.previewSend", "Preview transaction"),
+    previewing: tf("features.unified-wallet.previewing", "Loading preview..."),
+    confirmSend: tf("features.unified-wallet.confirmSend", "Confirm and send"),
+    sending: tf("features.unified-wallet.sending", "Sending..."),
+    minerFee: tf("features.unified-wallet.minerFee", "Miner fee"),
+    feeRate: tf("features.unified-wallet.feeRate", "Fee rate"),
+    change: tf("features.unified-wallet.change", "Change"),
+    inputs: tf("features.unified-wallet.inputs", "Inputs / outputs"),
+    rbfEnabled: tf("features.unified-wallet.rbfEnabled", "Enabled"),
+    bandwidth: tf("features.unified-wallet.bandwidth", "Bandwidth required / available"),
+    accountActivation: tf("features.unified-wallet.accountActivation", "Recipient account"),
+    activated: tf("features.unified-wallet.activated", "Activated"),
+    notActivated: tf("features.unified-wallet.notActivated", "Not activated"),
+    estimatedMaxFee: tf("features.unified-wallet.estimatedMaxFee", "Estimated maximum fee"),
+    transactionId: tf("features.unified-wallet.transactionId", "Transaction ID"),
+    sendSuccess: tf("features.unified-wallet.sendSuccess", "Transaction submitted"),
+    sendFailed: tf("features.unified-wallet.sendFailed", "Unable to send transaction"),
+    previewFailed: tf("features.unified-wallet.previewFailed", "Unable to preview transaction"),
+    reviewWarning: tf("features.unified-wallet.reviewWarning", "Review the address, amount, and network carefully before sending."),
   }), [t, tf]);
+
+  useEffect(() => {
+    if (applicationLocked) {
+      setWalletMultichainAccountsByWallet({});
+      setWalletNativeBalances({});
+      return;
+    }
+    const mnemonicWallets = wallets.filter((wallet) => wallet.secret_type === "mnemonic");
+    if (mnemonicWallets.length === 0) {
+      setWalletMultichainAccountsByWallet({});
+      return;
+    }
+    const controller = new AbortController();
+    setWalletMultichainAccountsByWallet((previous) => Object.fromEntries(mnemonicWallets.map((wallet) => [
+      wallet.id,
+      {
+        walletId: wallet.id,
+        accounts: previous[wallet.id]?.accounts ?? [],
+        loading: true,
+      },
+    ])));
+    void (async () => {
+      const entries = await Promise.all(mnemonicWallets.map(async (wallet) => {
+        try {
+          const response = await apiFetch(`wallets/${encodeURIComponent(wallet.id)}/multichain-accounts`, {
+            method: "GET",
+            cache: "no-store",
+            signal: controller.signal,
+          });
+          const data = await response.json();
+          const accounts = parseWalletMultichainAccounts(data?.accounts);
+          if (!response.ok || !accounts) {
+            throw new Error(data?.error || "Unable to load multi-chain accounts");
+          }
+          return [wallet.id, { walletId: wallet.id, accounts, loading: false }] as const;
+        } catch (error) {
+          return [wallet.id, {
+            walletId: wallet.id,
+            accounts: [],
+            loading: false,
+            error: errorMessage(error, "Unable to load multi-chain accounts"),
+          }] as const;
+        }
+      }));
+      if (!controller.signal.aborted) setWalletMultichainAccountsByWallet(Object.fromEntries(entries));
+    })();
+    return () => controller.abort();
+  }, [applicationLocked, wallets]);
+
+  useEffect(() => {
+    if (applicationLocked || !effectiveWallet) return;
+    const targets = Object.values(walletMultichainAccountsByWallet)
+      .filter((state) => state.walletId === effectiveWallet.id)
+      .flatMap((state) => state.accounts.map((account) => ({ walletId: state.walletId, account })));
+    if (targets.length === 0) {
+      setWalletNativeBalances({});
+      return;
+    }
+    const controller = new AbortController();
+    setWalletNativeBalances((previous) => Object.fromEntries(targets.map(({ walletId, account }) => {
+      const key = nativeBalanceKey(walletId, account.chain_id);
+      const prior = previous[key];
+      return [key, {
+        walletId,
+        chainId: account.chain_id,
+        address: account.address,
+        symbol: account.symbol,
+        decimals: account.family === "bitcoin" ? 8 : 6,
+        balanceAtomic: prior?.address === account.address ? prior.balanceAtomic : "",
+        loading: true,
+      }];
+    })));
+    void (async () => {
+      const entries = await Promise.all(targets.map(async ({ walletId, account }) => {
+        const key = nativeBalanceKey(walletId, account.chain_id);
+        try {
+          const action = account.family === "bitcoin" ? "bitcoin/balance" : "tron/account";
+          const response = await apiFetch(`wallets/${encodeURIComponent(walletId)}/${action}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chain_id: account.chain_id, address: account.address }),
+            signal: controller.signal,
+          });
+          const data = await response.json();
+          const decimals = account.family === "bitcoin" ? 8 : 6;
+          if (
+            !response.ok
+            || data?.chain_id !== account.chain_id
+            || data?.address !== account.address
+            || data?.symbol !== account.symbol
+            || data?.decimals !== decimals
+            || typeof data?.balance_atomic !== "string"
+            || !/^\d+$/.test(data.balance_atomic)
+          ) throw new Error(data?.error || "Unable to load native balance");
+          return [key, {
+            walletId,
+            chainId: account.chain_id,
+            address: account.address,
+            symbol: account.symbol,
+            decimals,
+            balanceAtomic: data.balance_atomic,
+            loading: false,
+          }] as const;
+        } catch (error) {
+          return [key, {
+            walletId,
+            chainId: account.chain_id,
+            address: account.address,
+            symbol: account.symbol,
+            decimals: account.family === "bitcoin" ? 8 : 6,
+            balanceAtomic: "",
+            loading: false,
+            error: errorMessage(error, "Unable to load native balance"),
+          }] as const;
+        }
+      }));
+      if (!controller.signal.aborted) setWalletNativeBalances(Object.fromEntries(entries));
+    })();
+    return () => controller.abort();
+  }, [applicationLocked, effectiveWallet, nativeBalanceRefreshNonce, walletMultichainAccountsByWallet]);
 
   const walletChainAddresses = useMemo<WalletChainAddress[]>(() => (
     effectiveWallet
@@ -11245,9 +11536,19 @@ export default function Home() {
               testnet: chain.testnet,
             }))
           : []),
+        ...(walletMultichainAccountsByWallet[effectiveWallet.id]?.accounts.map((account) => ({
+              id: account.chain_id,
+              family: account.family,
+              networkId: account.chain_id,
+              chainName: account.chain_name,
+              symbol: account.symbol,
+              address: account.address,
+              logoUri: chainDescriptorLogoUri({ family: account.family, chain_id: account.chain_id }),
+              testnet: account.testnet,
+            })) ?? []),
         ]
       : []
-  ), [effectiveNetwork, effectiveWallet, portfolioEvmChains]);
+  ), [effectiveNetwork, effectiveWallet, portfolioEvmChains, walletMultichainAccountsByWallet]);
 
   const selectedWalletChainId = currentWalletNetwork === "solana"
     ? `solana:${effectiveNetwork}`
@@ -11259,6 +11560,11 @@ export default function Home() {
     setCurrentWallet(effectiveWallet.id);
     if (item.family === "evm" && item.chainId) {
       selectEvmChain(String(item.chainId), { openChainView: false });
+      return;
+    }
+    if (item.family === "bitcoin" || item.family === "tron") {
+      setCurrentWalletNetwork(item.id);
+      saveCurrentWalletNetwork(item.id);
       return;
     }
     setCurrentWalletNetwork("solana");
@@ -11351,8 +11657,38 @@ export default function Home() {
         }
       }
     }
+    for (const account of walletMultichainAccountsByWallet[effectiveWallet.id]?.accounts ?? []) {
+      const decimals = account.family === "bitcoin" ? 8 : 6;
+      const balanceState = walletNativeBalances[nativeBalanceKey(effectiveWallet.id, account.chain_id)];
+      const rawBalance = balanceState?.balanceAtomic ?? "";
+      result.push({
+        id: `${account.chain_id}:native`,
+        family: account.family,
+        networkId: account.chain_id,
+        chainName: account.chain_name,
+        chainSymbol: account.symbol,
+        symbol: account.symbol,
+        name: account.family === "bitcoin" ? "Bitcoin" : "TRON",
+        balance: rawBalance ? atomicToDecimalUnits(rawBalance, decimals) : "--",
+        rawBalance,
+        decimals,
+        logoUri: chainDescriptorLogoUri({ family: account.family, chain_id: account.chain_id }),
+        tracked: true,
+        loading: balanceState?.loading ?? true,
+        testnet: account.testnet,
+      });
+    }
     return result;
-  }, [effectiveNetwork, effectiveWallet, evmAssetsByChain, evmPortfolioRefreshing, portfolioEvmChains, walletAssets]);
+  }, [
+    effectiveNetwork,
+    effectiveWallet,
+    evmAssetsByChain,
+    evmPortfolioRefreshing,
+    portfolioEvmChains,
+    walletAssets,
+    walletMultichainAccountsByWallet,
+    walletNativeBalances,
+  ]);
 
   const unifiedSearchAssets = useMemo<UnifiedWalletAsset[]>(() => {
     const assets = [...unifiedOwnedAssets];
@@ -11405,6 +11741,14 @@ export default function Home() {
           network: effectiveNetwork,
         }, "wallet-send");
       }
+      return;
+    }
+    if (asset.family === "bitcoin" || asset.family === "tron") {
+      handleOpenForm("native-chain-send", {
+        wallet_id: effectiveWallet.id,
+        network_id: asset.networkId,
+        asset_id: asset.id,
+      }, "wallet-send");
       return;
     }
     const chain = portfolioEvmChains.find((item) => item.chain_id === asset.chainId);
@@ -12924,7 +13268,6 @@ export default function Home() {
     setFormData(nextFormData);
     setPasswordPromptValue("");
     setMasterPasswordPromptValue("");
-    setSavePasswordToBiometric(false);
     setPasswordPrompt({
       kind: "form",
       formId,
@@ -12957,7 +13300,6 @@ export default function Home() {
     setFormData(nextFormData);
     setPasswordPromptValue("");
     setMasterPasswordPromptValue("");
-    setSavePasswordToBiometric(false);
     setPasswordPrompt({ kind: "proposal", proposal, action, formState: nextFormData });
   };
 
@@ -12967,7 +13309,6 @@ export default function Home() {
       clearProgramKeypairMaterial();
     }
     setPasswordPrompt(null);
-    setSavePasswordToBiometric(false);
     clearPasswordPromptSecrets();
   };
 
@@ -12987,15 +13328,6 @@ export default function Home() {
       : passwordPrompt && "formState" in passwordPrompt
       ? savedWalletFromForm(passwordPrompt.formState)
       : undefined;
-  const showPasswordPromptBiometric =
-    showWalletPasswordPrompt &&
-    !showMigrationPasswords &&
-    passwordPrompt?.kind !== "create-password" &&
-    Boolean(passwordPromptWallet) &&
-    canUseBiometricWallet(passwordPromptWallet);
-  const passwordPromptBiometricConfigured = biometricConfiguredFor(passwordPromptWallet);
-  const passwordPromptBiometricBusy =
-    Boolean(passwordPromptWallet && biometricBusyWalletId === passwordPromptWallet.id);
   const isProgramDeploymentPasswordPrompt =
     passwordPrompt?.kind === "form" && passwordPrompt.formId === "program-deploy";
   const isProgramUpgradePasswordPrompt =
@@ -13157,27 +13489,6 @@ export default function Home() {
     return true;
   };
 
-  const verifyAndStoreBiometricWalletPassword = async (
-    wallet: SavedWallet | undefined,
-    password: string,
-  ): Promise<boolean> => {
-    if (!savePasswordToBiometric || !wallet || !supportsBiometricWallet(wallet)) return true;
-    const response = await apiFetch("wallet/unlock", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        wallet_id: wallet.id,
-        password,
-      }),
-    });
-    const data = await response.json();
-    if (!response.ok || String(data.public_key || "").trim() !== wallet.public_key) {
-      toast.error(data.error || t("features.biometric.passwordInvalid"));
-      return false;
-    }
-    return storeBiometricWalletPassword(wallet, password);
-  };
-
   const confirmPasswordPrompt = async (passwordOverride?: string) => {
     if (!passwordPrompt || passwordConfirmationInFlightRef.current) return;
     const password = passwordOverride ?? passwordPromptValue;
@@ -13235,11 +13546,6 @@ export default function Home() {
           const passwordOk = await validateProgramInvokeWalletPassword(nextFormData, passwordPrompt.formId);
           if (!passwordOk) return;
         }
-        const biometricStored = await verifyAndStoreBiometricWalletPassword(
-          savedWalletFromForm(nextFormData),
-          password,
-        );
-        if (!biometricStored) return;
         await handleSubmit(passwordPrompt.formId, nextFormData);
       } else if (passwordPrompt.kind === "create-password") {
         await handleSubmit(passwordPrompt.formId, { ...passwordPrompt.formState, password });
@@ -13250,11 +13556,6 @@ export default function Home() {
         });
       } else if (passwordPrompt.kind === "proposal") {
         const nextFormData = walletAuthFormData({ ...passwordPrompt.formState, password });
-        const biometricStored = await verifyAndStoreBiometricWalletPassword(
-          savedWalletFromForm(nextFormData),
-          password,
-        );
-        if (!biometricStored) return;
         await handleWorkspaceProposalAction(passwordPrompt.proposal, passwordPrompt.action, nextFormData);
       } else if (passwordPrompt.kind === "enable-biometric") {
         const wallet = passwordPrompt.wallet;
@@ -13294,50 +13595,11 @@ export default function Home() {
         delete next.master_password;
         return next;
       });
-      setSavePasswordToBiometric(false);
     } finally {
       passwordConfirmationInFlightRef.current = false;
       setPasswordConfirmationBusy(false);
     }
   };
-  confirmPasswordPromptRef.current = confirmPasswordPrompt;
-
-  useEffect(() => {
-    if (!passwordPrompt) {
-      biometricPasswordPromptAttemptRef.current = "";
-      return;
-    }
-    if (
-      !passwordPromptWallet ||
-      !showPasswordPromptBiometric ||
-      passwordPromptIsBusy ||
-      passwordPromptBiometricBusy
-    ) {
-      return;
-    }
-    const promptKind =
-      passwordPrompt.kind === "form"
-        ? `${passwordPrompt.kind}:${passwordPrompt.formId}`
-        : passwordPrompt.kind === "proposal"
-          ? `${passwordPrompt.kind}:${passwordPrompt.action}:${passwordPrompt.proposal.address}:${passwordPrompt.proposal.transactionIndex}`
-          : passwordPrompt.kind;
-    const attemptKey = `${promptKind}:${passwordPromptWallet.id}`;
-    if (biometricPasswordPromptAttemptRef.current === attemptKey) return;
-    biometricPasswordPromptAttemptRef.current = attemptKey;
-    void (async () => {
-      const password = await getBiometricWalletPassword(passwordPromptWallet);
-      if (password) {
-        await confirmPasswordPromptRef.current?.(password);
-      }
-    })();
-  }, [
-    getBiometricWalletPassword,
-    passwordPrompt,
-    passwordPromptBiometricBusy,
-    passwordPromptIsBusy,
-    passwordPromptWallet,
-    showPasswordPromptBiometric,
-  ]);
 
   const handleBack = () => {
     const target = backTarget || (selectedForm ? defaultBackTarget(selectedForm) : null);
@@ -16455,40 +16717,146 @@ export default function Home() {
       </div>
     );
 
-    const renderWalletAccountManager = () => (
-      <div className="space-y-3">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <h3 className="text-sm font-semibold text-gray-200">{t("features.settings.walletTitle")}</h3>
-            <p className="mt-1 text-xs text-gray-500">{t("features.settings.walletHint")}</p>
+    const renderWalletAccountManager = () => {
+      const selectedEvmChainId = currentWalletNetwork.startsWith("evm:")
+        ? Number(currentWalletNetwork.slice(4))
+        : null;
+      const selectedEvmChain = selectedEvmChainId
+        ? visibleEvmChains.find((chain) => chain.chain_id === selectedEvmChainId)
+        : undefined;
+      const selectedNativeFamily = walletFamilyForNetwork(currentWalletNetwork);
+      const isNativeChainSelected = selectedNativeFamily === "bitcoin" || selectedNativeFamily === "tron";
+      let selectedWalletNetworkId = `solana:${effectiveNetwork}`;
+      if (selectedEvmChain) selectedWalletNetworkId = `evm:${selectedEvmChain.chain_id}`;
+      if (isNativeChainSelected) selectedWalletNetworkId = currentWalletNetwork;
+      let selectedWalletNetworkSymbol = "SOL";
+      if (selectedEvmChain) selectedWalletNetworkSymbol = selectedEvmChain.native_symbol;
+      if (selectedNativeFamily === "bitcoin") selectedWalletNetworkSymbol = "BTC";
+      if (selectedNativeFamily === "tron") selectedWalletNetworkSymbol = "TRX";
+      const walletsForSelectedNetwork = wallets.filter((wallet) => {
+        if (selectedEvmChain) return Boolean(wallet.evm_address?.trim());
+        if (isNativeChainSelected) return wallet.secret_type === "mnemonic";
+        return Boolean(wallet.public_key.trim());
+      });
+      const solanaNetworks = Array.from(
+        new Set(DEFAULT_RPC_PROFILES.map((profile) => profile.network)),
+      );
+
+      const selectWalletAccountNetwork = (networkId: string) => {
+        setWalletActionsMenuOpen(null);
+        if (networkId.startsWith("evm:")) {
+          selectEvmChain(networkId.slice(4), { openChainView: false });
+          return;
+        }
+        if (networkId.startsWith("bip122:") || networkId.startsWith("tron:")) {
+          setCurrentWalletNetwork(networkId);
+          saveCurrentWalletNetwork(networkId);
+          return;
+        }
+        const network = currentNetwork(networkId.replace(/^solana:/, ""));
+        setAppNetwork(network);
+      };
+
+      return (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold text-gray-200">{t("features.settings.walletTitle")}</h3>
+              <p className="mt-1 text-xs text-gray-500">{t("features.settings.walletHint")}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void loadWallets()}
+              className="shrink-0 rounded-lg bg-white/10 px-3 py-2 text-xs hover:bg-white/20 transition-colors"
+            >
+              {walletsLoading ? t("common.loading") : t("formUi.refreshWallets")}
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={() => void loadWallets()}
-            className="shrink-0 rounded-lg bg-white/10 px-3 py-2 text-xs hover:bg-white/20 transition-colors"
-          >
-            {walletsLoading ? t("common.loading") : t("formUi.refreshWallets")}
-          </button>
-        </div>
-        {wallets.length === 0 ? (
-          <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-sm text-gray-400">
-            {walletsLoading
-              ? t("features.wallet-list.loading")
-              : walletsLoadError || t("features.walletContext.empty")}
+          <div className="grid gap-2 border-y border-white/10 py-3 sm:grid-cols-[minmax(0,18rem)_1fr] sm:items-end">
+            <label className="min-w-0 space-y-1.5">
+              <span className="block text-xs font-medium text-gray-300">
+                {t("features.settings.walletNetworkLabel")}
+              </span>
+              <select
+                value={selectedWalletNetworkId}
+                onChange={(event) => selectWalletAccountNetwork(event.target.value)}
+                className="h-10 w-full rounded-lg border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:ring-2 focus:ring-emerald-400/40"
+              >
+                <optgroup label="Solana">
+                  {solanaNetworks.map((network) => (
+                    <option key={`solana:${network}`} value={`solana:${network}`}>
+                      Solana · {networkLabel(t, network)}
+                    </option>
+                  ))}
+                </optgroup>
+                {visibleEvmChains.length > 0 && (
+                  <optgroup label="EVM">
+                    {visibleEvmChains.map((chain) => (
+                      <option key={`evm:${chain.chain_id}`} value={`evm:${chain.chain_id}`}>
+                        {chain.name} · {chain.native_symbol}{chain.testnet ? ` · ${t("features.settings.evmChainTestnet")}` : ""}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                <optgroup label="Bitcoin">
+                  <option value={BITCOIN_MAINNET_ID}>Bitcoin · BTC</option>
+                </optgroup>
+                <optgroup label="TRON">
+                  <option value={TRON_MAINNET_ID}>TRON · TRX</option>
+                </optgroup>
+              </select>
+            </label>
+            <p className="text-xs leading-5 text-gray-500">
+              {t("features.settings.walletNetworkHint")}
+            </p>
           </div>
-        ) : (
-          <div className="space-y-3">
-            {wallets.map((wallet) => {
-              const isCurrent = wallet.id === effectiveWalletId;
-              const liveSolBalance =
-                walletAssets?.address === wallet.public_key &&
-                walletAssets.network === effectiveNetwork &&
-                walletAssets.solBalance !== "--"
-                  ? walletAssets.solBalance
+          {wallets.length === 0 ? (
+            <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-sm text-gray-400">
+              {walletsLoading
+                ? t("features.wallet-list.loading")
+                : walletsLoadError || t("features.walletContext.empty")}
+            </div>
+          ) : walletsForSelectedNetwork.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-white/10 bg-black/20 p-5 text-center text-sm text-gray-400">
+              {t("features.settings.walletNetworkEmpty")}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {walletsForSelectedNetwork.map((wallet) => {
+                const isCurrent = wallet.id === effectiveWalletId;
+                const selectedNativeAccount = isNativeChainSelected
+                  ? walletMultichainAccountsByWallet[wallet.id]?.accounts
+                    .find((account) => account.family === selectedNativeFamily)
                   : undefined;
-              const walletSolBalance = liveSolBalance ?? walletSolBalanceCache[wallet.public_key] ?? "--";
-              const copyId = `settings-wallet:${wallet.id}`;
-              return (
+                let walletAddress = wallet.public_key;
+                if (selectedEvmChain) walletAddress = wallet.evm_address?.trim() || "";
+                if (isNativeChainSelected) walletAddress = selectedNativeAccount?.address || "";
+                const selectedEvmAssets = selectedEvmChain
+                  ? evmAssetsByChain[selectedEvmChain.chain_id]
+                  : undefined;
+                const liveEvmBalance =
+                  selectedEvmAssets?.wallet_address.toLowerCase() === walletAddress.toLowerCase()
+                    ? rawTokenAmountToUi(selectedEvmAssets.native_balance_wei, 18)
+                    : undefined;
+                const liveSolBalance = !selectedEvmChain &&
+                  !isNativeChainSelected &&
+                  walletAssets?.address === wallet.public_key &&
+                  walletAssets.network === effectiveNetwork &&
+                  walletAssets.solBalance !== "--"
+                    ? walletAssets.solBalance
+                    : undefined;
+                const nativeBalance = selectedNativeAccount
+                  ? walletNativeBalances[nativeBalanceKey(wallet.id, selectedNativeAccount.chain_id)]
+                  : undefined;
+                let walletBalance = liveSolBalance ?? walletSolBalanceCache[wallet.public_key] ?? "--";
+                if (selectedEvmChain) walletBalance = liveEvmBalance ?? "--";
+                if (isNativeChainSelected) {
+                  walletBalance = nativeBalance?.balanceAtomic
+                    ? atomicToDecimalUnits(nativeBalance.balanceAtomic, nativeBalance.decimals)
+                    : "--";
+                }
+                const copyId = `settings-wallet:${selectedWalletNetworkId}:${wallet.id}`;
+                return (
                 <div
                   role="button"
                   tabIndex={0}
@@ -16558,21 +16926,23 @@ export default function Home() {
                         <div className="mt-2 flex min-w-0 items-center gap-2">
                           <button
                             type="button"
+                            disabled={!walletAddress}
                             onClick={(event) => {
                               event.stopPropagation();
-                              copyToClipboard(wallet.public_key, copyId);
+                              copyToClipboard(walletAddress, copyId);
                             }}
                             className="min-w-0 truncate text-left font-mono text-xs text-gray-400 hover:text-white sm:rounded-lg sm:border sm:border-white/10 sm:bg-black/20 sm:px-2.5 sm:py-1.5 sm:text-gray-300 sm:hover:bg-white/10"
-                            title={wallet.public_key}
+                            title={walletAddress || t("common.loading")}
                           >
-                            <span className="sm:hidden">{shortAddress(wallet.public_key)}</span>
-                            <span className="hidden sm:inline">{wallet.public_key}</span>
+                            <span className="sm:hidden">{walletAddress ? shortAddress(walletAddress) : t("common.loading")}</span>
+                            <span className="hidden sm:inline">{walletAddress || t("common.loading")}</span>
                           </button>
                           <button
                             type="button"
+                            disabled={!walletAddress}
                             onClick={(event) => {
                               event.stopPropagation();
-                              copyToClipboard(wallet.public_key, copyId);
+                              copyToClipboard(walletAddress, copyId);
                             }}
                             className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-white/5 text-gray-300 hover:bg-white/10 hover:text-white sm:h-8 sm:w-8 sm:border sm:border-white/10"
                             title={t("features.walletContext.copyAddress")}
@@ -16585,8 +16955,12 @@ export default function Home() {
                     </div>
                     <div className="flex items-center justify-end gap-2 lg:justify-end">
                       <div className="hidden min-w-28 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-right sm:block">
-                        <p className="text-[11px] uppercase tracking-normal text-gray-500">{t("features.wallet-list.solBalance")}</p>
-                        <p className="mt-0.5 truncate text-sm font-semibold text-white">{walletSolBalance} SOL</p>
+                        <p className="text-[11px] uppercase tracking-normal text-gray-500">
+                          {t("features.settings.walletNetworkBalance", { symbol: selectedWalletNetworkSymbol })}
+                        </p>
+                        <p className="mt-0.5 truncate text-sm font-semibold text-white">
+                          {walletBalance} {selectedWalletNetworkSymbol}
+                        </p>
                       </div>
                       <div className="relative" data-wallet-actions-menu>
                         <button
@@ -16725,25 +17099,40 @@ export default function Home() {
                     </div>
                   )}
                 </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    );
+                );
+              })}
+            </div>
+          )}
+        </div>
+      );
+    };
 
     const renderWalletListPanel = () => {
       const renderChainViewTabs = () => (
-        <div className="inline-flex rounded-lg border border-white/10 bg-white/5 p-1">
+        <div className="inline-flex max-w-full overflow-x-auto rounded-lg border border-white/10 bg-white/5 p-1">
           {[
             { id: "all" as const, label: tf("features.wallet-list.chainViewAll", "All assets") },
             { id: "solana" as const, label: t("features.wallet-list.chainViewSolana") },
             { id: "evm" as const, label: t("features.wallet-list.chainViewOtherChains") },
+            { id: "bitcoin" as const, label: "Bitcoin" },
+            { id: "tron" as const, label: "TRON" },
+            { id: "networks" as const, label: tf("features.wallet-list.chainViewNetworks", "Networks") },
           ].map((item) => (
             <button
               key={item.id}
               type="button"
-              onClick={() => setWalletChainView(item.id)}
+              onClick={() => {
+                setWalletChainView(item.id);
+                if ((item.id === "bitcoin" || item.id === "tron") && effectiveWallet) {
+                  const account = walletMultichainAccountsByWallet[effectiveWallet.id]?.accounts
+                    .find((candidate) => candidate.family === item.id);
+                  if (account) {
+                    setCurrentWalletNetwork(account.chain_id);
+                    saveCurrentWalletNetwork(account.chain_id);
+                  }
+                }
+              }}
+              aria-pressed={walletChainView === item.id}
               className={`rounded-md px-4 py-2 text-sm font-semibold transition-colors ${
                 walletChainView === item.id
                   ? "bg-white text-black"
@@ -16769,16 +17158,31 @@ export default function Home() {
         const evmTransactions = currentEvmAssets?.recent_transactions ?? [];
         return (
           <div className="space-y-4">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
               {renderChainViewTabs()}
-              <button
-                type="button"
-                onClick={() => handleSelectForm("evm-workbench")}
-                className="inline-flex w-fit items-center justify-center gap-2 rounded-lg bg-white px-3 py-2 text-sm font-semibold text-black hover:bg-gray-200"
-              >
-                <ArrowRightLeft className="h-4 w-4" />
-                {t("features.wallet-list.otherChainsOpenWorkbench")}
-              </button>
+              <div className="flex min-w-0 flex-col gap-2 sm:flex-row">
+                <label className="min-w-0">
+                  <span className="sr-only">{tf("features.evm-workbench.networkLabel", "Network for assets and transfers")}</span>
+                  <select
+                    value={evmChainId}
+                    onChange={(event) => selectEvmChain(event.target.value, { openChainView: false })}
+                    disabled={visibleEvmChains.length === 0}
+                    className="h-10 w-full min-w-0 rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none focus:ring-2 focus:ring-emerald-400/40 disabled:opacity-50 sm:w-56"
+                  >
+                    {visibleEvmChains.map((chain) => (
+                      <option key={chain.chain_id} value={chain.chain_id}>{chain.name} ({chain.chain_id})</option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => handleSelectForm("evm-workbench")}
+                  className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg bg-white px-3 text-sm font-semibold text-black hover:bg-gray-200"
+                >
+                  <ArrowRightLeft className="h-4 w-4" />
+                  {t("features.wallet-list.otherChainsOpenWorkbench")}
+                </button>
+              </div>
             </div>
 
             {!evmWallet ? (
@@ -16806,9 +17210,10 @@ export default function Home() {
                   <div className="rounded-2xl border border-white/10 bg-gradient-to-br from-emerald-500 to-sky-700 p-5 shadow-xl shadow-black/20 lg:rounded-none lg:border-0 lg:bg-none lg:p-4 lg:shadow-none">
                     <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                       <div className="flex min-w-0 items-center gap-3">
-                        <span className="hidden h-11 w-11 shrink-0 items-center justify-center rounded-full bg-emerald-200 text-sm font-bold text-black lg:flex">
-                          {activeEvmChain?.native_symbol || "CHAIN"}
-                        </span>
+                        <WalletChainMark
+                          logoUri={chainLogoUri(activeEvmChain?.chain_id)}
+                          fallback={activeEvmChain?.native_symbol || "CHAIN"}
+                        />
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
                             <h3 className="max-w-full truncate text-lg font-semibold">{evmWallet.name}</h3>
@@ -16930,8 +17335,122 @@ export default function Home() {
         );
       };
 
+      const renderNativeChainWalletPanel = (family: "bitcoin" | "tron") => {
+        const accountState = effectiveWallet
+          ? walletMultichainAccountsByWallet[effectiveWallet.id]
+          : undefined;
+        const account = accountState?.accounts.find((item) => item.family === family);
+        const asset = unifiedOwnedAssets.find((item) => item.family === family && item.networkId === account?.chain_id);
+        const chainName = family === "bitcoin" ? "Bitcoin" : "TRON";
+        const symbol = family === "bitcoin" ? "BTC" : "TRX";
+        const balanceState = effectiveWallet && account
+          ? walletNativeBalances[nativeBalanceKey(effectiveWallet.id, account.chain_id)]
+          : undefined;
+        const error = accountState?.error || balanceState?.error || null;
+        const loading = Boolean(accountState?.loading || balanceState?.loading);
+        const unavailableMessage = loading
+          ? tf("features.unified-wallet.loadingNativeAccount", `Loading ${chainName} account...`, { chain: chainName })
+          : tf("features.unified-wallet.nativeAccountUnavailable", `${chainName} requires a mnemonic-backed wallet.`, { chain: chainName });
+        return (
+          <div className="space-y-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              {renderChainViewTabs()}
+            </div>
+            {!effectiveWallet || !account || !asset ? (
+              <section className="border-y border-white/10 py-10 text-center">
+                <p className="text-base font-semibold text-gray-200">
+                  {unavailableMessage}
+                </p>
+                {error && <p className="mx-auto mt-2 max-w-xl text-sm text-amber-200">{error}</p>}
+              </section>
+            ) : (
+              <>
+                <section className="overflow-hidden rounded-lg border border-white/10 bg-black/50">
+                  <div className="flex min-w-0 flex-col gap-4 bg-zinc-900 p-5 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <WalletChainMark logoUri={asset.logoUri} fallback={symbol} />
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="truncate text-lg font-semibold text-white">{effectiveWallet.name}</h3>
+                          <span className="rounded bg-white/10 px-2 py-0.5 text-xs text-gray-300">{chainName}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => copyToClipboard(account.address, `${family}-wallet-address`)}
+                          className="mt-1 block max-w-full truncate text-left font-mono text-xs text-gray-400 hover:text-white"
+                        >
+                          {account.address}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="min-w-0 sm:text-right">
+                      <p className="text-xs text-gray-400">{t("features.settings.walletNetworkBalance", { symbol })}</p>
+                      <p className="mt-1 text-3xl font-semibold text-white">{asset.balance} <span className="text-sm text-gray-400">{symbol}</span></p>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 border-t border-white/10 bg-white/[0.03]">
+                    <button type="button" onClick={() => openUnifiedAssetForSend(asset)} className="flex h-16 items-center justify-center gap-2 border-r border-white/10 text-sm font-semibold text-gray-100 hover:bg-white/10">
+                      <Send className="h-5 w-5" />{unifiedWalletLabels.send}
+                    </button>
+                    <button type="button" onClick={() => handleOpenForm("wallet-receive", {}, "wallet-list")} className="flex h-16 items-center justify-center gap-2 border-r border-white/10 text-sm font-semibold text-gray-100 hover:bg-white/10">
+                      <Download className="h-5 w-5" />{t("features.wallet-list.receive")}
+                    </button>
+                    <button type="button" onClick={() => setNativeBalanceRefreshNonce((value) => value + 1)} disabled={loading} className="flex h-16 items-center justify-center gap-2 text-sm font-semibold text-gray-100 hover:bg-white/10 disabled:opacity-50">
+                      <RefreshCw className={`h-5 w-5 ${loading ? "animate-spin" : ""}`} />{t("features.wallet-list.refreshAssets")}
+                    </button>
+                  </div>
+                </section>
+                <UnifiedAssetList
+                  assets={[asset]}
+                  error={error}
+                  labels={unifiedWalletLabels}
+                  preferredChainId={account.chain_id}
+                  refreshing={loading}
+                  onRefresh={() => setNativeBalanceRefreshNonce((value) => value + 1)}
+                />
+              </>
+            )}
+          </div>
+        );
+      };
+
+      if (walletChainView === "networks") {
+        return (
+          <div className="space-y-4">
+            {renderChainViewTabs()}
+            <ChainDirectory labels={{
+              title: tf("features.chain-directory.title", "Supported networks"),
+              subtitle: tf("features.chain-directory.subtitle", "Capabilities are shown per network so you always know what can be used safely."),
+              all: tf("features.chain-directory.all", "All"),
+              search: tf("features.chain-directory.search", "Search network, symbol, or chain ID"),
+              refresh: tf("features.chain-directory.refresh", "Refresh networks"),
+              loading: tf("features.chain-directory.loading", "Loading supported networks..."),
+              loadFailed: tf("features.chain-directory.loadFailed", "Supported networks could not be loaded."),
+              retry: tf("features.chain-directory.retry", "Retry"),
+              noResults: tf("features.chain-directory.noResults", "No matching networks"),
+              mainnet: tf("features.chain-directory.mainnet", "Mainnet"),
+              testnet: tf("features.chain-directory.testnet", "Testnet"),
+              stable: tf("features.chain-directory.stable", "Stable"),
+              beta: tf("features.chain-directory.beta", "Beta"),
+              experimental: tf("features.chain-directory.experimental", "Experimental"),
+              walletReady: tf("features.chain-directory.walletReady", "Wallet ready"),
+              accountReady: tf("features.chain-directory.accountReady", "Account engine ready"),
+              validationReady: tf("features.chain-directory.validationReady", "Address tools"),
+              walletReadyHint: tf("features.chain-directory.walletReadyHint", "Balances and transfers are connected"),
+              accountReadyHint: tf("features.chain-directory.accountReadyHint", "Derivation and validation available; balances and sending are not connected yet"),
+              validationReadyHint: tf("features.chain-directory.validationReadyHint", "Address validation only"),
+              networks: tf("features.chain-directory.networks", "networks"),
+            }} />
+          </div>
+        );
+      }
+
       if (walletChainView === "evm") {
         return renderEvmWalletPanel();
+      }
+
+      if (walletChainView === "bitcoin" || walletChainView === "tron") {
+        return renderNativeChainWalletPanel(walletChainView);
       }
 
       const assets =
@@ -16973,7 +17492,7 @@ export default function Home() {
               <h3 className="mt-5 text-xl font-semibold">{emptyTitle}</h3>
               <p className="mx-auto mt-2 max-w-md text-sm text-gray-400">{emptyDescription}</p>
               {!walletsLoading && (
-                <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
                   <button
                     type="button"
                     onClick={() => {
@@ -16995,6 +17514,13 @@ export default function Home() {
                   >
                     {t("features.walletContext.importWallet")}
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setWalletChainView("networks")}
+                    className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-gray-200 hover:bg-white/10"
+                  >
+                    {tf("features.chain-directory.browse", "Browse networks")}
+                  </button>
                 </div>
               )}
             </div>
@@ -17003,18 +17529,33 @@ export default function Home() {
       }
 
       if (walletChainView === "all") {
+        const currentNativeBalances = effectiveWallet
+          ? Object.values(walletNativeBalances).filter((state) => state.walletId === effectiveWallet.id)
+          : [];
         const unifiedAssetsRefreshing = Boolean(
-          walletAssets?.loading || walletAssets?.refreshing || evmPortfolioRefreshing,
+          walletAssets?.loading
+          || walletAssets?.refreshing
+          || evmPortfolioRefreshing
+          || walletMultichainAccountsByWallet[effectiveWallet.id]?.loading
+          || currentNativeBalances.some((state) => state.loading),
         );
         const refreshUnifiedAssets = () => {
           refreshCurrentWalletAssets(effectiveWallet);
           void refreshEvmPortfolio();
+          setNativeBalanceRefreshNonce((value) => value + 1);
         };
         let unifiedPortfolioError: string | null = null;
         if (evmPortfolioError === "all") {
           unifiedPortfolioError = tf("features.unified-wallet.portfolioFailed", "EVM assets could not be refreshed. Try again later.");
         } else if (evmPortfolioError === "partial") {
           unifiedPortfolioError = tf("features.unified-wallet.portfolioPartial", "Some EVM networks did not respond. Available balances are still shown.");
+        }
+        const nativeError = walletMultichainAccountsByWallet[effectiveWallet.id]?.error
+          || currentNativeBalances.find((state) => state.error)?.error;
+        if (nativeError) {
+          unifiedPortfolioError = unifiedPortfolioError
+            ? `${unifiedPortfolioError} ${nativeError}`
+            : nativeError;
         }
         return (
           <div className="space-y-4">
@@ -17025,9 +17566,10 @@ export default function Home() {
             <section className="overflow-visible border-white/10 bg-transparent lg:rounded-lg lg:border lg:bg-black/50">
               <div className="rounded-lg border border-white/10 bg-zinc-900 p-5 lg:rounded-none lg:border-0 lg:p-4">
                 <div className="flex min-w-0 items-center gap-3">
-                  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white text-sm font-bold text-black">
-                    {walletAvatarText(effectiveWallet)}
-                  </span>
+                  <WalletChainMark
+                    logoUri={selectedWalletChain?.logoUri}
+                    fallback={selectedWalletChain?.symbol || walletAvatarText(effectiveWallet)}
+                  />
                   <WalletAddressPopover
                     addresses={walletChainAddresses}
                     copiedId={copied}
@@ -17075,6 +17617,7 @@ export default function Home() {
               assets={unifiedOwnedAssets}
               error={unifiedPortfolioError}
               labels={unifiedWalletLabels}
+              preferredChainId={selectedWalletChain?.id}
               refreshing={unifiedAssetsRefreshing}
               onRefresh={refreshUnifiedAssets}
             />
@@ -17127,9 +17670,7 @@ export default function Home() {
             <div className="rounded-2xl border border-white/10 bg-gradient-to-br from-blue-500 to-violet-700 p-5 shadow-xl shadow-black/20 lg:rounded-none lg:border-0 lg:bg-none lg:p-4 lg:shadow-none">
               <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                 <div className="flex min-w-0 items-center gap-3">
-                  <span className="hidden h-11 w-11 shrink-0 items-center justify-center rounded-full bg-violet-300 text-sm font-bold text-black lg:flex">
-                    {walletAvatarText(effectiveWallet)}
-                  </span>
+                  <WalletChainMark logoUri={SOLANA_CHAIN_LOGO_URI} fallback="SOL" />
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="max-w-full truncate text-lg font-semibold lg:text-lg">{effectiveWallet.name}</h3>
@@ -19646,6 +20187,8 @@ export default function Home() {
         return (
           <WalletSendAssetPicker
             assets={unifiedSearchAssets}
+            preferredChainId={selectedWalletChain?.id}
+            preferredFamily={walletFamilyForNetwork(currentWalletNetwork)}
             evmChains={portfolioEvmChains.map((chain) => ({
               chainId: chain.chain_id,
               name: chain.name,
@@ -19656,18 +20199,42 @@ export default function Home() {
           />
         );
 
+      case "native-chain-send": {
+        const assetId = String(formData.asset_id || "");
+        const networkId = String(formData.network_id || "");
+        const asset = unifiedOwnedAssets.find((item) => item.id === assetId);
+        const account = walletChainAddresses.find((item) => item.id === networkId);
+        if (
+          !effectiveWallet
+          || !asset
+          || !account
+          || (asset.family !== "bitcoin" && asset.family !== "tron")
+        ) {
+          return <p className="py-10 text-center text-sm text-gray-500">{unifiedWalletLabels.noAssets}</p>;
+        }
+        return (
+          <NativeChainSendPanel
+            asset={asset}
+            sender={account.address}
+            walletId={effectiveWallet.id}
+            labels={unifiedWalletLabels}
+            onSubmitted={() => setNativeBalanceRefreshNonce((value) => value + 1)}
+          />
+        );
+      }
+
       case "create-wallet":
         return (
           <div className="max-w-2xl space-y-5">
             <div>
               <p className="text-xs font-semibold uppercase text-emerald-300">
-                {tf("features.create-wallet.eyebrow", "One wallet, multiple networks")}
+                {tf("features.create-wallet.eyebrow", "One wallet, capability-aware networks")}
               </p>
               <h3 className="mt-2 text-lg font-semibold text-white">
-                {tf("features.create-wallet.heading", "Create once. Your network accounts are ready automatically.")}
+                {tf("features.create-wallet.heading", "Create one secure wallet for connected networks.")}
               </h3>
               <p className="mt-2 text-sm leading-6 text-gray-400">
-                {tf("features.create-wallet.hint", "A single recovery phrase derives an independent Solana address and one EVM address shared by every EVM-compatible network.")}
+                {tf("features.create-wallet.hint", "One mnemonic creates independent accounts for Solana, EVM, Bitcoin, and TRON with balances and native transfers.")}
               </p>
             </div>
 
@@ -19675,7 +20242,10 @@ export default function Home() {
               <div className="flex items-start gap-3 py-3">
                 <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-violet-400/10 text-xs font-bold text-violet-200">SOL</span>
                 <div>
-                  <p className="text-sm font-semibold text-white">Solana</p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-semibold text-white">Solana</p>
+                    <span className="rounded bg-emerald-400/15 px-1.5 py-0.5 text-[10px] text-emerald-200">{tf("features.chain-directory.walletReady", "Wallet ready")}</span>
+                  </div>
                   <p className="mt-1 text-xs text-gray-500">
                     {tf("features.create-wallet.solanaAccount", "An independent Solana account is derived automatically.")}
                   </p>
@@ -19684,9 +20254,36 @@ export default function Home() {
               <div className="flex items-start gap-3 py-3">
                 <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-400/10 text-xs font-bold text-emerald-200">EVM</span>
                 <div>
-                  <p className="text-sm font-semibold text-white">EVM</p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-semibold text-white">EVM</p>
+                    <span className="rounded bg-emerald-400/15 px-1.5 py-0.5 text-[10px] text-emerald-200">{tf("features.chain-directory.walletReady", "Wallet ready")}</span>
+                  </div>
                   <p className="mt-1 text-xs text-gray-500">
                     {tf("features.create-wallet.evmAccount", "One address works on Ethereum, BSC, Polygon, Base, Arbitrum, and every EVM-compatible network.")}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-start gap-3 py-3">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-400/10 text-xs font-bold text-amber-200">BTC</span>
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-semibold text-white">Bitcoin</p>
+                    <span className="rounded bg-emerald-400/15 px-1.5 py-0.5 text-[10px] text-emerald-200">{tf("features.chain-directory.walletReady", "Wallet ready")}</span>
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500">
+                    {tf("features.create-wallet.bitcoinAccount", "A BIP84 native SegWit account supports BTC balance lookup, fee preview, and transfer.")}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-start gap-3 py-3">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-red-400/10 text-xs font-bold text-red-200">TRX</span>
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-semibold text-white">TRON</p>
+                    <span className="rounded bg-emerald-400/15 px-1.5 py-0.5 text-[10px] text-emerald-200">{tf("features.chain-directory.walletReady", "Wallet ready")}</span>
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500">
+                    {tf("features.create-wallet.tronAccount", "A BIP44 TRON account supports TRX balance, resource preview, and transfer.")}
                   </p>
                 </div>
               </div>
@@ -20415,6 +21012,27 @@ export default function Home() {
                           <TweetSignalBody
                             signal={signal}
                             expanded={expanded}
+                            trailingActions={(
+                              <span className="ml-1 inline-flex items-center align-text-bottom">
+                                {displayedTokenSignals.map((tokenSignal) => (
+                                  <button
+                                    key={tokenSignal.id}
+                                    type="button"
+                                    onClick={() => copyToClipboard(
+                                      tweetSignalTokenLabel(tokenSignal),
+                                      `twitter-signal-${tokenSignal.id}`,
+                                    )}
+                                    className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-gray-400 transition-colors hover:bg-white/10 hover:text-white"
+                                    title={t("common.copy")}
+                                    aria-label={t("common.copy")}
+                                  >
+                                    {copied === `twitter-signal-${tokenSignal.id}`
+                                      ? <Check className="h-3.5 w-3.5" />
+                                      : <Copy className="h-3.5 w-3.5" />}
+                                  </button>
+                                ))}
+                              </span>
+                            )}
                             onOpen={openSignalTweet}
                             showMoreLabel={tf("features.twitter-signals.showMore", "显示更多")}
                             showLessLabel={tf("features.twitter-signals.showLess", "收起")}
@@ -20440,8 +21058,7 @@ export default function Home() {
                           />
                         </div>
                         <div className="col-start-2 ml-auto w-full min-w-0 max-w-[480px] space-y-1 self-start lg:col-start-3 lg:row-start-1 lg:justify-self-end">
-                          {displayedTokenSignals.map((tokenSignal, tokenIndex) => {
-                            const tokenLabel = tweetSignalTokenLabel(tokenSignal);
+                          {displayedTokenSignals.map((tokenSignal) => {
                             const tokenSymbolLabel = tokenSignal.tokenSymbols?.join(" ").trim();
                             const fomoActionUrls = fomoTokenActionUrls({
                               sourceUrl: tokenSignal.sourceUrl || signal.sourceUrl,
@@ -20485,15 +21102,6 @@ export default function Home() {
                                     <code>-</code>
                                   ) : null}
                                 </p>
-                                <button
-                                  type="button"
-                                  onClick={() => copyToClipboard(tokenLabel, `twitter-signal-${tokenSignal.id}`)}
-                                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-gray-400 transition-colors hover:bg-white/10 hover:text-white"
-                                  title={t("common.copy")}
-                                  aria-label={t("common.copy")}
-                                >
-                                  {copied === `twitter-signal-${tokenSignal.id}` ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                                </button>
                                 {fomoActionUrls.fomoUrl && (
                                   <button
                                     type="button"
@@ -20503,17 +21111,6 @@ export default function Home() {
                                   >
                                     <ExternalLink className="h-3.5 w-3.5" />
                                     {tf("features.twitter-signals.fomoAction", "Fomo")}
-                                  </button>
-                                )}
-                                {tokenIndex === 0 && !isFomoSignal && signal.sourceUrl && (
-                                  <button
-                                    type="button"
-                                    onClick={() => openSignalTweet(signal.sourceUrl || "")}
-                                    className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-gray-400 transition-colors hover:bg-white/10 hover:text-white"
-                                    title={tf("features.twitter-signals.openTweet", "打开推文")}
-                                    aria-label={tf("features.twitter-signals.openTweet", "打开推文")}
-                                  >
-                                    <ExternalLink className="h-3.5 w-3.5" />
                                   </button>
                                 )}
                                 <button
@@ -21415,9 +22012,9 @@ export default function Home() {
             id: "address-book",
             group: "data",
             title: tf("features.settings.addressBookTitle", "地址簿"),
-            description: tf("features.settings.addressBookHint", "管理 Solana 和 EVM 收款地址"),
+            description: tf("features.settings.addressBookHint", "管理 Solana、EVM、Bitcoin 和 TRON 收款地址"),
             summary: t("features.settings.itemCount", { count: addressBookEntries.length }),
-            keywords: ["address book", "contacts", "recipient", "solana", "evm", "地址簿", "联系人", "收款人"],
+            keywords: ["address book", "contacts", "recipient", "solana", "evm", "bitcoin", "tron", "地址簿", "联系人", "收款人"],
             icon: <BookUser className="h-4 w-4" />,
           },
           {
@@ -21580,9 +22177,22 @@ export default function Home() {
                       <section className="space-y-3 rounded-lg border border-violet-300/25 bg-violet-400/[0.06] p-4">
                         <div className="grid gap-2 sm:grid-cols-2">
                           <input value={addressBookEditor.label} onChange={(event) => setAddressBookEditor((previous) => previous && ({ ...previous, label: event.target.value }))} placeholder={tf("features.settings.addressLabel", "标签")} className="h-10 rounded-lg border border-white/10 bg-black/20 px-3 text-sm text-gray-100" />
-                          <select value={addressBookEditor.chain} onChange={(event) => setAddressBookEditor((previous) => previous && ({ ...previous, chain: event.target.value as "solana" | "evm", network: event.target.value === "solana" ? effectiveNetwork : String(activeEvmChain?.chain_id || "1") }))} className="h-10 rounded-lg border border-white/10 bg-black/20 px-3 text-sm text-gray-100">
+                          <select
+                            value={addressBookEditor.chain}
+                            onChange={(event) => {
+                              const chain = event.target.value as AddressBookChain;
+                              setAddressBookEditor((previous) => previous && ({
+                                ...previous,
+                                chain,
+                                network: defaultAddressBookNetwork(chain, effectiveNetwork, activeEvmChain?.chain_id),
+                              }));
+                            }}
+                            className="h-10 rounded-lg border border-white/10 bg-black/20 px-3 text-sm text-gray-100"
+                          >
                             <option value="solana">Solana</option>
                             <option value="evm">EVM</option>
+                            <option value="bitcoin">Bitcoin</option>
+                            <option value="tron">TRON</option>
                           </select>
                           <input value={addressBookEditor.network} onChange={(event) => setAddressBookEditor((previous) => previous && ({ ...previous, network: event.target.value }))} placeholder={tf("features.settings.addressNetwork", "网络 / Chain ID")} className="h-10 rounded-lg border border-white/10 bg-black/20 px-3 text-sm text-gray-100" />
                           <input value={addressBookEditor.address} onChange={(event) => setAddressBookEditor((previous) => previous && ({ ...previous, address: event.target.value }))} placeholder={tf("features.settings.addressValue", "地址")} className="h-10 min-w-0 rounded-lg border border-white/10 bg-black/20 px-3 font-mono text-sm text-gray-100" />
@@ -21598,7 +22208,7 @@ export default function Home() {
                         <div key={entry.id} className="flex items-center gap-3 p-3">
                           <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-white/[0.06] text-gray-300"><BookUser className="h-4 w-4" /></span>
                           <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center gap-2"><span className="text-sm font-medium text-gray-100">{entry.label}</span><span className="text-[11px] text-gray-500">{entry.chain === "evm" ? `EVM ${entry.network}` : `Solana ${entry.network}`}</span></div>
+                            <div className="flex flex-wrap items-center gap-2"><span className="text-sm font-medium text-gray-100">{entry.label}</span><span className="text-[11px] text-gray-500">{addressBookChainLabel(entry)}</span></div>
                             <code className="mt-1 block truncate text-xs text-gray-500" title={entry.address}>{entry.address}</code>
                           </div>
                           <button type="button" onClick={() => setAddressBookEditor({ id: entry.id, label: entry.label, chain: entry.chain, network: entry.network, address: entry.address })} className="inline-flex h-8 w-8 items-center justify-center rounded-md text-gray-400 hover:bg-white/10" title={tf("features.settings.addressEdit", "编辑")}><Pencil className="h-3.5 w-3.5" /></button>
@@ -22402,7 +23012,10 @@ export default function Home() {
           </div>
         );
 
-      case "import-keystore":
+      case "import-keystore": {
+        const importedKeystoreSecretType = detectedKeystoreSecretType(
+          typeof formData.keystoreJson === "string" ? formData.keystoreJson : undefined,
+        );
         return (
           <div className="space-y-4">
             <p className="rounded-lg border border-sky-300/15 bg-sky-400/[0.06] px-3 py-2.5 text-xs leading-relaxed text-sky-100">
@@ -22443,6 +23056,19 @@ export default function Home() {
                 className="w-full px-4 py-2 bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-white/20 text-white min-h-[120px]"
                 placeholder={t("features.import-keystore.jsonPlaceholder")}
               />
+              {formData.keystoreJson && (
+                <p className={`mt-2 text-xs ${
+                  importedKeystoreSecretType
+                    ? "text-emerald-300"
+                    : "text-amber-300"
+                }`}>
+                  {importedKeystoreSecretType === "mnemonic"
+                    ? t("features.import-keystore.detectedMnemonicKeystore")
+                    : importedKeystoreSecretType === "private_key"
+                      ? t("features.import-keystore.detectedPrivateKeyKeystore")
+                      : t("features.import-keystore.detectedUnknownKeystore")}
+                </p>
+              )}
             </div>
             <button type="button"
               onClick={() => requestCreatePasswordSubmit("import-keystore")}
@@ -22495,6 +23121,7 @@ export default function Home() {
             )}
           </div>
         );
+      }
 
       case "decrypt": {
         const decryptAuth = walletAuth("decrypt");
@@ -27339,6 +27966,7 @@ export default function Home() {
       ({
         "wallet-list": t("features.wallet-list.title"),
         "wallet-send": tf("features.unified-wallet.selectAsset", "Select an asset"),
+        "native-chain-send": tf("features.unified-wallet.sendNativeAsset", "Send native asset"),
         "wallet-receive": tf("features.unified-wallet.receiveAddress", "Receive address"),
         "wsol-workbench": t("features.wsol-workbench.title"),
         "pump-workbench": t("features.pump-workbench.title"),
@@ -27446,12 +28074,6 @@ export default function Home() {
       <Settings className="h-4 w-4" />
     </button>
   );
-  const dappSignWallet = dappSignRequest
-    ? wallets.find((wallet) => wallet.public_key === dappSignRequest.wallet_public_key)
-    : undefined;
-  const dappBiometricConfigured = biometricConfiguredFor(dappSignWallet);
-  const dappBiometricAvailable = canUseBiometricWallet(dappSignWallet);
-  const dappBiometricBusy = Boolean(dappSignWallet && biometricBusyWalletId === dappSignWallet.id);
   return (
     <div
       className="app-shell flex min-h-screen flex-col bg-black text-white lg:h-screen lg:flex-row"
@@ -27469,18 +28091,41 @@ export default function Home() {
             <div className="text-center">
               <div className="mx-auto inline-flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-white/[0.06]"><Lock className="h-5 w-5" /></div>
               <h2 className="mt-4 text-xl font-semibold">{tf("features.settings.lockedTitle", "FnzSafe 已锁定")}</h2>
-              <p className="mt-1 text-sm text-gray-500">{effectiveWallet.name}</p>
+              <p className="mt-1 text-sm text-gray-500">{tf("features.settings.unlockHint", "输入统一钱包密码以解锁全部钱包")}</p>
             </div>
             <label className="block text-sm text-gray-300">
-              <span className="mb-1.5 block">{tf("features.settings.unlockPassword", "钱包密码")}</span>
-              <input
-                type="password"
-                value={unlockPassword}
-                onChange={(event) => setUnlockPassword(event.target.value)}
-                autoComplete="current-password"
-                autoFocus
-                className="h-11 w-full rounded-lg border border-white/10 bg-white/[0.05] px-3 text-white outline-none focus:border-violet-300/40"
-              />
+              <span className="mb-1.5 block">{tf("features.settings.unlockPassword", "FnzSafe 钱包密码")}</span>
+              <div className="relative">
+                <input
+                  type={unlockPasswordVisible ? "text" : "password"}
+                  value={unlockPassword}
+                  onChange={(event) => {
+                    setUnlockPassword(event.target.value);
+                    if (unlockError) setUnlockError(null);
+                  }}
+                  autoComplete="current-password"
+                  autoFocus
+                  maxLength={MAX_WALLET_PASSWORD_CHARS}
+                  spellCheck={false}
+                  aria-invalid={Boolean(unlockError)}
+                  aria-describedby={unlockError ? "wallet-unlock-error" : undefined}
+                  className={`h-11 w-full rounded-lg border bg-white/[0.05] px-3 pr-11 text-white outline-none ${unlockError ? "border-red-400/60 focus:border-red-300" : "border-white/10 focus:border-violet-300/40"}`}
+                />
+                <button
+                  type="button"
+                  onClick={() => setUnlockPasswordVisible((visible) => !visible)}
+                  className="absolute inset-y-0 right-0 inline-flex w-11 items-center justify-center text-gray-400 hover:text-white"
+                  aria-label={unlockPasswordVisible ? t("common.hide") : t("common.show")}
+                  title={unlockPasswordVisible ? t("common.hide") : t("common.show")}
+                >
+                  {unlockPasswordVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+              {unlockError && (
+                <span id="wallet-unlock-error" role="alert" className="mt-2 block rounded-md border border-red-400/20 bg-red-400/10 px-3 py-2 text-xs leading-5 text-red-200">
+                  {unlockError}
+                </span>
+              )}
             </label>
             <button type="submit" disabled={unlockBusy || !unlockPassword} className="h-11 w-full rounded-lg bg-white text-sm font-semibold text-black hover:bg-gray-200 disabled:opacity-40">{unlockBusy ? t("common.loading") : tf("features.settings.unlock", "解锁")}</button>
             {biometricConfiguredFor(effectiveWallet) && (
@@ -28136,41 +28781,6 @@ export default function Home() {
                   className="w-full rounded-lg border border-white/10 bg-black/40 px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-white/20"
                   placeholder={t("formUi.placeholderKeystorePassword")}
                 />
-                {dappBiometricAvailable && (
-                  <div className="mt-3 rounded-lg border border-emerald-300/15 bg-emerald-400/10 p-3">
-                    {dappBiometricConfigured ? (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => void approveDappSignRequestWithBiometric()}
-                          disabled={dappSignBusy || dappBiometricBusy}
-                          className="inline-flex items-center gap-2 rounded-lg border border-emerald-200/25 bg-emerald-300/15 px-3.5 py-2.5 text-sm font-semibold text-emerald-50 shadow-sm shadow-emerald-950/20 hover:bg-emerald-300/25 disabled:opacity-50"
-                        >
-                          <Fingerprint className="h-4 w-4" />
-                          {dappBiometricBusy ? t("common.processing") : t("features.biometric.useTouchId")}
-                        </button>
-                        <p className="mt-2 text-xs leading-relaxed text-emerald-50/70">
-                          {t("features.biometric.touchIdHint")}
-                        </p>
-                      </>
-                    ) : (
-                      <>
-                        <label className="inline-flex items-center gap-2 text-xs font-medium text-emerald-50">
-                          <input
-                            type="checkbox"
-                            checked={dappSaveBiometric}
-                            onChange={(event) => setDappSaveBiometric(event.target.checked)}
-                            className="h-4 w-4 rounded border-emerald-200/30 bg-black/40"
-                          />
-                          <span>{t("features.biometric.saveForTouchId")}</span>
-                        </label>
-                        <p className="mt-2 text-xs leading-relaxed text-emerald-50/65">
-                          {t("features.biometric.saveHint")}
-                        </p>
-                      </>
-                    )}
-                  </div>
-                )}
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <button
@@ -28518,50 +29128,6 @@ export default function Home() {
                       className="w-full rounded-lg border border-white/10 bg-black/40 px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-white/20"
                       placeholder={t("formUi.placeholderKeystorePassword")}
                     />
-                    {showPasswordPromptBiometric && (
-                      <div className="mt-3 rounded-lg border border-emerald-300/15 bg-emerald-400/10 p-3">
-                        {passwordPromptBiometricConfigured ? (
-                          <>
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                const wallet = passwordPromptWallet;
-                                if (!wallet) return;
-                                const password = await getBiometricWalletPassword(wallet);
-                                if (password) {
-                                  await confirmPasswordPrompt(password);
-                                }
-                              }}
-                              disabled={passwordPromptIsBusy || passwordPromptBiometricBusy}
-                              className="inline-flex items-center gap-2 rounded-lg border border-emerald-200/25 bg-emerald-300/15 px-3.5 py-2.5 text-sm font-semibold text-emerald-50 shadow-sm shadow-emerald-950/20 hover:bg-emerald-300/25 disabled:opacity-50"
-                            >
-                              <Fingerprint className="h-4 w-4" />
-                              {passwordPromptBiometricBusy
-                                ? t("common.processing")
-                                : t("features.biometric.useTouchId")}
-                            </button>
-                            <p className="mt-2 text-xs leading-relaxed text-emerald-50/70">
-                              {t("features.biometric.touchIdHint")}
-                            </p>
-                          </>
-                        ) : (
-                          <>
-                            <label className="inline-flex items-center gap-2 text-xs font-medium text-emerald-50">
-                              <input
-                                type="checkbox"
-                                checked={savePasswordToBiometric}
-                                onChange={(event) => setSavePasswordToBiometric(event.target.checked)}
-                                className="h-4 w-4 rounded border-emerald-200/30 bg-black/40"
-                              />
-                              <span>{t("features.biometric.saveForTouchId")}</span>
-                            </label>
-                            <p className="mt-2 text-xs leading-relaxed text-emerald-50/65">
-                              {t("features.biometric.saveHint")}
-                            </p>
-                          </>
-                        )}
-                      </div>
-                    )}
                   </div>
                 )}
                 {showMigrationPasswords && (
@@ -28611,10 +29177,17 @@ export default function Home() {
                     <div className="mt-3 space-y-2">
                       {([
                         {
-                          id: "keystore",
+                          id: "private-key-keystore",
                           icon: <Download className="h-4 w-4" />,
-                          label: t("features.settings.exportKeystore"),
-                          hint: t("features.settings.exportBundleKeystoreHint"),
+                          label: t("features.settings.exportPrivateKeyKeystore"),
+                          hint: t("features.settings.exportBundlePrivateKeyKeystoreHint"),
+                          tone: "text-sky-100",
+                        },
+                        {
+                          id: "mnemonic-keystore",
+                          icon: <Download className="h-4 w-4" />,
+                          label: t("features.settings.exportMnemonicKeystore"),
+                          hint: t("features.settings.exportBundleMnemonicKeystoreHint"),
                           tone: "text-sky-100",
                         },
                         {
@@ -28639,7 +29212,8 @@ export default function Home() {
                         tone: string;
                       }>).filter(
                         (option) =>
-                          option.id !== "mnemonic" || passwordPromptWallet?.secret_type === "mnemonic",
+                          (option.id !== "mnemonic" && option.id !== "mnemonic-keystore")
+                          || passwordPromptWallet?.secret_type === "mnemonic",
                       ).map((option) => (
                         <label
                           key={option.id}

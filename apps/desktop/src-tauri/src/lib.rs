@@ -75,7 +75,11 @@ const LEGACY_DESKTOP_APP_PID_FILE_NAME: &str = "desktop.pid";
 const DESKTOP_APP_PID_FILE_NAME: &str = "desktop-app.pid";
 const DESKTOP_API_PID_FILE_NAME: &str = "desktop-api.pid";
 #[cfg(target_os = "macos")]
-const BIOMETRIC_WALLET_PASSWORD_SERVICE: &str = "dev.fnzero-safe.wallet.password.v6";
+// v6 items were created by ad-hoc-signed builds and can display a macOS
+// password prompt when a later build only checks whether they exist. Keep the
+// encrypted wallet database compatible, but start a clean Keychain namespace
+// for builds that have a stable signing identity.
+const BIOMETRIC_WALLET_PASSWORD_SERVICE: &str = "dev.fnzero-safe.wallet.password.v7";
 
 #[derive(Clone)]
 struct AllowedDapp {
@@ -167,13 +171,29 @@ struct DappPollResponse {
     result: Option<DappSignResult>,
 }
 
-#[derive(Default)]
 struct DappBridgeState {
     paused: AtomicBool,
+    webview_visibility: Mutex<()>,
     active_tab_label: Mutex<Option<String>>,
     sessions: Mutex<HashMap<String, DappSession>>,
     requests: Mutex<HashMap<String, DappPendingRequest>>,
     connect_requests: Mutex<HashMap<String, DappPendingConnectRequest>>,
+}
+
+impl Default for DappBridgeState {
+    fn default() -> Self {
+        Self {
+            // The frontend cannot know whether saved wallets exist until its
+            // initial API request completes. Keep native DApp surfaces closed
+            // until that wallet security state has been resolved explicitly.
+            paused: AtomicBool::new(true),
+            webview_visibility: Mutex::new(()),
+            active_tab_label: Mutex::new(None),
+            sessions: Mutex::new(HashMap::new()),
+            requests: Mutex::new(HashMap::new()),
+            connect_requests: Mutex::new(HashMap::new()),
+        }
+    }
 }
 
 fn ensure_dapp_connections_active(state: &DappBridgeState) -> Result<(), String> {
@@ -397,14 +417,36 @@ struct DesktopApiProcess {
     child: Mutex<Option<Child>>,
     port: AtomicU16,
     pid_file: PathBuf,
+    api_token: Zeroizing<String>,
+}
+
+fn generate_desktop_api_token() -> String {
+    let mut bytes = [0_u8; 32];
+    let token = {
+        OsRng.fill_bytes(&mut bytes);
+        BASE64.encode(bytes)
+    };
+    bytes.zeroize();
+    token
 }
 
 impl DesktopApiProcess {
     fn new(pid_file: PathBuf) -> Self {
+        let api_token = env::var("FNZERO_SAFE_API_TOKEN")
+            .or_else(|_| env::var("SOL_SAFEKEY_API_TOKEN"))
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(generate_desktop_api_token);
+        #[cfg(not(test))]
+        for name in ["FNZERO_SAFE_API_TOKEN", "SOL_SAFEKEY_API_TOKEN"] {
+            env::remove_var(name);
+        }
         Self {
             child: Mutex::new(None),
             port: AtomicU16::new(FNZERO_SAFE_API_PORT),
             pid_file,
+            api_token: Zeroizing::new(api_token),
         }
     }
 
@@ -414,6 +456,10 @@ impl DesktopApiProcess {
 
     fn set_port(&self, port: u16) {
         self.port.store(port, Ordering::Relaxed);
+    }
+
+    fn api_token(&self) -> &str {
+        self.api_token.as_str()
     }
 }
 
@@ -705,7 +751,6 @@ struct ProxyRequestHeader {
 struct SecureSessionResponse {
     version: String,
     public_key_pem: String,
-    api_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -849,6 +894,8 @@ mod biometric_wallet_keychain {
     };
 
     const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
+    const ERR_SEC_AUTH_FAILED: i32 = -25293;
+    const ERR_SEC_INTERACTION_NOT_ALLOWED: i32 = -25308;
 
     fn exists(service: &str, account: &str) -> Result<bool, String> {
         let mut query = ItemSearchOptions::new();
@@ -856,10 +903,21 @@ mod biometric_wallet_keychain {
             .class(ItemClass::generic_password())
             .service(service)
             .account(account)
-            .load_attributes(true);
+            .load_attributes(true)
+            // Status checks run while the wallet list is loading. An older
+            // ad-hoc-signed build may own this item, so never let a metadata
+            // lookup display a macOS password prompt during application start.
+            .skip_authenticated_items(true);
         match query.search() {
             Ok(items) => Ok(!items.is_empty()),
-            Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(false),
+            Err(error)
+                if matches!(
+                    error.code(),
+                    ERR_SEC_ITEM_NOT_FOUND | ERR_SEC_AUTH_FAILED | ERR_SEC_INTERACTION_NOT_ALLOWED
+                ) =>
+            {
+                Ok(false)
+            }
             Err(error) => Err(biometric_error_message(error)),
         }
     }
@@ -942,16 +1000,59 @@ fn biometric_wallet_store_password(req: BiometricWalletStoreRequest) -> Result<(
     }
 }
 
+#[derive(Serialize)]
+struct BiometricUnlockAllBody<'a> {
+    password: &'a str,
+}
+
+fn response_reports_wrong_wallet_password(response: &ProxyResponse) -> bool {
+    response.status == 401
+        && serde_json::from_str::<serde_json::Value>(&response.body)
+            .ok()
+            .and_then(|body| {
+                body.get("error")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            })
+            .as_deref()
+            == Some("钱包密码错误")
+}
+
 #[tauri::command]
-fn biometric_wallet_get_password(req: BiometricWalletRequest) -> Result<String, String> {
+async fn biometric_wallet_unlock_all(
+    process: tauri::State<'_, DesktopApiProcess>,
+    req: BiometricWalletRequest,
+) -> Result<ProxyResponse, String> {
     let accounts = biometric_wallet_accounts(&req.wallet_id, &req.public_key)?;
     #[cfg(target_os = "macos")]
     {
         biometric_touch_id_authenticate()?;
-        biometric_wallet_keychain::load(&accounts.primary)
+        let password = Zeroizing::new(biometric_wallet_keychain::load(&accounts.primary)?);
+        let body = Zeroizing::new(
+            serde_json::to_string(&BiometricUnlockAllBody {
+                password: password.as_str(),
+            })
+            .map_err(|error| format!("failed to encode biometric unlock request: {error}"))?,
+        );
+        let response = proxy_api_request_inner(
+            process.inner(),
+            "POST".to_string(),
+            "wallets/unlock-all".to_string(),
+            None,
+            Some(body),
+            Some(true),
+        )
+        .await?;
+        if response_reports_wrong_wallet_password(&response) {
+            biometric_wallet_keychain::delete(&accounts.primary).map_err(|error| {
+                format!("Touch ID 中保存的钱包密码已失效，且无法删除旧凭据: {error}")
+            })?;
+        }
+        Ok(response)
     }
     #[cfg(not(target_os = "macos"))]
     {
+        let _ = process;
         let _ = accounts;
         Err("Touch ID 只支持 macOS 桌面客户端".to_string())
     }
@@ -1062,6 +1163,25 @@ async fn proxy_api_request(
     body: Option<String>,
     secure_proxy: Option<bool>,
 ) -> Result<ProxyResponse, String> {
+    proxy_api_request_inner(
+        process.inner(),
+        method,
+        path,
+        headers,
+        body.map(Zeroizing::new),
+        secure_proxy,
+    )
+    .await
+}
+
+async fn proxy_api_request_inner(
+    process: &DesktopApiProcess,
+    method: String,
+    path: String,
+    headers: Option<Vec<ProxyRequestHeader>>,
+    body: Option<Zeroizing<String>>,
+    secure_proxy: Option<bool>,
+) -> Result<ProxyResponse, String> {
     let path = path.trim_start_matches('/');
     if path.is_empty()
         || path.contains("://")
@@ -1116,30 +1236,10 @@ async fn proxy_api_request(
     }
     let mut session = None;
     if proxied_api_path_requires_token(path) {
-        let mut token_attached = false;
-        if let Ok(token) = std::env::var("FNZERO_SAFE_API_TOKEN")
-            .or_else(|_| std::env::var("SOL_SAFEKEY_API_TOKEN"))
-        {
-            let token = token.trim().to_string();
-            if !token.is_empty() {
-                req = req.header("X-Fnzero-Safe-Token", token);
-                token_attached = true;
-            }
-        }
-        if !token_attached {
-            session = Some(fetch_secure_session(&client, api_port).await?);
-            let token = session
-                .as_ref()
-                .and_then(|session| session.api_token.as_deref())
-                .ok_or_else(|| {
-                    "secure API session did not provide a local API token".to_string()
-                })?;
-            req = req.header("X-Fnzero-Safe-Token", token);
-        }
+        req = req.header("X-Fnzero-Safe-Token", process.api_token());
     }
     if let Some(b) = body {
         if secure_proxy && matches!(method_upper.as_str(), "POST" | "PUT" | "PATCH") {
-            let b = Zeroizing::new(b);
             if session.is_none() {
                 session = Some(fetch_secure_session(&client, api_port).await?);
             }
@@ -1148,7 +1248,7 @@ async fn proxy_api_request(
             req = req.header(SECURE_BODY_HEADER, SECURE_BODY_VERSION);
             req = req.body(encrypted_body);
         } else {
-            req = req.body(b);
+            req = req.body(b.to_string());
         }
     }
 
@@ -3297,7 +3397,7 @@ fn open_url_in_chrome(url: String) -> Result<(), String> {
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-fn dapp_open_tab(
+async fn dapp_open_tab(
     app: DesktopAppHandle,
     state: tauri::State<'_, DappBridgeState>,
     tab_id: String,
@@ -3311,13 +3411,11 @@ fn dapp_open_tab(
     height: f64,
     hidden: Option<bool>,
 ) -> Result<(), String> {
+    ensure_dapp_connections_active(state.inner())?;
     let keep_running_in_background = tab_id.trim() == FOMO_ALERTS_TAB_ID;
     let label = dapp_tab_label(&tab_id)?;
     let url = parse_dapp_browser_url(&url)?;
     let dapp = app_id.as_deref().and_then(allowed_dapp);
-    if dapp.is_some() {
-        ensure_dapp_connections_active(state.inner())?;
-    }
     if let Some(dapp) = dapp.as_ref() {
         if !is_allowed_dapp_url(dapp, &url) {
             return Err("dapp tab URL does not match the selected DApp".to_string());
@@ -3475,6 +3573,11 @@ fn dapp_open_tab(
         builder = builder.initialization_script(&init_script);
     }
 
+    let _visibility = state
+        .webview_visibility
+        .lock()
+        .map_err(|_| "dapp webview visibility lock poisoned".to_string())?;
+    ensure_dapp_connections_active(state.inner())?;
     let webview = main_window
         .add_child(builder, bounds.position, bounds.size)
         .map_err(|error| format!("failed to open dapp tab: {error}"))?;
@@ -3518,7 +3621,7 @@ fn dapp_open_tab(
 }
 
 #[tauri::command]
-fn dapp_navigate_tab(
+async fn dapp_navigate_tab(
     app: DesktopAppHandle,
     state: tauri::State<'_, DappBridgeState>,
     tab_id: String,
@@ -3543,6 +3646,11 @@ fn dapp_navigate_tab(
     let webview = app
         .get_webview(&label)
         .ok_or_else(|| "dapp tab is not open".to_string())?;
+    let _visibility = state
+        .webview_visibility
+        .lock()
+        .map_err(|_| "dapp webview visibility lock poisoned".to_string())?;
+    ensure_dapp_connections_active(state.inner())?;
     webview
         .navigate(url)
         .map_err(|error| format!("failed to navigate dapp tab: {error}"))?;
@@ -3550,11 +3658,20 @@ fn dapp_navigate_tab(
 }
 
 #[tauri::command]
-fn dapp_reload_tab(app: DesktopAppHandle, tab_id: String) -> Result<(), String> {
+async fn dapp_reload_tab(
+    app: DesktopAppHandle,
+    state: tauri::State<'_, DappBridgeState>,
+    tab_id: String,
+) -> Result<(), String> {
     let label = dapp_tab_label(&tab_id)?;
     let webview = app
         .get_webview(&label)
         .ok_or_else(|| "dapp tab is not open".to_string())?;
+    let _visibility = state
+        .webview_visibility
+        .lock()
+        .map_err(|_| "dapp webview visibility lock poisoned".to_string())?;
+    ensure_dapp_connections_active(state.inner())?;
     webview
         .reload()
         .map_err(|error| format!("failed to reload dapp tab: {error}"))?;
@@ -3619,7 +3736,7 @@ fn raise_embedded_webview(webview: &DesktopWebview) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn dapp_set_active_tab(
+async fn dapp_set_active_tab(
     app: DesktopAppHandle,
     state: tauri::State<'_, DappBridgeState>,
     tab_id: Option<String>,
@@ -3628,6 +3745,11 @@ fn dapp_set_active_tab(
     width: f64,
     height: f64,
 ) -> Result<(), String> {
+    let _visibility = state
+        .webview_visibility
+        .lock()
+        .map_err(|_| "dapp webview visibility lock poisoned".to_string())?;
+    ensure_dapp_connections_active(state.inner())?;
     let active_label = tab_id.as_deref().map(dapp_tab_label).transpose()?;
     let fomo_background_label = dapp_tab_label(FOMO_ALERTS_TAB_ID)?;
     let fomo_background_bounds = dapp_webview_bounds(-20_000.0, -20_000.0, 1_280.0, 900.0)?;
@@ -3678,7 +3800,7 @@ fn dapp_set_active_tab(
 }
 
 #[tauri::command]
-fn dapp_close_tab(
+async fn dapp_close_tab(
     app: DesktopAppHandle,
     state: tauri::State<'_, DappBridgeState>,
     tab_id: String,
@@ -3725,20 +3847,29 @@ async fn dapp_request_tab_text(
         .ok_or_else(|| "dapp tab is not open".to_string())?;
     let run_in_background = background.unwrap_or(false);
     let original_bounds = run_in_background.then(|| webview.bounds().ok()).flatten();
-    if run_in_background {
-        let staging_bounds = Rect {
-            position: Position::Logical(LogicalPosition::new(-20_000.0, -20_000.0)),
-            size: Size::Logical(LogicalSize::new(1_280.0, 900.0)),
-        };
-        webview
-            .set_bounds(staging_bounds)
-            .map_err(|error| format!("failed to stage background dapp page scan: {error}"))?;
-        if let Err(error) = webview.show() {
-            if let Some(bounds) = original_bounds {
-                let _ = webview.set_bounds(bounds);
+    {
+        let _visibility = state
+            .webview_visibility
+            .lock()
+            .map_err(|_| "dapp webview visibility lock poisoned".to_string())?;
+        ensure_dapp_connections_active(state.inner())?;
+        if run_in_background {
+            let staging_bounds = Rect {
+                position: Position::Logical(LogicalPosition::new(-20_000.0, -20_000.0)),
+                size: Size::Logical(LogicalSize::new(1_280.0, 900.0)),
+            };
+            webview
+                .set_bounds(staging_bounds)
+                .map_err(|error| format!("failed to stage background dapp page scan: {error}"))?;
+            if let Err(error) = webview.show() {
+                if let Some(bounds) = original_bounds {
+                    let _ = webview.set_bounds(bounds);
+                }
+                return Err(format!("failed to show background dapp page scan: {error}"));
             }
-            return Err(format!("failed to show background dapp page scan: {error}"));
         }
+    }
+    if run_in_background {
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 
@@ -4097,16 +4228,20 @@ async fn dapp_request_tab_text(
     .await;
 
     if run_in_background {
-        let active_tab_label = state.active_tab_label.lock().ok();
-        let became_active = active_tab_label
-            .as_deref()
-            .and_then(|label| label.as_deref())
-            == Some(label.as_str());
+        let _visibility = state
+            .webview_visibility
+            .lock()
+            .map_err(|_| "dapp webview visibility lock poisoned".to_string())?;
+        let active_tab_label = state
+            .active_tab_label
+            .lock()
+            .map_err(|_| "active dapp tab lock poisoned".to_string())?;
+        let became_active = active_tab_label.as_deref() == Some(label.as_str());
         if !became_active {
             let _ = webview.hide();
-            if let Some(bounds) = original_bounds {
-                let _ = webview.set_bounds(bounds);
-            }
+        }
+        if let Some(bounds) = original_bounds {
+            let _ = webview.set_bounds(bounds);
         }
     }
     scan_result
@@ -5117,8 +5252,26 @@ fn ensure_dapp_result_pending(
 }
 
 #[tauri::command]
-fn dapp_pause_connections(state: tauri::State<'_, DappBridgeState>) -> Result<(), String> {
-    pause_dapp_connections(state.inner())
+fn dapp_pause_connections(
+    app: DesktopAppHandle,
+    state: tauri::State<'_, DappBridgeState>,
+) -> Result<(), String> {
+    let _visibility = state
+        .webview_visibility
+        .lock()
+        .map_err(|_| "dapp webview visibility lock poisoned".to_string())?;
+    pause_dapp_connections(state.inner())?;
+    let mut first_error = None;
+    for (label, webview) in app.webviews() {
+        if label.starts_with(DAPP_TAB_LABEL_PREFIX) {
+            if let Err(error) = webview.hide() {
+                first_error.get_or_insert_with(|| error.to_string());
+            }
+        }
+    }
+    first_error
+        .map(|error| Err(format!("failed to hide dapp tabs while locking: {error}")))
+        .unwrap_or(Ok(()))
 }
 
 fn pause_dapp_connections(state: &DappBridgeState) -> Result<(), String> {
@@ -5142,8 +5295,49 @@ fn pause_dapp_connections(state: &DappBridgeState) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn dapp_resume_connections(state: tauri::State<'_, DappBridgeState>) {
+fn dapp_resume_connections(
+    app: DesktopAppHandle,
+    state: tauri::State<'_, DappBridgeState>,
+) -> Result<(), String> {
+    let _visibility = state
+        .webview_visibility
+        .lock()
+        .map_err(|_| "dapp webview visibility lock poisoned".to_string())?;
+    let active_label = state
+        .active_tab_label
+        .lock()
+        .map_err(|_| "active dapp tab lock poisoned".to_string())?
+        .clone();
+    let fomo_background_label = dapp_tab_label(FOMO_ALERTS_TAB_ID)?;
+    let fomo_background_bounds = dapp_webview_bounds(-20_000.0, -20_000.0, 1_280.0, 900.0)?;
+    let mut active_webview = None;
+    for (label, webview) in app.webviews() {
+        if !label.starts_with(DAPP_TAB_LABEL_PREFIX) {
+            continue;
+        }
+        if active_label.as_deref() == Some(label.as_str()) {
+            active_webview = Some(webview);
+        } else if label == fomo_background_label {
+            webview
+                .set_bounds(fomo_background_bounds)
+                .map_err(|error| format!("failed to position background dapp tab: {error}"))?;
+            webview
+                .show()
+                .map_err(|error| format!("failed to restore background dapp tab: {error}"))?;
+        } else {
+            webview
+                .hide()
+                .map_err(|error| format!("failed to keep inactive dapp tab hidden: {error}"))?;
+        }
+    }
+    if let Some(webview) = active_webview {
+        webview
+            .show()
+            .map_err(|error| format!("failed to restore active dapp tab: {error}"))?;
+        raise_embedded_webview(&webview)?;
+    }
     state.paused.store(false, Ordering::Release);
+    Ok(())
 }
 
 fn dapp_session_matches_permission(
@@ -5705,6 +5899,7 @@ fn start_desktop_api_if_needed(
     let mut command = Command::new(&binary);
     command
         .env("FNZERO_SAFE_DB_PATH", &database_path)
+        .env("FNZERO_SAFE_API_TOKEN", process.api_token())
         .env("PORT", api_port.to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -5772,8 +5967,27 @@ fn start_desktop_api_if_needed(
     Err(format!("本地后端已启动但端口 {api_port} 尚未就绪"))
 }
 
+#[cfg(unix)]
+fn disable_core_dumps() {
+    let limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: `limit` is a valid `rlimit` and `setrlimit` does not retain the pointer.
+    if unsafe { libc::setrlimit(libc::RLIMIT_CORE, &limit) } != 0 {
+        eprintln!(
+            "failed to disable desktop process core dumps: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+}
+
+#[cfg(not(unix))]
+fn disable_core_dumps() {}
+
 #[tauri::cef_entry_point]
 pub fn run() {
+    disable_core_dumps();
     let pid_dir = prelaunch_app_support_dir();
     let legacy_desktop_app_pid_file = pid_dir.join(LEGACY_DESKTOP_APP_PID_FILE_NAME);
     let desktop_app_pid_file = pid_dir.join(DESKTOP_APP_PID_FILE_NAME);
@@ -5880,7 +6094,7 @@ pub fn run() {
             secure_input::set_secure_keyboard_input,
             biometric_wallet_status,
             biometric_wallet_store_password,
-            biometric_wallet_get_password,
+            biometric_wallet_unlock_all,
             biometric_wallet_delete_password,
             pick_source_directory,
             save_download_file,
@@ -5951,6 +6165,59 @@ mod tests {
         encoding::{AsDer, PublicKeyX509Der},
         rsa::{KeySize, OaepPrivateDecryptingKey, PrivateDecryptingKey},
     };
+
+    #[test]
+    fn generated_desktop_api_tokens_are_random_256_bit_values() {
+        let first = generate_desktop_api_token();
+        let second = generate_desktop_api_token();
+        assert_eq!(BASE64.decode(first.as_bytes()).unwrap().len(), 32);
+        assert_eq!(BASE64.decode(second.as_bytes()).unwrap().len(), 32);
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn desktop_api_process_keeps_one_nonempty_token_for_its_lifetime() {
+        let process = DesktopApiProcess::new(PathBuf::from("unused-test-desktop-api.pid"));
+        let first = process.api_token().to_string();
+        assert!(!first.is_empty());
+        assert_eq!(process.api_token(), first);
+    }
+
+    #[test]
+    fn biometric_unlock_command_and_permissions_stay_in_sync() {
+        let permissions = include_str!("../permissions/biometric_wallet.toml");
+        let capabilities = include_str!("../capabilities/default.json");
+        assert!(permissions.contains("biometric_wallet_unlock_all"));
+        assert!(!permissions.contains("biometric_wallet_get_password"));
+        assert!(capabilities.contains("allow-biometric-wallet-unlock-all"));
+        assert!(!capabilities.contains("allow-biometric-wallet-get-password"));
+    }
+
+    #[test]
+    fn biometric_unlock_only_resets_credentials_for_a_wrong_wallet_password() {
+        let wrong_password = ProxyResponse {
+            status: 401,
+            body: serde_json::json!({ "error": "钱包密码错误" }).to_string(),
+        };
+        assert!(response_reports_wrong_wallet_password(&wrong_password));
+
+        for response in [
+            ProxyResponse {
+                status: 429,
+                body: wrong_password.body.clone(),
+            },
+            ProxyResponse {
+                status: 401,
+                body: serde_json::json!({ "error": "部分历史钱包尚未统一密码" }).to_string(),
+            },
+            ProxyResponse {
+                status: 401,
+                body: "not-json".to_string(),
+            },
+        ] {
+            assert!(!response_reports_wrong_wallet_password(&response));
+        }
+    }
 
     #[test]
     fn twitter_status_sources_require_web_urls_and_numeric_status_ids() {
@@ -6638,6 +6905,8 @@ mod tests {
                 opened_at_ms: now_ms(),
             },
         );
+        assert!(ensure_dapp_connections_active(&state).is_err());
+        state.paused.store(false, Ordering::Release);
         assert!(ensure_dapp_connections_active(&state).is_ok());
         pause_dapp_connections(&state).unwrap();
         assert!(ensure_dapp_connections_active(&state).is_err());

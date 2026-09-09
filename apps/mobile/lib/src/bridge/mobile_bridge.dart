@@ -75,6 +75,31 @@ class MobileBridge {
 
   Future<List<EvmChainConfig>> evmChains() => _backend.evmChains();
 
+  Future<List<MultiChainDescriptor>> multichainCatalog() =>
+      _backend.multichainCatalog();
+
+  Future<MultiChainNormalizedAddress> normalizeMultichainAddress({
+    required String chainId,
+    required String address,
+  }) {
+    return _backend.normalizeMultichainAddress(
+      chainId: chainId,
+      address: address,
+    );
+  }
+
+  Future<MultiChainDerivedAccount> deriveMultichainAccount({
+    required String chainId,
+    required String mnemonic,
+    String? derivationPath,
+  }) {
+    return _backend.deriveMultichainAccount(
+      chainId: chainId,
+      mnemonic: mnemonic,
+      derivationPath: derivationPath,
+    );
+  }
+
   Future<WalletKeystore> createEvmWallet({
     required String name,
     required String password,
@@ -516,6 +541,7 @@ class DevelopmentMobileBridgeBackend implements MobileBridgeBackend {
   Future<MobileCapabilities> capabilities() async {
     return const MobileCapabilities(
       enabled: [
+        'chain_catalog',
         'wallet_management',
         'assets',
         'payments',
@@ -647,6 +673,33 @@ class DevelopmentMobileBridgeBackend implements MobileBridgeBackend {
 
   @override
   Future<List<EvmChainConfig>> evmChains() async => _developmentEvmChains;
+
+  @override
+  Future<List<MultiChainDescriptor>> multichainCatalog() async =>
+      _developmentMultiChainCatalog;
+
+  @override
+  Future<MultiChainNormalizedAddress> normalizeMultichainAddress({
+    required String chainId,
+    required String address,
+  }) async {
+    throw const MobileBridgeException(
+      'unsupported',
+      'Chain address validation requires the native Rust bridge',
+    );
+  }
+
+  @override
+  Future<MultiChainDerivedAccount> deriveMultichainAccount({
+    required String chainId,
+    required String mnemonic,
+    String? derivationPath,
+  }) async {
+    throw const MobileBridgeException(
+      'unsupported',
+      'Chain account derivation requires the native Rust bridge',
+    );
+  }
 
   @override
   Future<WalletKeystore> createEvmWallet({
@@ -1261,3 +1314,98 @@ const _developmentEvmChains = [
     testnet: false,
   ),
 ];
+
+final _developmentMultiChainCatalog = List<MultiChainDescriptor>.unmodifiable([
+  MultiChainDescriptor(
+    chainId: 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1',
+    family: 'solana',
+    name: 'Solana Devnet',
+    network: 'devnet',
+    testnet: true,
+    nativeAsset: const MultiChainNativeAsset(
+      symbol: 'SOL',
+      name: 'Solana',
+      decimals: 9,
+    ),
+    defaultDerivationPath: "m/44'/501'/0'/0'",
+    addressFormats: ['base58-pubkey'],
+    capabilities: ['transactions:transfer'],
+    endpoints: [
+      const MultiChainEndpoint(
+        kind: 'solana-json-rpc',
+        url: 'https://api.devnet.solana.com',
+      ),
+    ],
+    explorerUrl: 'https://explorer.solana.com',
+    supportLevel: 'stable',
+  ),
+  MultiChainDescriptor(
+    chainId: 'eip155:11155111',
+    family: 'evm',
+    name: 'Ethereum Sepolia',
+    network: 'testnet',
+    testnet: true,
+    nativeAsset: const MultiChainNativeAsset(
+      symbol: 'ETH',
+      name: 'ETH',
+      decimals: 18,
+    ),
+    defaultDerivationPath: "m/44'/60'/0'/0/0",
+    addressFormats: ['hex20'],
+    capabilities: ['transactions:transfer'],
+    endpoints: [
+      const MultiChainEndpoint(
+        kind: 'ethereum-json-rpc',
+        url: 'https://ethereum-sepolia-rpc.publicnode.com',
+      ),
+    ],
+    explorerUrl: 'https://sepolia.etherscan.io',
+    supportLevel: 'beta',
+  ),
+  MultiChainDescriptor(
+    chainId: 'bip122:000000000933ea01ad0ee984209779ba',
+    family: 'bitcoin',
+    name: 'Bitcoin Testnet',
+    network: 'testnet',
+    testnet: true,
+    nativeAsset: const MultiChainNativeAsset(
+      symbol: 'BTC',
+      name: 'Bitcoin',
+      decimals: 8,
+    ),
+    defaultDerivationPath: "m/84'/1'/0'/0/0",
+    addressFormats: ['p2wpkh'],
+    capabilities: [],
+    endpoints: [
+      const MultiChainEndpoint(
+        kind: 'esplora',
+        url: 'https://blockstream.info/testnet/api',
+      ),
+    ],
+    explorerUrl: 'https://mempool.space/testnet',
+    supportLevel: 'experimental',
+  ),
+  MultiChainDescriptor(
+    chainId: 'tron:2494104990',
+    family: 'tron',
+    name: 'TRON Shasta',
+    network: 'shasta',
+    testnet: true,
+    nativeAsset: const MultiChainNativeAsset(
+      symbol: 'TRX',
+      name: 'TRON',
+      decimals: 6,
+    ),
+    defaultDerivationPath: "m/44'/195'/0'/0/0",
+    addressFormats: ['base58check'],
+    capabilities: [],
+    endpoints: [
+      const MultiChainEndpoint(
+        kind: 'tron-http',
+        url: 'https://api.shasta.trongrid.io',
+      ),
+    ],
+    explorerUrl: 'https://shasta.tronscan.org',
+    supportLevel: 'experimental',
+  ),
+]);

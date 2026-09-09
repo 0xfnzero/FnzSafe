@@ -1,4 +1,5 @@
 const mobileEnabledCapabilities = <String>[
+  'chain_catalog',
   'wallet_management',
   'assets',
   'payments',

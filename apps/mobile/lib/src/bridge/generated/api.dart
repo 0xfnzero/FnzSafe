@@ -7,7 +7,7 @@ import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `bridge_error`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
 
 Future<MobileBridgeHealth> health() => RustLib.instance.api.crateApiHealth();
 
@@ -17,78 +17,75 @@ Future<MobileCapabilitySummary> getMobileCapabilities() =>
 Future<WalletKeystore> walletCreate({required CreateWalletRequest req}) =>
     RustLib.instance.api.crateApiWalletCreate(req: req);
 
-Future<WalletKeystore> walletImportKeystore(
-        {required ImportKeystoreRequest req}) =>
+Future<WalletKeystore> walletImportKeystore({required ImportKeystoreRequest req}) =>
     RustLib.instance.api.crateApiWalletImportKeystore(req: req);
 
-Future<WalletKeystore> walletImportPrivateKey(
-        {required ImportPrivateKeyRequest req}) =>
+Future<WalletKeystore> walletImportPrivateKey({required ImportPrivateKeyRequest req}) =>
     RustLib.instance.api.crateApiWalletImportPrivateKey(req: req);
 
-Future<WalletKeystore> walletImportMnemonic(
-        {required ImportMnemonicRequest req}) =>
+Future<WalletKeystore> walletImportMnemonic({required ImportMnemonicRequest req}) =>
     RustLib.instance.api.crateApiWalletImportMnemonic(req: req);
 
 Future<UnlockWalletResponse> walletUnlock({required UnlockWalletRequest req}) =>
     RustLib.instance.api.crateApiWalletUnlock(req: req);
 
-Future<ExportPrivateKeyResponse> walletExportPrivateKey(
-        {required ExportPrivateKeyRequest req}) =>
+Future<ExportPrivateKeyResponse> walletExportPrivateKey({required ExportPrivateKeyRequest req}) =>
     RustLib.instance.api.crateApiWalletExportPrivateKey(req: req);
 
-Future<List<EvmChainConfig>> evmChainsBuiltin() =>
-    RustLib.instance.api.crateApiEvmChainsBuiltin();
+Future<List<EvmChainConfig>> evmChainsBuiltin() => RustLib.instance.api.crateApiEvmChainsBuiltin();
 
-Future<EvmWalletKeystore> evmWalletCreateBridge(
-        {required EvmCreateWalletRequest req}) =>
+Future<List<MultiChainDescriptor>> multichainCatalogBridge() =>
+    RustLib.instance.api.crateApiMultichainCatalogBridge();
+
+Future<MultiChainNormalizedAddress> multichainNormalizeAddressBridge(
+        {required MultiChainNormalizeAddressRequest request}) =>
+    RustLib.instance.api.crateApiMultichainNormalizeAddressBridge(request: request);
+
+Future<MultiChainDerivedAccount> multichainDeriveAccountBridge(
+        {required MultiChainDeriveAccountRequest request}) =>
+    RustLib.instance.api.crateApiMultichainDeriveAccountBridge(request: request);
+
+Future<EvmWalletKeystore> evmWalletCreateBridge({required EvmCreateWalletRequest req}) =>
     RustLib.instance.api.crateApiEvmWalletCreateBridge(req: req);
 
 Future<EvmWalletKeystore> evmWalletImportPrivateKeyBridge(
         {required EvmImportPrivateKeyRequest req}) =>
     RustLib.instance.api.crateApiEvmWalletImportPrivateKeyBridge(req: req);
 
-Future<EvmWalletKeystore> evmWalletImportMnemonicBridge(
-        {required EvmImportMnemonicRequest req}) =>
+Future<EvmWalletKeystore> evmWalletImportMnemonicBridge({required EvmImportMnemonicRequest req}) =>
     RustLib.instance.api.crateApiEvmWalletImportMnemonicBridge(req: req);
 
-Future<EvmWalletKeystore> evmWalletImportKeystoreBridge(
-        {required EvmImportKeystoreRequest req}) =>
+Future<EvmWalletKeystore> evmWalletImportKeystoreBridge({required EvmImportKeystoreRequest req}) =>
     RustLib.instance.api.crateApiEvmWalletImportKeystoreBridge(req: req);
 
-Future<EvmWalletSummary> evmWalletUnlockBridge(
-        {required EvmUnlockWalletRequest req}) =>
+Future<EvmWalletSummary> evmWalletUnlockBridge({required EvmUnlockWalletRequest req}) =>
     RustLib.instance.api.crateApiEvmWalletUnlockBridge(req: req);
 
 Future<EvmExportPrivateKeyResponse> evmWalletExportPrivateKeyBridge(
         {required EvmExportPrivateKeyRequest req}) =>
     RustLib.instance.api.crateApiEvmWalletExportPrivateKeyBridge(req: req);
 
-Future<SigningDecision> walletDeletePreview(
-        {required String walletPublicKey}) =>
-    RustLib.instance.api
-        .crateApiWalletDeletePreview(walletPublicKey: walletPublicKey);
+Future<SigningDecision> walletDeletePreview({required String walletPublicKey}) =>
+    RustLib.instance.api.crateApiWalletDeletePreview(walletPublicKey: walletPublicKey);
 
 Future<AssetSnapshot> assetsEmptySnapshot(
         {required AppNetwork network, required String walletPublicKey}) =>
-    RustLib.instance.api.crateApiAssetsEmptySnapshot(
-        network: network, walletPublicKey: walletPublicKey);
+    RustLib.instance.api
+        .crateApiAssetsEmptySnapshot(network: network, walletPublicKey: walletPublicKey);
 
 Future<AssetSnapshot> assetsSnapshot({required AssetQueryRequest req}) =>
     RustLib.instance.api.crateApiAssetsSnapshot(req: req);
 
-Future<EvmAssetSnapshot> evmAssetsSnapshot(
-        {required EvmAssetQueryRequest req}) =>
+Future<EvmAssetSnapshot> evmAssetsSnapshot({required EvmAssetQueryRequest req}) =>
     RustLib.instance.api.crateApiEvmAssetsSnapshot(req: req);
 
 Future<SigningPreview> paymentPreview({required PaymentPreviewRequest req}) =>
     RustLib.instance.api.crateApiPaymentPreview(req: req);
 
-Future<TransactionSubmitResult> paymentConfirm(
-        {required PaymentSubmitRequest req}) =>
+Future<TransactionSubmitResult> paymentConfirm({required PaymentSubmitRequest req}) =>
     RustLib.instance.api.crateApiPaymentConfirm(req: req);
 
-Future<EvmPaymentPreview> evmPaymentPreviewBridge(
-        {required EvmPaymentPreviewRequest req}) =>
+Future<EvmPaymentPreview> evmPaymentPreviewBridge({required EvmPaymentPreviewRequest req}) =>
     RustLib.instance.api.crateApiEvmPaymentPreviewBridge(req: req);
 
 Future<EvmTransactionSubmitResult> evmPaymentConfirmBridge(
@@ -114,16 +111,13 @@ Future<SigningPreview> pumpPreview({required PumpPreviewRequest req}) =>
 Future<SigningPreview> dappSignPreview({required DappSignPreviewRequest req}) =>
     RustLib.instance.api.crateApiDappSignPreview(req: req);
 
-Future<DappSignSubmitResult> dappSignConfirm(
-        {required DappSignSubmitRequest req}) =>
+Future<DappSignSubmitResult> dappSignConfirm({required DappSignSubmitRequest req}) =>
     RustLib.instance.api.crateApiDappSignConfirm(req: req);
 
-Future<EvmDappSignPreview> evmDappSignPreviewBridge(
-        {required EvmDappSignPreviewRequest req}) =>
+Future<EvmDappSignPreview> evmDappSignPreviewBridge({required EvmDappSignPreviewRequest req}) =>
     RustLib.instance.api.crateApiEvmDappSignPreviewBridge(req: req);
 
-Future<EvmDappSignSubmitResult> evmDappSignConfirmBridge(
-        {required EvmDappSignSubmitRequest req}) =>
+Future<EvmDappSignSubmitResult> evmDappSignConfirmBridge({required EvmDappSignSubmitRequest req}) =>
     RustLib.instance.api.crateApiEvmDappSignConfirmBridge(req: req);
 
 Future<SigningPreview> squadsPreview({required SquadsPreviewRequest req}) =>
@@ -132,38 +126,30 @@ Future<SigningPreview> squadsPreview({required SquadsPreviewRequest req}) =>
 Future<SquadsInfoResponse> squadsInfoQuery({required SquadsInfoRequest req}) =>
     RustLib.instance.api.crateApiSquadsInfoQuery(req: req);
 
-Future<SquadsProposalsResponse> squadsProposalsQuery(
-        {required SquadsProposalsRequest req}) =>
+Future<SquadsProposalsResponse> squadsProposalsQuery({required SquadsProposalsRequest req}) =>
     RustLib.instance.api.crateApiSquadsProposalsQuery(req: req);
 
-Future<SquadsCreateSubmitResult> squadsCreateConfirm(
-        {required SquadsCreateSubmitRequest req}) =>
+Future<SquadsCreateSubmitResult> squadsCreateConfirm({required SquadsCreateSubmitRequest req}) =>
     RustLib.instance.api.crateApiSquadsCreateConfirm(req: req);
 
 Future<SquadsProposalCreateSubmitResult> squadsTransferProposalConfirm(
         {required SquadsTransferProposalSubmitRequest req}) =>
     RustLib.instance.api.crateApiSquadsTransferProposalConfirm(req: req);
 
-Future<TransactionSubmitResult> squadsApproveConfirm(
-        {required SquadsVoteSubmitRequest req}) =>
+Future<TransactionSubmitResult> squadsApproveConfirm({required SquadsVoteSubmitRequest req}) =>
     RustLib.instance.api.crateApiSquadsApproveConfirm(req: req);
 
-Future<TransactionSubmitResult> squadsRejectConfirm(
-        {required SquadsVoteSubmitRequest req}) =>
+Future<TransactionSubmitResult> squadsRejectConfirm({required SquadsVoteSubmitRequest req}) =>
     RustLib.instance.api.crateApiSquadsRejectConfirm(req: req);
 
-Future<TransactionSubmitResult> squadsExecuteConfirm(
-        {required SquadsExecuteSubmitRequest req}) =>
+Future<TransactionSubmitResult> squadsExecuteConfirm({required SquadsExecuteSubmitRequest req}) =>
     RustLib.instance.api.crateApiSquadsExecuteConfirm(req: req);
 
-Future<void> mobileProgramDeploy() =>
-    RustLib.instance.api.crateApiMobileProgramDeploy();
+Future<void> mobileProgramDeploy() => RustLib.instance.api.crateApiMobileProgramDeploy();
 
-Future<void> mobileProgramUpgrade() =>
-    RustLib.instance.api.crateApiMobileProgramUpgrade();
+Future<void> mobileProgramUpgrade() => RustLib.instance.api.crateApiMobileProgramUpgrade();
 
-Future<void> mobileProgramInvoke() =>
-    RustLib.instance.api.crateApiMobileProgramInvoke();
+Future<void> mobileProgramInvoke() => RustLib.instance.api.crateApiMobileProgramInvoke();
 
 enum AppNetwork {
   mainnet,
@@ -184,8 +170,7 @@ class AssetQueryRequest {
   });
 
   @override
-  int get hashCode =>
-      network.hashCode ^ walletPublicKey.hashCode ^ rpcUrl.hashCode;
+  int get hashCode => network.hashCode ^ walletPublicKey.hashCode ^ rpcUrl.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -295,8 +280,7 @@ class BiometricPolicy {
   });
 
   @override
-  int get hashCode =>
-      supported.hashCode ^ configured.hashCode ^ reason.hashCode;
+  int get hashCode => supported.hashCode ^ configured.hashCode ^ reason.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -761,10 +745,7 @@ class EvmDappSignSubmitResult {
 
   @override
   int get hashCode =>
-      signature.hashCode ^
-      signedTransaction.hashCode ^
-      transaction.hashCode ^
-      status.hashCode;
+      signature.hashCode ^ signedTransaction.hashCode ^ transaction.hashCode ^ status.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -858,10 +839,7 @@ class EvmImportMnemonicRequest {
 
   @override
   int get hashCode =>
-      name.hashCode ^
-      mnemonic.hashCode ^
-      derivationPath.hashCode ^
-      password.hashCode;
+      name.hashCode ^ mnemonic.hashCode ^ derivationPath.hashCode ^ password.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -886,8 +864,7 @@ class EvmImportPrivateKeyRequest {
   });
 
   @override
-  int get hashCode =>
-      name.hashCode ^ privateKeyHex.hashCode ^ password.hashCode;
+  int get hashCode => name.hashCode ^ privateKeyHex.hashCode ^ password.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -1312,8 +1289,7 @@ class EvmWalletSummary {
   });
 
   @override
-  int get hashCode =>
-      id.hashCode ^ name.hashCode ^ address.hashCode ^ derivationPath.hashCode;
+  int get hashCode => id.hashCode ^ name.hashCode ^ address.hashCode ^ derivationPath.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -1407,10 +1383,7 @@ class ImportMnemonicRequest {
 
   @override
   int get hashCode =>
-      name.hashCode ^
-      mnemonic.hashCode ^
-      derivationPath.hashCode ^
-      password.hashCode;
+      name.hashCode ^ mnemonic.hashCode ^ derivationPath.hashCode ^ password.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -1435,8 +1408,7 @@ class ImportPrivateKeyRequest {
   });
 
   @override
-  int get hashCode =>
-      name.hashCode ^ privateKeyBase58.hashCode ^ password.hashCode;
+  int get hashCode => name.hashCode ^ privateKeyBase58.hashCode ^ password.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -1530,6 +1502,218 @@ enum MobileErrorCode {
   unsupported,
   notImplemented,
   ;
+}
+
+class MultiChainDeriveAccountRequest {
+  final String chainId;
+  final String mnemonic;
+  final String? derivationPath;
+
+  const MultiChainDeriveAccountRequest({
+    required this.chainId,
+    required this.mnemonic,
+    this.derivationPath,
+  });
+
+  @override
+  int get hashCode => chainId.hashCode ^ mnemonic.hashCode ^ derivationPath.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MultiChainDeriveAccountRequest &&
+          runtimeType == other.runtimeType &&
+          chainId == other.chainId &&
+          mnemonic == other.mnemonic &&
+          derivationPath == other.derivationPath;
+}
+
+class MultiChainDerivedAccount {
+  final String chainId;
+  final String accountId;
+  final String address;
+  final String derivationPath;
+  final String? publicKeyHex;
+
+  const MultiChainDerivedAccount({
+    required this.chainId,
+    required this.accountId,
+    required this.address,
+    required this.derivationPath,
+    this.publicKeyHex,
+  });
+
+  @override
+  int get hashCode =>
+      chainId.hashCode ^
+      accountId.hashCode ^
+      address.hashCode ^
+      derivationPath.hashCode ^
+      publicKeyHex.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MultiChainDerivedAccount &&
+          runtimeType == other.runtimeType &&
+          chainId == other.chainId &&
+          accountId == other.accountId &&
+          address == other.address &&
+          derivationPath == other.derivationPath &&
+          publicKeyHex == other.publicKeyHex;
+}
+
+class MultiChainDescriptor {
+  final String chainId;
+  final String family;
+  final String name;
+  final String network;
+  final bool testnet;
+  final MultiChainNativeAsset nativeAsset;
+  final String defaultDerivationPath;
+  final List<String> addressFormats;
+  final List<String> capabilities;
+  final List<MultiChainEndpoint> endpoints;
+  final String? explorerUrl;
+  final String supportLevel;
+
+  const MultiChainDescriptor({
+    required this.chainId,
+    required this.family,
+    required this.name,
+    required this.network,
+    required this.testnet,
+    required this.nativeAsset,
+    required this.defaultDerivationPath,
+    required this.addressFormats,
+    required this.capabilities,
+    required this.endpoints,
+    this.explorerUrl,
+    required this.supportLevel,
+  });
+
+  @override
+  int get hashCode =>
+      chainId.hashCode ^
+      family.hashCode ^
+      name.hashCode ^
+      network.hashCode ^
+      testnet.hashCode ^
+      nativeAsset.hashCode ^
+      defaultDerivationPath.hashCode ^
+      addressFormats.hashCode ^
+      capabilities.hashCode ^
+      endpoints.hashCode ^
+      explorerUrl.hashCode ^
+      supportLevel.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MultiChainDescriptor &&
+          runtimeType == other.runtimeType &&
+          chainId == other.chainId &&
+          family == other.family &&
+          name == other.name &&
+          network == other.network &&
+          testnet == other.testnet &&
+          nativeAsset == other.nativeAsset &&
+          defaultDerivationPath == other.defaultDerivationPath &&
+          addressFormats == other.addressFormats &&
+          capabilities == other.capabilities &&
+          endpoints == other.endpoints &&
+          explorerUrl == other.explorerUrl &&
+          supportLevel == other.supportLevel;
+}
+
+class MultiChainEndpoint {
+  final String kind;
+  final String url;
+
+  const MultiChainEndpoint({
+    required this.kind,
+    required this.url,
+  });
+
+  @override
+  int get hashCode => kind.hashCode ^ url.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MultiChainEndpoint &&
+          runtimeType == other.runtimeType &&
+          kind == other.kind &&
+          url == other.url;
+}
+
+class MultiChainNativeAsset {
+  final String symbol;
+  final String name;
+  final int decimals;
+
+  const MultiChainNativeAsset({
+    required this.symbol,
+    required this.name,
+    required this.decimals,
+  });
+
+  @override
+  int get hashCode => symbol.hashCode ^ name.hashCode ^ decimals.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MultiChainNativeAsset &&
+          runtimeType == other.runtimeType &&
+          symbol == other.symbol &&
+          name == other.name &&
+          decimals == other.decimals;
+}
+
+class MultiChainNormalizeAddressRequest {
+  final String chainId;
+  final String address;
+
+  const MultiChainNormalizeAddressRequest({
+    required this.chainId,
+    required this.address,
+  });
+
+  @override
+  int get hashCode => chainId.hashCode ^ address.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MultiChainNormalizeAddressRequest &&
+          runtimeType == other.runtimeType &&
+          chainId == other.chainId &&
+          address == other.address;
+}
+
+class MultiChainNormalizedAddress {
+  final String chainId;
+  final String accountId;
+  final String address;
+
+  const MultiChainNormalizedAddress({
+    required this.chainId,
+    required this.accountId,
+    required this.address,
+  });
+
+  @override
+  int get hashCode => chainId.hashCode ^ accountId.hashCode ^ address.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MultiChainNormalizedAddress &&
+          runtimeType == other.runtimeType &&
+          chainId == other.chainId &&
+          accountId == other.accountId &&
+          address == other.address;
 }
 
 enum PaymentOperation {
@@ -1916,11 +2100,7 @@ class SquadsInfoRequest {
   });
 
   @override
-  int get hashCode =>
-      network.hashCode ^
-      rpcUrl.hashCode ^
-      multisig.hashCode ^
-      proposal.hashCode;
+  int get hashCode => network.hashCode ^ rpcUrl.hashCode ^ multisig.hashCode ^ proposal.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -2144,8 +2324,7 @@ class SquadsProposalsRequest {
   });
 
   @override
-  int get hashCode =>
-      network.hashCode ^ rpcUrl.hashCode ^ multisig.hashCode ^ limit.hashCode;
+  int get hashCode => network.hashCode ^ rpcUrl.hashCode ^ multisig.hashCode ^ limit.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -2376,8 +2555,7 @@ class TransactionHistoryEntry {
   });
 
   @override
-  int get hashCode =>
-      signature.hashCode ^ slot.hashCode ^ blockTime.hashCode ^ status.hashCode;
+  int get hashCode => signature.hashCode ^ slot.hashCode ^ blockTime.hashCode ^ status.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -2459,9 +2637,7 @@ class UnlockWalletResponse {
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is UnlockWalletResponse &&
-          runtimeType == other.runtimeType &&
-          wallet == other.wallet;
+      other is UnlockWalletResponse && runtimeType == other.runtimeType && wallet == other.wallet;
 }
 
 class WalletKeystore {

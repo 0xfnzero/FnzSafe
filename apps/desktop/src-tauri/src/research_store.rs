@@ -1109,7 +1109,7 @@ fn validate_fomo_signal_contract(signal: &ResearchSignalInput) -> Result<(), Str
         .ok_or_else(|| "Fomo signal requires a token contract address".to_string())?;
     let source_contract = url
         .path_segments()
-        .and_then(|segments| segments.last())
+        .and_then(|mut segments| segments.next_back())
         .unwrap_or_default();
     if !source_contract.eq_ignore_ascii_case(contract) {
         return Err("Fomo signal contract does not match source URL".to_string());
@@ -1146,6 +1146,37 @@ fn load_ai_api_key(_connection: &Connection, provider: &str) -> Result<Option<St
             .map_err(|_| "saved AI API key is not UTF-8".to_string()),
         Err(error) if error.code() == -25300 => Ok(None),
         Err(error) => Err(format!("failed to read AI API key from Keychain: {error}")),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn ai_api_key_exists(provider: &str) -> Result<bool, String> {
+    use security_framework::item::{ItemClass, ItemSearchOptions};
+
+    const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
+    const ERR_SEC_AUTH_FAILED: i32 = -25293;
+    const ERR_SEC_INTERACTION_NOT_ALLOWED: i32 = -25308;
+
+    let mut query = ItemSearchOptions::new();
+    query
+        .class(ItemClass::generic_password())
+        .service(RESEARCH_AI_KEYCHAIN_SERVICE)
+        .account(provider)
+        .load_attributes(true)
+        .skip_authenticated_items(true);
+    match query.search() {
+        Ok(items) => Ok(!items.is_empty()),
+        Err(error)
+            if matches!(
+                error.code(),
+                ERR_SEC_ITEM_NOT_FOUND | ERR_SEC_AUTH_FAILED | ERR_SEC_INTERACTION_NOT_ALLOWED
+            ) =>
+        {
+            Ok(false)
+        }
+        Err(error) => Err(format!(
+            "failed to check AI API key status in Keychain: {error}"
+        )),
     }
 }
 
@@ -1229,9 +1260,11 @@ pub fn research_ai_key_status(
     let provider = normalize_ai_provider(&provider)?;
     let connection = store.open()?;
     initialize_schema(&connection)?;
-    Ok(ResearchAiKeyStatus {
-        saved: load_ai_api_key(&connection, &provider)?.is_some(),
-    })
+    #[cfg(target_os = "macos")]
+    let saved = ai_api_key_exists(&provider)?;
+    #[cfg(not(target_os = "macos"))]
+    let saved = load_ai_api_key(&connection, &provider)?.is_some();
+    Ok(ResearchAiKeyStatus { saved })
 }
 
 #[tauri::command]
@@ -5165,21 +5198,7 @@ pub async fn research_ai_chat(
     let workspace_root = data_root.join("workspace");
     let (node, script) = ai_runtime_paths(&app)?;
     let wallet_api_url = format!("http://127.0.0.1:{}/api", desktop_api.port());
-    let api_client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|error| format!("failed to initialize wallet API client: {error}"))?;
-    let secure_session = crate::fetch_secure_session(&api_client, desktop_api.port()).await?;
-    let wallet_api_token = secure_session
-        .api_token
-        .or_else(|| {
-            std::env::var("FNZERO_SAFE_API_TOKEN")
-                .or_else(|_| std::env::var("SOL_SAFEKEY_API_TOKEN"))
-                .ok()
-        })
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| "wallet API did not provide a local capability token".to_string())?;
-    let wallet_api_token = Zeroizing::new(wallet_api_token);
+    let wallet_api_token = Zeroizing::new(desktop_api.api_token().to_string());
     let dsh_request = DshResearchRequest {
         api_key,
         base_url,

@@ -14,11 +14,14 @@ import {
   Search,
   X,
 } from "lucide-react";
+import { apiFetch } from "@/lib/apiFetch";
+import { atomicToDecimalUnits, decimalToAtomicUnits } from "@/lib/multichain";
 
 export interface WalletChainAddress {
   id: string;
-  family: "solana" | "evm";
+  family: "solana" | "evm" | "bitcoin" | "tron";
   chainId?: number;
+  networkId?: string;
   chainName: string;
   symbol: string;
   address: string;
@@ -28,8 +31,9 @@ export interface WalletChainAddress {
 
 export interface UnifiedWalletAsset {
   id: string;
-  family: "solana" | "evm";
+  family: "solana" | "evm" | "bitcoin" | "tron";
   chainId?: number;
+  networkId?: string;
   chainName: string;
   chainSymbol: string;
   symbol: string;
@@ -46,6 +50,7 @@ export interface UnifiedWalletAsset {
 
 export interface UnifiedWalletLabels {
   accountAddresses: string;
+  allNetworks: string;
   allAssets: string;
   addAndContinue: string;
   addingAsset: string;
@@ -56,7 +61,9 @@ export interface UnifiedWalletLabels {
   copy: string;
   copied: string;
   current: string;
+  chainFamily: string;
   network: string;
+  networks: string;
   noEvmNetworks: string;
   noAssets: string;
   noAddresses: string;
@@ -64,6 +71,7 @@ export interface UnifiedWalletLabels {
   qrFailed: string;
   receiveAddress: string;
   receiveNetworkWarning: string;
+  sharedNetworkWarning: string;
   refresh: string;
   searchAssets: string;
   searchEmpty: string;
@@ -72,6 +80,28 @@ export interface UnifiedWalletLabels {
   testnet: string;
   tracked: string;
   untracked: string;
+  recipient: string;
+  amount: string;
+  available: string;
+  previewSend: string;
+  previewing: string;
+  confirmSend: string;
+  sending: string;
+  minerFee: string;
+  feeRate: string;
+  change: string;
+  inputs: string;
+  rbfEnabled: string;
+  bandwidth: string;
+  accountActivation: string;
+  activated: string;
+  notActivated: string;
+  estimatedMaxFee: string;
+  transactionId: string;
+  sendSuccess: string;
+  sendFailed: string;
+  previewFailed: string;
+  reviewWarning: string;
 }
 
 type CopyHandler = (value: string, id: string) => void;
@@ -82,6 +112,8 @@ function shortAddress(value: string): string {
 
 function chainGlyph(address: WalletChainAddress | UnifiedWalletAsset): string {
   if (address.family === "solana") return "S";
+  if (address.family === "bitcoin") return "BTC";
+  if (address.family === "tron") return "TRX";
   return address.symbol.slice(0, 2).toUpperCase();
 }
 
@@ -115,8 +147,11 @@ function hasPositiveBalance(value: string): boolean {
   return /[1-9]/.test(normalized);
 }
 
-function sortUnifiedAssets(assets: UnifiedWalletAsset[]): UnifiedWalletAsset[] {
+function sortUnifiedAssets(assets: UnifiedWalletAsset[], preferredChainId?: string): UnifiedWalletAsset[] {
   return [...assets].sort((a, b) => {
+    const aPreferred = Boolean(preferredChainId && a.id.startsWith(`${preferredChainId}:`));
+    const bPreferred = Boolean(preferredChainId && b.id.startsWith(`${preferredChainId}:`));
+    if (aPreferred !== bPreferred) return aPreferred ? -1 : 1;
     const aPositive = hasPositiveBalance(a.rawBalance);
     const bPositive = hasPositiveBalance(b.rawBalance);
     if (aPositive !== bPositive) return aPositive ? -1 : 1;
@@ -334,7 +369,18 @@ export function WalletReceivePanel({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [qrFailed, setQrFailed] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const selected = selectedId ? addresses.find((item) => item.id === selectedId) ?? null : null;
+  const addressGroups = useMemo(() => {
+    const grouped = new Map<string, WalletChainAddress[]>();
+    for (const item of addresses) {
+      const key = `${item.family}:${item.address.toLowerCase()}`;
+      grouped.set(key, [...(grouped.get(key) ?? []), item]);
+    }
+    return Array.from(grouped.values()).map((items) => ({ primary: items[0], items }));
+  }, [addresses]);
+  const selectedGroup = selectedId
+    ? addressGroups.find((group) => group.primary.id === selectedId) ?? null
+    : null;
+  const selected = selectedGroup?.primary ?? null;
   const selectedAddress = selected?.address;
 
   useEffect(() => {
@@ -357,6 +403,8 @@ export function WalletReceivePanel({
 
   if (selected) {
     const copyId = `wallet-receive:${selected.id}`;
+    const isSharedEvmAddress = selected.family === "evm" && (selectedGroup?.items.length ?? 0) > 1;
+    const displayName = isSharedEvmAddress ? "EVM" : selected.chainName;
     return (
       <div className="mx-auto max-w-xl space-y-6">
         <button
@@ -371,12 +419,14 @@ export function WalletReceivePanel({
           <div className="mx-auto flex w-fit items-center gap-3">
             <ChainMark item={selected} />
             <div className="text-left">
-              <h3 className="text-xl font-semibold text-white">{selected.chainName}</h3>
-              <p className="text-sm text-gray-400">{labels.receiveAddress}</p>
+              <h3 className="text-xl font-semibold text-white">{displayName}</h3>
+              <p className="text-sm text-gray-400">
+                {isSharedEvmAddress ? `${selectedGroup?.items.length} ${labels.networks}` : labels.receiveAddress}
+              </p>
             </div>
           </div>
           <div className={`mx-auto mt-6 w-fit rounded-lg bg-white p-3 ${qrFailed ? "hidden" : ""}`}>
-            <canvas ref={canvasRef} role="img" className="block aspect-square h-auto w-[260px] max-w-[calc(100vw-5rem)]" aria-label={`${selected.chainName} ${labels.qrCode}`} />
+            <canvas ref={canvasRef} role="img" className="block aspect-square h-auto w-[260px] max-w-[calc(100vw-5rem)]" aria-label={`${displayName} ${labels.qrCode}`} />
           </div>
           {qrFailed && (
             <p className="mx-auto mt-6 max-w-sm rounded-lg border border-red-400/20 bg-red-500/10 p-4 text-sm text-red-100">
@@ -396,35 +446,40 @@ export function WalletReceivePanel({
           </button>
         </div>
         <p className="text-center text-sm text-amber-200/90">
-          {labels.network}: {selected.chainName}
+          {isSharedEvmAddress ? labels.chainFamily : labels.network}: {displayName}
         </p>
-        <p className="text-center text-xs text-gray-500">{labels.receiveNetworkWarning}</p>
+        <p className="text-center text-xs text-gray-500">
+          {isSharedEvmAddress ? labels.sharedNetworkWarning : labels.receiveNetworkWarning}
+        </p>
       </div>
     );
   }
 
   return (
     <div className="mx-auto max-w-3xl space-y-3">
-      {addresses.length === 0 && (
+      {addressGroups.length === 0 && (
         <p className="py-10 text-center text-sm text-gray-500">{labels.noAddresses}</p>
       )}
-      {addresses.map((item) => {
+      {addressGroups.map(({ primary: item, items }) => {
         const copyId = `wallet-receive-list:${item.id}`;
+        const isSharedEvmAddress = item.family === "evm" && items.length > 1;
+        const displayName = isSharedEvmAddress ? "EVM" : item.chainName;
         return (
           <div key={item.id} className="flex min-w-0 items-center gap-3 border-b border-white/10 px-1 py-3 last:border-b-0 lg:rounded-lg lg:border lg:bg-white/[0.04] lg:px-4">
             <ChainMark item={item} large />
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 items-center gap-2">
-                <p className="truncate font-semibold text-white">{item.chainName}</p>
-                {item.testnet && <span className="rounded bg-amber-400/15 px-1.5 py-0.5 text-[10px] text-amber-200">{labels.testnet}</span>}
+                <p className="truncate font-semibold text-white">{displayName}</p>
+                {!isSharedEvmAddress && item.testnet && <span className="rounded bg-amber-400/15 px-1.5 py-0.5 text-[10px] text-amber-200">{labels.testnet}</span>}
               </div>
-              <p className="mt-1 truncate font-mono text-sm text-gray-400" title={item.address}>{shortAddress(item.address)}</p>
+              {isSharedEvmAddress && <p className="mt-1 truncate text-xs text-gray-500">{items.length} {labels.networks}</p>}
+              <p className="mt-0.5 truncate font-mono text-sm text-gray-400" title={item.address}>{shortAddress(item.address)}</p>
             </div>
             <button
               type="button"
               onClick={() => setSelectedId(item.id)}
               className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-white/5 text-gray-200 hover:bg-white/10"
-              aria-label={`${item.chainName} ${labels.qrCode}`}
+              aria-label={`${displayName} ${labels.qrCode}`}
               title={labels.qrCode}
             >
               <QrCode className="h-5 w-5" />
@@ -433,7 +488,7 @@ export function WalletReceivePanel({
               type="button"
               onClick={() => onCopy(item.address, copyId)}
               className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-white/5 text-gray-200 hover:bg-white/10"
-              aria-label={`${copiedId === copyId ? labels.copied : labels.copy} ${item.chainName}`}
+              aria-label={`${copiedId === copyId ? labels.copied : labels.copy} ${displayName}`}
               title={copiedId === copyId ? labels.copied : labels.copy}
             >
               <CopyIcon copied={copiedId === copyId} />
@@ -446,6 +501,7 @@ export function WalletReceivePanel({
 }
 
 function AssetRow({ asset, labels, onSelect }: { asset: UnifiedWalletAsset; labels: UnifiedWalletLabels; onSelect?: (asset: UnifiedWalletAsset) => void }) {
+  const showAssetName = asset.name !== asset.chainName && asset.name !== asset.symbol;
   const content = (
     <>
       <ChainMark item={asset} large />
@@ -455,7 +511,7 @@ function AssetRow({ asset, labels, onSelect }: { asset: UnifiedWalletAsset; labe
           <span className="rounded bg-white/10 px-2 py-0.5 text-xs text-gray-300">{asset.chainName}</span>
           {asset.testnet && <span className="rounded bg-amber-400/15 px-1.5 py-0.5 text-[10px] text-amber-200">{labels.testnet}</span>}
         </div>
-        <p className="mt-1 truncate text-sm text-gray-400">{asset.name}</p>
+        {showAssetName && <p className="mt-1 truncate text-sm text-gray-400">{asset.name}</p>}
         {asset.tokenAddress && <p className="mt-0.5 truncate font-mono text-[11px] text-gray-600">{shortAddress(asset.tokenAddress)}</p>}
       </div>
       <div className="shrink-0 text-right">
@@ -484,16 +540,18 @@ export function UnifiedAssetList({
   assets,
   error,
   labels,
+  preferredChainId,
   refreshing,
   onRefresh,
 }: {
   assets: UnifiedWalletAsset[];
   error?: string | null;
   labels: UnifiedWalletLabels;
+  preferredChainId?: string;
   refreshing: boolean;
   onRefresh: () => void;
 }) {
-  const sortedAssets = useMemo(() => sortUnifiedAssets(assets), [assets]);
+  const sortedAssets = useMemo(() => sortUnifiedAssets(assets, preferredChainId), [assets, preferredChainId]);
   return (
     <section className="space-y-3">
       <div className="flex items-center justify-between gap-3">
@@ -521,31 +579,276 @@ export function UnifiedAssetList({
   );
 }
 
+interface NativeChainSendPreview {
+  chain_id: string;
+  family: "bitcoin" | "tron";
+  sender: string;
+  recipient: string;
+  amount_atomic: string;
+  fee_atomic: string;
+  fee_rate_sat_vb?: number;
+  change_atomic?: string;
+  input_count?: number;
+  output_count?: number;
+  rbf?: boolean;
+  estimated_bandwidth_bytes?: string;
+  bandwidth_available?: string;
+  recipient_activated?: boolean;
+  account_activation_fee_atomic?: string;
+}
+
+function isAtomicUnitString(value: unknown): value is string {
+  return typeof value === "string" && /^\d+$/.test(value);
+}
+
+function isNativeChainPreview(
+  value: unknown,
+  expected: { family: "bitcoin" | "tron"; networkId: string; sender: string; recipient: string; amountAtomic: string },
+): value is NativeChainSendPreview {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const preview = value as Partial<NativeChainSendPreview>;
+  if (
+    preview.chain_id !== expected.networkId
+    || preview.family !== expected.family
+    || preview.sender !== expected.sender
+    || preview.recipient !== expected.recipient
+    || preview.amount_atomic !== expected.amountAtomic
+    || !isAtomicUnitString(preview.fee_atomic)
+  ) return false;
+  if (expected.family === "bitcoin") {
+    return typeof preview.fee_rate_sat_vb === "number"
+      && Number.isFinite(preview.fee_rate_sat_vb)
+      && preview.fee_rate_sat_vb > 0
+      && isAtomicUnitString(preview.change_atomic)
+      && Number.isSafeInteger(preview.input_count)
+      && Number(preview.input_count) > 0
+      && Number.isSafeInteger(preview.output_count)
+      && Number(preview.output_count) > 0
+      && typeof preview.rbf === "boolean";
+  }
+  return isAtomicUnitString(preview.estimated_bandwidth_bytes)
+    && isAtomicUnitString(preview.bandwidth_available)
+    && typeof preview.recipient_activated === "boolean"
+    && isAtomicUnitString(preview.account_activation_fee_atomic);
+}
+
+export function NativeChainSendPanel({
+  asset,
+  sender,
+  walletId,
+  labels,
+  onSubmitted,
+}: {
+  asset: UnifiedWalletAsset;
+  sender: string;
+  walletId: string;
+  labels: UnifiedWalletLabels;
+  onSubmitted: () => void;
+}) {
+  const [recipient, setRecipient] = useState("");
+  const [amount, setAmount] = useState("");
+  const [preview, setPreview] = useState<NativeChainSendPreview | null>(null);
+  const [transactionId, setTransactionId] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState<"preview" | "submit" | null>(null);
+  const busyRef = useRef(false);
+  const networkId = asset.networkId || "";
+  const family = asset.family === "bitcoin" || asset.family === "tron" ? asset.family : null;
+  const amountAtomic = decimalToAtomicUnits(amount, asset.decimals);
+
+  const updateRecipient = (value: string) => {
+    setRecipient(value);
+    setPreview(null);
+    setTransactionId("");
+    setError("");
+  };
+  const updateAmount = (value: string) => {
+    setAmount(value);
+    setPreview(null);
+    setTransactionId("");
+    setError("");
+  };
+
+  const request = async (mode: "preview" | "submit") => {
+    if (busyRef.current || !family || !networkId || !amountAtomic || amountAtomic === "0" || !recipient.trim()) return;
+    busyRef.current = true;
+    setBusy(mode);
+    setError("");
+    try {
+      const body: Record<string, unknown> = {
+        chain_id: networkId,
+        sender,
+        recipient: recipient.trim(),
+        amount_atomic: amountAtomic,
+      };
+      if (mode === "submit" && family === "bitcoin") {
+        body.fee_rate_sat_vb = preview?.fee_rate_sat_vb;
+      }
+      const response = await apiFetch(
+        `wallets/${encodeURIComponent(walletId)}/${family}/send/${mode}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      );
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || (mode === "preview" ? labels.previewFailed : labels.sendFailed));
+      if (mode === "preview") {
+        if (!isNativeChainPreview(data, {
+          family,
+          networkId,
+          sender,
+          recipient: recipient.trim(),
+          amountAtomic,
+        })) {
+          throw new Error(labels.previewFailed);
+        }
+        setPreview(data);
+      } else {
+        if (
+          data?.chain_id !== networkId
+          || data?.status !== "submitted"
+          || typeof data?.transaction_id !== "string"
+          || !data.transaction_id
+        ) throw new Error(labels.sendFailed);
+        setTransactionId(data.transaction_id);
+        setPreview(null);
+        onSubmitted();
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : mode === "preview" ? labels.previewFailed : labels.sendFailed);
+    } finally {
+      busyRef.current = false;
+      setBusy(null);
+    }
+  };
+
+  if (!family || !networkId) return null;
+  const formattedFee = preview ? atomicToDecimalUnits(preview.fee_atomic, asset.decimals) : "--";
+  return (
+    <div className="mx-auto max-w-2xl space-y-5">
+      <div className="flex items-center gap-3 border-b border-white/10 pb-4">
+        <ChainMark item={asset} large />
+        <div className="min-w-0">
+          <p className="text-lg font-semibold text-white">{asset.symbol} · {asset.chainName}</p>
+          <p className="mt-1 text-sm text-gray-400">{labels.available}: {asset.balance} {asset.symbol}</p>
+        </div>
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <label className="space-y-1.5 text-sm text-gray-300 sm:col-span-2">
+          {labels.recipient}
+          <input
+            value={recipient}
+            onChange={(event) => updateRecipient(event.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder={family === "bitcoin" ? "bc1..." : "T..."}
+            className="h-11 w-full rounded-lg border border-white/10 bg-black/40 px-3 font-mono text-sm text-white outline-none focus:ring-2 focus:ring-emerald-400/30"
+          />
+        </label>
+        <label className="space-y-1.5 text-sm text-gray-300 sm:col-span-2">
+          {labels.amount} ({asset.symbol})
+          <input
+            value={amount}
+            onChange={(event) => updateAmount(event.target.value)}
+            inputMode="decimal"
+            placeholder="0"
+            className="h-11 w-full rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none focus:ring-2 focus:ring-emerald-400/30"
+          />
+        </label>
+      </div>
+      {!preview && !transactionId && (
+        <button
+          type="button"
+          onClick={() => void request("preview")}
+          disabled={busy !== null || !recipient.trim() || !amountAtomic || amountAtomic === "0"}
+          className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-white px-4 text-sm font-semibold text-black hover:bg-gray-200 disabled:opacity-50"
+        >
+          <RefreshCw className={`h-4 w-4 ${busy === "preview" ? "animate-spin" : ""}`} />
+          {busy === "preview" ? labels.previewing : labels.previewSend}
+        </button>
+      )}
+      {preview && (
+        <div className="space-y-4 border-y border-white/10 py-4">
+          <p className="text-sm text-amber-100">{labels.reviewWarning}</p>
+          <dl className="grid gap-x-5 gap-y-3 text-sm sm:grid-cols-2">
+            <div><dt className="text-gray-500">{labels.amount}</dt><dd className="mt-1 text-white">{amount} {asset.symbol}</dd></div>
+            <div><dt className="text-gray-500">{family === "bitcoin" ? labels.minerFee : labels.estimatedMaxFee}</dt><dd className="mt-1 text-white">{formattedFee} {asset.symbol}</dd></div>
+            {family === "bitcoin" && (
+              <>
+                <div><dt className="text-gray-500">{labels.feeRate}</dt><dd className="mt-1 text-white">{preview.fee_rate_sat_vb} sat/vB</dd></div>
+                <div><dt className="text-gray-500">{labels.inputs}</dt><dd className="mt-1 text-white">{preview.input_count} / {preview.output_count}</dd></div>
+                <div><dt className="text-gray-500">{labels.change}</dt><dd className="mt-1 text-white">{atomicToDecimalUnits(preview.change_atomic || "0", asset.decimals)} BTC</dd></div>
+                <div><dt className="text-gray-500">RBF</dt><dd className="mt-1 text-white">{preview.rbf ? labels.rbfEnabled : "-"}</dd></div>
+              </>
+            )}
+            {family === "tron" && (
+              <>
+                <div><dt className="text-gray-500">{labels.bandwidth}</dt><dd className="mt-1 text-white">{preview.estimated_bandwidth_bytes} / {preview.bandwidth_available}</dd></div>
+                <div><dt className="text-gray-500">{labels.accountActivation}</dt><dd className="mt-1 text-white">{preview.recipient_activated ? labels.activated : `${labels.notActivated} (+${atomicToDecimalUnits(preview.account_activation_fee_atomic || "0", asset.decimals)} TRX)`}</dd></div>
+              </>
+            )}
+          </dl>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => void request("submit")}
+              disabled={busy !== null}
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-emerald-500 px-4 text-sm font-semibold text-black hover:bg-emerald-400 disabled:opacity-50"
+            >
+              <Check className="h-4 w-4" />
+              {busy === "submit" ? labels.sending : labels.confirmSend}
+            </button>
+            <button type="button" onClick={() => setPreview(null)} disabled={busy !== null} className="h-11 rounded-lg border border-white/10 px-4 text-sm text-gray-200 hover:bg-white/10 disabled:opacity-50">
+              {labels.back}
+            </button>
+          </div>
+        </div>
+      )}
+      {transactionId && (
+        <div className="border-y border-emerald-300/20 bg-emerald-300/[0.04] py-4">
+          <p className="font-semibold text-emerald-100">{labels.sendSuccess}</p>
+          <p className="mt-2 text-xs text-gray-400">{labels.transactionId}</p>
+          <p className="mt-1 break-all font-mono text-sm text-white">{transactionId}</p>
+        </div>
+      )}
+      {error && <p role="alert" className="text-sm text-red-200">{error}</p>}
+    </div>
+  );
+}
+
 export function WalletSendAssetPicker({
   assets,
+  preferredChainId,
+  preferredFamily,
   evmChains,
   labels,
   onAddEvmContract,
   onSelect,
 }: {
   assets: UnifiedWalletAsset[];
+  preferredChainId?: string;
+  preferredFamily?: "solana" | "evm" | "bitcoin" | "tron";
   evmChains: Array<{ chainId: number; name: string }>;
   labels: UnifiedWalletLabels;
   onAddEvmContract: (chainId: number, contract: string) => Promise<void>;
   onSelect: (asset: UnifiedWalletAsset) => void;
 }) {
   const [query, setQuery] = useState("");
+  const [familyFilter, setFamilyFilter] = useState<"all" | "solana" | "evm" | "bitcoin" | "tron">(preferredFamily ?? "all");
   const [chainId, setChainId] = useState(() => String(evmChains[0]?.chainId || ""));
   const [adding, setAdding] = useState(false);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const normalized = query.trim().toLowerCase();
   const isContract = /^0x[0-9a-f]{40}$/.test(normalized);
   const filtered = useMemo(() => {
-    const ranked = sortUnifiedAssets(assets);
-    if (!normalized) return ranked;
+    const ranked = sortUnifiedAssets(assets, preferredChainId)
+      .filter((asset) => familyFilter === "all" || asset.family === familyFilter);
+    if (!normalized) return ranked.filter((asset) => asset.tracked);
     return ranked.filter((asset) => [asset.symbol, asset.name, asset.chainName, asset.tokenAddress]
       .some((value) => value?.toLowerCase().includes(normalized)));
-  }, [assets, normalized]);
+  }, [assets, familyFilter, normalized, preferredChainId]);
 
   useEffect(() => {
     if (!evmChains.some((chain) => String(chain.chainId) === chainId)) {
@@ -572,6 +875,27 @@ export function WalletSendAssetPicker({
 
   return (
     <div className="mx-auto max-w-3xl space-y-4">
+      <div className="inline-flex rounded-lg border border-white/10 bg-white/5 p-1">
+        {[
+          { id: "solana" as const, label: "Solana" },
+          { id: "evm" as const, label: "EVM" },
+          { id: "bitcoin" as const, label: "Bitcoin" },
+          { id: "tron" as const, label: "TRON" },
+          { id: "all" as const, label: labels.allNetworks },
+        ].map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => setFamilyFilter(item.id)}
+            className={`h-8 rounded-md px-3 text-xs font-semibold transition-colors ${
+              familyFilter === item.id ? "bg-white text-black" : "text-gray-300 hover:bg-white/10 hover:text-white"
+            }`}
+            aria-pressed={familyFilter === item.id}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
       <div className="relative">
         <Search className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-500" />
         <input
@@ -586,6 +910,7 @@ export function WalletSendAssetPicker({
             }
           }}
           placeholder={labels.searchAssets}
+          aria-label={labels.searchAssets}
           className="h-12 w-full rounded-lg border border-white/10 bg-black/30 pl-11 pr-3 text-sm text-white outline-none focus:ring-2 focus:ring-emerald-400/30"
         />
       </div>

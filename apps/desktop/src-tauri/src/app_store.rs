@@ -1,9 +1,11 @@
+use bitcoin::{Address, Network};
 use rand::{rngs::OsRng, RngCore};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const SETTINGS_SCHEMA_VERSION: i64 = 1;
@@ -296,6 +298,8 @@ fn normalize_chain(value: &str) -> Result<String, String> {
     match value.trim().to_ascii_lowercase().as_str() {
         "solana" | "sol" => Ok("solana".to_string()),
         "evm" | "ethereum" | "eth" => Ok("evm".to_string()),
+        "bitcoin" | "btc" => Ok("bitcoin".to_string()),
+        "tron" | "trx" => Ok("tron".to_string()),
         _ => Err("unsupported address chain".to_string()),
     }
 }
@@ -313,6 +317,23 @@ fn normalize_address(chain: &str, value: &str) -> Result<String, String> {
         }
         return Ok(value.to_ascii_lowercase());
     }
+    if chain == "bitcoin" {
+        let address = Address::from_str(value)
+            .map_err(|_| "invalid Bitcoin address".to_string())?
+            .require_network(Network::Bitcoin)
+            .map_err(|_| "Bitcoin address is not for mainnet".to_string())?;
+        return Ok(address.to_string());
+    }
+    if chain == "tron" {
+        let decoded = bs58::decode(value)
+            .with_check(None)
+            .into_vec()
+            .map_err(|_| "invalid TRON address checksum".to_string())?;
+        if decoded.len() != 21 || decoded.first() != Some(&0x41) {
+            return Err("invalid TRON mainnet address".to_string());
+        }
+        return Ok(value.to_string());
+    }
     if bs58::decode(value)
         .into_vec()
         .map(|decoded| decoded.len() != 32)
@@ -329,6 +350,16 @@ fn normalize_address_network(chain: &str, value: &str) -> Result<String, String>
         return matches!(value.as_str(), "mainnet" | "devnet" | "testnet")
             .then_some(value)
             .ok_or_else(|| "invalid Solana network".to_string());
+    }
+    if chain == "bitcoin" {
+        return (value == "bip122:000000000019d6689c085ae165831e93")
+            .then_some(value)
+            .ok_or_else(|| "invalid Bitcoin network".to_string());
+    }
+    if chain == "tron" {
+        return (value == "tron:728126428")
+            .then_some(value)
+            .ok_or_else(|| "invalid TRON network".to_string());
     }
     if value.starts_with('0') || !value.chars().all(|character| character.is_ascii_digit()) {
         return Err("invalid EVM chain ID".to_string());
@@ -900,6 +931,18 @@ mod tests {
         );
         assert!(normalize_address("solana", "111111111111111111111111111111111").is_err());
         assert_eq!(
+            normalize_address("bitcoin", "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu").unwrap(),
+            "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu"
+        );
+        assert!(
+            normalize_address("bitcoin", "tb1qfm7w7u5x3rhw73myhw55aj60m4q0zj5g6c7rjl").is_err()
+        );
+        assert_eq!(
+            normalize_address("tron", "TMVQGm1qAQYVdetCeGRRkTWYYrLXuHK2HC").unwrap(),
+            "TMVQGm1qAQYVdetCeGRRkTWYYrLXuHK2HC"
+        );
+        assert!(normalize_address("tron", "TMVQGm1qAQYVdetCeGRRkTWYYrLXuHK2HD").is_err());
+        assert_eq!(
             normalize_address_network("solana", " DEVNET ").unwrap(),
             "devnet"
         );
@@ -908,6 +951,15 @@ mod tests {
         assert!(normalize_address_network("evm", "01").is_err());
         assert!(normalize_address_network("evm", "0").is_err());
         assert!(normalize_address_network("evm", "9007199254740992").is_err());
+        assert_eq!(
+            normalize_address_network("bitcoin", "bip122:000000000019d6689c085ae165831e93")
+                .unwrap(),
+            "bip122:000000000019d6689c085ae165831e93"
+        );
+        assert_eq!(
+            normalize_address_network("tron", "tron:728126428").unwrap(),
+            "tron:728126428"
+        );
         assert_eq!(normalize_theme(" dark ").as_deref(), Some("dark"));
         assert!(normalize_theme("system").is_none());
         let duplicate_preferences = AppPreferences {

@@ -1,5 +1,5 @@
 [build]
-target-dir = "build-cache"
+target-dir = "build-cache-fnzsafe"
 
 [dependencies.openssl-sys]
 version = "0.9.109" # Use your actual version

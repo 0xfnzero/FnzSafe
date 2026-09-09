@@ -1766,6 +1766,52 @@ pub fn replace_keystore_atomically(
     )
 }
 
+pub fn replace_all_keystores_atomically(
+    replacements: Vec<(String, String, String, String)>,
+) -> Result<Vec<SavedWallet>, String> {
+    let _guard = store_lock()
+        .lock()
+        .map_err(|_| "数据库写锁已损坏".to_string())?;
+    let mut conn = open_connection()?;
+    let now = now_unix_secs()?;
+    replace_all_keystores_atomically_with_connection(&mut conn, replacements, now)
+}
+
+fn replace_all_keystores_atomically_with_connection(
+    conn: &mut Connection,
+    replacements: Vec<(String, String, String, String)>,
+    now: u64,
+) -> Result<Vec<SavedWallet>, String> {
+    let transaction = conn
+        .transaction()
+        .map_err(|error| format!("开始全局钱包改密事务失败: {error}"))?;
+    let mut updated_wallets = Vec::with_capacity(replacements.len());
+    for (wallet_id, public_key, expected_keystore, next_keystore) in replacements {
+        let updated = transaction
+            .execute(
+                "UPDATE wallets SET keystore_json = ?1, updated_at = ?2 \
+                 WHERE id = ?3 AND public_key = ?4 AND keystore_json = ?5",
+                params![next_keystore, now, wallet_id, public_key, expected_keystore],
+            )
+            .map_err(|error| format!("原子更新钱包密文失败: {error}"))?;
+        if updated != 1 {
+            return Err("钱包已被其它操作修改，全局密码未变更".to_string());
+        }
+        let wallet = transaction
+            .query_row(
+                "SELECT id, name, public_key, keystore_json, created_at, updated_at FROM wallets WHERE id = ?1",
+                params![wallet_id],
+                row_to_wallet,
+            )
+            .map_err(|error| format!("回读全局改密后的钱包失败: {error}"))?;
+        updated_wallets.push(wallet);
+    }
+    transaction
+        .commit()
+        .map_err(|error| format!("提交全局钱包改密事务失败: {error}"))?;
+    Ok(updated_wallets)
+}
+
 fn replace_keystore_atomically_with_connection(
     conn: &mut Connection,
     wallet_id: &str,
@@ -2112,6 +2158,48 @@ mod tests {
             .unwrap();
         assert_eq!(stored.keystore_json, "new-ciphertext");
         assert_eq!(stored.updated_at, 20);
+    }
+
+    #[test]
+    fn global_keystore_replacement_rolls_back_every_wallet_on_conflict() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        for (id, key) in [("wallet-a", "key-a"), ("wallet-b", "key-b")] {
+            conn.execute(
+                "INSERT INTO wallets (id, name, public_key, keystore_json, created_at, updated_at) VALUES (?1, ?1, ?2, 'old', 1, 1)",
+                params![id, key],
+            )
+            .unwrap();
+        }
+        let result = replace_all_keystores_atomically_with_connection(
+            &mut conn,
+            vec![
+                (
+                    "wallet-a".into(),
+                    "key-a".into(),
+                    "old".into(),
+                    "new-a".into(),
+                ),
+                (
+                    "wallet-b".into(),
+                    "key-b".into(),
+                    "stale".into(),
+                    "new-b".into(),
+                ),
+            ],
+            2,
+        );
+        assert!(result.is_err());
+        for id in ["wallet-a", "wallet-b"] {
+            let ciphertext: String = conn
+                .query_row(
+                    "SELECT keystore_json FROM wallets WHERE id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(ciphertext, "old");
+        }
     }
 
     #[test]

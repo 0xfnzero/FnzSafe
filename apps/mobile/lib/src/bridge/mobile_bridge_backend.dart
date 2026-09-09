@@ -41,6 +41,19 @@ abstract interface class MobileBridgeBackend {
 
   Future<List<EvmChainConfig>> evmChains();
 
+  Future<List<MultiChainDescriptor>> multichainCatalog();
+
+  Future<MultiChainNormalizedAddress> normalizeMultichainAddress({
+    required String chainId,
+    required String address,
+  });
+
+  Future<MultiChainDerivedAccount> deriveMultichainAccount({
+    required String chainId,
+    required String mnemonic,
+    String? derivationPath,
+  });
+
   Future<WalletKeystore> createEvmWallet({
     required String name,
     required String password,

@@ -1,0 +1,20 @@
+[package]
+name = "fnzero-safe-bitcoin-services"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+bip32 = { version = "0.5", features = ["secp256k1"] }
+bip39 = { version = "2", features = ["zeroize"] }
+bitcoin = { version = "0.32", features = ["serde"] }
+base64 = "0.22"
+fnzero-safe-chain-core = { workspace = true }
+hex = "0.4"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+zeroize = "1"

@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 964782953;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1393775798;
 
 // Section: executor
 
@@ -764,6 +764,106 @@ fn wire__crate__api__mobile_program_upgrade_impl(
             move |context| {
                 transform_result_sse::<_, crate::api::MobileError>((move || {
                     let output_ok = crate::api::mobile_program_upgrade()?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__multichain_catalog_bridge_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "multichain_catalog_bridge",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, crate::api::MobileError>((move || {
+                    let output_ok = crate::api::multichain_catalog_bridge()?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__multichain_derive_account_bridge_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "multichain_derive_account_bridge",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_request =
+                <crate::api::MultiChainDeriveAccountRequest>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, crate::api::MobileError>((move || {
+                    let output_ok = crate::api::multichain_derive_account_bridge(api_request)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__multichain_normalize_address_bridge_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "multichain_normalize_address_bridge",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_request =
+                <crate::api::MultiChainNormalizeAddressRequest>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, crate::api::MobileError>((move || {
+                    let output_ok = crate::api::multichain_normalize_address_bridge(api_request)?;
                     Ok(output_ok)
                 })())
             }
@@ -2266,6 +2366,30 @@ impl SseDecode for Vec<crate::api::EvmTransactionHistoryEntry> {
     }
 }
 
+impl SseDecode for Vec<crate::api::MultiChainDescriptor> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::MultiChainDescriptor>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<crate::api::MultiChainEndpoint> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::MultiChainEndpoint>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
 impl SseDecode for Vec<u8> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -2376,6 +2500,122 @@ impl SseDecode for crate::api::MobileErrorCode {
             12 => crate::api::MobileErrorCode::Unsupported,
             13 => crate::api::MobileErrorCode::NotImplemented,
             _ => unreachable!("Invalid variant for MobileErrorCode: {}", inner),
+        };
+    }
+}
+
+impl SseDecode for crate::api::MultiChainDeriveAccountRequest {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_chainId = <String>::sse_decode(deserializer);
+        let mut var_mnemonic = <String>::sse_decode(deserializer);
+        let mut var_derivationPath = <Option<String>>::sse_decode(deserializer);
+        return crate::api::MultiChainDeriveAccountRequest {
+            chain_id: var_chainId,
+            mnemonic: var_mnemonic,
+            derivation_path: var_derivationPath,
+        };
+    }
+}
+
+impl SseDecode for crate::api::MultiChainDerivedAccount {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_chainId = <String>::sse_decode(deserializer);
+        let mut var_accountId = <String>::sse_decode(deserializer);
+        let mut var_address = <String>::sse_decode(deserializer);
+        let mut var_derivationPath = <String>::sse_decode(deserializer);
+        let mut var_publicKeyHex = <Option<String>>::sse_decode(deserializer);
+        return crate::api::MultiChainDerivedAccount {
+            chain_id: var_chainId,
+            account_id: var_accountId,
+            address: var_address,
+            derivation_path: var_derivationPath,
+            public_key_hex: var_publicKeyHex,
+        };
+    }
+}
+
+impl SseDecode for crate::api::MultiChainDescriptor {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_chainId = <String>::sse_decode(deserializer);
+        let mut var_family = <String>::sse_decode(deserializer);
+        let mut var_name = <String>::sse_decode(deserializer);
+        let mut var_network = <String>::sse_decode(deserializer);
+        let mut var_testnet = <bool>::sse_decode(deserializer);
+        let mut var_nativeAsset = <crate::api::MultiChainNativeAsset>::sse_decode(deserializer);
+        let mut var_defaultDerivationPath = <String>::sse_decode(deserializer);
+        let mut var_addressFormats = <Vec<String>>::sse_decode(deserializer);
+        let mut var_capabilities = <Vec<String>>::sse_decode(deserializer);
+        let mut var_endpoints = <Vec<crate::api::MultiChainEndpoint>>::sse_decode(deserializer);
+        let mut var_explorerUrl = <Option<String>>::sse_decode(deserializer);
+        let mut var_supportLevel = <String>::sse_decode(deserializer);
+        return crate::api::MultiChainDescriptor {
+            chain_id: var_chainId,
+            family: var_family,
+            name: var_name,
+            network: var_network,
+            testnet: var_testnet,
+            native_asset: var_nativeAsset,
+            default_derivation_path: var_defaultDerivationPath,
+            address_formats: var_addressFormats,
+            capabilities: var_capabilities,
+            endpoints: var_endpoints,
+            explorer_url: var_explorerUrl,
+            support_level: var_supportLevel,
+        };
+    }
+}
+
+impl SseDecode for crate::api::MultiChainEndpoint {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_kind = <String>::sse_decode(deserializer);
+        let mut var_url = <String>::sse_decode(deserializer);
+        return crate::api::MultiChainEndpoint {
+            kind: var_kind,
+            url: var_url,
+        };
+    }
+}
+
+impl SseDecode for crate::api::MultiChainNativeAsset {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_symbol = <String>::sse_decode(deserializer);
+        let mut var_name = <String>::sse_decode(deserializer);
+        let mut var_decimals = <u8>::sse_decode(deserializer);
+        return crate::api::MultiChainNativeAsset {
+            symbol: var_symbol,
+            name: var_name,
+            decimals: var_decimals,
+        };
+    }
+}
+
+impl SseDecode for crate::api::MultiChainNormalizeAddressRequest {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_chainId = <String>::sse_decode(deserializer);
+        let mut var_address = <String>::sse_decode(deserializer);
+        return crate::api::MultiChainNormalizeAddressRequest {
+            chain_id: var_chainId,
+            address: var_address,
+        };
+    }
+}
+
+impl SseDecode for crate::api::MultiChainNormalizedAddress {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_chainId = <String>::sse_decode(deserializer);
+        let mut var_accountId = <String>::sse_decode(deserializer);
+        let mut var_address = <String>::sse_decode(deserializer);
+        return crate::api::MultiChainNormalizedAddress {
+            chain_id: var_chainId,
+            account_id: var_accountId,
+            address: var_address,
         };
     }
 }
@@ -3092,32 +3332,45 @@ fn pde_ffi_dispatcher_primary_impl(
         20 => wire__crate__api__mobile_program_deploy_impl(port, ptr, rust_vec_len, data_len),
         21 => wire__crate__api__mobile_program_invoke_impl(port, ptr, rust_vec_len, data_len),
         22 => wire__crate__api__mobile_program_upgrade_impl(port, ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__payment_confirm_impl(port, ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__payment_preview_impl(port, ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__pump_preview_impl(port, ptr, rust_vec_len, data_len),
-        26 => wire__crate__api__security_biometric_policy_impl(port, ptr, rust_vec_len, data_len),
-        27 => wire__crate__api__security_setup_totp_impl(port, ptr, rust_vec_len, data_len),
-        28 => wire__crate__api__security_verify_totp_impl(port, ptr, rust_vec_len, data_len),
-        29 => wire__crate__api__squads_approve_confirm_impl(port, ptr, rust_vec_len, data_len),
-        30 => wire__crate__api__squads_create_confirm_impl(port, ptr, rust_vec_len, data_len),
-        31 => wire__crate__api__squads_execute_confirm_impl(port, ptr, rust_vec_len, data_len),
-        32 => wire__crate__api__squads_info_query_impl(port, ptr, rust_vec_len, data_len),
-        33 => wire__crate__api__squads_preview_impl(port, ptr, rust_vec_len, data_len),
-        34 => wire__crate__api__squads_proposals_query_impl(port, ptr, rust_vec_len, data_len),
-        35 => wire__crate__api__squads_reject_confirm_impl(port, ptr, rust_vec_len, data_len),
-        36 => wire__crate__api__squads_transfer_proposal_confirm_impl(
+        23 => wire__crate__api__multichain_catalog_bridge_impl(port, ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__multichain_derive_account_bridge_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        37 => wire__crate__api__wallet_create_impl(port, ptr, rust_vec_len, data_len),
-        38 => wire__crate__api__wallet_delete_preview_impl(port, ptr, rust_vec_len, data_len),
-        39 => wire__crate__api__wallet_export_private_key_impl(port, ptr, rust_vec_len, data_len),
-        40 => wire__crate__api__wallet_import_keystore_impl(port, ptr, rust_vec_len, data_len),
-        41 => wire__crate__api__wallet_import_mnemonic_impl(port, ptr, rust_vec_len, data_len),
-        42 => wire__crate__api__wallet_import_private_key_impl(port, ptr, rust_vec_len, data_len),
-        43 => wire__crate__api__wallet_unlock_impl(port, ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__multichain_normalize_address_bridge_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        26 => wire__crate__api__payment_confirm_impl(port, ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__payment_preview_impl(port, ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__pump_preview_impl(port, ptr, rust_vec_len, data_len),
+        29 => wire__crate__api__security_biometric_policy_impl(port, ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__security_setup_totp_impl(port, ptr, rust_vec_len, data_len),
+        31 => wire__crate__api__security_verify_totp_impl(port, ptr, rust_vec_len, data_len),
+        32 => wire__crate__api__squads_approve_confirm_impl(port, ptr, rust_vec_len, data_len),
+        33 => wire__crate__api__squads_create_confirm_impl(port, ptr, rust_vec_len, data_len),
+        34 => wire__crate__api__squads_execute_confirm_impl(port, ptr, rust_vec_len, data_len),
+        35 => wire__crate__api__squads_info_query_impl(port, ptr, rust_vec_len, data_len),
+        36 => wire__crate__api__squads_preview_impl(port, ptr, rust_vec_len, data_len),
+        37 => wire__crate__api__squads_proposals_query_impl(port, ptr, rust_vec_len, data_len),
+        38 => wire__crate__api__squads_reject_confirm_impl(port, ptr, rust_vec_len, data_len),
+        39 => wire__crate__api__squads_transfer_proposal_confirm_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        40 => wire__crate__api__wallet_create_impl(port, ptr, rust_vec_len, data_len),
+        41 => wire__crate__api__wallet_delete_preview_impl(port, ptr, rust_vec_len, data_len),
+        42 => wire__crate__api__wallet_export_private_key_impl(port, ptr, rust_vec_len, data_len),
+        43 => wire__crate__api__wallet_import_keystore_impl(port, ptr, rust_vec_len, data_len),
+        44 => wire__crate__api__wallet_import_mnemonic_impl(port, ptr, rust_vec_len, data_len),
+        45 => wire__crate__api__wallet_import_private_key_impl(port, ptr, rust_vec_len, data_len),
+        46 => wire__crate__api__wallet_unlock_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -4106,6 +4359,169 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::MobileErrorCode>
     for crate::api::MobileErrorCode
 {
     fn into_into_dart(self) -> crate::api::MobileErrorCode {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::MultiChainDeriveAccountRequest {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.chain_id.into_into_dart().into_dart(),
+            self.mnemonic.into_into_dart().into_dart(),
+            self.derivation_path.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::MultiChainDeriveAccountRequest
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::MultiChainDeriveAccountRequest>
+    for crate::api::MultiChainDeriveAccountRequest
+{
+    fn into_into_dart(self) -> crate::api::MultiChainDeriveAccountRequest {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::MultiChainDerivedAccount {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.chain_id.into_into_dart().into_dart(),
+            self.account_id.into_into_dart().into_dart(),
+            self.address.into_into_dart().into_dart(),
+            self.derivation_path.into_into_dart().into_dart(),
+            self.public_key_hex.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::MultiChainDerivedAccount
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::MultiChainDerivedAccount>
+    for crate::api::MultiChainDerivedAccount
+{
+    fn into_into_dart(self) -> crate::api::MultiChainDerivedAccount {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::MultiChainDescriptor {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.chain_id.into_into_dart().into_dart(),
+            self.family.into_into_dart().into_dart(),
+            self.name.into_into_dart().into_dart(),
+            self.network.into_into_dart().into_dart(),
+            self.testnet.into_into_dart().into_dart(),
+            self.native_asset.into_into_dart().into_dart(),
+            self.default_derivation_path.into_into_dart().into_dart(),
+            self.address_formats.into_into_dart().into_dart(),
+            self.capabilities.into_into_dart().into_dart(),
+            self.endpoints.into_into_dart().into_dart(),
+            self.explorer_url.into_into_dart().into_dart(),
+            self.support_level.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::MultiChainDescriptor
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::MultiChainDescriptor>
+    for crate::api::MultiChainDescriptor
+{
+    fn into_into_dart(self) -> crate::api::MultiChainDescriptor {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::MultiChainEndpoint {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.kind.into_into_dart().into_dart(),
+            self.url.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::MultiChainEndpoint
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::MultiChainEndpoint>
+    for crate::api::MultiChainEndpoint
+{
+    fn into_into_dart(self) -> crate::api::MultiChainEndpoint {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::MultiChainNativeAsset {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.symbol.into_into_dart().into_dart(),
+            self.name.into_into_dart().into_dart(),
+            self.decimals.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::MultiChainNativeAsset
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::MultiChainNativeAsset>
+    for crate::api::MultiChainNativeAsset
+{
+    fn into_into_dart(self) -> crate::api::MultiChainNativeAsset {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::MultiChainNormalizeAddressRequest {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.chain_id.into_into_dart().into_dart(),
+            self.address.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::MultiChainNormalizeAddressRequest
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::MultiChainNormalizeAddressRequest>
+    for crate::api::MultiChainNormalizeAddressRequest
+{
+    fn into_into_dart(self) -> crate::api::MultiChainNormalizeAddressRequest {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::MultiChainNormalizedAddress {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.chain_id.into_into_dart().into_dart(),
+            self.account_id.into_into_dart().into_dart(),
+            self.address.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::MultiChainNormalizedAddress
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::MultiChainNormalizedAddress>
+    for crate::api::MultiChainNormalizedAddress
+{
+    fn into_into_dart(self) -> crate::api::MultiChainNormalizedAddress {
         self
     }
 }
@@ -5289,6 +5705,26 @@ impl SseEncode for Vec<crate::api::EvmTransactionHistoryEntry> {
     }
 }
 
+impl SseEncode for Vec<crate::api::MultiChainDescriptor> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::MultiChainDescriptor>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<crate::api::MultiChainEndpoint> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::MultiChainEndpoint>::sse_encode(item, serializer);
+        }
+    }
+}
+
 impl SseEncode for Vec<u8> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -5379,6 +5815,78 @@ impl SseEncode for crate::api::MobileErrorCode {
             },
             serializer,
         );
+    }
+}
+
+impl SseEncode for crate::api::MultiChainDeriveAccountRequest {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.chain_id, serializer);
+        <String>::sse_encode(self.mnemonic, serializer);
+        <Option<String>>::sse_encode(self.derivation_path, serializer);
+    }
+}
+
+impl SseEncode for crate::api::MultiChainDerivedAccount {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.chain_id, serializer);
+        <String>::sse_encode(self.account_id, serializer);
+        <String>::sse_encode(self.address, serializer);
+        <String>::sse_encode(self.derivation_path, serializer);
+        <Option<String>>::sse_encode(self.public_key_hex, serializer);
+    }
+}
+
+impl SseEncode for crate::api::MultiChainDescriptor {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.chain_id, serializer);
+        <String>::sse_encode(self.family, serializer);
+        <String>::sse_encode(self.name, serializer);
+        <String>::sse_encode(self.network, serializer);
+        <bool>::sse_encode(self.testnet, serializer);
+        <crate::api::MultiChainNativeAsset>::sse_encode(self.native_asset, serializer);
+        <String>::sse_encode(self.default_derivation_path, serializer);
+        <Vec<String>>::sse_encode(self.address_formats, serializer);
+        <Vec<String>>::sse_encode(self.capabilities, serializer);
+        <Vec<crate::api::MultiChainEndpoint>>::sse_encode(self.endpoints, serializer);
+        <Option<String>>::sse_encode(self.explorer_url, serializer);
+        <String>::sse_encode(self.support_level, serializer);
+    }
+}
+
+impl SseEncode for crate::api::MultiChainEndpoint {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.kind, serializer);
+        <String>::sse_encode(self.url, serializer);
+    }
+}
+
+impl SseEncode for crate::api::MultiChainNativeAsset {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.symbol, serializer);
+        <String>::sse_encode(self.name, serializer);
+        <u8>::sse_encode(self.decimals, serializer);
+    }
+}
+
+impl SseEncode for crate::api::MultiChainNormalizeAddressRequest {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.chain_id, serializer);
+        <String>::sse_encode(self.address, serializer);
+    }
+}
+
+impl SseEncode for crate::api::MultiChainNormalizedAddress {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.chain_id, serializer);
+        <String>::sse_encode(self.account_id, serializer);
+        <String>::sse_encode(self.address, serializer);
     }
 }
 

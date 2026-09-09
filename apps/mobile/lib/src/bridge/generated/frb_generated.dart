@@ -7,8 +7,7 @@ import 'api.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'frb_generated.dart';
-import 'frb_generated.io.dart'
-    if (dart.library.js_interop) 'frb_generated.web.dart';
+import 'frb_generated.io.dart' if (dart.library.js_interop) 'frb_generated.web.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 /// Main entrypoint of the Rust API
@@ -50,12 +49,10 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   static void dispose() => instance.disposeImpl();
 
   @override
-  ApiImplConstructor<RustLibApiImpl, RustLibWire> get apiImplConstructor =>
-      RustLibApiImpl.new;
+  ApiImplConstructor<RustLibApiImpl, RustLibWire> get apiImplConstructor => RustLibApiImpl.new;
 
   @override
-  WireConstructor<RustLibWire> get wireConstructor =>
-      RustLibWire.fromExternalLibrary;
+  WireConstructor<RustLibWire> get wireConstructor => RustLibWire.fromExternalLibrary;
 
   @override
   Future<void> executeRustInitializers() async {}
@@ -68,10 +65,9 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => 964782953;
+  int get rustContentHash => -1393775798;
 
-  static const kDefaultExternalLibraryLoaderConfig =
-      ExternalLibraryLoaderConfig(
+  static const kDefaultExternalLibraryLoaderConfig = ExternalLibraryLoaderConfig(
     stem: 'fnzero_safe_mobile_bridge',
     ioDirectory: '../../crates/mobile-bridge/target/release/',
     webPrefix: 'pkg/',
@@ -83,17 +79,13 @@ abstract class RustLibApi extends BaseApi {
   Future<AssetSnapshot> crateApiAssetsEmptySnapshot(
       {required AppNetwork network, required String walletPublicKey});
 
-  Future<AssetSnapshot> crateApiAssetsSnapshot(
-      {required AssetQueryRequest req});
+  Future<AssetSnapshot> crateApiAssetsSnapshot({required AssetQueryRequest req});
 
-  Future<DappSignSubmitResult> crateApiDappSignConfirm(
-      {required DappSignSubmitRequest req});
+  Future<DappSignSubmitResult> crateApiDappSignConfirm({required DappSignSubmitRequest req});
 
-  Future<SigningPreview> crateApiDappSignPreview(
-      {required DappSignPreviewRequest req});
+  Future<SigningPreview> crateApiDappSignPreview({required DappSignPreviewRequest req});
 
-  Future<EvmAssetSnapshot> crateApiEvmAssetsSnapshot(
-      {required EvmAssetQueryRequest req});
+  Future<EvmAssetSnapshot> crateApiEvmAssetsSnapshot({required EvmAssetQueryRequest req});
 
   Future<List<EvmChainConfig>> crateApiEvmChainsBuiltin();
 
@@ -112,8 +104,7 @@ abstract class RustLibApi extends BaseApi {
   Future<EvmTransactionStatus> crateApiEvmTransactionStatusBridge(
       {required EvmTransactionStatusRequest req});
 
-  Future<EvmWalletKeystore> crateApiEvmWalletCreateBridge(
-      {required EvmCreateWalletRequest req});
+  Future<EvmWalletKeystore> crateApiEvmWalletCreateBridge({required EvmCreateWalletRequest req});
 
   Future<EvmExportPrivateKeyResponse> crateApiEvmWalletExportPrivateKeyBridge(
       {required EvmExportPrivateKeyRequest req});
@@ -127,8 +118,7 @@ abstract class RustLibApi extends BaseApi {
   Future<EvmWalletKeystore> crateApiEvmWalletImportPrivateKeyBridge(
       {required EvmImportPrivateKeyRequest req});
 
-  Future<EvmWalletSummary> crateApiEvmWalletUnlockBridge(
-      {required EvmUnlockWalletRequest req});
+  Future<EvmWalletSummary> crateApiEvmWalletUnlockBridge({required EvmUnlockWalletRequest req});
 
   Future<MobileCapabilitySummary> crateApiGetMobileCapabilities();
 
@@ -140,11 +130,17 @@ abstract class RustLibApi extends BaseApi {
 
   Future<void> crateApiMobileProgramUpgrade();
 
-  Future<TransactionSubmitResult> crateApiPaymentConfirm(
-      {required PaymentSubmitRequest req});
+  Future<List<MultiChainDescriptor>> crateApiMultichainCatalogBridge();
 
-  Future<SigningPreview> crateApiPaymentPreview(
-      {required PaymentPreviewRequest req});
+  Future<MultiChainDerivedAccount> crateApiMultichainDeriveAccountBridge(
+      {required MultiChainDeriveAccountRequest request});
+
+  Future<MultiChainNormalizedAddress> crateApiMultichainNormalizeAddressBridge(
+      {required MultiChainNormalizeAddressRequest request});
+
+  Future<TransactionSubmitResult> crateApiPaymentConfirm({required PaymentSubmitRequest req});
+
+  Future<SigningPreview> crateApiPaymentPreview({required PaymentPreviewRequest req});
 
   Future<SigningPreview> crateApiPumpPreview({required PumpPreviewRequest req});
 
@@ -163,11 +159,9 @@ abstract class RustLibApi extends BaseApi {
   Future<TransactionSubmitResult> crateApiSquadsExecuteConfirm(
       {required SquadsExecuteSubmitRequest req});
 
-  Future<SquadsInfoResponse> crateApiSquadsInfoQuery(
-      {required SquadsInfoRequest req});
+  Future<SquadsInfoResponse> crateApiSquadsInfoQuery({required SquadsInfoRequest req});
 
-  Future<SigningPreview> crateApiSquadsPreview(
-      {required SquadsPreviewRequest req});
+  Future<SigningPreview> crateApiSquadsPreview({required SquadsPreviewRequest req});
 
   Future<SquadsProposalsResponse> crateApiSquadsProposalsQuery(
       {required SquadsProposalsRequest req});
@@ -175,30 +169,23 @@ abstract class RustLibApi extends BaseApi {
   Future<TransactionSubmitResult> crateApiSquadsRejectConfirm(
       {required SquadsVoteSubmitRequest req});
 
-  Future<SquadsProposalCreateSubmitResult>
-      crateApiSquadsTransferProposalConfirm(
-          {required SquadsTransferProposalSubmitRequest req});
+  Future<SquadsProposalCreateSubmitResult> crateApiSquadsTransferProposalConfirm(
+      {required SquadsTransferProposalSubmitRequest req});
 
-  Future<WalletKeystore> crateApiWalletCreate(
-      {required CreateWalletRequest req});
+  Future<WalletKeystore> crateApiWalletCreate({required CreateWalletRequest req});
 
-  Future<SigningDecision> crateApiWalletDeletePreview(
-      {required String walletPublicKey});
+  Future<SigningDecision> crateApiWalletDeletePreview({required String walletPublicKey});
 
   Future<ExportPrivateKeyResponse> crateApiWalletExportPrivateKey(
       {required ExportPrivateKeyRequest req});
 
-  Future<WalletKeystore> crateApiWalletImportKeystore(
-      {required ImportKeystoreRequest req});
+  Future<WalletKeystore> crateApiWalletImportKeystore({required ImportKeystoreRequest req});
 
-  Future<WalletKeystore> crateApiWalletImportMnemonic(
-      {required ImportMnemonicRequest req});
+  Future<WalletKeystore> crateApiWalletImportMnemonic({required ImportMnemonicRequest req});
 
-  Future<WalletKeystore> crateApiWalletImportPrivateKey(
-      {required ImportPrivateKeyRequest req});
+  Future<WalletKeystore> crateApiWalletImportPrivateKey({required ImportPrivateKeyRequest req});
 
-  Future<UnlockWalletResponse> crateApiWalletUnlock(
-      {required UnlockWalletRequest req});
+  Future<UnlockWalletResponse> crateApiWalletUnlock({required UnlockWalletRequest req});
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -217,8 +204,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_app_network(network, serializer);
         sse_encode_String(walletPublicKey, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 1, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 1, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_asset_snapshot,
@@ -230,21 +216,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     ));
   }
 
-  TaskConstMeta get kCrateApiAssetsEmptySnapshotConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateApiAssetsEmptySnapshotConstMeta => const TaskConstMeta(
         debugName: "assets_empty_snapshot",
         argNames: ["network", "walletPublicKey"],
       );
 
   @override
-  Future<AssetSnapshot> crateApiAssetsSnapshot(
-      {required AssetQueryRequest req}) {
+  Future<AssetSnapshot> crateApiAssetsSnapshot({required AssetQueryRequest req}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_asset_query_request(req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 2, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 2, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_asset_snapshot,
@@ -262,14 +245,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<DappSignSubmitResult> crateApiDappSignConfirm(
-      {required DappSignSubmitRequest req}) {
+  Future<DappSignSubmitResult> crateApiDappSignConfirm({required DappSignSubmitRequest req}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_dapp_sign_submit_request(req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 3, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 3, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_dapp_sign_submit_result,
@@ -287,14 +268,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<SigningPreview> crateApiDappSignPreview(
-      {required DappSignPreviewRequest req}) {
+  Future<SigningPreview> crateApiDappSignPreview({required DappSignPreviewRequest req}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_dapp_sign_preview_request(req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 4, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 4, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_signing_preview,
@@ -312,14 +291,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<EvmAssetSnapshot> crateApiEvmAssetsSnapshot(
-      {required EvmAssetQueryRequest req}) {
+  Future<EvmAssetSnapshot> crateApiEvmAssetsSnapshot({required EvmAssetQueryRequest req}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_evm_asset_query_request(req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 5, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 5, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_evm_asset_snapshot,
@@ -341,8 +318,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 6, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 6, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_list_evm_chain_config,
@@ -366,8 +342,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_evm_dapp_sign_submit_request(req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 7, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 7, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_evm_dapp_sign_submit_result,
@@ -379,8 +354,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     ));
   }
 
-  TaskConstMeta get kCrateApiEvmDappSignConfirmBridgeConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateApiEvmDappSignConfirmBridgeConstMeta => const TaskConstMeta(
         debugName: "evm_dapp_sign_confirm_bridge",
         argNames: ["req"],
       );
@@ -392,8 +366,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_evm_dapp_sign_preview_request(req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 8, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 8, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_evm_dapp_sign_preview,
@@ -405,8 +378,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     ));
   }
 
-  TaskConstMeta get kCrateApiEvmDappSignPreviewBridgeConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateApiEvmDappSignPreviewBridgeConstMeta => const TaskConstMeta(
         debugName: "evm_dapp_sign_preview_bridge",
         argNames: ["req"],
       );
@@ -418,8 +390,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_evm_payment_submit_request(req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 9, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 9, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_evm_transaction_submit_result,
@@ -431,8 +402,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     ));
   }
 
-  TaskConstMeta get kCrateApiEvmPaymentConfirmBridgeConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateApiEvmPaymentConfirmBridgeConstMeta => const TaskConstMeta(
         debugName: "evm_payment_confirm_bridge",
         argNames: ["req"],
       );
@@ -444,8 +414,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_evm_payment_preview_request(req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 10, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 10, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_evm_payment_preview,
@@ -457,8 +426,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     ));
   }
 
-  TaskConstMeta get kCrateApiEvmPaymentPreviewBridgeConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateApiEvmPaymentPreviewBridgeConstMeta => const TaskConstMeta(
         debugName: "evm_payment_preview_bridge",
         argNames: ["req"],
       );
@@ -470,8 +438,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_evm_transaction_status_request(req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 11, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 11, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_evm_transaction_status,
@@ -483,21 +450,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     ));
   }
 
-  TaskConstMeta get kCrateApiEvmTransactionStatusBridgeConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateApiEvmTransactionStatusBridgeConstMeta => const TaskConstMeta(
         debugName: "evm_transaction_status_bridge",
         argNames: ["req"],
       );
 
   @override
-  Future<EvmWalletKeystore> crateApiEvmWalletCreateBridge(
-      {required EvmCreateWalletRequest req}) {
+  Future<EvmWalletKeystore> crateApiEvmWalletCreateBridge({required EvmCreateWalletRequest req}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_evm_create_wallet_request(req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 12, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 12, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_evm_wallet_keystore,
@@ -509,8 +473,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     ));
   }
 
-  TaskConstMeta get kCrateApiEvmWalletCreateBridgeConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateApiEvmWalletCreateBridgeConstMeta => const TaskConstMeta(
         debugName: "evm_wallet_create_bridge",
         argNames: ["req"],
       );
@@ -522,8 +485,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_evm_export_private_key_request(req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 13, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 13, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_evm_export_private_key_response,
@@ -535,8 +497,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     ));
   }
 
-  TaskConstMeta get kCrateApiEvmWalletExportPrivateKeyBridgeConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateApiEvmWalletExportPrivateKeyBridgeConstMeta => const TaskConstMeta(
         debugName: "evm_wallet_export_private_key_bridge",
         argNames: ["req"],
       );
@@ -548,8 +509,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_evm_import_keystore_request(req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 14, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 14, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_evm_wallet_keystore,
@@ -561,8 +521,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     ));
   }
 
-  TaskConstMeta get kCrateApiEvmWalletImportKeystoreBridgeConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateApiEvmWalletImportKeystoreBridgeConstMeta => const TaskConstMeta(
         debugName: "evm_wallet_import_keystore_bridge",
         argNames: ["req"],
       );
@@ -574,8 +533,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_evm_import_mnemonic_request(req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 15, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 15, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_evm_wallet_keystore,
@@ -587,8 +545,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     ));
   }
 
-  TaskConstMeta get kCrateApiEvmWalletImportMnemonicBridgeConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateApiEvmWalletImportMnemonicBridgeConstMeta => const TaskConstMeta(
         debugName: "evm_wallet_import_mnemonic_bridge",
         argNames: ["req"],
       );
@@ -600,8 +557,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_evm_import_private_key_request(req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 16, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 16, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_evm_wallet_keystore,
@@ -613,21 +569,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     ));
   }
 
-  TaskConstMeta get kCrateApiEvmWalletImportPrivateKeyBridgeConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateApiEvmWalletImportPrivateKeyBridgeConstMeta => const TaskConstMeta(
         debugName: "evm_wallet_import_private_key_bridge",
         argNames: ["req"],
       );
 
   @override
-  Future<EvmWalletSummary> crateApiEvmWalletUnlockBridge(
-      {required EvmUnlockWalletRequest req}) {
+  Future<EvmWalletSummary> crateApiEvmWalletUnlockBridge({required EvmUnlockWalletRequest req}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_evm_unlock_wallet_request(req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 17, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 17, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_evm_wallet_summary,
@@ -639,8 +592,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     ));
   }
 
-  TaskConstMeta get kCrateApiEvmWalletUnlockBridgeConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateApiEvmWalletUnlockBridgeConstMeta => const TaskConstMeta(
         debugName: "evm_wallet_unlock_bridge",
         argNames: ["req"],
       );
@@ -650,8 +602,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 18, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 18, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_mobile_capability_summary,
@@ -663,8 +614,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     ));
   }
 
-  TaskConstMeta get kCrateApiGetMobileCapabilitiesConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateApiGetMobileCapabilitiesConstMeta => const TaskConstMeta(
         debugName: "get_mobile_capabilities",
         argNames: [],
       );
@@ -674,8 +624,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 19, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 19, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_mobile_bridge_health,
@@ -697,8 +646,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 20, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 20, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -710,8 +658,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     ));
   }
 
-  TaskConstMeta get kCrateApiMobileProgramDeployConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateApiMobileProgramDeployConstMeta => const TaskConstMeta(
         debugName: "mobile_program_deploy",
         argNames: [],
       );
@@ -721,8 +668,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 21, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 21, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -734,8 +680,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     ));
   }
 
-  TaskConstMeta get kCrateApiMobileProgramInvokeConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateApiMobileProgramInvokeConstMeta => const TaskConstMeta(
         debugName: "mobile_program_invoke",
         argNames: [],
       );
@@ -745,8 +690,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 22, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 22, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -758,21 +702,88 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     ));
   }
 
-  TaskConstMeta get kCrateApiMobileProgramUpgradeConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateApiMobileProgramUpgradeConstMeta => const TaskConstMeta(
         debugName: "mobile_program_upgrade",
         argNames: [],
       );
 
   @override
-  Future<TransactionSubmitResult> crateApiPaymentConfirm(
-      {required PaymentSubmitRequest req}) {
+  Future<List<MultiChainDescriptor>> crateApiMultichainCatalogBridge() {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 23, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_list_multi_chain_descriptor,
+        decodeErrorData: sse_decode_mobile_error,
+      ),
+      constMeta: kCrateApiMultichainCatalogBridgeConstMeta,
+      argValues: [],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiMultichainCatalogBridgeConstMeta => const TaskConstMeta(
+        debugName: "multichain_catalog_bridge",
+        argNames: [],
+      );
+
+  @override
+  Future<MultiChainDerivedAccount> crateApiMultichainDeriveAccountBridge(
+      {required MultiChainDeriveAccountRequest request}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_box_autoadd_multi_chain_derive_account_request(request, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 24, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_multi_chain_derived_account,
+        decodeErrorData: sse_decode_mobile_error,
+      ),
+      constMeta: kCrateApiMultichainDeriveAccountBridgeConstMeta,
+      argValues: [request],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiMultichainDeriveAccountBridgeConstMeta => const TaskConstMeta(
+        debugName: "multichain_derive_account_bridge",
+        argNames: ["request"],
+      );
+
+  @override
+  Future<MultiChainNormalizedAddress> crateApiMultichainNormalizeAddressBridge(
+      {required MultiChainNormalizeAddressRequest request}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_box_autoadd_multi_chain_normalize_address_request(request, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 25, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_multi_chain_normalized_address,
+        decodeErrorData: sse_decode_mobile_error,
+      ),
+      constMeta: kCrateApiMultichainNormalizeAddressBridgeConstMeta,
+      argValues: [request],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiMultichainNormalizeAddressBridgeConstMeta => const TaskConstMeta(
+        debugName: "multichain_normalize_address_bridge",
+        argNames: ["request"],
+      );
+
+  @override
+  Future<TransactionSubmitResult> crateApiPaymentConfirm({required PaymentSubmitRequest req}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_payment_submit_request(req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 23, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 26, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_transaction_submit_result,
@@ -790,14 +801,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<SigningPreview> crateApiPaymentPreview(
-      {required PaymentPreviewRequest req}) {
+  Future<SigningPreview> crateApiPaymentPreview({required PaymentPreviewRequest req}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_payment_preview_request(req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 24, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 27, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_signing_preview,
@@ -815,14 +824,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<SigningPreview> crateApiPumpPreview(
-      {required PumpPreviewRequest req}) {
+  Future<SigningPreview> crateApiPumpPreview({required PumpPreviewRequest req}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_pump_preview_request(req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 25, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 28, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_signing_preview,
@@ -844,8 +851,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 26, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 29, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_biometric_policy,
@@ -857,8 +863,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     ));
   }
 
-  TaskConstMeta get kCrateApiSecurityBiometricPolicyConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateApiSecurityBiometricPolicyConstMeta => const TaskConstMeta(
         debugName: "security_biometric_policy",
         argNames: [],
       );
@@ -869,8 +874,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_String(account, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 27, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 30, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_totp_setup,
@@ -893,8 +897,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_totp_verify_request(req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 28, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 31, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_bool,
@@ -918,8 +921,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_squads_vote_submit_request(req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 29, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 32, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_transaction_submit_result,
@@ -931,8 +933,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     ));
   }
 
-  TaskConstMeta get kCrateApiSquadsApproveConfirmConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateApiSquadsApproveConfirmConstMeta => const TaskConstMeta(
         debugName: "squads_approve_confirm",
         argNames: ["req"],
       );
@@ -944,8 +945,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_squads_create_submit_request(req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 30, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 33, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_squads_create_submit_result,
@@ -957,8 +957,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     ));
   }
 
-  TaskConstMeta get kCrateApiSquadsCreateConfirmConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateApiSquadsCreateConfirmConstMeta => const TaskConstMeta(
         debugName: "squads_create_confirm",
         argNames: ["req"],
       );
@@ -970,8 +969,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_squads_execute_submit_request(req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 31, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 34, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_transaction_submit_result,
@@ -983,21 +981,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     ));
   }
 
-  TaskConstMeta get kCrateApiSquadsExecuteConfirmConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateApiSquadsExecuteConfirmConstMeta => const TaskConstMeta(
         debugName: "squads_execute_confirm",
         argNames: ["req"],
       );
 
   @override
-  Future<SquadsInfoResponse> crateApiSquadsInfoQuery(
-      {required SquadsInfoRequest req}) {
+  Future<SquadsInfoResponse> crateApiSquadsInfoQuery({required SquadsInfoRequest req}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_squads_info_request(req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 32, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 35, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_squads_info_response,
@@ -1015,14 +1010,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<SigningPreview> crateApiSquadsPreview(
-      {required SquadsPreviewRequest req}) {
+  Future<SigningPreview> crateApiSquadsPreview({required SquadsPreviewRequest req}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_squads_preview_request(req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 33, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 36, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_signing_preview,
@@ -1046,8 +1039,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_squads_proposals_request(req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 34, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 37, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_squads_proposals_response,
@@ -1059,8 +1051,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     ));
   }
 
-  TaskConstMeta get kCrateApiSquadsProposalsQueryConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateApiSquadsProposalsQueryConstMeta => const TaskConstMeta(
         debugName: "squads_proposals_query",
         argNames: ["req"],
       );
@@ -1072,8 +1063,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_squads_vote_submit_request(req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 35, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 38, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_transaction_submit_result,
@@ -1085,23 +1075,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     ));
   }
 
-  TaskConstMeta get kCrateApiSquadsRejectConfirmConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateApiSquadsRejectConfirmConstMeta => const TaskConstMeta(
         debugName: "squads_reject_confirm",
         argNames: ["req"],
       );
 
   @override
-  Future<SquadsProposalCreateSubmitResult>
-      crateApiSquadsTransferProposalConfirm(
-          {required SquadsTransferProposalSubmitRequest req}) {
+  Future<SquadsProposalCreateSubmitResult> crateApiSquadsTransferProposalConfirm(
+      {required SquadsTransferProposalSubmitRequest req}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_box_autoadd_squads_transfer_proposal_submit_request(
-            req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 36, port: port_);
+        sse_encode_box_autoadd_squads_transfer_proposal_submit_request(req, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 39, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_squads_proposal_create_submit_result,
@@ -1113,21 +1099,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     ));
   }
 
-  TaskConstMeta get kCrateApiSquadsTransferProposalConfirmConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateApiSquadsTransferProposalConfirmConstMeta => const TaskConstMeta(
         debugName: "squads_transfer_proposal_confirm",
         argNames: ["req"],
       );
 
   @override
-  Future<WalletKeystore> crateApiWalletCreate(
-      {required CreateWalletRequest req}) {
+  Future<WalletKeystore> crateApiWalletCreate({required CreateWalletRequest req}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_create_wallet_request(req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 37, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 40, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_wallet_keystore,
@@ -1145,14 +1128,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<SigningDecision> crateApiWalletDeletePreview(
-      {required String walletPublicKey}) {
+  Future<SigningDecision> crateApiWalletDeletePreview({required String walletPublicKey}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_String(walletPublicKey, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 38, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 41, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_signing_decision,
@@ -1164,8 +1145,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     ));
   }
 
-  TaskConstMeta get kCrateApiWalletDeletePreviewConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateApiWalletDeletePreviewConstMeta => const TaskConstMeta(
         debugName: "wallet_delete_preview",
         argNames: ["walletPublicKey"],
       );
@@ -1177,8 +1157,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_export_private_key_request(req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 39, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 42, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_export_private_key_response,
@@ -1190,21 +1169,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     ));
   }
 
-  TaskConstMeta get kCrateApiWalletExportPrivateKeyConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateApiWalletExportPrivateKeyConstMeta => const TaskConstMeta(
         debugName: "wallet_export_private_key",
         argNames: ["req"],
       );
 
   @override
-  Future<WalletKeystore> crateApiWalletImportKeystore(
-      {required ImportKeystoreRequest req}) {
+  Future<WalletKeystore> crateApiWalletImportKeystore({required ImportKeystoreRequest req}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_import_keystore_request(req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 40, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 43, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_wallet_keystore,
@@ -1216,21 +1192,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     ));
   }
 
-  TaskConstMeta get kCrateApiWalletImportKeystoreConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateApiWalletImportKeystoreConstMeta => const TaskConstMeta(
         debugName: "wallet_import_keystore",
         argNames: ["req"],
       );
 
   @override
-  Future<WalletKeystore> crateApiWalletImportMnemonic(
-      {required ImportMnemonicRequest req}) {
+  Future<WalletKeystore> crateApiWalletImportMnemonic({required ImportMnemonicRequest req}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_import_mnemonic_request(req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 41, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 44, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_wallet_keystore,
@@ -1242,21 +1215,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     ));
   }
 
-  TaskConstMeta get kCrateApiWalletImportMnemonicConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateApiWalletImportMnemonicConstMeta => const TaskConstMeta(
         debugName: "wallet_import_mnemonic",
         argNames: ["req"],
       );
 
   @override
-  Future<WalletKeystore> crateApiWalletImportPrivateKey(
-      {required ImportPrivateKeyRequest req}) {
+  Future<WalletKeystore> crateApiWalletImportPrivateKey({required ImportPrivateKeyRequest req}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_import_private_key_request(req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 42, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 45, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_wallet_keystore,
@@ -1268,21 +1238,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     ));
   }
 
-  TaskConstMeta get kCrateApiWalletImportPrivateKeyConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateApiWalletImportPrivateKeyConstMeta => const TaskConstMeta(
         debugName: "wallet_import_private_key",
         argNames: ["req"],
       );
 
   @override
-  Future<UnlockWalletResponse> crateApiWalletUnlock(
-      {required UnlockWalletRequest req}) {
+  Future<UnlockWalletResponse> crateApiWalletUnlock({required UnlockWalletRequest req}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_unlock_wallet_request(req, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 43, port: port_);
+        pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 46, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unlock_wallet_response,
@@ -1315,8 +1282,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   AssetQueryRequest dco_decode_asset_query_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 3)
-      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    if (arr.length != 3) throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
     return AssetQueryRequest(
       network: dco_decode_app_network(arr[0]),
       walletPublicKey: dco_decode_String(arr[1]),
@@ -1328,8 +1294,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   AssetSnapshot dco_decode_asset_snapshot(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 6)
-      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
+    if (arr.length != 6) throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
     return AssetSnapshot(
       network: dco_decode_app_network(arr[0]),
       walletPublicKey: dco_decode_String(arr[1]),
@@ -1344,8 +1309,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   AssetSummary dco_decode_asset_summary(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 8)
-      throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
+    if (arr.length != 8) throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
     return AssetSummary(
       tokenAccount: dco_decode_String(arr[0]),
       mint: dco_decode_String(arr[1]),
@@ -1362,8 +1326,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   BiometricPolicy dco_decode_biometric_policy(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 3)
-      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    if (arr.length != 3) throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
     return BiometricPolicy(
       supported: dco_decode_bool(arr[0]),
       configured: dco_decode_bool(arr[1]),
@@ -1384,120 +1347,103 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  CreateWalletRequest dco_decode_box_autoadd_create_wallet_request(
-      dynamic raw) {
+  CreateWalletRequest dco_decode_box_autoadd_create_wallet_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_create_wallet_request(raw);
   }
 
   @protected
-  DappSignPreviewRequest dco_decode_box_autoadd_dapp_sign_preview_request(
-      dynamic raw) {
+  DappSignPreviewRequest dco_decode_box_autoadd_dapp_sign_preview_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_dapp_sign_preview_request(raw);
   }
 
   @protected
-  DappSignSubmitRequest dco_decode_box_autoadd_dapp_sign_submit_request(
-      dynamic raw) {
+  DappSignSubmitRequest dco_decode_box_autoadd_dapp_sign_submit_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_dapp_sign_submit_request(raw);
   }
 
   @protected
-  EvmAssetQueryRequest dco_decode_box_autoadd_evm_asset_query_request(
-      dynamic raw) {
+  EvmAssetQueryRequest dco_decode_box_autoadd_evm_asset_query_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_evm_asset_query_request(raw);
   }
 
   @protected
-  EvmCreateWalletRequest dco_decode_box_autoadd_evm_create_wallet_request(
-      dynamic raw) {
+  EvmCreateWalletRequest dco_decode_box_autoadd_evm_create_wallet_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_evm_create_wallet_request(raw);
   }
 
   @protected
-  EvmDappSignPreviewRequest
-      dco_decode_box_autoadd_evm_dapp_sign_preview_request(dynamic raw) {
+  EvmDappSignPreviewRequest dco_decode_box_autoadd_evm_dapp_sign_preview_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_evm_dapp_sign_preview_request(raw);
   }
 
   @protected
-  EvmDappSignSubmitRequest dco_decode_box_autoadd_evm_dapp_sign_submit_request(
-      dynamic raw) {
+  EvmDappSignSubmitRequest dco_decode_box_autoadd_evm_dapp_sign_submit_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_evm_dapp_sign_submit_request(raw);
   }
 
   @protected
-  EvmExportPrivateKeyRequest
-      dco_decode_box_autoadd_evm_export_private_key_request(dynamic raw) {
+  EvmExportPrivateKeyRequest dco_decode_box_autoadd_evm_export_private_key_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_evm_export_private_key_request(raw);
   }
 
   @protected
-  EvmImportKeystoreRequest dco_decode_box_autoadd_evm_import_keystore_request(
-      dynamic raw) {
+  EvmImportKeystoreRequest dco_decode_box_autoadd_evm_import_keystore_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_evm_import_keystore_request(raw);
   }
 
   @protected
-  EvmImportMnemonicRequest dco_decode_box_autoadd_evm_import_mnemonic_request(
-      dynamic raw) {
+  EvmImportMnemonicRequest dco_decode_box_autoadd_evm_import_mnemonic_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_evm_import_mnemonic_request(raw);
   }
 
   @protected
-  EvmImportPrivateKeyRequest
-      dco_decode_box_autoadd_evm_import_private_key_request(dynamic raw) {
+  EvmImportPrivateKeyRequest dco_decode_box_autoadd_evm_import_private_key_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_evm_import_private_key_request(raw);
   }
 
   @protected
-  EvmPaymentPreviewRequest dco_decode_box_autoadd_evm_payment_preview_request(
-      dynamic raw) {
+  EvmPaymentPreviewRequest dco_decode_box_autoadd_evm_payment_preview_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_evm_payment_preview_request(raw);
   }
 
   @protected
-  EvmPaymentSubmitRequest dco_decode_box_autoadd_evm_payment_submit_request(
-      dynamic raw) {
+  EvmPaymentSubmitRequest dco_decode_box_autoadd_evm_payment_submit_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_evm_payment_submit_request(raw);
   }
 
   @protected
-  EvmTransactionStatusRequest
-      dco_decode_box_autoadd_evm_transaction_status_request(dynamic raw) {
+  EvmTransactionStatusRequest dco_decode_box_autoadd_evm_transaction_status_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_evm_transaction_status_request(raw);
   }
 
   @protected
-  EvmTransactionSubmitResult
-      dco_decode_box_autoadd_evm_transaction_submit_result(dynamic raw) {
+  EvmTransactionSubmitResult dco_decode_box_autoadd_evm_transaction_submit_result(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_evm_transaction_submit_result(raw);
   }
 
   @protected
-  EvmUnlockWalletRequest dco_decode_box_autoadd_evm_unlock_wallet_request(
-      dynamic raw) {
+  EvmUnlockWalletRequest dco_decode_box_autoadd_evm_unlock_wallet_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_evm_unlock_wallet_request(raw);
   }
 
   @protected
-  ExportPrivateKeyRequest dco_decode_box_autoadd_export_private_key_request(
-      dynamic raw) {
+  ExportPrivateKeyRequest dco_decode_box_autoadd_export_private_key_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_export_private_key_request(raw);
   }
@@ -1509,36 +1455,45 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  ImportKeystoreRequest dco_decode_box_autoadd_import_keystore_request(
-      dynamic raw) {
+  ImportKeystoreRequest dco_decode_box_autoadd_import_keystore_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_import_keystore_request(raw);
   }
 
   @protected
-  ImportMnemonicRequest dco_decode_box_autoadd_import_mnemonic_request(
-      dynamic raw) {
+  ImportMnemonicRequest dco_decode_box_autoadd_import_mnemonic_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_import_mnemonic_request(raw);
   }
 
   @protected
-  ImportPrivateKeyRequest dco_decode_box_autoadd_import_private_key_request(
-      dynamic raw) {
+  ImportPrivateKeyRequest dco_decode_box_autoadd_import_private_key_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_import_private_key_request(raw);
   }
 
   @protected
-  PaymentPreviewRequest dco_decode_box_autoadd_payment_preview_request(
+  MultiChainDeriveAccountRequest dco_decode_box_autoadd_multi_chain_derive_account_request(
       dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_multi_chain_derive_account_request(raw);
+  }
+
+  @protected
+  MultiChainNormalizeAddressRequest dco_decode_box_autoadd_multi_chain_normalize_address_request(
+      dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_multi_chain_normalize_address_request(raw);
+  }
+
+  @protected
+  PaymentPreviewRequest dco_decode_box_autoadd_payment_preview_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_payment_preview_request(raw);
   }
 
   @protected
-  PaymentSubmitRequest dco_decode_box_autoadd_payment_submit_request(
-      dynamic raw) {
+  PaymentSubmitRequest dco_decode_box_autoadd_payment_submit_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_payment_submit_request(raw);
   }
@@ -1550,15 +1505,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  SquadsCreateSubmitRequest dco_decode_box_autoadd_squads_create_submit_request(
-      dynamic raw) {
+  SquadsCreateSubmitRequest dco_decode_box_autoadd_squads_create_submit_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_squads_create_submit_request(raw);
   }
 
   @protected
-  SquadsExecuteSubmitRequest
-      dco_decode_box_autoadd_squads_execute_submit_request(dynamic raw) {
+  SquadsExecuteSubmitRequest dco_decode_box_autoadd_squads_execute_submit_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_squads_execute_submit_request(raw);
   }
@@ -1570,37 +1523,32 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  SquadsPreviewRequest dco_decode_box_autoadd_squads_preview_request(
-      dynamic raw) {
+  SquadsPreviewRequest dco_decode_box_autoadd_squads_preview_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_squads_preview_request(raw);
   }
 
   @protected
-  SquadsProposalSummary dco_decode_box_autoadd_squads_proposal_summary(
-      dynamic raw) {
+  SquadsProposalSummary dco_decode_box_autoadd_squads_proposal_summary(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_squads_proposal_summary(raw);
   }
 
   @protected
-  SquadsProposalsRequest dco_decode_box_autoadd_squads_proposals_request(
-      dynamic raw) {
+  SquadsProposalsRequest dco_decode_box_autoadd_squads_proposals_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_squads_proposals_request(raw);
   }
 
   @protected
   SquadsTransferProposalSubmitRequest
-      dco_decode_box_autoadd_squads_transfer_proposal_submit_request(
-          dynamic raw) {
+      dco_decode_box_autoadd_squads_transfer_proposal_submit_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_squads_transfer_proposal_submit_request(raw);
   }
 
   @protected
-  SquadsVoteSubmitRequest dco_decode_box_autoadd_squads_vote_submit_request(
-      dynamic raw) {
+  SquadsVoteSubmitRequest dco_decode_box_autoadd_squads_vote_submit_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_squads_vote_submit_request(raw);
   }
@@ -1612,8 +1560,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  TransactionSubmitResult dco_decode_box_autoadd_transaction_submit_result(
-      dynamic raw) {
+  TransactionSubmitResult dco_decode_box_autoadd_transaction_submit_result(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_transaction_submit_result(raw);
   }
@@ -1637,8 +1584,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  UnlockWalletRequest dco_decode_box_autoadd_unlock_wallet_request(
-      dynamic raw) {
+  UnlockWalletRequest dco_decode_box_autoadd_unlock_wallet_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_unlock_wallet_request(raw);
   }
@@ -1647,8 +1593,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   CreateWalletRequest dco_decode_create_wallet_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 2)
-      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    if (arr.length != 2) throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
     return CreateWalletRequest(
       name: dco_decode_String(arr[0]),
       password: dco_decode_String(arr[1]),
@@ -1659,8 +1604,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   DappSignPreviewRequest dco_decode_dapp_sign_preview_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 7)
-      throw Exception('unexpected arr length: expect 7 but see ${arr.length}');
+    if (arr.length != 7) throw Exception('unexpected arr length: expect 7 but see ${arr.length}');
     return DappSignPreviewRequest(
       network: dco_decode_app_network(arr[0]),
       walletPublicKey: dco_decode_String(arr[1]),
@@ -1676,8 +1620,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   DappSignSubmitRequest dco_decode_dapp_sign_submit_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 12)
-      throw Exception('unexpected arr length: expect 12 but see ${arr.length}');
+    if (arr.length != 12) throw Exception('unexpected arr length: expect 12 but see ${arr.length}');
     return DappSignSubmitRequest(
       previewId: dco_decode_String(arr[0]),
       approved: dco_decode_bool(arr[1]),
@@ -1698,8 +1641,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   DappSignSubmitResult dco_decode_dapp_sign_submit_result(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 6)
-      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
+    if (arr.length != 6) throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
     return DappSignSubmitResult(
       signature: dco_decode_opt_String(arr[0]),
       signatureBase64: dco_decode_opt_String(arr[1]),
@@ -1714,8 +1656,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   EvmAssetQueryRequest dco_decode_evm_asset_query_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 3)
-      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    if (arr.length != 3) throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
     return EvmAssetQueryRequest(
       chain: dco_decode_evm_chain_config(arr[0]),
       walletAddress: dco_decode_String(arr[1]),
@@ -1727,8 +1668,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   EvmAssetSnapshot dco_decode_evm_asset_snapshot(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 8)
-      throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
+    if (arr.length != 8) throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
     return EvmAssetSnapshot(
       chain: dco_decode_evm_chain_config(arr[0]),
       walletAddress: dco_decode_String(arr[1]),
@@ -1745,8 +1685,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   EvmChainConfig dco_decode_evm_chain_config(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 6)
-      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
+    if (arr.length != 6) throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
     return EvmChainConfig(
       chainId: dco_decode_u_64(arr[0]),
       name: dco_decode_String(arr[1]),
@@ -1761,8 +1700,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   EvmCreateWalletRequest dco_decode_evm_create_wallet_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 2)
-      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    if (arr.length != 2) throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
     return EvmCreateWalletRequest(
       name: dco_decode_String(arr[0]),
       password: dco_decode_String(arr[1]),
@@ -1773,8 +1711,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   EvmDappSignPreview dco_decode_evm_dapp_sign_preview(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 8)
-      throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
+    if (arr.length != 8) throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
     return EvmDappSignPreview(
       previewId: dco_decode_String(arr[0]),
       chain: dco_decode_evm_chain_config(arr[1]),
@@ -1788,12 +1725,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  EvmDappSignPreviewRequest dco_decode_evm_dapp_sign_preview_request(
-      dynamic raw) {
+  EvmDappSignPreviewRequest dco_decode_evm_dapp_sign_preview_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 6)
-      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
+    if (arr.length != 6) throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
     return EvmDappSignPreviewRequest(
       chain: dco_decode_evm_chain_config(arr[0]),
       walletAddress: dco_decode_String(arr[1]),
@@ -1805,12 +1740,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  EvmDappSignSubmitRequest dco_decode_evm_dapp_sign_submit_request(
-      dynamic raw) {
+  EvmDappSignSubmitRequest dco_decode_evm_dapp_sign_submit_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 10)
-      throw Exception('unexpected arr length: expect 10 but see ${arr.length}');
+    if (arr.length != 10) throw Exception('unexpected arr length: expect 10 but see ${arr.length}');
     return EvmDappSignSubmitRequest(
       previewId: dco_decode_String(arr[0]),
       approved: dco_decode_bool(arr[1]),
@@ -1829,24 +1762,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   EvmDappSignSubmitResult dco_decode_evm_dapp_sign_submit_result(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 4)
-      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    if (arr.length != 4) throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
     return EvmDappSignSubmitResult(
       signature: dco_decode_opt_String(arr[0]),
       signedTransaction: dco_decode_opt_String(arr[1]),
-      transaction:
-          dco_decode_opt_box_autoadd_evm_transaction_submit_result(arr[2]),
+      transaction: dco_decode_opt_box_autoadd_evm_transaction_submit_result(arr[2]),
       status: dco_decode_String(arr[3]),
     );
   }
 
   @protected
-  EvmExportPrivateKeyRequest dco_decode_evm_export_private_key_request(
-      dynamic raw) {
+  EvmExportPrivateKeyRequest dco_decode_evm_export_private_key_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 2)
-      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    if (arr.length != 2) throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
     return EvmExportPrivateKeyRequest(
       keystoreJson: dco_decode_String(arr[0]),
       password: dco_decode_String(arr[1]),
@@ -1854,12 +1783,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  EvmExportPrivateKeyResponse dco_decode_evm_export_private_key_response(
-      dynamic raw) {
+  EvmExportPrivateKeyResponse dco_decode_evm_export_private_key_response(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 2)
-      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    if (arr.length != 2) throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
     return EvmExportPrivateKeyResponse(
       address: dco_decode_String(arr[0]),
       privateKeyHex: dco_decode_String(arr[1]),
@@ -1870,8 +1797,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   EvmImportKeystoreRequest dco_decode_evm_import_keystore_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 3)
-      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    if (arr.length != 3) throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
     return EvmImportKeystoreRequest(
       name: dco_decode_String(arr[0]),
       keystoreJson: dco_decode_String(arr[1]),
@@ -1883,8 +1809,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   EvmImportMnemonicRequest dco_decode_evm_import_mnemonic_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 4)
-      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    if (arr.length != 4) throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
     return EvmImportMnemonicRequest(
       name: dco_decode_String(arr[0]),
       mnemonic: dco_decode_String(arr[1]),
@@ -1894,12 +1819,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  EvmImportPrivateKeyRequest dco_decode_evm_import_private_key_request(
-      dynamic raw) {
+  EvmImportPrivateKeyRequest dco_decode_evm_import_private_key_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 3)
-      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    if (arr.length != 3) throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
     return EvmImportPrivateKeyRequest(
       name: dco_decode_String(arr[0]),
       privateKeyHex: dco_decode_String(arr[1]),
@@ -1911,8 +1834,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   EvmPaymentPreview dco_decode_evm_payment_preview(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 15)
-      throw Exception('unexpected arr length: expect 15 but see ${arr.length}');
+    if (arr.length != 15) throw Exception('unexpected arr length: expect 15 but see ${arr.length}');
     return EvmPaymentPreview(
       previewId: dco_decode_String(arr[0]),
       chain: dco_decode_evm_chain_config(arr[1]),
@@ -1936,8 +1858,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   EvmPaymentPreviewRequest dco_decode_evm_payment_preview_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 6)
-      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
+    if (arr.length != 6) throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
     return EvmPaymentPreviewRequest(
       chain: dco_decode_evm_chain_config(arr[0]),
       walletAddress: dco_decode_String(arr[1]),
@@ -1952,8 +1873,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   EvmPaymentSubmitRequest dco_decode_evm_payment_submit_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 14)
-      throw Exception('unexpected arr length: expect 14 but see ${arr.length}');
+    if (arr.length != 14) throw Exception('unexpected arr length: expect 14 but see ${arr.length}');
     return EvmPaymentSubmitRequest(
       previewId: dco_decode_String(arr[0]),
       approved: dco_decode_bool(arr[1]),
@@ -1976,8 +1896,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   EvmTokenAsset dco_decode_evm_token_asset(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 5)
-      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    if (arr.length != 5) throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
     return EvmTokenAsset(
       contractAddress: dco_decode_String(arr[0]),
       symbol: dco_decode_String(arr[1]),
@@ -1991,20 +1910,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   EvmTokenQuery dco_decode_evm_token_query(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 1)
-      throw Exception('unexpected arr length: expect 1 but see ${arr.length}');
+    if (arr.length != 1) throw Exception('unexpected arr length: expect 1 but see ${arr.length}');
     return EvmTokenQuery(
       contractAddress: dco_decode_String(arr[0]),
     );
   }
 
   @protected
-  EvmTransactionHistoryEntry dco_decode_evm_transaction_history_entry(
-      dynamic raw) {
+  EvmTransactionHistoryEntry dco_decode_evm_transaction_history_entry(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 3)
-      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    if (arr.length != 3) throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
     return EvmTransactionHistoryEntry(
       hash: dco_decode_String(arr[0]),
       blockNumber: dco_decode_opt_box_autoadd_u_64(arr[1]),
@@ -2016,8 +1932,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   EvmTransactionStatus dco_decode_evm_transaction_status(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 6)
-      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
+    if (arr.length != 6) throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
     return EvmTransactionStatus(
       transactionHash: dco_decode_String(arr[0]),
       chain: dco_decode_evm_chain_config(arr[1]),
@@ -2029,12 +1944,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  EvmTransactionStatusRequest dco_decode_evm_transaction_status_request(
-      dynamic raw) {
+  EvmTransactionStatusRequest dco_decode_evm_transaction_status_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 2)
-      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    if (arr.length != 2) throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
     return EvmTransactionStatusRequest(
       chain: dco_decode_evm_chain_config(arr[0]),
       transactionHash: dco_decode_String(arr[1]),
@@ -2042,12 +1955,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  EvmTransactionSubmitResult dco_decode_evm_transaction_submit_result(
-      dynamic raw) {
+  EvmTransactionSubmitResult dco_decode_evm_transaction_submit_result(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 5)
-      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    if (arr.length != 5) throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
     return EvmTransactionSubmitResult(
       transactionHash: dco_decode_String(arr[0]),
       chain: dco_decode_evm_chain_config(arr[1]),
@@ -2061,8 +1972,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   EvmUnlockWalletRequest dco_decode_evm_unlock_wallet_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 2)
-      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    if (arr.length != 2) throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
     return EvmUnlockWalletRequest(
       keystoreJson: dco_decode_String(arr[0]),
       password: dco_decode_String(arr[1]),
@@ -2073,8 +1983,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   EvmWalletKeystore dco_decode_evm_wallet_keystore(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 2)
-      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    if (arr.length != 2) throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
     return EvmWalletKeystore(
       wallet: dco_decode_evm_wallet_summary(arr[0]),
       keystoreJson: dco_decode_String(arr[1]),
@@ -2085,8 +1994,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   EvmWalletSummary dco_decode_evm_wallet_summary(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 4)
-      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    if (arr.length != 4) throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
     return EvmWalletSummary(
       id: dco_decode_String(arr[0]),
       name: dco_decode_String(arr[1]),
@@ -2099,8 +2007,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ExportPrivateKeyRequest dco_decode_export_private_key_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 2)
-      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    if (arr.length != 2) throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
     return ExportPrivateKeyRequest(
       keystoreJson: dco_decode_String(arr[0]),
       password: dco_decode_String(arr[1]),
@@ -2111,8 +2018,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ExportPrivateKeyResponse dco_decode_export_private_key_response(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 2)
-      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    if (arr.length != 2) throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
     return ExportPrivateKeyResponse(
       publicKey: dco_decode_String(arr[0]),
       privateKeyBase58: dco_decode_String(arr[1]),
@@ -2135,8 +2041,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ImportKeystoreRequest dco_decode_import_keystore_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 3)
-      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    if (arr.length != 3) throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
     return ImportKeystoreRequest(
       name: dco_decode_String(arr[0]),
       keystoreJson: dco_decode_String(arr[1]),
@@ -2148,8 +2053,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ImportMnemonicRequest dco_decode_import_mnemonic_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 4)
-      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    if (arr.length != 4) throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
     return ImportMnemonicRequest(
       name: dco_decode_String(arr[0]),
       mnemonic: dco_decode_String(arr[1]),
@@ -2162,8 +2066,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ImportPrivateKeyRequest dco_decode_import_private_key_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 3)
-      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    if (arr.length != 3) throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
     return ImportPrivateKeyRequest(
       name: dco_decode_String(arr[0]),
       privateKeyBase58: dco_decode_String(arr[1]),
@@ -2202,12 +2105,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  List<EvmTransactionHistoryEntry>
-      dco_decode_list_evm_transaction_history_entry(dynamic raw) {
+  List<EvmTransactionHistoryEntry> dco_decode_list_evm_transaction_history_entry(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
-    return (raw as List<dynamic>)
-        .map(dco_decode_evm_transaction_history_entry)
-        .toList();
+    return (raw as List<dynamic>).map(dco_decode_evm_transaction_history_entry).toList();
+  }
+
+  @protected
+  List<MultiChainDescriptor> dco_decode_list_multi_chain_descriptor(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_multi_chain_descriptor).toList();
+  }
+
+  @protected
+  List<MultiChainEndpoint> dco_decode_list_multi_chain_endpoint(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_multi_chain_endpoint).toList();
   }
 
   @protected
@@ -2219,35 +2131,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   List<SquadsMemberSummary> dco_decode_list_squads_member_summary(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
-    return (raw as List<dynamic>)
-        .map(dco_decode_squads_member_summary)
-        .toList();
+    return (raw as List<dynamic>).map(dco_decode_squads_member_summary).toList();
   }
 
   @protected
-  List<SquadsProposalSummary> dco_decode_list_squads_proposal_summary(
-      dynamic raw) {
+  List<SquadsProposalSummary> dco_decode_list_squads_proposal_summary(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
-    return (raw as List<dynamic>)
-        .map(dco_decode_squads_proposal_summary)
-        .toList();
+    return (raw as List<dynamic>).map(dco_decode_squads_proposal_summary).toList();
   }
 
   @protected
-  List<TransactionHistoryEntry> dco_decode_list_transaction_history_entry(
-      dynamic raw) {
+  List<TransactionHistoryEntry> dco_decode_list_transaction_history_entry(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
-    return (raw as List<dynamic>)
-        .map(dco_decode_transaction_history_entry)
-        .toList();
+    return (raw as List<dynamic>).map(dco_decode_transaction_history_entry).toList();
   }
 
   @protected
   MobileBridgeHealth dco_decode_mobile_bridge_health(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 3)
-      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    if (arr.length != 3) throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
     return MobileBridgeHealth(
       ok: dco_decode_bool(arr[0]),
       service: dco_decode_String(arr[1]),
@@ -2259,8 +2162,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   MobileCapabilitySummary dco_decode_mobile_capability_summary(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 2)
-      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    if (arr.length != 2) throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
     return MobileCapabilitySummary(
       enabled: dco_decode_list_String(arr[0]),
       excluded: dco_decode_list_String(arr[1]),
@@ -2271,8 +2173,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   MobileError dco_decode_mobile_error(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 2)
-      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    if (arr.length != 2) throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
     return MobileError(
       code: dco_decode_mobile_error_code(arr[0]),
       message: dco_decode_String(arr[1]),
@@ -2286,18 +2187,109 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  MultiChainDeriveAccountRequest dco_decode_multi_chain_derive_account_request(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 3) throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    return MultiChainDeriveAccountRequest(
+      chainId: dco_decode_String(arr[0]),
+      mnemonic: dco_decode_String(arr[1]),
+      derivationPath: dco_decode_opt_String(arr[2]),
+    );
+  }
+
+  @protected
+  MultiChainDerivedAccount dco_decode_multi_chain_derived_account(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 5) throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    return MultiChainDerivedAccount(
+      chainId: dco_decode_String(arr[0]),
+      accountId: dco_decode_String(arr[1]),
+      address: dco_decode_String(arr[2]),
+      derivationPath: dco_decode_String(arr[3]),
+      publicKeyHex: dco_decode_opt_String(arr[4]),
+    );
+  }
+
+  @protected
+  MultiChainDescriptor dco_decode_multi_chain_descriptor(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 12) throw Exception('unexpected arr length: expect 12 but see ${arr.length}');
+    return MultiChainDescriptor(
+      chainId: dco_decode_String(arr[0]),
+      family: dco_decode_String(arr[1]),
+      name: dco_decode_String(arr[2]),
+      network: dco_decode_String(arr[3]),
+      testnet: dco_decode_bool(arr[4]),
+      nativeAsset: dco_decode_multi_chain_native_asset(arr[5]),
+      defaultDerivationPath: dco_decode_String(arr[6]),
+      addressFormats: dco_decode_list_String(arr[7]),
+      capabilities: dco_decode_list_String(arr[8]),
+      endpoints: dco_decode_list_multi_chain_endpoint(arr[9]),
+      explorerUrl: dco_decode_opt_String(arr[10]),
+      supportLevel: dco_decode_String(arr[11]),
+    );
+  }
+
+  @protected
+  MultiChainEndpoint dco_decode_multi_chain_endpoint(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2) throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return MultiChainEndpoint(
+      kind: dco_decode_String(arr[0]),
+      url: dco_decode_String(arr[1]),
+    );
+  }
+
+  @protected
+  MultiChainNativeAsset dco_decode_multi_chain_native_asset(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 3) throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    return MultiChainNativeAsset(
+      symbol: dco_decode_String(arr[0]),
+      name: dco_decode_String(arr[1]),
+      decimals: dco_decode_u_8(arr[2]),
+    );
+  }
+
+  @protected
+  MultiChainNormalizeAddressRequest dco_decode_multi_chain_normalize_address_request(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2) throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return MultiChainNormalizeAddressRequest(
+      chainId: dco_decode_String(arr[0]),
+      address: dco_decode_String(arr[1]),
+    );
+  }
+
+  @protected
+  MultiChainNormalizedAddress dco_decode_multi_chain_normalized_address(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 3) throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    return MultiChainNormalizedAddress(
+      chainId: dco_decode_String(arr[0]),
+      accountId: dco_decode_String(arr[1]),
+      address: dco_decode_String(arr[2]),
+    );
+  }
+
+  @protected
   String? dco_decode_opt_String(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_String(raw);
   }
 
   @protected
-  EvmTransactionSubmitResult?
-      dco_decode_opt_box_autoadd_evm_transaction_submit_result(dynamic raw) {
+  EvmTransactionSubmitResult? dco_decode_opt_box_autoadd_evm_transaction_submit_result(
+      dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
-    return raw == null
-        ? null
-        : dco_decode_box_autoadd_evm_transaction_submit_result(raw);
+    return raw == null ? null : dco_decode_box_autoadd_evm_transaction_submit_result(raw);
   }
 
   @protected
@@ -2307,21 +2299,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  SquadsProposalSummary? dco_decode_opt_box_autoadd_squads_proposal_summary(
-      dynamic raw) {
+  SquadsProposalSummary? dco_decode_opt_box_autoadd_squads_proposal_summary(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
-    return raw == null
-        ? null
-        : dco_decode_box_autoadd_squads_proposal_summary(raw);
+    return raw == null ? null : dco_decode_box_autoadd_squads_proposal_summary(raw);
   }
 
   @protected
-  TransactionSubmitResult? dco_decode_opt_box_autoadd_transaction_submit_result(
-      dynamic raw) {
+  TransactionSubmitResult? dco_decode_opt_box_autoadd_transaction_submit_result(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
-    return raw == null
-        ? null
-        : dco_decode_box_autoadd_transaction_submit_result(raw);
+    return raw == null ? null : dco_decode_box_autoadd_transaction_submit_result(raw);
   }
 
   @protected
@@ -2352,8 +2338,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   PaymentPreviewRequest dco_decode_payment_preview_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 8)
-      throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
+    if (arr.length != 8) throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
     return PaymentPreviewRequest(
       network: dco_decode_app_network(arr[0]),
       walletPublicKey: dco_decode_String(arr[1]),
@@ -2370,8 +2355,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   PaymentSubmitRequest dco_decode_payment_submit_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 11)
-      throw Exception('unexpected arr length: expect 11 but see ${arr.length}');
+    if (arr.length != 11) throw Exception('unexpected arr length: expect 11 but see ${arr.length}');
     return PaymentSubmitRequest(
       previewId: dco_decode_String(arr[0]),
       approved: dco_decode_bool(arr[1]),
@@ -2391,8 +2375,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   PumpPreviewRequest dco_decode_pump_preview_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 6)
-      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
+    if (arr.length != 6) throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
     return PumpPreviewRequest(
       network: dco_decode_app_network(arr[0]),
       walletPublicKey: dco_decode_String(arr[1]),
@@ -2407,8 +2390,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   SigningDecision dco_decode_signing_decision(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 3)
-      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    if (arr.length != 3) throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
     return SigningDecision(
       previewId: dco_decode_String(arr[0]),
       approved: dco_decode_bool(arr[1]),
@@ -2420,8 +2402,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   SigningPreview dco_decode_signing_preview(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 7)
-      throw Exception('unexpected arr length: expect 7 but see ${arr.length}');
+    if (arr.length != 7) throw Exception('unexpected arr length: expect 7 but see ${arr.length}');
     return SigningPreview(
       id: dco_decode_String(arr[0]),
       title: dco_decode_String(arr[1]),
@@ -2434,12 +2415,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  SquadsCreateSubmitRequest dco_decode_squads_create_submit_request(
-      dynamic raw) {
+  SquadsCreateSubmitRequest dco_decode_squads_create_submit_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 9)
-      throw Exception('unexpected arr length: expect 9 but see ${arr.length}');
+    if (arr.length != 9) throw Exception('unexpected arr length: expect 9 but see ${arr.length}');
     return SquadsCreateSubmitRequest(
       approved: dco_decode_bool(arr[0]),
       network: dco_decode_app_network(arr[1]),
@@ -2457,8 +2436,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   SquadsCreateSubmitResult dco_decode_squads_create_submit_result(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 9)
-      throw Exception('unexpected arr length: expect 9 but see ${arr.length}');
+    if (arr.length != 9) throw Exception('unexpected arr length: expect 9 but see ${arr.length}');
     return SquadsCreateSubmitResult(
       multisig: dco_decode_String(arr[0]),
       vault: dco_decode_String(arr[1]),
@@ -2473,12 +2451,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  SquadsExecuteSubmitRequest dco_decode_squads_execute_submit_request(
-      dynamic raw) {
+  SquadsExecuteSubmitRequest dco_decode_squads_execute_submit_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 8)
-      throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
+    if (arr.length != 8) throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
     return SquadsExecuteSubmitRequest(
       approved: dco_decode_bool(arr[0]),
       network: dco_decode_app_network(arr[1]),
@@ -2495,8 +2471,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   SquadsInfoRequest dco_decode_squads_info_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 4)
-      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    if (arr.length != 4) throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
     return SquadsInfoRequest(
       network: dco_decode_app_network(arr[0]),
       rpcUrl: dco_decode_opt_String(arr[1]),
@@ -2509,8 +2484,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   SquadsInfoResponse dco_decode_squads_info_response(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 10)
-      throw Exception('unexpected arr length: expect 10 but see ${arr.length}');
+    if (arr.length != 10) throw Exception('unexpected arr length: expect 10 but see ${arr.length}');
     return SquadsInfoResponse(
       multisig: dco_decode_String(arr[0]),
       vault: dco_decode_String(arr[1]),
@@ -2529,8 +2503,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   SquadsMemberSummary dco_decode_squads_member_summary(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 2)
-      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    if (arr.length != 2) throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
     return SquadsMemberSummary(
       key: dco_decode_String(arr[0]),
       permissions: dco_decode_u_8(arr[1]),
@@ -2541,8 +2514,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   SquadsPreviewRequest dco_decode_squads_preview_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 5)
-      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    if (arr.length != 5) throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
     return SquadsPreviewRequest(
       network: dco_decode_app_network(arr[0]),
       walletPublicKey: dco_decode_String(arr[1]),
@@ -2553,12 +2525,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  SquadsProposalCreateSubmitResult
-      dco_decode_squads_proposal_create_submit_result(dynamic raw) {
+  SquadsProposalCreateSubmitResult dco_decode_squads_proposal_create_submit_result(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 8)
-      throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
+    if (arr.length != 8) throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
     return SquadsProposalCreateSubmitResult(
       multisig: dco_decode_String(arr[0]),
       vault: dco_decode_String(arr[1]),
@@ -2575,8 +2545,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   SquadsProposalSummary dco_decode_squads_proposal_summary(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 6)
-      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
+    if (arr.length != 6) throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
     return SquadsProposalSummary(
       address: dco_decode_String(arr[0]),
       transactionIndex: dco_decode_u_64(arr[1]),
@@ -2591,8 +2560,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   SquadsProposalsRequest dco_decode_squads_proposals_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 4)
-      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    if (arr.length != 4) throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
     return SquadsProposalsRequest(
       network: dco_decode_app_network(arr[0]),
       rpcUrl: dco_decode_opt_String(arr[1]),
@@ -2605,8 +2573,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   SquadsProposalsResponse dco_decode_squads_proposals_response(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 5)
-      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    if (arr.length != 5) throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
     return SquadsProposalsResponse(
       multisig: dco_decode_String(arr[0]),
       vault: dco_decode_String(arr[1]),
@@ -2623,12 +2590,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  SquadsTransferProposalSubmitRequest
-      dco_decode_squads_transfer_proposal_submit_request(dynamic raw) {
+  SquadsTransferProposalSubmitRequest dco_decode_squads_transfer_proposal_submit_request(
+      dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 14)
-      throw Exception('unexpected arr length: expect 14 but see ${arr.length}');
+    if (arr.length != 14) throw Exception('unexpected arr length: expect 14 but see ${arr.length}');
     return SquadsTransferProposalSubmitRequest(
       approved: dco_decode_bool(arr[0]),
       network: dco_decode_app_network(arr[1]),
@@ -2651,8 +2617,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   SquadsVoteSubmitRequest dco_decode_squads_vote_submit_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 8)
-      throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
+    if (arr.length != 8) throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
     return SquadsVoteSubmitRequest(
       approved: dco_decode_bool(arr[0]),
       network: dco_decode_app_network(arr[1]),
@@ -2669,8 +2634,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TotpSetup dco_decode_totp_setup(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 3)
-      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    if (arr.length != 3) throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
     return TotpSetup(
       secret: dco_decode_String(arr[0]),
       issuer: dco_decode_String(arr[1]),
@@ -2682,8 +2646,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TotpVerifyRequest dco_decode_totp_verify_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 2)
-      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    if (arr.length != 2) throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
     return TotpVerifyRequest(
       secret: dco_decode_String(arr[0]),
       code: dco_decode_String(arr[1]),
@@ -2694,8 +2657,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TransactionHistoryEntry dco_decode_transaction_history_entry(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 4)
-      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    if (arr.length != 4) throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
     return TransactionHistoryEntry(
       signature: dco_decode_String(arr[0]),
       slot: dco_decode_u_64(arr[1]),
@@ -2708,8 +2670,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TransactionSubmitResult dco_decode_transaction_submit_result(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 5)
-      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    if (arr.length != 5) throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
     return TransactionSubmitResult(
       signature: dco_decode_String(arr[0]),
       slot: dco_decode_opt_box_autoadd_u_64(arr[1]),
@@ -2753,8 +2714,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   UnlockWalletRequest dco_decode_unlock_wallet_request(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 2)
-      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    if (arr.length != 2) throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
     return UnlockWalletRequest(
       keystoreJson: dco_decode_String(arr[0]),
       password: dco_decode_String(arr[1]),
@@ -2765,8 +2725,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   UnlockWalletResponse dco_decode_unlock_wallet_response(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 1)
-      throw Exception('unexpected arr length: expect 1 but see ${arr.length}');
+    if (arr.length != 1) throw Exception('unexpected arr length: expect 1 but see ${arr.length}');
     return UnlockWalletResponse(
       wallet: dco_decode_wallet_summary(arr[0]),
     );
@@ -2776,8 +2735,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   WalletKeystore dco_decode_wallet_keystore(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 2)
-      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    if (arr.length != 2) throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
     return WalletKeystore(
       wallet: dco_decode_wallet_summary(arr[0]),
       keystoreJson: dco_decode_String(arr[1]),
@@ -2788,8 +2746,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   WalletSummary dco_decode_wallet_summary(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 3)
-      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    if (arr.length != 3) throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
     return WalletSummary(
       id: dco_decode_String(arr[0]),
       name: dco_decode_String(arr[1]),
@@ -2812,16 +2769,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  AssetQueryRequest sse_decode_asset_query_request(
-      SseDeserializer deserializer) {
+  AssetQueryRequest sse_decode_asset_query_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_network = sse_decode_app_network(deserializer);
     var var_walletPublicKey = sse_decode_String(deserializer);
     var var_rpcUrl = sse_decode_opt_String(deserializer);
     return AssetQueryRequest(
-        network: var_network,
-        walletPublicKey: var_walletPublicKey,
-        rpcUrl: var_rpcUrl);
+        network: var_network, walletPublicKey: var_walletPublicKey, rpcUrl: var_rpcUrl);
   }
 
   @protected
@@ -2831,8 +2785,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_walletPublicKey = sse_decode_String(deserializer);
     var var_solBalanceLamports = sse_decode_u_64(deserializer);
     var var_tokens = sse_decode_list_asset_summary(deserializer);
-    var var_recentTransactions =
-        sse_decode_list_transaction_history_entry(deserializer);
+    var var_recentTransactions = sse_decode_list_transaction_history_entry(deserializer);
     var var_refreshedAtMs = sse_decode_u_64(deserializer);
     return AssetSnapshot(
         network: var_network,
@@ -2872,9 +2825,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_configured = sse_decode_bool(deserializer);
     var var_reason = sse_decode_opt_String(deserializer);
     return BiometricPolicy(
-        supported: var_supported,
-        configured: var_configured,
-        reason: var_reason);
+        supported: var_supported, configured: var_configured, reason: var_reason);
   }
 
   @protected
@@ -2884,15 +2835,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  AssetQueryRequest sse_decode_box_autoadd_asset_query_request(
-      SseDeserializer deserializer) {
+  AssetQueryRequest sse_decode_box_autoadd_asset_query_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_asset_query_request(deserializer));
   }
 
   @protected
-  CreateWalletRequest sse_decode_box_autoadd_create_wallet_request(
-      SseDeserializer deserializer) {
+  CreateWalletRequest sse_decode_box_autoadd_create_wallet_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_create_wallet_request(deserializer));
   }
@@ -2926,9 +2875,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  EvmDappSignPreviewRequest
-      sse_decode_box_autoadd_evm_dapp_sign_preview_request(
-          SseDeserializer deserializer) {
+  EvmDappSignPreviewRequest sse_decode_box_autoadd_evm_dapp_sign_preview_request(
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_evm_dapp_sign_preview_request(deserializer));
   }
@@ -2941,9 +2889,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  EvmExportPrivateKeyRequest
-      sse_decode_box_autoadd_evm_export_private_key_request(
-          SseDeserializer deserializer) {
+  EvmExportPrivateKeyRequest sse_decode_box_autoadd_evm_export_private_key_request(
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_evm_export_private_key_request(deserializer));
   }
@@ -2963,9 +2910,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  EvmImportPrivateKeyRequest
-      sse_decode_box_autoadd_evm_import_private_key_request(
-          SseDeserializer deserializer) {
+  EvmImportPrivateKeyRequest sse_decode_box_autoadd_evm_import_private_key_request(
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_evm_import_private_key_request(deserializer));
   }
@@ -2985,17 +2931,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  EvmTransactionStatusRequest
-      sse_decode_box_autoadd_evm_transaction_status_request(
-          SseDeserializer deserializer) {
+  EvmTransactionStatusRequest sse_decode_box_autoadd_evm_transaction_status_request(
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_evm_transaction_status_request(deserializer));
   }
 
   @protected
-  EvmTransactionSubmitResult
-      sse_decode_box_autoadd_evm_transaction_submit_result(
-          SseDeserializer deserializer) {
+  EvmTransactionSubmitResult sse_decode_box_autoadd_evm_transaction_submit_result(
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_evm_transaction_submit_result(deserializer));
   }
@@ -3042,6 +2986,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  MultiChainDeriveAccountRequest sse_decode_box_autoadd_multi_chain_derive_account_request(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_multi_chain_derive_account_request(deserializer));
+  }
+
+  @protected
+  MultiChainNormalizeAddressRequest sse_decode_box_autoadd_multi_chain_normalize_address_request(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_multi_chain_normalize_address_request(deserializer));
+  }
+
+  @protected
   PaymentPreviewRequest sse_decode_box_autoadd_payment_preview_request(
       SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -3049,15 +3007,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  PaymentSubmitRequest sse_decode_box_autoadd_payment_submit_request(
-      SseDeserializer deserializer) {
+  PaymentSubmitRequest sse_decode_box_autoadd_payment_submit_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_payment_submit_request(deserializer));
   }
 
   @protected
-  PumpPreviewRequest sse_decode_box_autoadd_pump_preview_request(
-      SseDeserializer deserializer) {
+  PumpPreviewRequest sse_decode_box_autoadd_pump_preview_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_pump_preview_request(deserializer));
   }
@@ -3070,23 +3026,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  SquadsExecuteSubmitRequest
-      sse_decode_box_autoadd_squads_execute_submit_request(
-          SseDeserializer deserializer) {
+  SquadsExecuteSubmitRequest sse_decode_box_autoadd_squads_execute_submit_request(
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_squads_execute_submit_request(deserializer));
   }
 
   @protected
-  SquadsInfoRequest sse_decode_box_autoadd_squads_info_request(
-      SseDeserializer deserializer) {
+  SquadsInfoRequest sse_decode_box_autoadd_squads_info_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_squads_info_request(deserializer));
   }
 
   @protected
-  SquadsPreviewRequest sse_decode_box_autoadd_squads_preview_request(
-      SseDeserializer deserializer) {
+  SquadsPreviewRequest sse_decode_box_autoadd_squads_preview_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_squads_preview_request(deserializer));
   }
@@ -3107,8 +3060,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   SquadsTransferProposalSubmitRequest
-      sse_decode_box_autoadd_squads_transfer_proposal_submit_request(
-          SseDeserializer deserializer) {
+      sse_decode_box_autoadd_squads_transfer_proposal_submit_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_squads_transfer_proposal_submit_request(deserializer));
   }
@@ -3121,8 +3073,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  TotpVerifyRequest sse_decode_box_autoadd_totp_verify_request(
-      SseDeserializer deserializer) {
+  TotpVerifyRequest sse_decode_box_autoadd_totp_verify_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_totp_verify_request(deserializer));
   }
@@ -3153,15 +3104,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  UnlockWalletRequest sse_decode_box_autoadd_unlock_wallet_request(
-      SseDeserializer deserializer) {
+  UnlockWalletRequest sse_decode_box_autoadd_unlock_wallet_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_unlock_wallet_request(deserializer));
   }
 
   @protected
-  CreateWalletRequest sse_decode_create_wallet_request(
-      SseDeserializer deserializer) {
+  CreateWalletRequest sse_decode_create_wallet_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_name = sse_decode_String(deserializer);
     var var_password = sse_decode_String(deserializer);
@@ -3169,8 +3118,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  DappSignPreviewRequest sse_decode_dapp_sign_preview_request(
-      SseDeserializer deserializer) {
+  DappSignPreviewRequest sse_decode_dapp_sign_preview_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_network = sse_decode_app_network(deserializer);
     var var_walletPublicKey = sse_decode_String(deserializer);
@@ -3190,8 +3138,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  DappSignSubmitRequest sse_decode_dapp_sign_submit_request(
-      SseDeserializer deserializer) {
+  DappSignSubmitRequest sse_decode_dapp_sign_submit_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_previewId = sse_decode_String(deserializer);
     var var_approved = sse_decode_bool(deserializer);
@@ -3221,15 +3168,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  DappSignSubmitResult sse_decode_dapp_sign_submit_result(
-      SseDeserializer deserializer) {
+  DappSignSubmitResult sse_decode_dapp_sign_submit_result(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_signature = sse_decode_opt_String(deserializer);
     var var_signatureBase64 = sse_decode_opt_String(deserializer);
     var var_signedPayloadBase64 = sse_decode_opt_String(deserializer);
     var var_signedPayloadsBase64 = sse_decode_list_String(deserializer);
-    var var_transaction =
-        sse_decode_opt_box_autoadd_transaction_submit_result(deserializer);
+    var var_transaction = sse_decode_opt_box_autoadd_transaction_submit_result(deserializer);
     var var_status = sse_decode_String(deserializer);
     return DappSignSubmitResult(
         signature: var_signature,
@@ -3241,8 +3186,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  EvmAssetQueryRequest sse_decode_evm_asset_query_request(
-      SseDeserializer deserializer) {
+  EvmAssetQueryRequest sse_decode_evm_asset_query_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_chain = sse_decode_evm_chain_config(deserializer);
     var var_walletAddress = sse_decode_String(deserializer);
@@ -3258,8 +3202,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_walletAddress = sse_decode_String(deserializer);
     var var_nativeBalanceWei = sse_decode_String(deserializer);
     var var_tokens = sse_decode_list_evm_token_asset(deserializer);
-    var var_recentTransactions =
-        sse_decode_list_evm_transaction_history_entry(deserializer);
+    var var_recentTransactions = sse_decode_list_evm_transaction_history_entry(deserializer);
     var var_historyStatus = sse_decode_String(deserializer);
     var var_historyMessage = sse_decode_opt_String(deserializer);
     var var_refreshedAtMs = sse_decode_u_64(deserializer);
@@ -3293,8 +3236,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  EvmCreateWalletRequest sse_decode_evm_create_wallet_request(
-      SseDeserializer deserializer) {
+  EvmCreateWalletRequest sse_decode_evm_create_wallet_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_name = sse_decode_String(deserializer);
     var var_password = sse_decode_String(deserializer);
@@ -3302,8 +3244,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  EvmDappSignPreview sse_decode_evm_dapp_sign_preview(
-      SseDeserializer deserializer) {
+  EvmDappSignPreview sse_decode_evm_dapp_sign_preview(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_previewId = sse_decode_String(deserializer);
     var var_chain = sse_decode_evm_chain_config(deserializer);
@@ -3325,8 +3266,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  EvmDappSignPreviewRequest sse_decode_evm_dapp_sign_preview_request(
-      SseDeserializer deserializer) {
+  EvmDappSignPreviewRequest sse_decode_evm_dapp_sign_preview_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_chain = sse_decode_evm_chain_config(deserializer);
     var var_walletAddress = sse_decode_String(deserializer);
@@ -3344,8 +3284,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  EvmDappSignSubmitRequest sse_decode_evm_dapp_sign_submit_request(
-      SseDeserializer deserializer) {
+  EvmDappSignSubmitRequest sse_decode_evm_dapp_sign_submit_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_previewId = sse_decode_String(deserializer);
     var var_approved = sse_decode_bool(deserializer);
@@ -3371,13 +3310,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  EvmDappSignSubmitResult sse_decode_evm_dapp_sign_submit_result(
-      SseDeserializer deserializer) {
+  EvmDappSignSubmitResult sse_decode_evm_dapp_sign_submit_result(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_signature = sse_decode_opt_String(deserializer);
     var var_signedTransaction = sse_decode_opt_String(deserializer);
-    var var_transaction =
-        sse_decode_opt_box_autoadd_evm_transaction_submit_result(deserializer);
+    var var_transaction = sse_decode_opt_box_autoadd_evm_transaction_submit_result(deserializer);
     var var_status = sse_decode_String(deserializer);
     return EvmDappSignSubmitResult(
         signature: var_signature,
@@ -3392,8 +3329,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_keystoreJson = sse_decode_String(deserializer);
     var var_password = sse_decode_String(deserializer);
-    return EvmExportPrivateKeyRequest(
-        keystoreJson: var_keystoreJson, password: var_password);
+    return EvmExportPrivateKeyRequest(keystoreJson: var_keystoreJson, password: var_password);
   }
 
   @protected
@@ -3402,13 +3338,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_address = sse_decode_String(deserializer);
     var var_privateKeyHex = sse_decode_String(deserializer);
-    return EvmExportPrivateKeyResponse(
-        address: var_address, privateKeyHex: var_privateKeyHex);
+    return EvmExportPrivateKeyResponse(address: var_address, privateKeyHex: var_privateKeyHex);
   }
 
   @protected
-  EvmImportKeystoreRequest sse_decode_evm_import_keystore_request(
-      SseDeserializer deserializer) {
+  EvmImportKeystoreRequest sse_decode_evm_import_keystore_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_name = sse_decode_String(deserializer);
     var var_keystoreJson = sse_decode_String(deserializer);
@@ -3418,8 +3352,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  EvmImportMnemonicRequest sse_decode_evm_import_mnemonic_request(
-      SseDeserializer deserializer) {
+  EvmImportMnemonicRequest sse_decode_evm_import_mnemonic_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_name = sse_decode_String(deserializer);
     var var_mnemonic = sse_decode_String(deserializer);
@@ -3440,14 +3373,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_privateKeyHex = sse_decode_String(deserializer);
     var var_password = sse_decode_String(deserializer);
     return EvmImportPrivateKeyRequest(
-        name: var_name,
-        privateKeyHex: var_privateKeyHex,
-        password: var_password);
+        name: var_name, privateKeyHex: var_privateKeyHex, password: var_password);
   }
 
   @protected
-  EvmPaymentPreview sse_decode_evm_payment_preview(
-      SseDeserializer deserializer) {
+  EvmPaymentPreview sse_decode_evm_payment_preview(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_previewId = sse_decode_String(deserializer);
     var var_chain = sse_decode_evm_chain_config(deserializer);
@@ -3483,8 +3413,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  EvmPaymentPreviewRequest sse_decode_evm_payment_preview_request(
-      SseDeserializer deserializer) {
+  EvmPaymentPreviewRequest sse_decode_evm_payment_preview_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_chain = sse_decode_evm_chain_config(deserializer);
     var var_walletAddress = sse_decode_String(deserializer);
@@ -3502,8 +3431,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  EvmPaymentSubmitRequest sse_decode_evm_payment_submit_request(
-      SseDeserializer deserializer) {
+  EvmPaymentSubmitRequest sse_decode_evm_payment_submit_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_previewId = sse_decode_String(deserializer);
     var var_approved = sse_decode_bool(deserializer);
@@ -3571,8 +3499,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  EvmTransactionStatus sse_decode_evm_transaction_status(
-      SseDeserializer deserializer) {
+  EvmTransactionStatus sse_decode_evm_transaction_status(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_transactionHash = sse_decode_String(deserializer);
     var var_chain = sse_decode_evm_chain_config(deserializer);
@@ -3595,8 +3522,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_chain = sse_decode_evm_chain_config(deserializer);
     var var_transactionHash = sse_decode_String(deserializer);
-    return EvmTransactionStatusRequest(
-        chain: var_chain, transactionHash: var_transactionHash);
+    return EvmTransactionStatusRequest(chain: var_chain, transactionHash: var_transactionHash);
   }
 
   @protected
@@ -3617,23 +3543,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  EvmUnlockWalletRequest sse_decode_evm_unlock_wallet_request(
-      SseDeserializer deserializer) {
+  EvmUnlockWalletRequest sse_decode_evm_unlock_wallet_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_keystoreJson = sse_decode_String(deserializer);
     var var_password = sse_decode_String(deserializer);
-    return EvmUnlockWalletRequest(
-        keystoreJson: var_keystoreJson, password: var_password);
+    return EvmUnlockWalletRequest(keystoreJson: var_keystoreJson, password: var_password);
   }
 
   @protected
-  EvmWalletKeystore sse_decode_evm_wallet_keystore(
-      SseDeserializer deserializer) {
+  EvmWalletKeystore sse_decode_evm_wallet_keystore(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_wallet = sse_decode_evm_wallet_summary(deserializer);
     var var_keystoreJson = sse_decode_String(deserializer);
-    return EvmWalletKeystore(
-        wallet: var_wallet, keystoreJson: var_keystoreJson);
+    return EvmWalletKeystore(wallet: var_wallet, keystoreJson: var_keystoreJson);
   }
 
   @protected
@@ -3644,25 +3566,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_address = sse_decode_String(deserializer);
     var var_derivationPath = sse_decode_opt_String(deserializer);
     return EvmWalletSummary(
-        id: var_id,
-        name: var_name,
-        address: var_address,
-        derivationPath: var_derivationPath);
+        id: var_id, name: var_name, address: var_address, derivationPath: var_derivationPath);
   }
 
   @protected
-  ExportPrivateKeyRequest sse_decode_export_private_key_request(
-      SseDeserializer deserializer) {
+  ExportPrivateKeyRequest sse_decode_export_private_key_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_keystoreJson = sse_decode_String(deserializer);
     var var_password = sse_decode_String(deserializer);
-    return ExportPrivateKeyRequest(
-        keystoreJson: var_keystoreJson, password: var_password);
+    return ExportPrivateKeyRequest(keystoreJson: var_keystoreJson, password: var_password);
   }
 
   @protected
-  ExportPrivateKeyResponse sse_decode_export_private_key_response(
-      SseDeserializer deserializer) {
+  ExportPrivateKeyResponse sse_decode_export_private_key_response(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_publicKey = sse_decode_String(deserializer);
     var var_privateKeyBase58 = sse_decode_String(deserializer);
@@ -3683,8 +3599,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  ImportKeystoreRequest sse_decode_import_keystore_request(
-      SseDeserializer deserializer) {
+  ImportKeystoreRequest sse_decode_import_keystore_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_name = sse_decode_String(deserializer);
     var var_keystoreJson = sse_decode_String(deserializer);
@@ -3694,8 +3609,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  ImportMnemonicRequest sse_decode_import_mnemonic_request(
-      SseDeserializer deserializer) {
+  ImportMnemonicRequest sse_decode_import_mnemonic_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_name = sse_decode_String(deserializer);
     var var_mnemonic = sse_decode_String(deserializer);
@@ -3709,16 +3623,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  ImportPrivateKeyRequest sse_decode_import_private_key_request(
-      SseDeserializer deserializer) {
+  ImportPrivateKeyRequest sse_decode_import_private_key_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_name = sse_decode_String(deserializer);
     var var_privateKeyBase58 = sse_decode_String(deserializer);
     var var_password = sse_decode_String(deserializer);
     return ImportPrivateKeyRequest(
-        name: var_name,
-        privateKeyBase58: var_privateKeyBase58,
-        password: var_password);
+        name: var_name, privateKeyBase58: var_privateKeyBase58, password: var_password);
   }
 
   @protected
@@ -3734,8 +3645,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  List<AssetSummary> sse_decode_list_asset_summary(
-      SseDeserializer deserializer) {
+  List<AssetSummary> sse_decode_list_asset_summary(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     var len_ = sse_decode_i_32(deserializer);
@@ -3747,8 +3657,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  List<EvmChainConfig> sse_decode_list_evm_chain_config(
-      SseDeserializer deserializer) {
+  List<EvmChainConfig> sse_decode_list_evm_chain_config(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     var len_ = sse_decode_i_32(deserializer);
@@ -3760,8 +3669,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  List<EvmTokenAsset> sse_decode_list_evm_token_asset(
-      SseDeserializer deserializer) {
+  List<EvmTokenAsset> sse_decode_list_evm_token_asset(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     var len_ = sse_decode_i_32(deserializer);
@@ -3773,8 +3681,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  List<EvmTokenQuery> sse_decode_list_evm_token_query(
-      SseDeserializer deserializer) {
+  List<EvmTokenQuery> sse_decode_list_evm_token_query(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     var len_ = sse_decode_i_32(deserializer);
@@ -3786,15 +3693,38 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  List<EvmTransactionHistoryEntry>
-      sse_decode_list_evm_transaction_history_entry(
-          SseDeserializer deserializer) {
+  List<EvmTransactionHistoryEntry> sse_decode_list_evm_transaction_history_entry(
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     var len_ = sse_decode_i_32(deserializer);
     var ans_ = <EvmTransactionHistoryEntry>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
       ans_.add(sse_decode_evm_transaction_history_entry(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<MultiChainDescriptor> sse_decode_list_multi_chain_descriptor(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <MultiChainDescriptor>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_multi_chain_descriptor(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<MultiChainEndpoint> sse_decode_list_multi_chain_endpoint(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <MultiChainEndpoint>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_multi_chain_endpoint(deserializer));
     }
     return ans_;
   }
@@ -3807,8 +3737,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  List<SquadsMemberSummary> sse_decode_list_squads_member_summary(
-      SseDeserializer deserializer) {
+  List<SquadsMemberSummary> sse_decode_list_squads_member_summary(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     var len_ = sse_decode_i_32(deserializer);
@@ -3846,24 +3775,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  MobileBridgeHealth sse_decode_mobile_bridge_health(
-      SseDeserializer deserializer) {
+  MobileBridgeHealth sse_decode_mobile_bridge_health(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_ok = sse_decode_bool(deserializer);
     var var_service = sse_decode_String(deserializer);
     var var_version = sse_decode_String(deserializer);
-    return MobileBridgeHealth(
-        ok: var_ok, service: var_service, version: var_version);
+    return MobileBridgeHealth(ok: var_ok, service: var_service, version: var_version);
   }
 
   @protected
-  MobileCapabilitySummary sse_decode_mobile_capability_summary(
-      SseDeserializer deserializer) {
+  MobileCapabilitySummary sse_decode_mobile_capability_summary(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_enabled = sse_decode_list_String(deserializer);
     var var_excluded = sse_decode_list_String(deserializer);
-    return MobileCapabilitySummary(
-        enabled: var_enabled, excluded: var_excluded);
+    return MobileCapabilitySummary(enabled: var_enabled, excluded: var_excluded);
   }
 
   @protected
@@ -3882,6 +3807,100 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  MultiChainDeriveAccountRequest sse_decode_multi_chain_derive_account_request(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_chainId = sse_decode_String(deserializer);
+    var var_mnemonic = sse_decode_String(deserializer);
+    var var_derivationPath = sse_decode_opt_String(deserializer);
+    return MultiChainDeriveAccountRequest(
+        chainId: var_chainId, mnemonic: var_mnemonic, derivationPath: var_derivationPath);
+  }
+
+  @protected
+  MultiChainDerivedAccount sse_decode_multi_chain_derived_account(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_chainId = sse_decode_String(deserializer);
+    var var_accountId = sse_decode_String(deserializer);
+    var var_address = sse_decode_String(deserializer);
+    var var_derivationPath = sse_decode_String(deserializer);
+    var var_publicKeyHex = sse_decode_opt_String(deserializer);
+    return MultiChainDerivedAccount(
+        chainId: var_chainId,
+        accountId: var_accountId,
+        address: var_address,
+        derivationPath: var_derivationPath,
+        publicKeyHex: var_publicKeyHex);
+  }
+
+  @protected
+  MultiChainDescriptor sse_decode_multi_chain_descriptor(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_chainId = sse_decode_String(deserializer);
+    var var_family = sse_decode_String(deserializer);
+    var var_name = sse_decode_String(deserializer);
+    var var_network = sse_decode_String(deserializer);
+    var var_testnet = sse_decode_bool(deserializer);
+    var var_nativeAsset = sse_decode_multi_chain_native_asset(deserializer);
+    var var_defaultDerivationPath = sse_decode_String(deserializer);
+    var var_addressFormats = sse_decode_list_String(deserializer);
+    var var_capabilities = sse_decode_list_String(deserializer);
+    var var_endpoints = sse_decode_list_multi_chain_endpoint(deserializer);
+    var var_explorerUrl = sse_decode_opt_String(deserializer);
+    var var_supportLevel = sse_decode_String(deserializer);
+    return MultiChainDescriptor(
+        chainId: var_chainId,
+        family: var_family,
+        name: var_name,
+        network: var_network,
+        testnet: var_testnet,
+        nativeAsset: var_nativeAsset,
+        defaultDerivationPath: var_defaultDerivationPath,
+        addressFormats: var_addressFormats,
+        capabilities: var_capabilities,
+        endpoints: var_endpoints,
+        explorerUrl: var_explorerUrl,
+        supportLevel: var_supportLevel);
+  }
+
+  @protected
+  MultiChainEndpoint sse_decode_multi_chain_endpoint(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_kind = sse_decode_String(deserializer);
+    var var_url = sse_decode_String(deserializer);
+    return MultiChainEndpoint(kind: var_kind, url: var_url);
+  }
+
+  @protected
+  MultiChainNativeAsset sse_decode_multi_chain_native_asset(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_symbol = sse_decode_String(deserializer);
+    var var_name = sse_decode_String(deserializer);
+    var var_decimals = sse_decode_u_8(deserializer);
+    return MultiChainNativeAsset(symbol: var_symbol, name: var_name, decimals: var_decimals);
+  }
+
+  @protected
+  MultiChainNormalizeAddressRequest sse_decode_multi_chain_normalize_address_request(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_chainId = sse_decode_String(deserializer);
+    var var_address = sse_decode_String(deserializer);
+    return MultiChainNormalizeAddressRequest(chainId: var_chainId, address: var_address);
+  }
+
+  @protected
+  MultiChainNormalizedAddress sse_decode_multi_chain_normalized_address(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_chainId = sse_decode_String(deserializer);
+    var var_accountId = sse_decode_String(deserializer);
+    var var_address = sse_decode_String(deserializer);
+    return MultiChainNormalizedAddress(
+        chainId: var_chainId, accountId: var_accountId, address: var_address);
+  }
+
+  @protected
   String? sse_decode_opt_String(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -3893,14 +3912,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  EvmTransactionSubmitResult?
-      sse_decode_opt_box_autoadd_evm_transaction_submit_result(
-          SseDeserializer deserializer) {
+  EvmTransactionSubmitResult? sse_decode_opt_box_autoadd_evm_transaction_submit_result(
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     if (sse_decode_bool(deserializer)) {
-      return (sse_decode_box_autoadd_evm_transaction_submit_result(
-          deserializer));
+      return (sse_decode_box_autoadd_evm_transaction_submit_result(deserializer));
     } else {
       return null;
     }
@@ -3982,8 +3999,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  PaymentPreviewRequest sse_decode_payment_preview_request(
-      SseDeserializer deserializer) {
+  PaymentPreviewRequest sse_decode_payment_preview_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_network = sse_decode_app_network(deserializer);
     var var_walletPublicKey = sse_decode_String(deserializer);
@@ -4005,8 +4021,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  PaymentSubmitRequest sse_decode_payment_submit_request(
-      SseDeserializer deserializer) {
+  PaymentSubmitRequest sse_decode_payment_submit_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_previewId = sse_decode_String(deserializer);
     var var_approved = sse_decode_bool(deserializer);
@@ -4034,8 +4049,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  PumpPreviewRequest sse_decode_pump_preview_request(
-      SseDeserializer deserializer) {
+  PumpPreviewRequest sse_decode_pump_preview_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_network = sse_decode_app_network(deserializer);
     var var_walletPublicKey = sse_decode_String(deserializer);
@@ -4058,8 +4072,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_previewId = sse_decode_String(deserializer);
     var var_approved = sse_decode_bool(deserializer);
     var var_status = sse_decode_String(deserializer);
-    return SigningDecision(
-        previewId: var_previewId, approved: var_approved, status: var_status);
+    return SigningDecision(previewId: var_previewId, approved: var_approved, status: var_status);
   }
 
   @protected
@@ -4083,8 +4096,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  SquadsCreateSubmitRequest sse_decode_squads_create_submit_request(
-      SseDeserializer deserializer) {
+  SquadsCreateSubmitRequest sse_decode_squads_create_submit_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_approved = sse_decode_bool(deserializer);
     var var_network = sse_decode_app_network(deserializer);
@@ -4108,8 +4120,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  SquadsCreateSubmitResult sse_decode_squads_create_submit_result(
-      SseDeserializer deserializer) {
+  SquadsCreateSubmitResult sse_decode_squads_create_submit_result(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_multisig = sse_decode_String(deserializer);
     var var_vault = sse_decode_String(deserializer);
@@ -4156,23 +4167,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  SquadsInfoRequest sse_decode_squads_info_request(
-      SseDeserializer deserializer) {
+  SquadsInfoRequest sse_decode_squads_info_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_network = sse_decode_app_network(deserializer);
     var var_rpcUrl = sse_decode_opt_String(deserializer);
     var var_multisig = sse_decode_String(deserializer);
     var var_proposal = sse_decode_opt_String(deserializer);
     return SquadsInfoRequest(
-        network: var_network,
-        rpcUrl: var_rpcUrl,
-        multisig: var_multisig,
-        proposal: var_proposal);
+        network: var_network, rpcUrl: var_rpcUrl, multisig: var_multisig, proposal: var_proposal);
   }
 
   @protected
-  SquadsInfoResponse sse_decode_squads_info_response(
-      SseDeserializer deserializer) {
+  SquadsInfoResponse sse_decode_squads_info_response(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_multisig = sse_decode_String(deserializer);
     var var_vault = sse_decode_String(deserializer);
@@ -4182,8 +4188,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_transactionIndex = sse_decode_u_64(deserializer);
     var var_staleTransactionIndex = sse_decode_u_64(deserializer);
     var var_members = sse_decode_list_squads_member_summary(deserializer);
-    var var_proposal =
-        sse_decode_opt_box_autoadd_squads_proposal_summary(deserializer);
+    var var_proposal = sse_decode_opt_box_autoadd_squads_proposal_summary(deserializer);
     var var_network = sse_decode_app_network(deserializer);
     return SquadsInfoResponse(
         multisig: var_multisig,
@@ -4199,8 +4204,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  SquadsMemberSummary sse_decode_squads_member_summary(
-      SseDeserializer deserializer) {
+  SquadsMemberSummary sse_decode_squads_member_summary(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_key = sse_decode_String(deserializer);
     var var_permissions = sse_decode_u_8(deserializer);
@@ -4208,8 +4212,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  SquadsPreviewRequest sse_decode_squads_preview_request(
-      SseDeserializer deserializer) {
+  SquadsPreviewRequest sse_decode_squads_preview_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_network = sse_decode_app_network(deserializer);
     var var_walletPublicKey = sse_decode_String(deserializer);
@@ -4225,9 +4228,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  SquadsProposalCreateSubmitResult
-      sse_decode_squads_proposal_create_submit_result(
-          SseDeserializer deserializer) {
+  SquadsProposalCreateSubmitResult sse_decode_squads_proposal_create_submit_result(
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_multisig = sse_decode_String(deserializer);
     var var_vault = sse_decode_String(deserializer);
@@ -4249,8 +4251,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  SquadsProposalSummary sse_decode_squads_proposal_summary(
-      SseDeserializer deserializer) {
+  SquadsProposalSummary sse_decode_squads_proposal_summary(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_address = sse_decode_String(deserializer);
     var var_transactionIndex = sse_decode_u_64(deserializer);
@@ -4268,23 +4269,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  SquadsProposalsRequest sse_decode_squads_proposals_request(
-      SseDeserializer deserializer) {
+  SquadsProposalsRequest sse_decode_squads_proposals_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_network = sse_decode_app_network(deserializer);
     var var_rpcUrl = sse_decode_opt_String(deserializer);
     var var_multisig = sse_decode_String(deserializer);
     var var_limit = sse_decode_opt_box_autoadd_u_64(deserializer);
     return SquadsProposalsRequest(
-        network: var_network,
-        rpcUrl: var_rpcUrl,
-        multisig: var_multisig,
-        limit: var_limit);
+        network: var_network, rpcUrl: var_rpcUrl, multisig: var_multisig, limit: var_limit);
   }
 
   @protected
-  SquadsProposalsResponse sse_decode_squads_proposals_response(
-      SseDeserializer deserializer) {
+  SquadsProposalsResponse sse_decode_squads_proposals_response(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_multisig = sse_decode_String(deserializer);
     var var_vault = sse_decode_String(deserializer);
@@ -4300,17 +4296,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  SquadsTransferKind sse_decode_squads_transfer_kind(
-      SseDeserializer deserializer) {
+  SquadsTransferKind sse_decode_squads_transfer_kind(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var inner = sse_decode_i_32(deserializer);
     return SquadsTransferKind.values[inner];
   }
 
   @protected
-  SquadsTransferProposalSubmitRequest
-      sse_decode_squads_transfer_proposal_submit_request(
-          SseDeserializer deserializer) {
+  SquadsTransferProposalSubmitRequest sse_decode_squads_transfer_proposal_submit_request(
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_approved = sse_decode_bool(deserializer);
     var var_network = sse_decode_app_network(deserializer);
@@ -4344,8 +4338,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  SquadsVoteSubmitRequest sse_decode_squads_vote_submit_request(
-      SseDeserializer deserializer) {
+  SquadsVoteSubmitRequest sse_decode_squads_vote_submit_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_approved = sse_decode_bool(deserializer);
     var var_network = sse_decode_app_network(deserializer);
@@ -4372,13 +4365,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_secret = sse_decode_String(deserializer);
     var var_issuer = sse_decode_String(deserializer);
     var var_account = sse_decode_String(deserializer);
-    return TotpSetup(
-        secret: var_secret, issuer: var_issuer, account: var_account);
+    return TotpSetup(secret: var_secret, issuer: var_issuer, account: var_account);
   }
 
   @protected
-  TotpVerifyRequest sse_decode_totp_verify_request(
-      SseDeserializer deserializer) {
+  TotpVerifyRequest sse_decode_totp_verify_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_secret = sse_decode_String(deserializer);
     var var_code = sse_decode_String(deserializer);
@@ -4386,23 +4377,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  TransactionHistoryEntry sse_decode_transaction_history_entry(
-      SseDeserializer deserializer) {
+  TransactionHistoryEntry sse_decode_transaction_history_entry(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_signature = sse_decode_String(deserializer);
     var var_slot = sse_decode_u_64(deserializer);
     var var_blockTime = sse_decode_opt_box_autoadd_i_64(deserializer);
     var var_status = sse_decode_String(deserializer);
     return TransactionHistoryEntry(
-        signature: var_signature,
-        slot: var_slot,
-        blockTime: var_blockTime,
-        status: var_status);
+        signature: var_signature, slot: var_slot, blockTime: var_blockTime, status: var_status);
   }
 
   @protected
-  TransactionSubmitResult sse_decode_transaction_submit_result(
-      SseDeserializer deserializer) {
+  TransactionSubmitResult sse_decode_transaction_submit_result(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_signature = sse_decode_String(deserializer);
     var var_slot = sse_decode_opt_box_autoadd_u_64(deserializer);
@@ -4447,18 +4433,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  UnlockWalletRequest sse_decode_unlock_wallet_request(
-      SseDeserializer deserializer) {
+  UnlockWalletRequest sse_decode_unlock_wallet_request(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_keystoreJson = sse_decode_String(deserializer);
     var var_password = sse_decode_String(deserializer);
-    return UnlockWalletRequest(
-        keystoreJson: var_keystoreJson, password: var_password);
+    return UnlockWalletRequest(keystoreJson: var_keystoreJson, password: var_password);
   }
 
   @protected
-  UnlockWalletResponse sse_decode_unlock_wallet_response(
-      SseDeserializer deserializer) {
+  UnlockWalletResponse sse_decode_unlock_wallet_response(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_wallet = sse_decode_wallet_summary(deserializer);
     return UnlockWalletResponse(wallet: var_wallet);
@@ -4494,8 +4477,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_asset_query_request(
-      AssetQueryRequest self, SseSerializer serializer) {
+  void sse_encode_asset_query_request(AssetQueryRequest self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_app_network(self.network, serializer);
     sse_encode_String(self.walletPublicKey, serializer);
@@ -4509,8 +4491,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_String(self.walletPublicKey, serializer);
     sse_encode_u_64(self.solBalanceLamports, serializer);
     sse_encode_list_asset_summary(self.tokens, serializer);
-    sse_encode_list_transaction_history_entry(
-        self.recentTransactions, serializer);
+    sse_encode_list_transaction_history_entry(self.recentTransactions, serializer);
     sse_encode_u_64(self.refreshedAtMs, serializer);
   }
 
@@ -4528,8 +4509,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_biometric_policy(
-      BiometricPolicy self, SseSerializer serializer) {
+  void sse_encode_biometric_policy(BiometricPolicy self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_bool(self.supported, serializer);
     sse_encode_bool(self.configured, serializer);
@@ -4669,8 +4649,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_box_autoadd_i_64(
-      PlatformInt64 self, SseSerializer serializer) {
+  void sse_encode_box_autoadd_i_64(PlatformInt64 self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_64(self, serializer);
   }
@@ -4694,6 +4673,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       ImportPrivateKeyRequest self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_import_private_key_request(self, serializer);
+  }
+
+  @protected
+  void sse_encode_box_autoadd_multi_chain_derive_account_request(
+      MultiChainDeriveAccountRequest self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_multi_chain_derive_account_request(self, serializer);
+  }
+
+  @protected
+  void sse_encode_box_autoadd_multi_chain_normalize_address_request(
+      MultiChainNormalizeAddressRequest self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_multi_chain_normalize_address_request(self, serializer);
   }
 
   @protected
@@ -4813,16 +4806,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_create_wallet_request(
-      CreateWalletRequest self, SseSerializer serializer) {
+  void sse_encode_create_wallet_request(CreateWalletRequest self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.name, serializer);
     sse_encode_String(self.password, serializer);
   }
 
   @protected
-  void sse_encode_dapp_sign_preview_request(
-      DappSignPreviewRequest self, SseSerializer serializer) {
+  void sse_encode_dapp_sign_preview_request(DappSignPreviewRequest self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_app_network(self.network, serializer);
     sse_encode_String(self.walletPublicKey, serializer);
@@ -4834,8 +4825,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_dapp_sign_submit_request(
-      DappSignSubmitRequest self, SseSerializer serializer) {
+  void sse_encode_dapp_sign_submit_request(DappSignSubmitRequest self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.previewId, serializer);
     sse_encode_bool(self.approved, serializer);
@@ -4852,21 +4842,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_dapp_sign_submit_result(
-      DappSignSubmitResult self, SseSerializer serializer) {
+  void sse_encode_dapp_sign_submit_result(DappSignSubmitResult self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_opt_String(self.signature, serializer);
     sse_encode_opt_String(self.signatureBase64, serializer);
     sse_encode_opt_String(self.signedPayloadBase64, serializer);
     sse_encode_list_String(self.signedPayloadsBase64, serializer);
-    sse_encode_opt_box_autoadd_transaction_submit_result(
-        self.transaction, serializer);
+    sse_encode_opt_box_autoadd_transaction_submit_result(self.transaction, serializer);
     sse_encode_String(self.status, serializer);
   }
 
   @protected
-  void sse_encode_evm_asset_query_request(
-      EvmAssetQueryRequest self, SseSerializer serializer) {
+  void sse_encode_evm_asset_query_request(EvmAssetQueryRequest self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_evm_chain_config(self.chain, serializer);
     sse_encode_String(self.walletAddress, serializer);
@@ -4874,23 +4861,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_evm_asset_snapshot(
-      EvmAssetSnapshot self, SseSerializer serializer) {
+  void sse_encode_evm_asset_snapshot(EvmAssetSnapshot self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_evm_chain_config(self.chain, serializer);
     sse_encode_String(self.walletAddress, serializer);
     sse_encode_String(self.nativeBalanceWei, serializer);
     sse_encode_list_evm_token_asset(self.tokens, serializer);
-    sse_encode_list_evm_transaction_history_entry(
-        self.recentTransactions, serializer);
+    sse_encode_list_evm_transaction_history_entry(self.recentTransactions, serializer);
     sse_encode_String(self.historyStatus, serializer);
     sse_encode_opt_String(self.historyMessage, serializer);
     sse_encode_u_64(self.refreshedAtMs, serializer);
   }
 
   @protected
-  void sse_encode_evm_chain_config(
-      EvmChainConfig self, SseSerializer serializer) {
+  void sse_encode_evm_chain_config(EvmChainConfig self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_u_64(self.chainId, serializer);
     sse_encode_String(self.name, serializer);
@@ -4901,16 +4885,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_evm_create_wallet_request(
-      EvmCreateWalletRequest self, SseSerializer serializer) {
+  void sse_encode_evm_create_wallet_request(EvmCreateWalletRequest self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.name, serializer);
     sse_encode_String(self.password, serializer);
   }
 
   @protected
-  void sse_encode_evm_dapp_sign_preview(
-      EvmDappSignPreview self, SseSerializer serializer) {
+  void sse_encode_evm_dapp_sign_preview(EvmDappSignPreview self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.previewId, serializer);
     sse_encode_evm_chain_config(self.chain, serializer);
@@ -4956,8 +4938,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_opt_String(self.signature, serializer);
     sse_encode_opt_String(self.signedTransaction, serializer);
-    sse_encode_opt_box_autoadd_evm_transaction_submit_result(
-        self.transaction, serializer);
+    sse_encode_opt_box_autoadd_evm_transaction_submit_result(self.transaction, serializer);
     sse_encode_String(self.status, serializer);
   }
 
@@ -5006,8 +4987,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_evm_payment_preview(
-      EvmPaymentPreview self, SseSerializer serializer) {
+  void sse_encode_evm_payment_preview(EvmPaymentPreview self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.previewId, serializer);
     sse_encode_evm_chain_config(self.chain, serializer);
@@ -5059,8 +5039,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_evm_token_asset(
-      EvmTokenAsset self, SseSerializer serializer) {
+  void sse_encode_evm_token_asset(EvmTokenAsset self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.contractAddress, serializer);
     sse_encode_String(self.symbol, serializer);
@@ -5070,8 +5049,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_evm_token_query(
-      EvmTokenQuery self, SseSerializer serializer) {
+  void sse_encode_evm_token_query(EvmTokenQuery self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.contractAddress, serializer);
   }
@@ -5086,8 +5064,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_evm_transaction_status(
-      EvmTransactionStatus self, SseSerializer serializer) {
+  void sse_encode_evm_transaction_status(EvmTransactionStatus self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.transactionHash, serializer);
     sse_encode_evm_chain_config(self.chain, serializer);
@@ -5117,24 +5094,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_evm_unlock_wallet_request(
-      EvmUnlockWalletRequest self, SseSerializer serializer) {
+  void sse_encode_evm_unlock_wallet_request(EvmUnlockWalletRequest self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.keystoreJson, serializer);
     sse_encode_String(self.password, serializer);
   }
 
   @protected
-  void sse_encode_evm_wallet_keystore(
-      EvmWalletKeystore self, SseSerializer serializer) {
+  void sse_encode_evm_wallet_keystore(EvmWalletKeystore self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_evm_wallet_summary(self.wallet, serializer);
     sse_encode_String(self.keystoreJson, serializer);
   }
 
   @protected
-  void sse_encode_evm_wallet_summary(
-      EvmWalletSummary self, SseSerializer serializer) {
+  void sse_encode_evm_wallet_summary(EvmWalletSummary self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.id, serializer);
     sse_encode_String(self.name, serializer);
@@ -5171,8 +5145,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_import_keystore_request(
-      ImportKeystoreRequest self, SseSerializer serializer) {
+  void sse_encode_import_keystore_request(ImportKeystoreRequest self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.name, serializer);
     sse_encode_String(self.keystoreJson, serializer);
@@ -5180,8 +5153,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_import_mnemonic_request(
-      ImportMnemonicRequest self, SseSerializer serializer) {
+  void sse_encode_import_mnemonic_request(ImportMnemonicRequest self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.name, serializer);
     sse_encode_String(self.mnemonic, serializer);
@@ -5208,8 +5180,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_list_asset_summary(
-      List<AssetSummary> self, SseSerializer serializer) {
+  void sse_encode_list_asset_summary(List<AssetSummary> self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     for (final item in self) {
@@ -5218,8 +5189,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_list_evm_chain_config(
-      List<EvmChainConfig> self, SseSerializer serializer) {
+  void sse_encode_list_evm_chain_config(List<EvmChainConfig> self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     for (final item in self) {
@@ -5228,8 +5198,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_list_evm_token_asset(
-      List<EvmTokenAsset> self, SseSerializer serializer) {
+  void sse_encode_list_evm_token_asset(List<EvmTokenAsset> self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     for (final item in self) {
@@ -5238,8 +5207,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_list_evm_token_query(
-      List<EvmTokenQuery> self, SseSerializer serializer) {
+  void sse_encode_list_evm_token_query(List<EvmTokenQuery> self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     for (final item in self) {
@@ -5258,8 +5226,27 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_list_prim_u_8_strict(
-      Uint8List self, SseSerializer serializer) {
+  void sse_encode_list_multi_chain_descriptor(
+      List<MultiChainDescriptor> self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_multi_chain_descriptor(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_multi_chain_endpoint(
+      List<MultiChainEndpoint> self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_multi_chain_endpoint(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_prim_u_8_strict(Uint8List self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     serializer.buffer.putUint8List(self);
@@ -5296,8 +5283,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_mobile_bridge_health(
-      MobileBridgeHealth self, SseSerializer serializer) {
+  void sse_encode_mobile_bridge_health(MobileBridgeHealth self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_bool(self.ok, serializer);
     sse_encode_String(self.service, serializer);
@@ -5320,10 +5306,78 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_mobile_error_code(
-      MobileErrorCode self, SseSerializer serializer) {
+  void sse_encode_mobile_error_code(MobileErrorCode self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
+  void sse_encode_multi_chain_derive_account_request(
+      MultiChainDeriveAccountRequest self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.chainId, serializer);
+    sse_encode_String(self.mnemonic, serializer);
+    sse_encode_opt_String(self.derivationPath, serializer);
+  }
+
+  @protected
+  void sse_encode_multi_chain_derived_account(
+      MultiChainDerivedAccount self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.chainId, serializer);
+    sse_encode_String(self.accountId, serializer);
+    sse_encode_String(self.address, serializer);
+    sse_encode_String(self.derivationPath, serializer);
+    sse_encode_opt_String(self.publicKeyHex, serializer);
+  }
+
+  @protected
+  void sse_encode_multi_chain_descriptor(MultiChainDescriptor self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.chainId, serializer);
+    sse_encode_String(self.family, serializer);
+    sse_encode_String(self.name, serializer);
+    sse_encode_String(self.network, serializer);
+    sse_encode_bool(self.testnet, serializer);
+    sse_encode_multi_chain_native_asset(self.nativeAsset, serializer);
+    sse_encode_String(self.defaultDerivationPath, serializer);
+    sse_encode_list_String(self.addressFormats, serializer);
+    sse_encode_list_String(self.capabilities, serializer);
+    sse_encode_list_multi_chain_endpoint(self.endpoints, serializer);
+    sse_encode_opt_String(self.explorerUrl, serializer);
+    sse_encode_String(self.supportLevel, serializer);
+  }
+
+  @protected
+  void sse_encode_multi_chain_endpoint(MultiChainEndpoint self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.kind, serializer);
+    sse_encode_String(self.url, serializer);
+  }
+
+  @protected
+  void sse_encode_multi_chain_native_asset(MultiChainNativeAsset self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.symbol, serializer);
+    sse_encode_String(self.name, serializer);
+    sse_encode_u_8(self.decimals, serializer);
+  }
+
+  @protected
+  void sse_encode_multi_chain_normalize_address_request(
+      MultiChainNormalizeAddressRequest self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.chainId, serializer);
+    sse_encode_String(self.address, serializer);
+  }
+
+  @protected
+  void sse_encode_multi_chain_normalized_address(
+      MultiChainNormalizedAddress self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.chainId, serializer);
+    sse_encode_String(self.accountId, serializer);
+    sse_encode_String(self.address, serializer);
   }
 
   @protected
@@ -5348,8 +5402,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_opt_box_autoadd_i_64(
-      PlatformInt64? self, SseSerializer serializer) {
+  void sse_encode_opt_box_autoadd_i_64(PlatformInt64? self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     sse_encode_bool(self != null, serializer);
@@ -5411,15 +5464,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_payment_operation(
-      PaymentOperation self, SseSerializer serializer) {
+  void sse_encode_payment_operation(PaymentOperation self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.index, serializer);
   }
 
   @protected
-  void sse_encode_payment_preview_request(
-      PaymentPreviewRequest self, SseSerializer serializer) {
+  void sse_encode_payment_preview_request(PaymentPreviewRequest self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_app_network(self.network, serializer);
     sse_encode_String(self.walletPublicKey, serializer);
@@ -5432,8 +5483,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_payment_submit_request(
-      PaymentSubmitRequest self, SseSerializer serializer) {
+  void sse_encode_payment_submit_request(PaymentSubmitRequest self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.previewId, serializer);
     sse_encode_bool(self.approved, serializer);
@@ -5449,8 +5499,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_pump_preview_request(
-      PumpPreviewRequest self, SseSerializer serializer) {
+  void sse_encode_pump_preview_request(PumpPreviewRequest self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_app_network(self.network, serializer);
     sse_encode_String(self.walletPublicKey, serializer);
@@ -5461,8 +5510,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_signing_decision(
-      SigningDecision self, SseSerializer serializer) {
+  void sse_encode_signing_decision(SigningDecision self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.previewId, serializer);
     sse_encode_bool(self.approved, serializer);
@@ -5470,8 +5518,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_signing_preview(
-      SigningPreview self, SseSerializer serializer) {
+  void sse_encode_signing_preview(SigningPreview self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.id, serializer);
     sse_encode_String(self.title, serializer);
@@ -5527,8 +5574,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_squads_info_request(
-      SquadsInfoRequest self, SseSerializer serializer) {
+  void sse_encode_squads_info_request(SquadsInfoRequest self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_app_network(self.network, serializer);
     sse_encode_opt_String(self.rpcUrl, serializer);
@@ -5537,8 +5583,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_squads_info_response(
-      SquadsInfoResponse self, SseSerializer serializer) {
+  void sse_encode_squads_info_response(SquadsInfoResponse self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.multisig, serializer);
     sse_encode_String(self.vault, serializer);
@@ -5548,22 +5593,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_u_64(self.transactionIndex, serializer);
     sse_encode_u_64(self.staleTransactionIndex, serializer);
     sse_encode_list_squads_member_summary(self.members, serializer);
-    sse_encode_opt_box_autoadd_squads_proposal_summary(
-        self.proposal, serializer);
+    sse_encode_opt_box_autoadd_squads_proposal_summary(self.proposal, serializer);
     sse_encode_app_network(self.network, serializer);
   }
 
   @protected
-  void sse_encode_squads_member_summary(
-      SquadsMemberSummary self, SseSerializer serializer) {
+  void sse_encode_squads_member_summary(SquadsMemberSummary self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.key, serializer);
     sse_encode_u_8(self.permissions, serializer);
   }
 
   @protected
-  void sse_encode_squads_preview_request(
-      SquadsPreviewRequest self, SseSerializer serializer) {
+  void sse_encode_squads_preview_request(SquadsPreviewRequest self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_app_network(self.network, serializer);
     sse_encode_String(self.walletPublicKey, serializer);
@@ -5587,8 +5629,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_squads_proposal_summary(
-      SquadsProposalSummary self, SseSerializer serializer) {
+  void sse_encode_squads_proposal_summary(SquadsProposalSummary self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.address, serializer);
     sse_encode_u_64(self.transactionIndex, serializer);
@@ -5599,8 +5640,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_squads_proposals_request(
-      SquadsProposalsRequest self, SseSerializer serializer) {
+  void sse_encode_squads_proposals_request(SquadsProposalsRequest self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_app_network(self.network, serializer);
     sse_encode_opt_String(self.rpcUrl, serializer);
@@ -5620,8 +5660,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_squads_transfer_kind(
-      SquadsTransferKind self, SseSerializer serializer) {
+  void sse_encode_squads_transfer_kind(SquadsTransferKind self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.index, serializer);
   }
@@ -5669,8 +5708,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_totp_verify_request(
-      TotpVerifyRequest self, SseSerializer serializer) {
+  void sse_encode_totp_verify_request(TotpVerifyRequest self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.secret, serializer);
     sse_encode_String(self.code, serializer);
@@ -5727,23 +5765,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_unlock_wallet_request(
-      UnlockWalletRequest self, SseSerializer serializer) {
+  void sse_encode_unlock_wallet_request(UnlockWalletRequest self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.keystoreJson, serializer);
     sse_encode_String(self.password, serializer);
   }
 
   @protected
-  void sse_encode_unlock_wallet_response(
-      UnlockWalletResponse self, SseSerializer serializer) {
+  void sse_encode_unlock_wallet_response(UnlockWalletResponse self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_wallet_summary(self.wallet, serializer);
   }
 
   @protected
-  void sse_encode_wallet_keystore(
-      WalletKeystore self, SseSerializer serializer) {
+  void sse_encode_wallet_keystore(WalletKeystore self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_wallet_summary(self.wallet, serializer);
     sse_encode_String(self.keystoreJson, serializer);

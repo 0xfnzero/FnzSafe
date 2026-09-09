@@ -9,9 +9,9 @@ description = "Allow the main wallet UI to store a saved wallet password in macO
 commands.allow = ["biometric_wallet_store_password"]
 
 [[permission]]
-identifier = "allow-biometric-wallet-get-password"
-description = "Allow the main wallet UI to retrieve a saved wallet password after macOS Touch ID authentication."
-commands.allow = ["biometric_wallet_get_password"]
+identifier = "allow-biometric-wallet-unlock-all"
+description = "Allow the main wallet UI to unlock saved wallets natively after macOS Touch ID authentication without exposing the password to JavaScript."
+commands.allow = ["biometric_wallet_unlock_all"]
 
 [[permission]]
 identifier = "allow-biometric-wallet-delete-password"

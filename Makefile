@@ -31,6 +31,7 @@ help:
 	@echo "Options:"
 	@echo "  ANDROID_JAVA_HOME=/path/to/jdk17 make package-android"
 	@echo "  IOS_CODESIGN=true IOS_EXPORT_OPTIONS_PLIST=/path/ExportOptions.plist make package-ios"
+	@echo "  APPLE_SIGNING_IDENTITY='Developer ID Application: ...' make package-macos"
 	@echo "  TAURI_WINDOWS_TARGET=x86_64-pc-windows-msvc make package-windows"
 
 dev:
@@ -89,6 +90,7 @@ package-ios: prepare-release-dir
 
 package-macos:
 	mkdir -p "$(MACOS_RELEASE_DIR)"
+	cd "$(DESKTOP_DIR)" && node scripts/macos-release.cjs preflight
 	cd "$(DESKTOP_DIR)" && npm run desktop:build
 	@copied=0; \
 	while IFS= read -r artifact; do \
@@ -103,6 +105,7 @@ package-macos:
 		echo "No macOS desktop package artifacts were found." >&2; \
 		exit 1; \
 	fi
+	cd "$(DESKTOP_DIR)" && node scripts/macos-release.cjs verify "$(MACOS_RELEASE_DIR)"
 
 package-windows:
 	mkdir -p "$(WINDOWS_RELEASE_DIR)"

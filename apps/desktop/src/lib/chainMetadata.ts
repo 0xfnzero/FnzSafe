@@ -18,8 +18,35 @@ const CHAIN_LOGO_BY_ID: Readonly<Record<number, string>> = {
   11155111: "/chain-icons/ethereum.svg",
 };
 
-export const SOLANA_CHAIN_LOGO_URI = "/chain-icons/solana.svg";
+export const SOLANA_CHAIN_LOGO_URI = "/token-icons/solana.png";
+export const BITCOIN_CHAIN_LOGO_URI = "/chain-icons/bitcoin.svg";
+export const TRON_CHAIN_LOGO_URI = "/chain-icons/tron.svg";
+
+const CHAIN_FAMILY_LOGO_BY_ID: Readonly<Record<string, string>> = {
+  solana: SOLANA_CHAIN_LOGO_URI,
+  evm: CHAIN_LOGO_BY_ID[1],
+  bitcoin: BITCOIN_CHAIN_LOGO_URI,
+  tron: TRON_CHAIN_LOGO_URI,
+};
 
 export function chainLogoUri(chainId?: number): string | undefined {
   return chainId === undefined ? undefined : CHAIN_LOGO_BY_ID[chainId];
+}
+
+export function chainFamilyLogoUri(family: string): string | undefined {
+  return CHAIN_FAMILY_LOGO_BY_ID[family];
+}
+
+export function chainDescriptorLogoUri(chain: { family: string; chain_id: string }): string | undefined {
+  if (chain.family !== "evm") {
+    const expectedNamespace = chain.family === "bitcoin" ? "bip122" : chain.family;
+    return chain.chain_id.startsWith(`${expectedNamespace}:`) && chain.chain_id.length > expectedNamespace.length + 1
+      ? chainFamilyLogoUri(chain.family)
+      : undefined;
+  }
+
+  const match = /^eip155:([1-9]\d*)$/.exec(chain.chain_id);
+  if (!match) return undefined;
+  const chainId = Number(match[1]);
+  return Number.isSafeInteger(chainId) ? chainLogoUri(chainId) : undefined;
 }

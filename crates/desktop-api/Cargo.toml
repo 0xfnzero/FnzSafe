@@ -1,6 +1,6 @@
 [package]
 name = "fnzero-safe-desktop-api"
-version = "0.4.7"
+version = "0.5.0"
 edition = "2021"
 rust-version = "1.89"
 license = "MIT"
@@ -13,7 +13,9 @@ path = "src/main.rs"
 [dependencies]
 agave-syscalls = { version = "=3.1.12", features = ["agave-unstable-api"] }
 fnzero-safe-app-services = { workspace = true }
+fnzero-safe-bitcoin-services = { workspace = true }
 fnzero-safe-core = { workspace = true, features = ["solana-ops", "2fa", "sol-trade-sdk"] }
+fnzero-safe-tron-services = { workspace = true }
 sol-trade-sdk = "=4.0.21"
 solana-client = "3.1"
 solana-commitment-config = "3.1"
@@ -52,6 +54,7 @@ pem-rfc7468 = { version = "0.7", features = ["std"] }
 sha2 = "0.10"
 zeroize = "1"
 rand = "0.8"
+libc = "0.2"
 rusqlite = { version = "0.37", features = ["bundled"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 solana-derivation-path = "3.0"
