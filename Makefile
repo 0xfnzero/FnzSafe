@@ -99,6 +99,7 @@ package-macos:
 		copied=1; \
 	done < <(find \
 		"$(DESKTOP_DIR)/src-tauri/target/release/bundle" \
+		"$(ROOT_DIR)/build-cache-fnzsafe/release/bundle" \
 		"$(ROOT_DIR)/build-cache/release/bundle" \
 		-maxdepth 5 \( -name "FnzSafe_*.dmg" -o -name "FnzSafe.app" \) ! -name "rw.*" -print 2>/dev/null); \
 	if [[ "$$copied" != "1" ]]; then \

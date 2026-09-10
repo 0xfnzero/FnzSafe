@@ -1,4 +1,6 @@
 {
+  "productName": "FnzSafe Dev",
+  "identifier": "dev.sol-safekey.ui.dev",
   "build": {
     "beforeDevCommand": ""
   },

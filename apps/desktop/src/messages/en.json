@@ -290,6 +290,7 @@
       "chainNativeBalance": "{symbol} Balance",
       "chainRefreshAssets": "Refresh Chain Assets",
       "otherChainsOpenWorkbench": "Open EVM Wallet",
+      "otherChainsAddToken": "Add token",
       "otherChainsNoWalletTitle": "No EVM wallet yet",
       "otherChainsNoWalletHint": "Create one wallet to automatically get a Solana account and an EVM account. The EVM address works on every EVM-compatible network.",
       "otherChainsCreateImport": "Create Wallet",

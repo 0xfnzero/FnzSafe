@@ -122,8 +122,10 @@ function managedRecordStillMatches(record) {
   if (record.executable.includes("fnzero-safe-desktop-api")) {
     return command.includes("fnzero-safe-desktop-api");
   }
-  if (executableName === "FnzSafe" || executableName === "FnzeroSafe") {
-    return command.includes("/FnzSafe.app/Contents/MacOS/") || command.includes("/FnzeroSafe.app/Contents/MacOS/");
+  if (executableName === "FnzSafe" || executableName === "FnzSafe Dev" || executableName === "FnzeroSafe") {
+    return command.includes("/FnzSafe.app/Contents/MacOS/")
+      || command.includes("/FnzSafe Dev.app/Contents/MacOS/")
+      || command.includes("/FnzeroSafe.app/Contents/MacOS/");
   }
   return false;
 }
@@ -187,6 +189,7 @@ function isFnzSafeProcess(pid) {
     isProjectProcess(pid) ||
     normalizedCommand.includes("fnzero-safe-desktop-api") ||
     normalizedCommand.includes("/FnzSafe.app/Contents/MacOS/FnzSafe") ||
+    normalizedCommand.includes("/FnzSafe Dev.app/Contents/MacOS/FnzSafe Dev") ||
     normalizedCommand.includes("/FnzeroSafe.app/Contents/MacOS/FnzeroSafe") ||
     normalizedCommand.includes("/FnzSafe.app/Contents/MacOS/FnzeroSafe") ||
     normalizedCommand.includes("scripts/dev-stack.cjs") ||
@@ -202,6 +205,16 @@ function matchingProjectPids() {
     "tauri dev",
     "scripts/dev-stack.cjs",
     "scripts/desktop-dev.cjs",
+    "build-cache-fnzsafe/debug/FnzeroSafe",
+    "build-cache-fnzsafe/debug/FnzSafe",
+    "build-cache-fnzsafe/release/FnzeroSafe",
+    "build-cache-fnzsafe/release/FnzSafe",
+    "build-cache-fnzsafe/debug/bundle/macos/FnzeroSafe.app/Contents/MacOS/FnzeroSafe",
+    "build-cache-fnzsafe/debug/bundle/macos/FnzSafe.app/Contents/MacOS/FnzSafe",
+    "build-cache-fnzsafe/debug/bundle/macos/FnzSafe Dev.app/Contents/MacOS/FnzSafe Dev",
+    "build-cache-fnzsafe/release/bundle/macos/FnzeroSafe.app/Contents/MacOS/FnzeroSafe",
+    "build-cache-fnzsafe/release/bundle/macos/FnzSafe.app/Contents/MacOS/FnzSafe",
+    "build-cache-fnzsafe/release/fnzero-safe-desktop-api",
     "build-cache/debug/FnzeroSafe",
     "build-cache/debug/FnzSafe",
     "build-cache/release/FnzeroSafe",

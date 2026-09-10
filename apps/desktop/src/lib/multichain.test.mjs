@@ -68,4 +68,6 @@ test("native amounts convert without floating point precision loss", () => {
   assert.equal(multichain.decimalToAtomicUnits("1e-8", 8), null);
   assert.equal(multichain.atomicToDecimalUnits("100000001", 8), "1.00000001");
   assert.equal(multichain.atomicToDecimalUnits("1", 6), "0.000001");
+  assert.equal(multichain.atomicToDecimalUnits("100000000000000000", 18), "0.1");
+  assert.equal(multichain.atomicToDecimalUnits("0", 18), "0");
 });

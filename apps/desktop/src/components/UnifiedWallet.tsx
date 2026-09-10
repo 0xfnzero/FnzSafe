@@ -540,39 +540,45 @@ export function UnifiedAssetList({
   assets,
   error,
   labels,
+  onSelect,
   preferredChainId,
   refreshing,
   onRefresh,
+  showHeader = true,
 }: {
   assets: UnifiedWalletAsset[];
   error?: string | null;
   labels: UnifiedWalletLabels;
+  onSelect?: (asset: UnifiedWalletAsset) => void;
   preferredChainId?: string;
   refreshing: boolean;
   onRefresh: () => void;
+  showHeader?: boolean;
 }) {
   const sortedAssets = useMemo(() => sortUnifiedAssets(assets, preferredChainId), [assets, preferredChainId]);
   return (
     <section className="space-y-3">
-      <div className="flex items-center justify-between gap-3">
-        <h3 className="text-sm font-semibold text-gray-200">{labels.allAssets}</h3>
-        <button
-          type="button"
-          onClick={onRefresh}
-          disabled={refreshing}
-          className="inline-flex h-9 items-center gap-2 rounded-lg bg-white/10 px-3 text-xs text-gray-200 hover:bg-white/15 disabled:opacity-50"
-        >
-          <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
-          {labels.refresh}
-        </button>
-      </div>
+      {showHeader && (
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="text-sm font-semibold text-gray-200">{labels.allAssets}</h3>
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={refreshing}
+            className="inline-flex h-9 items-center gap-2 rounded-lg bg-white/10 px-3 text-xs text-gray-200 hover:bg-white/15 disabled:opacity-50"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
+            {labels.refresh}
+          </button>
+        </div>
+      )}
       {error && (
         <p role="status" className="rounded-lg border border-amber-300/20 bg-amber-300/[0.06] px-3 py-2 text-sm text-amber-100">
           {error}
         </p>
       )}
       <div className="space-y-2">
-        {sortedAssets.map((asset) => <AssetRow key={asset.id} asset={asset} labels={labels} />)}
+        {sortedAssets.map((asset) => <AssetRow key={asset.id} asset={asset} labels={labels} onSelect={onSelect} />)}
         {sortedAssets.length === 0 && <p className="py-8 text-center text-sm text-gray-500">{labels.noAssets}</p>}
       </div>
     </section>

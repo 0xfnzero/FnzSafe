@@ -4180,7 +4180,15 @@ export default function Home() {
     if (options.openChainView !== false) setWalletChainView("evm");
     saveStoredDesktopEvmChainId(chainId);
     resetEvmChainScopedState();
-  }, [resetEvmChainScopedState]);
+    const cachedAssets = evmAssetsByChain[parsedChainId];
+    if (
+      cachedAssets &&
+      evmWallet &&
+      cachedAssets.wallet_address.toLowerCase() === evmWallet.address.toLowerCase()
+    ) {
+      setEvmAssets(cachedAssets);
+    }
+  }, [evmAssetsByChain, evmWallet, resetEvmChainScopedState]);
 
   const loadEvmChains = useCallback(async () => {
     const response = await apiFetch("evm/chains", {});
@@ -17153,8 +17161,44 @@ export default function Home() {
           evmAssets.chain.chain_id === activeEvmChain.chain_id
             ? evmAssets
             : null;
-        const evmNativeBalance = currentEvmAssets?.native_balance_wei ?? "--";
-        const evmTokens = currentEvmAssets?.tokens ?? [];
+        const evmNativeBalance = currentEvmAssets
+          ? atomicToDecimalUnits(currentEvmAssets.native_balance_wei, 18)
+          : "--";
+        const evmAssetsForCurrentChain: UnifiedWalletAsset[] = activeEvmChain
+          ? [
+              {
+                id: `evm:${activeEvmChain.chain_id}:native`,
+                family: "evm",
+                chainId: activeEvmChain.chain_id,
+                chainName: activeEvmChain.name,
+                chainSymbol: activeEvmChain.native_symbol,
+                symbol: activeEvmChain.native_symbol,
+                name: activeEvmChain.name,
+                balance: evmNativeBalance,
+                rawBalance: currentEvmAssets?.native_balance_wei ?? "",
+                decimals: 18,
+                logoUri: chainLogoUri(activeEvmChain.chain_id),
+                tracked: true,
+                loading: evmBusy && !currentEvmAssets,
+                testnet: activeEvmChain.testnet,
+              },
+              ...(currentEvmAssets?.tokens ?? []).map((token) => ({
+                id: `evm:${activeEvmChain.chain_id}:${token.contract_address.toLowerCase()}`,
+                family: "evm" as const,
+                chainId: activeEvmChain.chain_id,
+                chainName: activeEvmChain.name,
+                chainSymbol: activeEvmChain.native_symbol,
+                symbol: token.symbol,
+                name: token.name,
+                balance: rawTokenAmountToUi(token.balance, token.decimals),
+                rawBalance: token.balance,
+                decimals: token.decimals,
+                tokenAddress: token.contract_address,
+                tracked: true,
+                testnet: activeEvmChain.testnet,
+              })),
+            ]
+          : [];
         const evmTransactions = currentEvmAssets?.recent_transactions ?? [];
         return (
           <div className="space-y-4">
@@ -17249,7 +17293,7 @@ export default function Home() {
                         </div>
                         <div className="mt-1 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
                           <p className="max-w-full truncate text-4xl font-semibold tracking-normal lg:text-3xl">{evmNativeBalance}</p>
-                          <p className="text-sm text-white/75 lg:text-gray-400">wei</p>
+                          <p className="text-sm text-white/75 lg:text-gray-400">{activeEvmChain?.native_symbol || ""}</p>
                         </div>
                       </div>
                     </div>
@@ -17283,51 +17327,84 @@ export default function Home() {
                   </div>
                 </section>
 
-                <section className="grid gap-4 lg:grid-cols-2">
-                  <div className="space-y-3 rounded-xl border border-white/10 bg-white/[0.03] p-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <h3 className="text-sm font-semibold text-gray-200">{t("features.wallet-list.assets")}</h3>
-                      <span className="rounded bg-white/10 px-2 py-1 text-xs text-gray-400">
-                        {activeEvmChain?.name || t("features.wallet-list.currentPublicChain")}
-                      </span>
+                <section className="space-y-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="inline-flex w-fit rounded-lg border border-white/10 bg-white/5 p-1">
+                      {[
+                        { id: "assets" as const, label: t("features.wallet-list.assets") },
+                        { id: "transactions" as const, label: t("features.wallet-list.transactions") },
+                      ].map((tab) => (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          onClick={() => setWalletOverviewTab(tab.id)}
+                          aria-pressed={walletOverviewTab === tab.id}
+                          className={`rounded-md px-4 py-2 text-sm font-semibold transition-colors ${
+                            walletOverviewTab === tab.id
+                              ? "bg-white text-black"
+                              : "text-gray-300 hover:bg-white/10 hover:text-white"
+                          }`}
+                        >
+                          {tab.label}
+                        </button>
+                      ))}
                     </div>
-                    {evmTokens.length === 0 ? (
-                      <p className="rounded-lg border border-dashed border-white/10 bg-black/20 p-4 text-sm text-gray-500">
-                        {t("features.wallet-list.otherChainsAssetsEmpty")}
-                      </p>
-                    ) : (
-                      <div className="space-y-2">
-                        {evmTokens.map((token) => (
-                          <div key={token.contract_address} className="rounded-lg border border-white/10 bg-black/20 p-3 text-sm">
-                            <p className="font-medium text-white">{token.symbol} {token.balance}</p>
-                            <p className="mt-1 break-all text-xs text-gray-500">{token.name} · {token.contract_address}</p>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                    <div className="flex flex-wrap items-center gap-2">
+                      {walletOverviewTab === "assets" && (
+                        <button
+                          type="button"
+                          onClick={() => handleSelectForm("evm-workbench")}
+                          className="inline-flex h-9 items-center gap-2 rounded-lg bg-white/10 px-3 text-xs text-gray-200 hover:bg-white/15"
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                          {tf("features.wallet-list.otherChainsAddToken", "Add token")}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={refreshEvmAssets}
+                        disabled={evmBusy || !activeEvmChain}
+                        className="inline-flex h-9 items-center gap-2 rounded-lg bg-white/10 px-3 text-xs text-gray-200 hover:bg-white/15 disabled:opacity-50"
+                      >
+                        <RefreshCw className={`h-3.5 w-3.5 ${evmBusy ? "animate-spin" : ""}`} />
+                        {walletOverviewTab === "assets"
+                          ? t("features.wallet-list.refreshAssets")
+                          : t("features.wallet-list.refreshTransactions")}
+                      </button>
+                    </div>
                   </div>
-                  <div className="space-y-3 rounded-xl border border-white/10 bg-white/[0.03] p-4">
-                    <h3 className="text-sm font-semibold text-gray-200">
-                      {t("features.wallet-list.chainHistory", { chain: activeEvmChain?.name || t("features.wallet-list.currentPublicChain") })}
-                    </h3>
-                    {evmTransactions.length === 0 ? (
-                      <p className="rounded-lg border border-dashed border-white/10 bg-black/20 p-4 text-sm text-gray-500">
-                        {t("features.wallet-list.otherChainsNoHistory")}
-                      </p>
-                    ) : (
-                      <div className="space-y-2">
-                        {evmTransactions.map((entry) => (
-                          <div key={entry.hash} className="rounded-lg border border-white/10 bg-black/20 p-3 text-sm">
-                            <p className="text-white">{entry.status} · block {entry.block_number ?? "-"}</p>
-                            <p className="mt-1 break-all text-xs text-gray-500">{entry.hash}</p>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {currentEvmAssets?.history_message && (
-                      <p className="text-xs text-yellow-200">{currentEvmAssets.history_message}</p>
-                    )}
-                  </div>
+                  {walletOverviewTab === "assets" ? (
+                    <UnifiedAssetList
+                      assets={evmAssetsForCurrentChain}
+                      error={evmError}
+                      labels={unifiedWalletLabels}
+                      onSelect={openUnifiedAssetForSend}
+                      preferredChainId={`evm:${activeEvmChain?.chain_id ?? ""}`}
+                      refreshing={evmBusy}
+                      onRefresh={refreshEvmAssets}
+                      showHeader={false}
+                    />
+                  ) : (
+                    <div className="space-y-3">
+                      {evmTransactions.length === 0 ? (
+                        <p className="rounded-lg border border-dashed border-white/10 bg-black/20 p-4 text-sm text-gray-500">
+                          {t("features.wallet-list.otherChainsNoHistory")}
+                        </p>
+                      ) : (
+                        <div className="space-y-2">
+                          {evmTransactions.map((entry) => (
+                            <div key={entry.hash} className="rounded-lg border border-white/10 bg-black/20 p-3 text-sm">
+                              <p className="text-white">{entry.status} · block {entry.block_number ?? "-"}</p>
+                              <p className="mt-1 break-all text-xs text-gray-500">{entry.hash}</p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {currentEvmAssets?.history_message && (
+                        <p className="text-xs text-yellow-200">{currentEvmAssets.history_message}</p>
+                      )}
+                    </div>
+                  )}
                 </section>
               </>
             )}

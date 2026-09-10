@@ -290,6 +290,7 @@
       "chainNativeBalance": "{symbol} 余额",
       "chainRefreshAssets": "刷新链上资产",
       "otherChainsOpenWorkbench": "打开 EVM 钱包",
+      "otherChainsAddToken": "添加代币",
       "otherChainsNoWalletTitle": "还没有 EVM 钱包",
       "otherChainsNoWalletHint": "创建一个钱包即可自动获得 Solana 账户和 EVM 账户；同一个 EVM 地址支持所有 EVM 兼容链。",
       "otherChainsCreateImport": "创建钱包",

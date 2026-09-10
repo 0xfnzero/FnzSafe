@@ -75,7 +75,8 @@ async function fetchOk(url) {
       cache: "no-store",
       signal: controller.signal,
     });
-    return response.ok;
+    const body = await response.text();
+    return response.ok && body.trim().length > 0;
   } catch {
     return false;
   } finally {
