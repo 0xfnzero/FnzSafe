@@ -34,7 +34,7 @@ export function normalizeWalletAuth(method: WalletAuthTab): WalletAuthTab {
 }
 
 export const authFormsWithWallets = new Set([
-  "decrypt", "unlock", "get-pubkey", "transfer-sol", "transfer-token",
+  "decrypt", "unlock", "get-pubkey", "transfer-sol", "transfer-token", "create-token-ata",
   "create-wsol-ata", "wrap-sol", "unwrap-sol", "close-wsol-ata",
   "create-nonce", "pumpfun-sell", "pumpswap-sell", "create-tfa",
   "pumpfun-cashback", "pumpswap-cashback", "program-deploy", "program-upgrade",

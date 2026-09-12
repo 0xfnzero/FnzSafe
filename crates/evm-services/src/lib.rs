@@ -1076,9 +1076,9 @@ where
     }
     match method.as_str() {
         "personal_sign" | "eth_sign" => {
-            let message = evm_message_from_payload(&payload_json)?;
+            let message = evm_message_from_payload(&payload_json, &wallet_address)?;
             Ok(EvmDappSignSubmitResult {
-                signature: Some(sign_personal_message(&signing_key, message.as_bytes())?),
+                signature: Some(sign_personal_message(&signing_key, &message)?),
                 signed_transaction: None,
                 transaction: None,
                 status: "signed".to_string(),
@@ -2403,24 +2403,51 @@ fn sign_digest(signing_key: &SigningKey, digest: &[u8]) -> EvmResult<(Signature,
         .map_err(|_| EvmServiceError::InvalidInput("EVM signing failed".to_string()))
 }
 
-fn evm_message_from_payload(payload_json: &str) -> EvmResult<String> {
+fn evm_message_from_payload(payload_json: &str, wallet_address: &str) -> EvmResult<Vec<u8>> {
     let value: serde_json::Value = serde_json::from_str(payload_json)
         .map_err(|_| EvmServiceError::InvalidInput("EVM dApp payload must be JSON".to_string()))?;
     if let Some(message) = value.get("message").and_then(serde_json::Value::as_str) {
-        return Ok(message.to_string());
+        return evm_message_bytes(message);
     }
     if let Some(params) = value.get("params").and_then(serde_json::Value::as_array) {
         for item in params {
             if let Some(message) = item.as_str() {
-                if !message.starts_with("0x") || message.len() > 42 {
-                    return Ok(message.to_string());
+                if normalize_address(message, "signing account").is_ok() {
+                    if !address_eq(message, wallet_address) {
+                        return Err(EvmServiceError::InvalidInput(
+                            "EVM signing account does not match the selected wallet".to_string(),
+                        ));
+                    }
+                    continue;
                 }
+                return evm_message_bytes(message);
             }
         }
     }
     Err(EvmServiceError::InvalidInput(
         "EVM message payload must include a message string".to_string(),
     ))
+}
+
+fn evm_message_bytes(value: &str) -> EvmResult<Vec<u8>> {
+    let bytes = if let Some(hex_value) = value.strip_prefix("0x") {
+        if hex_value.len() % 2 != 0 {
+            return Err(EvmServiceError::InvalidInput(
+                "EVM message hex must contain complete bytes".to_string(),
+            ));
+        }
+        hex::decode(hex_value).map_err(|_| {
+            EvmServiceError::InvalidInput("EVM message contains invalid hex".to_string())
+        })?
+    } else {
+        value.as_bytes().to_vec()
+    };
+    if bytes.is_empty() || bytes.len() > 16 * 1024 {
+        return Err(EvmServiceError::InvalidInput(
+            "EVM message must contain between 1 and 16384 bytes".to_string(),
+        ));
+    }
+    Ok(bytes)
 }
 
 fn parse_dapp_transaction(
@@ -4196,6 +4223,29 @@ mod tests {
             .signature
             .as_deref()
             .is_some_and(|value| value.starts_with("0x")));
+    }
+
+    #[test]
+    fn dapp_message_payload_decodes_hex_and_binds_the_selected_account() {
+        let wallet_address = "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf";
+        let payload = serde_json::json!({
+            "params": ["0x68656c6c6f", wallet_address]
+        })
+        .to_string();
+        assert_eq!(
+            evm_message_from_payload(&payload, wallet_address).unwrap(),
+            b"hello"
+        );
+
+        let mismatched = serde_json::json!({
+            "params": [
+                "0x000000000000000000000000000000000000dead",
+                "0x68656c6c6f"
+            ]
+        })
+        .to_string();
+        let error = evm_message_from_payload(&mismatched, wallet_address).unwrap_err();
+        assert!(error.to_string().contains("does not match"));
     }
 
     #[test]

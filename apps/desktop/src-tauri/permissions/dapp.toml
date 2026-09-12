@@ -88,6 +88,16 @@ description = "Allow an allowlisted DApp webview to submit a transaction signing
 commands.allow = ["dapp_submit_sign_request"]
 
 [[permission]]
+identifier = "allow-submit-dapp-connect-request"
+description = "Allow an embedded EVM DApp webview to request access to its bound wallet account."
+commands.allow = ["dapp_submit_connect_request"]
+
+[[permission]]
+identifier = "allow-poll-dapp-connect-request"
+description = "Allow an embedded EVM DApp webview to poll its own wallet connection result."
+commands.allow = ["dapp_poll_connect_request"]
+
+[[permission]]
 identifier = "allow-poll-dapp-sign-request"
 description = "Allow an allowlisted DApp webview to poll its transaction signing result."
 commands.allow = ["dapp_poll_sign_request"]

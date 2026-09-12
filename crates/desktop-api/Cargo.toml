@@ -25,6 +25,7 @@ solana-program-runtime = { version = "=3.1.12", features = ["agave-unstable-api"
 solana-rpc-client-api = "3.1"
 solana-sbpf = "=0.13.1"
 solana-sdk = "3.0"
+solana-program-pack = "3.0"
 solana-system-interface = "3.2"
 solana-svm-feature-set = { version = "=3.1.12", features = ["agave-unstable-api"] }
 solana-transaction-status-client-types = "3.1"
@@ -44,6 +45,7 @@ futures = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 spl-token = "6.0"
+spl-token-interface = "2.0"
 uuid = { version = "1", features = ["v4"] }
 aes-gcm = "0.10"
 aws-lc-rs = { version = "=1.17.3", default-features = false, features = ["non-fips"] }

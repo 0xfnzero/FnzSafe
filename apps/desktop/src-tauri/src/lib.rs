@@ -92,6 +92,7 @@ struct DappSession {
     app_id: String,
     app_name: String,
     url: String,
+    wallet_family: String,
     wallet_public_key: String,
     network: String,
     opened_at_ms: u64,
@@ -112,12 +113,15 @@ struct DappSignRequestEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     request_purpose: Option<String>,
     method: String,
+    wallet_family: String,
     wallet_public_key: String,
     network: String,
     transaction_base64: String,
     transaction_format: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     message_base64: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    payload_json: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     callback_url: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -131,8 +135,12 @@ struct DappConnectRequestEvent {
     app_id: String,
     app_name: String,
     app_url: String,
+    wallet_family: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wallet_public_key: Option<String>,
     network: String,
-    callback_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    callback_url: Option<String>,
     created_at_ms: u64,
 }
 
@@ -145,6 +153,7 @@ struct DappPendingRequest {
 
 #[derive(Clone)]
 struct DappPendingConnectRequest {
+    webview_label: Option<String>,
     event: DappConnectRequestEvent,
     result: Option<DappSignResult>,
 }
@@ -1626,7 +1635,18 @@ fn is_safe_dapp_webview_navigation_url(url: &tauri::Url) -> bool {
         return true;
     }
 
-    matches!(url.scheme(), "about" | "blob" | "data")
+    matches!(url.scheme(), "about" | "blob")
+}
+
+fn update_dapp_session_navigation(session: &mut DappSession, url: &tauri::Url) {
+    session.url = url.to_string();
+    if !session.app_id.starts_with("web:") {
+        return;
+    }
+    if let Some(host) = url.host_str() {
+        session.app_id = format!("web:{host}");
+        session.app_name = host.to_string();
+    }
 }
 
 fn is_fomo_auth_popup_url(url: &tauri::Url) -> bool {
@@ -1828,6 +1848,26 @@ fn is_likely_solana_pubkey(value: &str) -> bool {
             .all(|b| matches!(b, b'1'..=b'9' | b'A'..=b'H' | b'J'..=b'N' | b'P'..=b'Z' | b'a'..=b'k' | b'm'..=b'z'))
 }
 
+fn is_likely_evm_address(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed.len() == 42
+        && trimmed.starts_with("0x")
+        && trimmed[2..].bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn validate_dapp_wallet_family(
+    value: Option<&str>,
+    has_allowlisted_dapp: bool,
+) -> Result<String, String> {
+    let family = value
+        .unwrap_or(if has_allowlisted_dapp { "solana" } else { "" })
+        .trim();
+    match family {
+        "solana" | "evm" => Ok(family.to_string()),
+        _ => Err("unsupported dapp wallet family".to_string()),
+    }
+}
+
 fn validate_dapp_method(method: &str) -> Result<String, String> {
     let normalized = method.trim();
     match normalized {
@@ -1838,6 +1878,32 @@ fn validate_dapp_method(method: &str) -> Result<String, String> {
         | "signMessage" => Ok(normalized.to_string()),
         _ => Err("unsupported dapp signing method".to_string()),
     }
+}
+
+fn validate_evm_dapp_method(method: &str) -> Result<String, String> {
+    let normalized = method.trim();
+    match normalized {
+        "personal_sign"
+        | "eth_sign"
+        | "eth_signTypedData"
+        | "eth_signTypedData_v4"
+        | "eth_sendTransaction"
+        | "eth_signTransaction" => Ok(normalized.to_string()),
+        _ => Err("unsupported EVM dapp signing method".to_string()),
+    }
+}
+
+fn validate_evm_payload_json(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.len() > 128 * 1024 {
+        return Err("invalid EVM dapp payload".to_string());
+    }
+    let parsed: serde_json::Value = serde_json::from_str(trimmed)
+        .map_err(|_| "EVM dapp payload is not valid JSON".to_string())?;
+    if !parsed.is_array() && !parsed.is_object() {
+        return Err("EVM dapp payload must be a JSON array or object".to_string());
+    }
+    Ok(trimmed.to_string())
 }
 
 fn validate_transaction_format(format: &str) -> Result<String, String> {
@@ -2071,8 +2137,10 @@ fn parse_connect_deep_link(url: &tauri::Url) -> Result<DappConnectRequestEvent, 
         app_id: "fnzsafe-deep-link".to_string(),
         app_name,
         app_url: app_url_string,
+        wallet_family: "solana".to_string(),
+        wallet_public_key: None,
         network,
-        callback_url,
+        callback_url: Some(callback_url),
         created_at_ms: now_ms(),
     })
 }
@@ -2155,11 +2223,13 @@ fn parse_sign_deep_link(url: &tauri::Url) -> Result<DappSignRequestEvent, String
         app_url: app_url_string,
         request_purpose,
         method,
+        wallet_family: "solana".to_string(),
         wallet_public_key,
         network,
         transaction_base64,
         transaction_format,
         message_base64,
+        payload_json: None,
         callback_url,
         known_programs: deep_link_known_programs(url)?,
         created_at_ms: now_ms(),
@@ -2213,6 +2283,7 @@ fn enqueue_dapp_sign_request(
 fn enqueue_dapp_connect_request(
     app: &DesktopAppHandle,
     state: &DappBridgeState,
+    webview_label: Option<String>,
     event: DappConnectRequestEvent,
 ) -> Result<(), String> {
     ensure_dapp_connections_active(state)?;
@@ -2234,6 +2305,7 @@ fn enqueue_dapp_connect_request(
     requests.insert(
         event.request_id.clone(),
         DappPendingConnectRequest {
+            webview_label,
             event: event.clone(),
             result: None,
         },
@@ -2304,7 +2376,7 @@ fn handle_connect_deep_link(app: &DesktopAppHandle, url: &tauri::Url) -> Result<
     let event = parse_connect_deep_link(url)?;
     focus_main_window(app);
     let state = app.state::<DappBridgeState>();
-    enqueue_dapp_connect_request(app, state.inner(), event)
+    enqueue_dapp_connect_request(app, state.inner(), None, event)
 }
 
 fn handle_fnzsafe_deep_link(app: &DesktopAppHandle, url: &tauri::Url) -> Result<(), String> {
@@ -2331,15 +2403,16 @@ fn handle_current_fnzsafe_deep_links(app: &DesktopAppHandle) {
     }
 }
 
-fn dapp_provider_script(
-    dapp: &AllowedDapp,
+fn solana_dapp_provider_script(
+    app_id: &str,
+    app_name: &str,
     wallet_public_key: &str,
     network: &str,
 ) -> Result<String, String> {
     let wallet_public_key = serde_json::to_string(wallet_public_key).map_err(|e| e.to_string())?;
     let network = serde_json::to_string(network).map_err(|e| e.to_string())?;
-    let app_id = serde_json::to_string(dapp.id).map_err(|e| e.to_string())?;
-    let app_name = serde_json::to_string(dapp.name).map_err(|e| e.to_string())?;
+    let app_id = serde_json::to_string(app_id).map_err(|e| e.to_string())?;
+    let app_name = serde_json::to_string(app_name).map_err(|e| e.to_string())?;
     let wallet_name = serde_json::to_string(DAPP_WALLET_NAME).map_err(|e| e.to_string())?;
     let wallet_icon = serde_json::to_string(&format!(
         "data:image/png;base64,{}",
@@ -2354,9 +2427,10 @@ fn dapp_provider_script(
   const appId = {app_id};
   const appName = {app_name};
   const walletName = {wallet_name};
-  const walletIcon = {wallet_icon};
-  const listeners = new Map();
-  let connected = true;
+	  const walletIcon = {wallet_icon};
+	  const listeners = new Map();
+	  let connected = false;
+	  let connectionPromise = null;
 
   function sleep(ms) {{ return new Promise((resolve) => setTimeout(resolve, ms)); }}
 	  function tauriInvoke(command, args) {{
@@ -2364,7 +2438,37 @@ fn dapp_provider_script(
 	    if (typeof invoke !== "function") {{
 	      throw new Error("FnzSafe bridge is unavailable");
 	    }}
-	    return invoke(command, args || {{}});
+		    return invoke(command, args || {{}});
+		  }}
+	  async function requestConnection() {{
+	    if (connected) return {{ publicKey }};
+	    if (connectionPromise) return connectionPromise;
+	    connectionPromise = (async () => {{
+	      const requestId = await tauriInvoke("dapp_submit_connect_request");
+	      const started = Date.now();
+	      while (Date.now() - started < 180000) {{
+	        const poll = await tauriInvoke("dapp_poll_connect_request", {{ requestId }});
+	        if (poll.status === "approved") {{
+	          if (String(poll.result?.public_key || "") !== walletPublicKey) {{
+	            throw new Error("FnzSafe returned a different wallet account");
+	          }}
+	          connected = true;
+	          setAutoConnectHints();
+	          emit("connect", publicKey);
+	          emitWallet("change", {{ accounts: standardWallet.accounts }});
+	          return {{ publicKey }};
+	        }}
+	        if (poll.status === "rejected") throw new Error(poll.result?.error || "User rejected the request");
+	        if (poll.status === "expired") throw new Error("FnzSafe connection request expired");
+	        await sleep(500);
+	      }}
+	      throw new Error("FnzSafe connection request timed out");
+	    }})();
+	    try {{
+	      return await connectionPromise;
+	    }} finally {{
+	      connectionPromise = null;
+	    }}
 	  }}
   function bytesToBase64(bytes) {{
     const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
@@ -2547,13 +2651,10 @@ fn dapp_provider_script(
     appId,
     appName,
     network,
-    get publicKey() {{ return connected ? publicKey : null; }},
-    get isConnected() {{ return connected; }},
-    async connect() {{
-      connected = true;
-      emit("connect", publicKey);
-      emitWallet("change", {{ accounts: standardWallet.accounts }});
-      return {{ publicKey }};
+	    get publicKey() {{ return connected ? publicKey : null; }},
+	    get isConnected() {{ return connected; }},
+	    async connect() {{
+	      return requestConnection();
     }},
     async disconnect() {{
       connected = false;
@@ -2582,9 +2683,10 @@ fn dapp_provider_script(
       if (method === "signMessage") return this.signMessage(params?.message ?? params?.[0] ?? params);
       if (method === "signAndSendTransaction") return this.signAndSendTransaction(params?.transaction || params?.[0] || params);
       throw new Error("Unsupported FnzSafe provider method: " + method);
-    }},
-    async signTransaction(transaction) {{
-      const result = await requestSignature("signTransaction", transaction);
+	    }},
+	    async signTransaction(transaction) {{
+	      if (!connected) await requestConnection();
+	      const result = await requestSignature("signTransaction", transaction);
       if (!result.raw_transaction) throw new Error("FnzSafe did not return a signed transaction");
       return hydrateSignedTransaction(transaction, result.raw_transaction);
     }},
@@ -2595,14 +2697,16 @@ fn dapp_provider_script(
       }}
       return signed;
     }},
-    async signAndSendTransaction(input) {{
-      const transaction = input?.transaction || input;
+	    async signAndSendTransaction(input) {{
+	      if (!connected) await requestConnection();
+	      const transaction = input?.transaction || input;
       const result = await requestSignature("signAndSendTransaction", transaction);
       if (!result.signature) throw new Error("FnzSafe did not return a transaction signature");
       return {{ signature: result.signature }};
     }},
-    async sendTransaction(transaction, connection, options) {{
-      if (connection && typeof connection.sendRawTransaction === "function") {{
+	    async sendTransaction(transaction, connection, options) {{
+	      if (!connected) await requestConnection();
+	      if (connection && typeof connection.sendRawTransaction === "function") {{
         const signedTransaction = await this.signTransaction(transaction);
         const raw = bytesView(signedTransaction) || serializeTransaction(signedTransaction);
         return connection.sendRawTransaction(raw, options || {{}});
@@ -2611,8 +2715,9 @@ fn dapp_provider_script(
       if (!result.signature) throw new Error("FnzSafe did not return a transaction signature");
       return result.signature;
     }},
-    async signMessage(message) {{
-      const result = await requestMessageSignature(message);
+	    async signMessage(message) {{
+	      if (!connected) await requestConnection();
+	      const result = await requestMessageSignature(message);
       if (!result.signature) throw new Error("FnzSafe did not return a message signature");
       return base58Decode(result.signature);
     }},
@@ -2624,13 +2729,11 @@ fn dapp_provider_script(
     chains: ["solana:mainnet", "solana:devnet", "solana:testnet"],
     get accounts() {{ return connected ? [account] : []; }},
     features: {{
-      "standard:connect": {{
-        version: "1.0.0",
-        connect: async () => {{
-          connected = true;
-          emit("connect", publicKey);
-          emitWallet("change", {{ accounts: standardWallet.accounts }});
-          return {{ accounts: standardWallet.accounts }};
+	      "standard:connect": {{
+	        version: "1.0.0",
+	        connect: async () => {{
+	          await requestConnection();
+	          return {{ accounts: standardWallet.accounts }};
         }},
       }},
       "standard:disconnect": {{
@@ -2649,6 +2752,7 @@ fn dapp_provider_script(
 	        version: "1.0.0",
 	        supportedTransactionVersions: ["legacy", 0],
 	        signTransaction: async (...inputs) => {{
+	          if (!connected) await requestConnection();
           const signed = [];
           for (const input of inputs) {{
             let resolved = false;
@@ -2680,6 +2784,7 @@ fn dapp_provider_script(
 	        version: "1.0.0",
 	        supportedTransactionVersions: ["legacy", 0],
 	        signAndSendTransaction: async (...inputs) => {{
+	          if (!connected) await requestConnection();
 	          const signed = [];
 	          for (const input of inputs) {{
 	            let resolved = false;
@@ -2710,6 +2815,7 @@ fn dapp_provider_script(
 	      "solana:signMessage": {{
         version: "1.0.0",
         signMessage: async (...inputs) => {{
+	          if (!connected) await requestConnection();
           const signed = [];
           for (const input of inputs) {{
             const message = input?.message || input;
@@ -2871,8 +2977,9 @@ fn dapp_provider_script(
   window.phantom = window.phantom || {{}};
   Object.defineProperty(window.phantom, "solana", {{ value: provider, configurable: true }});
   Object.defineProperty(window, "solflare", {{ value: provider, configurable: true }});
-  Object.defineProperty(window, "fnzeroWallet", {{ value: provider, configurable: true }});
-  registerStandardWallet(standardWallet);
+	  Object.defineProperty(window, "fnzeroWallet", {{ value: provider, configurable: true }});
+	  try {{ window.dispatchEvent(new Event("solana#initialized")); }} catch (_) {{}}
+	  registerStandardWallet(standardWallet);
   installFnzSafeDomPrioritizer();
   [0, 250, 750, 1500, 3000].forEach((delay) => window.setTimeout(prioritizeFnzSafes, delay));
   [0, 250, 750, 1500, 3000].forEach((delay) => window.setTimeout(prioritizeFnzSafeDom, delay));
@@ -2880,6 +2987,221 @@ fn dapp_provider_script(
 }})();
 "#
     ))
+}
+
+fn evm_dapp_provider_script(wallet_address: &str, network: &str) -> Result<String, String> {
+    if !is_likely_evm_address(wallet_address) {
+        return Err("invalid EVM wallet address".to_string());
+    }
+    let chain_id = network
+        .strip_prefix("eip155:")
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .ok_or_else(|| "invalid EVM dapp network".to_string())?;
+    let wallet_address = serde_json::to_string(wallet_address).map_err(|e| e.to_string())?;
+    let chain_id_hex =
+        serde_json::to_string(&format!("0x{chain_id:x}")).map_err(|e| e.to_string())?;
+    let chain_id_decimal =
+        serde_json::to_string(&chain_id.to_string()).map_err(|e| e.to_string())?;
+    let wallet_name = serde_json::to_string(DAPP_WALLET_NAME).map_err(|e| e.to_string())?;
+    let wallet_icon = serde_json::to_string(&format!(
+        "data:image/png;base64,{}",
+        BASE64.encode(include_bytes!("../icons/dapp-wallet-icon.png"))
+    ))
+    .map_err(|e| e.to_string())?;
+    let script = r#"
+(function () {
+  if (window.__FNZSAFE_EVM_PROVIDER__) return;
+  const walletAddress = __WALLET_ADDRESS__;
+  const chainId = __CHAIN_ID_HEX__;
+  const networkVersion = __CHAIN_ID_DECIMAL__;
+  const walletName = __WALLET_NAME__;
+  const walletIcon = __WALLET_ICON__;
+  const listeners = new Map();
+  let connected = false;
+  let connectionPromise = null;
+
+  function providerError(code, message) {
+    const error = new Error(message);
+    error.code = code;
+    return error;
+  }
+  function emit(event, value) {
+    const handlers = listeners.get(event);
+    if (!handlers) return;
+    for (const handler of Array.from(handlers)) {
+      try { handler(value); } catch (_) {}
+    }
+  }
+  function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+  function tauriInvoke(command, args) {
+    const invoke = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
+    if (typeof invoke !== "function") throw providerError(4900, "FnzSafe bridge is unavailable");
+    return invoke(command, args || {});
+  }
+  async function requestSignature(method, params) {
+    const requestId = await tauriInvoke("dapp_submit_sign_request", {
+      method,
+      payloadJson: JSON.stringify({ method, params: params ?? [] }),
+    });
+    const started = Date.now();
+    while (Date.now() - started < 180000) {
+      const poll = await tauriInvoke("dapp_poll_sign_request", { requestId });
+      if (poll.status === "approved") {
+        if (method === "eth_signTransaction") {
+          if (!poll.result?.raw_transaction) throw providerError(-32603, "FnzSafe did not return a signed transaction");
+          return poll.result.raw_transaction;
+        }
+        if (!poll.result?.signature) throw providerError(-32603, "FnzSafe did not return a signature");
+        return poll.result.signature;
+      }
+      if (poll.status === "rejected") {
+        throw providerError(4001, poll.result?.error || "User rejected the request");
+      }
+      if (poll.status === "expired") throw providerError(4001, "FnzSafe signing request expired");
+      await sleep(500);
+    }
+    throw providerError(4900, "FnzSafe signing request timed out");
+  }
+  async function requestConnection() {
+    if (connected) return [walletAddress];
+    if (connectionPromise) return connectionPromise;
+    connectionPromise = (async () => {
+      const requestId = await tauriInvoke("dapp_submit_connect_request");
+      const started = Date.now();
+      while (Date.now() - started < 180000) {
+        const poll = await tauriInvoke("dapp_poll_connect_request", { requestId });
+        if (poll.status === "approved") {
+          const approvedAddress = String(poll.result?.public_key || "");
+          if (approvedAddress.toLowerCase() !== walletAddress.toLowerCase()) {
+            throw providerError(-32603, "FnzSafe returned a different wallet account");
+          }
+          connected = true;
+          emit("connect", { chainId });
+          emit("accountsChanged", [walletAddress]);
+          return [walletAddress];
+        }
+        if (poll.status === "rejected") {
+          throw providerError(4001, poll.result?.error || "User rejected the request");
+        }
+        if (poll.status === "expired") throw providerError(4001, "FnzSafe connection request expired");
+        await sleep(500);
+      }
+      throw providerError(4900, "FnzSafe connection request timed out");
+    })();
+    try {
+      return await connectionPromise;
+    } finally {
+      connectionPromise = null;
+    }
+  }
+  const provider = {
+    isFnzSafe: true,
+    isConnected: () => connected,
+    get chainId() { return chainId; },
+    get networkVersion() { return networkVersion; },
+    get selectedAddress() { return connected ? walletAddress : null; },
+    async request(args) {
+      if (!args || typeof args.method !== "string") throw providerError(-32600, "Invalid EIP-1193 request");
+      const method = args.method;
+      const params = args.params ?? [];
+      switch (method) {
+        case "eth_chainId": return chainId;
+        case "net_version": return networkVersion;
+        case "eth_accounts": return connected ? [walletAddress] : [];
+        case "eth_coinbase": return connected ? walletAddress : null;
+        case "eth_requestAccounts": return requestConnection();
+        case "wallet_requestPermissions":
+          await requestConnection();
+          return [{ parentCapability: "eth_accounts" }];
+        case "wallet_getPermissions":
+          return connected ? [{ parentCapability: "eth_accounts" }] : [];
+        case "wallet_switchEthereumChain": {
+          const requested = String(params?.[0]?.chainId || "").toLowerCase();
+          if (requested === chainId.toLowerCase()) return null;
+          throw providerError(4902, "Switch the active EVM network in FnzSafe first");
+        }
+        case "wallet_addEthereumChain": {
+          const requested = String(params?.[0]?.chainId || "").toLowerCase();
+          if (requested === chainId.toLowerCase()) return null;
+          throw providerError(4200, "Add the network in FnzSafe settings first");
+        }
+        case "personal_sign":
+        case "eth_sign":
+        case "eth_signTypedData":
+        case "eth_signTypedData_v4":
+        case "eth_sendTransaction":
+        case "eth_signTransaction":
+          if (!connected) await requestConnection();
+          return requestSignature(method, params);
+        default:
+          throw providerError(4200, "Unsupported FnzSafe provider method: " + method);
+      }
+    },
+    enable() { return this.request({ method: "eth_requestAccounts" }); },
+    send(methodOrPayload, paramsOrCallback) {
+      if (typeof methodOrPayload === "string") {
+        return this.request({ method: methodOrPayload, params: paramsOrCallback || [] });
+      }
+      const promise = this.request(methodOrPayload || {});
+      if (typeof paramsOrCallback === "function") {
+        promise.then(
+          (result) => paramsOrCallback(null, { id: methodOrPayload?.id, jsonrpc: "2.0", result }),
+          (error) => paramsOrCallback(error, null),
+        );
+      }
+      return promise;
+    },
+    sendAsync(payload, callback) {
+      this.request(payload || {}).then(
+        (result) => callback(null, { id: payload?.id, jsonrpc: "2.0", result }),
+        (error) => callback(error, null),
+      );
+    },
+    on(event, handler) {
+      if (typeof handler !== "function") return this;
+      if (!listeners.has(event)) listeners.set(event, new Set());
+      listeners.get(event).add(handler);
+      return this;
+    },
+    removeListener(event, handler) {
+      listeners.get(event)?.delete(handler);
+      return this;
+    },
+    off(event, handler) { return this.removeListener(event, handler); },
+  };
+  provider.providers = [provider];
+  const providerInfo = Object.freeze({
+    uuid: "6fdd35f3-8306-4c49-8c52-9f6c73c86e8a",
+    name: walletName,
+    icon: walletIcon,
+    rdns: "dev.fnzero.safe",
+  });
+  const providerDetail = Object.freeze({ info: providerInfo, provider });
+  function announceProvider() {
+    try {
+      window.dispatchEvent(new CustomEvent("eip6963:announceProvider", { detail: providerDetail }));
+    } catch (_) {}
+  }
+  try {
+    Object.defineProperty(window, "ethereum", { value: provider, configurable: true });
+  } catch (_) {
+    try { window.ethereum = provider; } catch (_) {}
+  }
+  Object.defineProperty(window, "fnzsafe", { value: provider, configurable: true });
+  Object.defineProperty(window, "__FNZSAFE_EVM_PROVIDER__", { value: provider, configurable: false });
+  window.addEventListener("eip6963:requestProvider", announceProvider);
+  announceProvider();
+  [0, 100, 500, 1500, 3000].forEach((delay) => window.setTimeout(announceProvider, delay));
+  try { window.dispatchEvent(new Event("ethereum#initialized")); } catch (_) {}
+})();
+"#;
+    Ok(script
+        .replace("__WALLET_ADDRESS__", &wallet_address)
+        .replace("__CHAIN_ID_HEX__", &chain_id_hex)
+        .replace("__CHAIN_ID_DECIMAL__", &chain_id_decimal)
+        .replace("__WALLET_NAME__", &wallet_name)
+        .replace("__WALLET_ICON__", &wallet_icon))
 }
 
 fn fomo_alert_capture_script() -> &'static str {
@@ -3404,6 +3726,7 @@ async fn dapp_open_tab(
     url: String,
     app_id: Option<String>,
     wallet_public_key: Option<String>,
+    wallet_family: Option<String>,
     network: String,
     x: f64,
     y: f64,
@@ -3416,26 +3739,51 @@ async fn dapp_open_tab(
     let label = dapp_tab_label(&tab_id)?;
     let url = parse_dapp_browser_url(&url)?;
     let dapp = app_id.as_deref().and_then(allowed_dapp);
+    let wallet_family = if wallet_public_key.is_some() || dapp.is_some() {
+        validate_dapp_wallet_family(wallet_family.as_deref(), dapp.is_some())?
+    } else {
+        String::new()
+    };
     if let Some(dapp) = dapp.as_ref() {
         if !is_allowed_dapp_url(dapp, &url) {
             return Err("dapp tab URL does not match the selected DApp".to_string());
         }
     }
 
-    let wallet_public_key = match (dapp.as_ref(), wallet_public_key) {
-        (Some(_), Some(value)) => {
+    let wallet_public_key = match wallet_public_key {
+        Some(value) => {
             let trimmed = value.trim().to_string();
-            if !is_likely_solana_pubkey(&trimmed) {
-                return Err("invalid wallet public key".to_string());
+            let valid = if wallet_family == "evm" {
+                is_likely_evm_address(&trimmed)
+            } else {
+                is_likely_solana_pubkey(&trimmed)
+            };
+            if !valid {
+                return Err(format!("invalid {wallet_family} wallet address"));
             }
             Some(trimmed)
         }
-        (Some(_), None) => {
-            return Err("wallet public key is required for connected DApp tabs".to_string())
-        }
-        (None, _) => None,
+        None if wallet_family.is_empty() => None,
+        None => return Err("wallet address is required for connected DApp tabs".to_string()),
     };
     let network = validate_dapp_network(&network)?;
+    if wallet_family == "evm"
+        && network
+            .strip_prefix("eip155:")
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| *value > 0)
+            .is_none()
+    {
+        return Err("invalid EVM dapp network".to_string());
+    }
+    let app_id = dapp
+        .as_ref()
+        .map(|value| value.id.to_string())
+        .unwrap_or_else(|| format!("web:{}", url.host_str().unwrap_or("dapp")));
+    let app_name = dapp
+        .as_ref()
+        .map(|value| value.name.to_string())
+        .unwrap_or_else(|| url.host_str().unwrap_or("DApp").to_string());
 
     if let Some(existing) = app.get_webview(&label) {
         let _ = existing.close();
@@ -3454,11 +3802,13 @@ async fn dapp_open_tab(
     let tab_id_for_title = tab_id_for_nav.clone();
     let tab_id_for_new_window = tab_id_for_nav.clone();
     let dapp_for_nav = dapp.clone();
+    let allow_any_safe_navigation = dapp.is_none() && !wallet_family.is_empty();
     let app_for_nav = app.clone();
     let app_for_title = app.clone();
     let app_for_new_window = app.clone();
     let app_for_download = app.clone();
     let tab_id_for_download = tab_id_for_nav.clone();
+    let label_for_page_load = label.clone();
     let data_directory = dapp_browser_data_directory(&app)?;
     let mut builder = WebviewBuilder::new(label.clone(), WebviewUrl::External(url.clone()))
         .data_directory(data_directory)
@@ -3468,7 +3818,10 @@ async fn dapp_open_tab(
             }
             let allowed = match dapp_for_nav.as_ref() {
                 Some(dapp) => is_allowed_connected_dapp_navigation_url(dapp, target_url),
-                None => is_safe_dapp_webview_navigation_url(target_url),
+                None if allow_any_safe_navigation => {
+                    is_safe_dapp_webview_navigation_url(target_url)
+                }
+                None => false,
             };
             if is_safe_browser_url(target_url) {
                 let _ = app_for_nav.emit_to(
@@ -3489,6 +3842,12 @@ async fn dapp_open_tab(
             move |_webview, payload| {
                 if !is_safe_browser_url(payload.url()) {
                     return;
+                }
+                let state = app.state::<DappBridgeState>();
+                if let Ok(mut sessions) = state.sessions.lock() {
+                    if let Some(session) = sessions.get_mut(&label_for_page_load) {
+                        update_dapp_session_navigation(session, payload.url());
+                    }
                 }
                 let _ = app.emit_to(
                     "main",
@@ -3568,8 +3927,12 @@ async fn dapp_open_tab(
         });
 
     builder = builder.initialization_script(fomo_alert_capture_script());
-    if let (Some(dapp), Some(wallet_public_key)) = (dapp.as_ref(), wallet_public_key.as_ref()) {
-        let init_script = dapp_provider_script(dapp, wallet_public_key, &network)?;
+    if let Some(wallet_public_key) = wallet_public_key.as_ref() {
+        let init_script = if wallet_family == "evm" {
+            evm_dapp_provider_script(wallet_public_key, &network)?
+        } else {
+            solana_dapp_provider_script(&app_id, &app_name, wallet_public_key, &network)?
+        };
         builder = builder.initialization_script(&init_script);
     }
 
@@ -3595,7 +3958,7 @@ async fn dapp_open_tab(
         raise_embedded_webview(&webview)?;
     }
 
-    if let (Some(dapp), Some(wallet_public_key)) = (dapp, wallet_public_key) {
+    if let Some(wallet_public_key) = wallet_public_key {
         let mut sessions = state
             .sessions
             .lock()
@@ -3608,9 +3971,10 @@ async fn dapp_open_tab(
         sessions.insert(
             label,
             DappSession {
-                app_id: dapp.id.to_string(),
-                app_name: dapp.name.to_string(),
+                app_id,
+                app_name,
                 url: url.as_str().to_string(),
+                wallet_family,
                 wallet_public_key,
                 network,
                 opened_at_ms: now_ms(),
@@ -3636,11 +4000,16 @@ async fn dapp_navigate_tab(
         .get(&label)
         .cloned();
     if let Some(session) = dapp_session.as_ref() {
-        let dapp = allowed_dapp(&session.app_id).ok_or_else(|| "unsupported dapp".to_string())?;
-        if !is_allowed_dapp_url(&dapp, &url) {
-            return Err(
-                "connected DApp tabs can only navigate inside their DApp domain".to_string(),
-            );
+        if session.wallet_family == "solana" {
+            if allowed_dapp(&session.app_id)
+                .as_ref()
+                .is_some_and(|dapp| !is_allowed_dapp_url(dapp, &url))
+            {
+                return Err(
+                    "connected Solana DApp tabs can only navigate inside their DApp domain"
+                        .to_string(),
+                );
+            }
         }
     }
     let webview = app
@@ -5023,6 +5392,101 @@ fn dapp_submit_fomo_profile(
 }
 
 #[tauri::command]
+fn dapp_submit_connect_request(
+    webview: DesktopWebview,
+    app: DesktopAppHandle,
+    state: tauri::State<'_, DappBridgeState>,
+) -> Result<String, String> {
+    let webview_label = webview.label().to_string();
+    if dapp_tab_id_from_label(&webview_label).is_none() {
+        return Err("dapp connection requests are only accepted from dapp tabs".to_string());
+    }
+    let session = state
+        .sessions
+        .lock()
+        .map_err(|_| "dapp session lock poisoned".to_string())?
+        .get(&webview_label)
+        .cloned()
+        .ok_or_else(|| "no active dapp session for this tab".to_string())?;
+    if session.wallet_family != "evm" && session.wallet_family != "solana" {
+        return Err("unsupported embedded wallet session".to_string());
+    }
+    if now_ms().saturating_sub(session.opened_at_ms) > 12 * 60 * 60 * 1000 {
+        return Err("dapp session expired".to_string());
+    }
+    let current_url = webview
+        .url()
+        .ok()
+        .filter(is_safe_browser_url)
+        .ok_or_else(|| "dapp connection origin is unavailable".to_string())?;
+    let request_id = dapp_request_id();
+    let event = DappConnectRequestEvent {
+        request_id: request_id.clone(),
+        app_id: session.app_id,
+        app_name: current_url
+            .host_str()
+            .unwrap_or(&session.app_name)
+            .to_string(),
+        app_url: current_url.to_string(),
+        wallet_family: session.wallet_family,
+        wallet_public_key: Some(session.wallet_public_key),
+        network: session.network,
+        callback_url: None,
+        created_at_ms: now_ms(),
+    };
+    enqueue_dapp_connect_request(&app, state.inner(), Some(webview_label), event)?;
+    Ok(request_id)
+}
+
+#[tauri::command]
+fn dapp_poll_connect_request(
+    webview: DesktopWebview,
+    state: tauri::State<'_, DappBridgeState>,
+    request_id: String,
+) -> Result<DappPollResponse, String> {
+    let webview_label = webview.label().to_string();
+    if dapp_tab_id_from_label(&webview_label).is_none() {
+        return Err("dapp connection requests are only polled from dapp tabs".to_string());
+    }
+    let request_id = request_id.trim();
+    let mut requests = state
+        .connect_requests
+        .lock()
+        .map_err(|_| "dapp connect request lock poisoned".to_string())?;
+    let Some(pending) = requests.get(request_id) else {
+        return Ok(DappPollResponse {
+            status: "expired",
+            result: None,
+        });
+    };
+    if pending.webview_label.as_deref() != Some(webview_label.as_str()) {
+        return Err("dapp connection request does not belong to this tab".to_string());
+    }
+    if now_ms().saturating_sub(pending.event.created_at_ms) > DAPP_REQUEST_TTL_MS {
+        requests.remove(request_id);
+        return Ok(DappPollResponse {
+            status: "expired",
+            result: None,
+        });
+    }
+    if let Some(result) = pending.result.clone() {
+        requests.remove(request_id);
+        return Ok(DappPollResponse {
+            status: if result.approved {
+                "approved"
+            } else {
+                "rejected"
+            },
+            result: Some(result),
+        });
+    }
+    Ok(DappPollResponse {
+        status: "pending",
+        result: None,
+    })
+}
+
+#[tauri::command]
 fn dapp_submit_sign_request(
     webview: DesktopWebview,
     app: DesktopAppHandle,
@@ -5031,28 +5495,11 @@ fn dapp_submit_sign_request(
     transaction_base64: Option<String>,
     transaction_format: Option<String>,
     message_base64: Option<String>,
+    payload_json: Option<String>,
 ) -> Result<String, String> {
     let webview_label = webview.label().to_string();
     let Some(_tab_id) = dapp_tab_id_from_label(&webview_label) else {
         return Err("dapp signing requests are only accepted from dapp tabs".to_string());
-    };
-    let method = validate_dapp_method(&method)?;
-    let (transaction_base64, transaction_format, message_base64) = if method == "signMessage" {
-        let message_base64 = validate_dapp_message_base64(
-            message_base64
-                .as_deref()
-                .ok_or_else(|| "message payload is required".to_string())?,
-        )?;
-        ("".to_string(), "message".to_string(), Some(message_base64))
-    } else {
-        let transaction_base64 = validate_dapp_transaction_base64(
-            transaction_base64
-                .as_deref()
-                .ok_or_else(|| "transaction payload is required".to_string())?,
-        )?;
-        let transaction_format =
-            validate_transaction_format(transaction_format.as_deref().unwrap_or("auto"))?;
-        (transaction_base64, transaction_format, None)
     };
     let session = state
         .sessions
@@ -5064,20 +5511,79 @@ fn dapp_submit_sign_request(
     if now_ms().saturating_sub(session.opened_at_ms) > 12 * 60 * 60 * 1000 {
         return Err("dapp session expired".to_string());
     }
+    let (method, transaction_base64, transaction_format, message_base64, payload_json) = if session
+        .wallet_family
+        == "evm"
+    {
+        let method = validate_evm_dapp_method(&method)?;
+        let payload_json = validate_evm_payload_json(
+            payload_json
+                .as_deref()
+                .ok_or_else(|| "EVM dapp payload is required".to_string())?,
+        )?;
+        (
+            method,
+            String::new(),
+            "evm-json".to_string(),
+            None,
+            Some(payload_json),
+        )
+    } else {
+        let method = validate_dapp_method(&method)?;
+        let (transaction_base64, transaction_format, message_base64) = if method == "signMessage" {
+            let message_base64 = validate_dapp_message_base64(
+                message_base64
+                    .as_deref()
+                    .ok_or_else(|| "message payload is required".to_string())?,
+            )?;
+            ("".to_string(), "message".to_string(), Some(message_base64))
+        } else {
+            let transaction_base64 = validate_dapp_transaction_base64(
+                transaction_base64
+                    .as_deref()
+                    .ok_or_else(|| "transaction payload is required".to_string())?,
+            )?;
+            let transaction_format =
+                validate_transaction_format(transaction_format.as_deref().unwrap_or("auto"))?;
+            (transaction_base64, transaction_format, None)
+        };
+        (
+            method,
+            transaction_base64,
+            transaction_format,
+            message_base64,
+            None,
+        )
+    };
+    let current_url = webview
+        .url()
+        .ok()
+        .filter(is_safe_browser_url)
+        .unwrap_or_else(|| tauri::Url::parse(&session.url).expect("validated dapp session URL"));
+    let app_name = if session.wallet_family == "evm" || session.app_id.starts_with("web:") {
+        current_url
+            .host_str()
+            .unwrap_or(&session.app_name)
+            .to_string()
+    } else {
+        session.app_name
+    };
 
     let request_id = dapp_request_id();
     let event = DappSignRequestEvent {
         request_id: request_id.clone(),
         app_id: session.app_id,
-        app_name: session.app_name,
-        app_url: session.url,
+        app_name,
+        app_url: current_url.to_string(),
         request_purpose: None,
         method,
+        wallet_family: session.wallet_family,
         wallet_public_key: session.wallet_public_key,
         network: session.network,
         transaction_base64,
         transaction_format,
         message_base64,
+        payload_json,
         callback_url: None,
         known_programs: Vec::new(),
         created_at_ms: now_ms(),
@@ -5234,9 +5740,28 @@ fn resolve_dapp_connect_request(
         return Err("dapp connect request expired".to_string());
     }
     ensure_dapp_result_pending(&pending.result, "dapp connect request")?;
-    let callback_target =
-        append_dapp_result_to_callback_url(&pending.event.callback_url, request_id, &result)?;
-    spawn_system_browser(&callback_target)?;
+    if result.approved {
+        let approved_wallet = result
+            .public_key
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| "approved dapp connection must include a wallet address".to_string())?;
+        if let Some(expected_wallet) = pending.event.wallet_public_key.as_deref() {
+            let matches = if pending.event.wallet_family == "evm" {
+                approved_wallet.eq_ignore_ascii_case(expected_wallet)
+            } else {
+                approved_wallet == expected_wallet
+            };
+            if !matches {
+                return Err("approved wallet does not match the dapp session".to_string());
+            }
+        }
+    }
+    if let Some(callback_url) = pending.event.callback_url.as_deref() {
+        let callback_target =
+            append_dapp_result_to_callback_url(callback_url, request_id, &result)?;
+        spawn_system_browser(&callback_target)?;
+    }
     pending.result = Some(result);
     Ok(())
 }
@@ -5367,10 +5892,21 @@ fn dapp_sign_request_matches_permission(
 fn dapp_connect_request_matches_permission(
     request: &DappConnectRequestEvent,
     origin: &str,
+    wallet_public_key: &str,
     network: &str,
 ) -> bool {
     app_store::normalize_dapp_origin(&request.app_url)
         .is_ok_and(|request_origin| request_origin == origin)
+        && request
+            .wallet_public_key
+            .as_deref()
+            .is_none_or(|requested| {
+                if request.wallet_family == "evm" {
+                    requested.eq_ignore_ascii_case(wallet_public_key)
+                } else {
+                    requested == wallet_public_key
+                }
+            })
         && request.network.eq_ignore_ascii_case(network)
 }
 
@@ -5440,7 +5976,7 @@ fn disconnect_dapp_connection_state<ResultValue>(
             )
     });
     connect_requests.retain(|_, pending| {
-        !dapp_connect_request_matches_permission(&pending.event, origin, network)
+        !dapp_connect_request_matches_permission(&pending.event, origin, wallet_public_key, network)
     });
     Ok(result)
 }
@@ -6080,6 +6616,8 @@ pub fn run() {
             research_store::research_ai_key_status,
             research_store::research_ai_key_store,
             research_store::research_ai_key_delete,
+            dapp_submit_connect_request,
+            dapp_poll_connect_request,
             dapp_submit_sign_request,
             dapp_poll_sign_request,
             dapp_pending_sign_request,
@@ -6722,6 +7260,7 @@ mod tests {
             app_id: "pumpfun".to_string(),
             app_name: "Pump.fun".to_string(),
             url: "https://pump.fun/coin/example?source=wallet".to_string(),
+            wallet_family: "solana".to_string(),
             wallet_public_key: "wallet-a".to_string(),
             network: "mainnet".to_string(),
             opened_at_ms: now_ms(),
@@ -6759,11 +7298,13 @@ mod tests {
             app_url: session.url.clone(),
             request_purpose: None,
             method: "signMessage".to_string(),
+            wallet_family: "solana".to_string(),
             wallet_public_key: session.wallet_public_key.clone(),
             network: session.network.clone(),
             transaction_base64: String::new(),
             transaction_format: "message".to_string(),
             message_base64: Some("aGVsbG8=".to_string()),
+            payload_json: None,
             callback_url: None,
             known_programs: Vec::new(),
             created_at_ms: now_ms(),
@@ -6786,19 +7327,42 @@ mod tests {
             app_id: "fnzsafe-deep-link".to_string(),
             app_name: "Pump.fun".to_string(),
             app_url: session.url,
+            wallet_family: "solana".to_string(),
+            wallet_public_key: None,
             network: session.network,
-            callback_url: "https://pump.fun/wallet/callback".to_string(),
+            callback_url: Some("https://pump.fun/wallet/callback".to_string()),
             created_at_ms: now_ms(),
         };
         assert!(dapp_connect_request_matches_permission(
             &connect_request,
             "https://pump.fun",
+            "wallet-a",
             "mainnet"
         ));
         assert!(!dapp_connect_request_matches_permission(
             &connect_request,
             "https://pump.fun",
+            "wallet-a",
             "devnet"
+        ));
+
+        let evm_connect_request = DappConnectRequestEvent {
+            wallet_family: "evm".to_string(),
+            wallet_public_key: Some("0x1111111111111111111111111111111111111111".to_string()),
+            network: "eip155:4663".to_string(),
+            ..connect_request
+        };
+        assert!(dapp_connect_request_matches_permission(
+            &evm_connect_request,
+            "https://pump.fun",
+            "0x1111111111111111111111111111111111111111",
+            "EIP155:4663"
+        ));
+        assert!(!dapp_connect_request_matches_permission(
+            &evm_connect_request,
+            "https://pump.fun",
+            "0x2222222222222222222222222222222222222222",
+            "eip155:4663"
         ));
     }
 
@@ -6826,6 +7390,7 @@ mod tests {
             app_id: "pumpfun".to_string(),
             app_name: "Pump.fun".to_string(),
             url: "https://pump.fun".to_string(),
+            wallet_family: "solana".to_string(),
             wallet_public_key: wallet_public_key.to_string(),
             network: "mainnet".to_string(),
             opened_at_ms: now_ms(),
@@ -6850,6 +7415,7 @@ mod tests {
                 app_id: "pumpfun".to_string(),
                 app_name: "Pump.fun".to_string(),
                 url: "https://pump.fun".to_string(),
+                wallet_family: "solana".to_string(),
                 wallet_public_key: "wallet-a".to_string(),
                 network: "mainnet".to_string(),
                 opened_at_ms: now_ms(),
@@ -6877,6 +7443,7 @@ mod tests {
                 app_id: "pumpfun".to_string(),
                 app_name: "Pump.fun".to_string(),
                 url: "https://pump.fun".to_string(),
+                wallet_family: "solana".to_string(),
                 wallet_public_key: "wallet-a".to_string(),
                 network: "mainnet".to_string(),
                 opened_at_ms: now_ms(),
@@ -6900,6 +7467,7 @@ mod tests {
                 app_id: "pumpfun".to_string(),
                 app_name: "Pump.fun".to_string(),
                 url: "https://pump.fun".to_string(),
+                wallet_family: "solana".to_string(),
                 wallet_public_key: "wallet-a".to_string(),
                 network: "mainnet".to_string(),
                 opened_at_ms: now_ms(),
@@ -6935,6 +7503,90 @@ mod tests {
         assert!(!is_allowed_connected_dapp_navigation_url(
             &pumpfun, &data_page
         ));
+        assert!(!is_safe_dapp_webview_navigation_url(&data_page));
+    }
+
+    #[test]
+    fn user_entered_dapp_navigation_accepts_safe_web_origins() {
+        let uniswap = "https://app.uniswap.org/swap".parse().unwrap();
+        let localhost = "http://localhost:3000/".parse().unwrap();
+        let insecure_remote = "http://example.com/".parse().unwrap();
+
+        assert!(is_safe_dapp_webview_navigation_url(&uniswap));
+        assert!(is_safe_dapp_webview_navigation_url(&localhost));
+        assert!(!is_safe_dapp_webview_navigation_url(&insecure_remote));
+    }
+
+    #[test]
+    fn user_entered_dapp_session_tracks_the_current_origin() {
+        let mut session = DappSession {
+            app_id: "web:example.com".to_string(),
+            app_name: "example.com".to_string(),
+            url: "https://example.com/".to_string(),
+            wallet_family: "solana".to_string(),
+            wallet_public_key: "11111111111111111111111111111111".to_string(),
+            network: "mainnet".to_string(),
+            opened_at_ms: now_ms(),
+        };
+        let target = "https://app.uniswap.org/swap".parse().unwrap();
+
+        update_dapp_session_navigation(&mut session, &target);
+
+        assert_eq!(session.url, "https://app.uniswap.org/swap");
+        assert_eq!(session.app_id, "web:app.uniswap.org");
+        assert_eq!(session.app_name, "app.uniswap.org");
+    }
+
+    #[test]
+    fn evm_provider_announces_fnzsafe_with_the_selected_chain() {
+        let address = "0x1111111111111111111111111111111111111111";
+        let script = evm_dapp_provider_script(address, "eip155:4663").unwrap();
+        assert!(script.contains("eip6963:announceProvider"));
+        assert!(script.contains("eip6963:requestProvider"));
+        assert!(script.contains("Object.defineProperty(window, \"ethereum\""));
+        assert!(script.contains(address));
+        assert!(script.contains("0x1237"));
+        assert!(script.contains("eth_requestAccounts"));
+        assert!(script.contains("dapp_submit_connect_request"));
+        assert!(script.contains("dapp_poll_connect_request"));
+        assert!(script.contains("eth_sendTransaction"));
+    }
+
+    #[test]
+    fn solana_provider_supports_user_entered_dapps_without_exposing_the_account() {
+        let script = solana_dapp_provider_script(
+            "web:example.com",
+            "example.com",
+            "11111111111111111111111111111111",
+            "mainnet",
+        )
+        .unwrap();
+        assert!(script.contains("web:example.com"));
+        assert!(script.contains("let connected = false"));
+        assert!(script.contains("dapp_submit_connect_request"));
+        assert!(script.contains("dapp_poll_connect_request"));
+        assert!(script.contains("wallet-standard:register-wallet"));
+        assert!(script.contains("Object.defineProperty(window, \"solana\""));
+        assert!(
+            script
+                .matches("if (!connected) await requestConnection();")
+                .count()
+                >= 7
+        );
+    }
+
+    #[test]
+    fn evm_provider_and_signing_payload_validation_reject_malformed_input() {
+        assert!(evm_dapp_provider_script("not-an-address", "eip155:1").is_err());
+        assert!(
+            evm_dapp_provider_script("0x1111111111111111111111111111111111111111", "mainnet")
+                .is_err()
+        );
+        assert!(validate_evm_dapp_method("eth_sendTransaction").is_ok());
+        assert!(validate_evm_dapp_method("eth_sendRawTransaction").is_err());
+        assert!(validate_evm_payload_json(r#"[{"from":"0x111"}]"#).is_ok());
+        assert!(validate_evm_payload_json("not-json").is_err());
+        assert!(validate_evm_payload_json("\"scalar\"").is_err());
     }
 
     #[test]
@@ -6980,8 +7632,8 @@ mod tests {
         assert_eq!(request.app_name, "Example DApp");
         assert_eq!(request.network, "devnet");
         assert_eq!(
-            request.callback_url,
-            "http://localhost:5174/wallet/callback"
+            request.callback_url.as_deref(),
+            Some("http://localhost:5174/wallet/callback")
         );
     }
 

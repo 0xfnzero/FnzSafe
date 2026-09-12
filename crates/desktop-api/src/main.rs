@@ -62,8 +62,10 @@ use solana_loader_v3_interface::{
     instruction::{self as loader_v3_instruction, MINIMUM_EXTEND_PROGRAM_BYTES},
     state::UpgradeableLoaderState,
 };
+use solana_program_pack::Pack;
 use solana_rpc_client_api::{
     config::{RpcAccountInfoConfig, RpcSimulateTransactionConfig, RpcTransactionConfig},
+    custom_error::JSON_RPC_SERVER_ERROR_MIN_CONTEXT_SLOT_NOT_REACHED,
     request::{Address as RpcAddress, RpcError, RpcResponseErrorData, TokenAccountsFilter},
     response::RpcKeyedAccount,
 };
@@ -80,6 +82,7 @@ use solana_transaction_status_client_types::{
     option_serializer::OptionSerializer, EncodedTransaction, TransactionStatus, UiInstruction,
     UiMessage, UiParsedInstruction, UiTransactionEncoding,
 };
+use spl_token_interface::state::{Account as SplTokenAccount, Mint as SplTokenMint};
 use std::collections::HashMap;
 use std::fs;
 use std::net::{IpAddr, SocketAddr};
@@ -2568,6 +2571,90 @@ async fn submit_signed_transaction_once(
     }
 }
 
+async fn submit_signed_transaction_with_rebroadcast(
+    client: &RpcClient,
+    transaction: &Transaction,
+    action: &str,
+    context: &str,
+    commitment: CommitmentConfig,
+    commitment_label: &str,
+    timeout: Duration,
+) -> Result<(Signature, u64), ApiError> {
+    let local_signature = *transaction.signatures.first().ok_or_else(|| ApiError {
+        message: format!("{action}交易缺少本地签名；{context}"),
+    })?;
+    if local_signature == Signature::default() {
+        return Err(ApiError {
+            message: format!("{action}交易尚未签名；{context}"),
+        });
+    }
+
+    let deadline = Instant::now() + timeout;
+    let rebroadcast_interval = Duration::from_secs(5);
+    let mut next_broadcast = Instant::now();
+    let mut first_broadcast = true;
+    let mut last_rpc_error = None;
+
+    loop {
+        match client.get_signature_statuses_with_history(&[local_signature]) {
+            Ok(response) => {
+                if let Some(status) = response.value.into_iter().next().flatten() {
+                    if status.satisfies_commitment(commitment) {
+                        if let Some(error) = status.err.as_ref() {
+                            return Err(ApiError {
+                                message: format!(
+                                    "{}交易 {} 已在目标确认级别执行失败，不能盲目重试: {}；{}",
+                                    action, local_signature, error, context
+                                ),
+                            });
+                        }
+                        return Ok((local_signature, status.slot));
+                    }
+                }
+            }
+            Err(error) => last_rpc_error = Some(error.to_string()),
+        }
+
+        let now = Instant::now();
+        if now >= deadline {
+            let detail = last_rpc_error
+                .map(|error| format!("；最后一次 RPC 错误: {error}"))
+                .unwrap_or_default();
+            return Err(ApiError {
+                message: format!(
+                    "{}交易 {} 已使用同一确定签名重复广播，但未能在超时前确认 {}{}；{}。不得自动重签",
+                    action, local_signature, commitment_label, detail, context
+                ),
+            });
+        }
+
+        if now >= next_broadcast {
+            match client.send_transaction(transaction) {
+                Ok(rpc_signature) if rpc_signature != local_signature => {
+                    return Err(ApiError {
+                        message: format!(
+                            "{action} RPC 返回签名 {rpc_signature}，但本地确定签名为 {local_signature}；{context}"
+                        ),
+                    });
+                }
+                Ok(_) => last_rpc_error = None,
+                Err(error) if first_broadcast && send_error_is_preflight_rejection(&error) => {
+                    return Err(ApiError {
+                        message: format!(
+                            "{action}交易在 RPC 预检模拟阶段失败，未提交到链上: {error}；{context}"
+                        ),
+                    });
+                }
+                Err(error) => last_rpc_error = Some(error.to_string()),
+            }
+            first_broadcast = false;
+            next_broadcast = now + rebroadcast_interval;
+        }
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
 async fn submit_signed_versioned_transaction_once(
     client: &RpcClient,
     transaction: &VersionedTransaction,
@@ -4268,6 +4355,10 @@ async fn main() -> anyhow::Result<()> {
         // WSOL Operations (9-12)
         .route("/api/wsol/create-ata", post(create_wsol_ata))
         .route("/api/wsol/create-ata/", post(create_wsol_ata))
+        .route("/api/token/derive-ata", post(derive_token_ata))
+        .route("/api/token/derive-ata/", post(derive_token_ata))
+        .route("/api/token/create-ata", post(create_token_ata))
+        .route("/api/token/create-ata/", post(create_token_ata))
         .route("/api/wsol/wrap", post(wrap_sol))
         .route("/api/wsol/wrap/", post(wrap_sol))
         .route("/api/wsol/unwrap", post(unwrap_sol))
@@ -4309,6 +4400,11 @@ async fn main() -> anyhow::Result<()> {
         // Program Deployment
         .route("/api/program/deploy", post(deploy_generic_program))
         .route("/api/program/deploy/", post(deploy_generic_program))
+        .route("/api/program/deploy/progress", get(program_deploy_progress))
+        .route(
+            "/api/program/deploy/progress/",
+            get(program_deploy_progress),
+        )
         .route("/api/program/upgrade", post(upgrade_generic_program))
         .route("/api/program/upgrade/", post(upgrade_generic_program))
         .route(
@@ -8083,6 +8179,218 @@ async fn create_wsol_ata(
     }))
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeriveTokenAtaRequest {
+    mint: String,
+    owner: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateTokenAtaRequest {
+    #[serde(flatten)]
+    wallet: WalletAuthRequest,
+    mint: String,
+    owner: String,
+    #[serde(default)]
+    network: Option<String>,
+}
+
+#[derive(Serialize)]
+struct TokenAtaResponse {
+    status: String,
+    ata: String,
+    mint: String,
+    owner: String,
+    signature: Option<String>,
+}
+
+fn parse_token_ata_addresses(
+    mint: &str,
+    owner: &str,
+) -> Result<(Pubkey, Pubkey, Pubkey), ApiError> {
+    let mint = Pubkey::from_str(mint.trim()).map_err(|_| ApiError {
+        message: "无效的 Token Mint 地址".to_string(),
+    })?;
+    let owner = Pubkey::from_str(owner.trim()).map_err(|_| ApiError {
+        message: "无效的 Token Account Owner 地址".to_string(),
+    })?;
+    if mint == Pubkey::default() || owner == Pubkey::default() {
+        return Err(ApiError {
+            message: "Token Mint 和 Owner 不能是零地址".to_string(),
+        });
+    }
+    let ata = squads_v4::associated_token_address(&owner, &mint);
+    Ok((mint, owner, ata))
+}
+
+fn validate_standard_spl_mint(mint: &Pubkey, account: &Account) -> Result<(), ApiError> {
+    let token_program = Pubkey::from_str(SPL_TOKEN_PROGRAM_ID).map_err(|error| ApiError {
+        message: format!("Token Program 地址解析失败: {error}"),
+    })?;
+    if account.owner != token_program || account.executable {
+        return Err(ApiError {
+            message: format!("Mint {mint} 不是标准 SPL Token Mint"),
+        });
+    }
+    SplTokenMint::unpack(&account.data).map_err(|_| ApiError {
+        message: format!("Mint {mint} 的账户数据无效或尚未初始化"),
+    })?;
+    Ok(())
+}
+
+fn validate_standard_spl_ata(
+    ata: &Pubkey,
+    mint: &Pubkey,
+    owner: &Pubkey,
+    account: &Account,
+) -> Result<(), ApiError> {
+    let token_program = Pubkey::from_str(SPL_TOKEN_PROGRAM_ID).map_err(|error| ApiError {
+        message: format!("Token Program 地址解析失败: {error}"),
+    })?;
+    if account.owner != token_program || account.executable {
+        return Err(ApiError {
+            message: format!("ATA {ata} 不是标准 SPL Token 账户"),
+        });
+    }
+    let token_account = SplTokenAccount::unpack(&account.data).map_err(|_| ApiError {
+        message: format!("ATA {ata} 的账户数据无效或尚未初始化"),
+    })?;
+    if token_account.mint != *mint || token_account.owner != *owner {
+        return Err(ApiError {
+            message: format!("ATA {ata} 的 Mint 或 Owner 与请求不匹配"),
+        });
+    }
+    Ok(())
+}
+
+async fn derive_token_ata(
+    Json(req): Json<DeriveTokenAtaRequest>,
+) -> Result<Json<TokenAtaResponse>, ApiError> {
+    let (mint, owner, ata) = parse_token_ata_addresses(&req.mint, &req.owner)?;
+    Ok(Json(TokenAtaResponse {
+        status: "derived".to_string(),
+        ata: ata.to_string(),
+        mint: mint.to_string(),
+        owner: owner.to_string(),
+        signature: None,
+    }))
+}
+
+async fn create_token_ata(
+    Json(req): Json<CreateTokenAtaRequest>,
+) -> Result<Json<TokenAtaResponse>, ApiError> {
+    let (mint, owner, ata) = parse_token_ata_addresses(&req.mint, &req.owner)?;
+    let payer = req.wallet.keypair()?;
+    let (client, _) = rpc_client_for(req.network.as_deref())?;
+
+    let mint_account = client.get_account(&mint).map_err(|error| ApiError {
+        message: format!("无法在当前网络读取 Token Mint {mint}: {error}"),
+    })?;
+    validate_standard_spl_mint(&mint, &mint_account)?;
+
+    match client.get_account(&ata) {
+        Ok(account) => {
+            validate_standard_spl_ata(&ata, &mint, &owner, &account)?;
+            return Ok(Json(TokenAtaResponse {
+                status: "already_exists".to_string(),
+                ata: ata.to_string(),
+                mint: mint.to_string(),
+                owner: owner.to_string(),
+                signature: None,
+            }));
+        }
+        Err(error) if is_missing_token_account_error(&error.to_string()) => {}
+        Err(error) => {
+            return Err(ApiError {
+                message: format!("查询 ATA {ata} 失败: {error}"),
+            });
+        }
+    }
+
+    let instruction =
+        squads_v4::create_associated_token_account_idempotent_ix(&payer.pubkey(), &owner, &mint);
+    let signature = sign_and_send_single(&client, instruction, &payer)?;
+    let ata_account = client.get_account(&ata).map_err(|error| ApiError {
+        message: format!("交易已确认，但读取 ATA {ata} 失败: {error}"),
+    })?;
+    validate_standard_spl_ata(&ata, &mint, &owner, &ata_account)?;
+
+    Ok(Json(TokenAtaResponse {
+        status: "created".to_string(),
+        ata: ata.to_string(),
+        mint: mint.to_string(),
+        owner: owner.to_string(),
+        signature: Some(signature),
+    }))
+}
+
+#[cfg(test)]
+mod token_ata_tests {
+    use super::*;
+
+    #[test]
+    fn derives_known_fnzero_mainnet_usdc_vault_ata() {
+        let (_, _, ata) = parse_token_ata_addresses(
+            "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            "AmD5atx1L5qrxZsXsS8mbAhwj8b1skZusYJFWwbtGfLq",
+        )
+        .unwrap();
+        assert_eq!(
+            ata.to_string(),
+            "Ai657cHT1LFHRQjcj3dxvY7ALZJrk5Fv8Wne6nNj2mPV"
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_or_zero_token_ata_addresses() {
+        assert!(
+            parse_token_ata_addresses("not-a-mint", &Pubkey::new_unique().to_string()).is_err()
+        );
+        assert!(parse_token_ata_addresses(
+            &Pubkey::new_unique().to_string(),
+            &Pubkey::default().to_string(),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn validates_standard_mint_and_matching_ata_state() {
+        let token_program = Pubkey::from_str(SPL_TOKEN_PROGRAM_ID).unwrap();
+        let mint = Pubkey::new_unique();
+        let owner = Pubkey::new_unique();
+        let ata = squads_v4::associated_token_address(&owner, &mint);
+
+        let mut mint_data = vec![0_u8; SplTokenMint::LEN];
+        mint_data[45] = 1;
+        let mint_account = Account {
+            lamports: 1,
+            data: mint_data,
+            owner: token_program,
+            executable: false,
+            rent_epoch: 0,
+        };
+        validate_standard_spl_mint(&mint, &mint_account).unwrap();
+
+        let mut token_data = vec![0_u8; SplTokenAccount::LEN];
+        token_data[..32].copy_from_slice(mint.as_ref());
+        token_data[32..64].copy_from_slice(owner.as_ref());
+        token_data[108] = 1;
+        let token_account = Account {
+            lamports: 1,
+            data: token_data,
+            owner: token_program,
+            executable: false,
+            rent_epoch: 0,
+        };
+        validate_standard_spl_ata(&ata, &mint, &owner, &token_account).unwrap();
+        assert!(
+            validate_standard_spl_ata(&ata, &Pubkey::new_unique(), &owner, &token_account).is_err()
+        );
+    }
+}
+
 // 10. Wrap SOL
 #[derive(Deserialize)]
 struct WrapSolRequest {
@@ -8400,6 +8708,8 @@ const DEPLOYMENT_STATUS_DEPLOY_SIGNED: &str = "deploy_signed";
 const DEPLOYMENT_STATUS_DEPLOY_RECONCILE: &str = "deploy_requires_reconciliation";
 const DEPLOYMENT_STATUS_DEPLOY_FINALIZED: &str = "deploy_finalized_pending_readback";
 const DEPLOYMENT_STATUS_FINALIZED: &str = "finalized";
+const RECOVERY_MIN_CONTEXT_RETRY_TIMEOUT: Duration = Duration::from_secs(20);
+const RECOVERY_MIN_CONTEXT_RETRY_INTERVAL: Duration = Duration::from_millis(250);
 
 #[derive(Debug, PartialEq, Eq)]
 enum DeploymentAttemptExpiryDecision {
@@ -8434,7 +8744,10 @@ fn classify_deployment_attempt_expiry(
     }
     let Some(status) = historical_status else {
         return DeploymentAttemptExpiryDecision::ExpiredAbsent {
-            min_context_slot: history_context_slot,
+            // Signature-status responses can be evaluated at a processed slot ahead of
+            // the finalized bank. The business-state readback only needs to reach the
+            // finalized slot where blockhash expiry was established.
+            min_context_slot: expiry_observation_slot,
         };
     };
     if !status.satisfies_commitment(CommitmentConfig::finalized()) {
@@ -8515,6 +8828,29 @@ fn finalized_recovery_account_config(min_context_slot: u64) -> RpcAccountInfoCon
     }
 }
 
+fn min_context_slot_not_reached(error: &ClientError) -> bool {
+    matches!(
+        error.kind(),
+        ClientErrorKind::RpcError(RpcError::RpcResponseError { code, .. })
+            if *code == JSON_RPC_SERVER_ERROR_MIN_CONTEXT_SLOT_NOT_REACHED
+    )
+}
+
+fn read_with_min_context_retry<T>(
+    mut read: impl FnMut() -> Result<T, ClientError>,
+) -> Result<T, ClientError> {
+    let deadline = Instant::now() + RECOVERY_MIN_CONTEXT_RETRY_TIMEOUT;
+    loop {
+        match read() {
+            Ok(value) => return Ok(value),
+            Err(error) if min_context_slot_not_reached(&error) && Instant::now() < deadline => {
+                std::thread::sleep(RECOVERY_MIN_CONTEXT_RETRY_INTERVAL);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 fn decode_recovery_ui_account(address: &Pubkey, account: UiAccount) -> Result<Account, ApiError> {
     account.decode().ok_or_else(|| {
         deployment_journal_error(format!(
@@ -8529,17 +8865,21 @@ fn get_finalized_recovery_account(
     address: &Pubkey,
     min_context_slot: u64,
 ) -> Result<Option<Account>, ApiError> {
-    let response = client
-        .get_ui_account_with_config(address, finalized_recovery_account_config(min_context_slot))
-        .map_err(|error| {
-            deployment_journal_error(format!(
-                "在最小上下文 slot {} 二次读取 finalized 账户 {} 失败: {error}",
-                min_context_slot, address
-            ))
-        })?;
+    let response = read_with_min_context_retry(|| {
+        client.get_ui_account_with_config(
+            address,
+            finalized_recovery_account_config(min_context_slot),
+        )
+    })
+    .map_err(|error| {
+        deployment_journal_error(format!(
+            "在最小上下文 slot {} 二次读取 finalized 账户 {} 失败: {error}",
+            min_context_slot, address
+        ))
+    })?;
     if response.context.slot < min_context_slot {
         return Err(deployment_journal_error(format!(
-            "finalized 账户 {} 二次回读 slot {} 早于签名历史 slot {}",
+            "finalized 账户 {} 二次回读 slot {} 早于过期判定 finalized slot {}",
             address, response.context.slot, min_context_slot
         )));
     }
@@ -8554,20 +8894,21 @@ fn get_finalized_recovery_accounts(
     addresses: &[Pubkey],
     min_context_slot: u64,
 ) -> Result<Vec<Option<Account>>, ApiError> {
-    let response = client
-        .get_multiple_ui_accounts_with_config(
+    let response = read_with_min_context_retry(|| {
+        client.get_multiple_ui_accounts_with_config(
             addresses,
             finalized_recovery_account_config(min_context_slot),
         )
-        .map_err(|error| {
-            deployment_journal_error(format!(
-                "在最小上下文 slot {} 二次读取 finalized 账户组失败: {error}",
-                min_context_slot
-            ))
-        })?;
+    })
+    .map_err(|error| {
+        deployment_journal_error(format!(
+            "在最小上下文 slot {} 二次读取 finalized 账户组失败: {error}",
+            min_context_slot
+        ))
+    })?;
     if response.context.slot < min_context_slot {
         return Err(deployment_journal_error(format!(
-            "finalized 账户组二次回读 slot {} 早于签名历史 slot {}",
+            "finalized 账户组二次回读 slot {} 早于过期判定 finalized slot {}",
             response.context.slot, min_context_slot
         )));
     }
@@ -9348,6 +9689,16 @@ mod deployment_journal_tests {
     }
 
     #[test]
+    fn expiry_classifier_uses_finalized_expiry_slot_for_account_readback() {
+        assert_eq!(
+            classify_deployment_attempt_expiry(43, 42, None, 140, 102),
+            DeploymentAttemptExpiryDecision::ExpiredAbsent {
+                min_context_slot: 102
+            }
+        );
+    }
+
+    #[test]
     fn expiry_classifier_rejects_history_older_than_expiry_observation() {
         let decision = classify_deployment_attempt_expiry(43, 42, None, 499, 500);
         assert_eq!(
@@ -9368,7 +9719,7 @@ mod deployment_journal_tests {
     }
 
     #[test]
-    fn expired_absent_gate_passes_exact_history_slot_once() {
+    fn expired_absent_gate_passes_exact_min_context_slot_once() {
         let observed_slot = std::cell::Cell::new(None);
         let decision = gate_expired_absent_with(
             DeploymentAttemptExpiryDecision::ExpiredAbsent {
@@ -9416,12 +9767,29 @@ mod deployment_journal_tests {
     }
 
     #[test]
-    fn recovery_account_config_is_finalized_and_history_slot_bound() {
+    fn recovery_account_config_is_finalized_and_expiry_slot_bound() {
         let config = finalized_recovery_account_config(321);
         assert_eq!(config.encoding, Some(UiAccountEncoding::Base64Zstd));
         assert_eq!(config.commitment, Some(CommitmentConfig::finalized()));
         assert_eq!(config.min_context_slot, Some(321));
         assert!(config.data_slice.is_none());
+    }
+
+    #[test]
+    fn minimum_context_slot_rpc_error_is_retryable() {
+        let retryable = ClientError::from(ClientErrorKind::RpcError(RpcError::RpcResponseError {
+            code: JSON_RPC_SERVER_ERROR_MIN_CONTEXT_SLOT_NOT_REACHED,
+            message: "Minimum context slot has not been reached".to_string(),
+            data: RpcResponseErrorData::Empty,
+        }));
+        assert!(min_context_slot_not_reached(&retryable));
+
+        let other = ClientError::from(ClientErrorKind::RpcError(RpcError::RpcResponseError {
+            code: -32000,
+            message: "other".to_string(),
+            data: RpcResponseErrorData::Empty,
+        }));
+        assert!(!min_context_slot_not_reached(&other));
     }
 
     #[test]
@@ -13108,6 +13476,18 @@ struct DeployProgramResponse {
     status: String,
 }
 
+#[derive(Serialize)]
+struct ProgramDeployProgressResponse {
+    active: bool,
+}
+
+async fn program_deploy_progress() -> Json<ProgramDeployProgressResponse> {
+    let active = PROGRAM_DEPLOY_LOCK
+        .get()
+        .is_some_and(|lock| lock.try_lock().is_err());
+    Json(ProgramDeployProgressResponse { active })
+}
+
 async fn deploy_generic_program(
     Json(req): Json<DeployProgramRequest>,
 ) -> Result<Json<DeployProgramResponse>, ApiError> {
@@ -14169,7 +14549,7 @@ async fn deploy_program(
             }
         }
         let context = format!("Program ID: {program_id}；Buffer: {buffer_address}");
-        let submission = submit_signed_transaction_once(
+        let submission = submit_signed_transaction_with_rebroadcast(
             &client,
             &transaction,
             "创建 Buffer",
@@ -14265,6 +14645,9 @@ async fn deploy_program(
     let completed_writes = write_plan.completed_chunks;
     let total_pending_writes = write_plan.pending_chunk_indexes.len();
     for (position, index) in write_plan.pending_chunk_indexes.iter().copied().enumerate() {
+        let completed_before_chunk = completed_writes
+            .checked_add(position)
+            .ok_or_else(|| deployment_journal_error("Program 写入完成计数溢出"))?;
         let start = index
             .checked_mul(PROGRAM_WRITE_CHUNK_BYTES)
             .ok_or_else(|| ApiError {
@@ -14312,7 +14695,7 @@ async fn deploy_program(
             &mut deployment_journal,
             attempt,
             DEPLOYMENT_STATUS_WRITE_SIGNED,
-            completed_writes,
+            completed_before_chunk,
         )?;
         let context = format!(
             "Program ID: {program_id}；Buffer: {buffer_address}；写入进度: {}/{}；chunk index: {}",
@@ -14320,7 +14703,7 @@ async fn deploy_program(
             total_pending_writes,
             index
         );
-        let submission = submit_signed_transaction_once(
+        let submission = submit_signed_transaction_with_rebroadcast(
             &client,
             &transaction,
             "写入 Buffer",
@@ -14344,7 +14727,7 @@ async fn deploy_program(
                     wallet_store::PROGRAM_DEPLOYMENT_ATTEMPT_SIGNED,
                     wallet_store::PROGRAM_DEPLOYMENT_ATTEMPT_CONFIRMED,
                     DEPLOYMENT_STATUS_WRITE_CONFIRMED,
-                    completed_writes,
+                    completed_before_chunk + 1,
                 )?;
                 write_signatures.push(signature.to_string());
             }
@@ -14355,7 +14738,7 @@ async fn deploy_program(
                     wallet_store::PROGRAM_DEPLOYMENT_ATTEMPT_SIGNED,
                     wallet_store::PROGRAM_DEPLOYMENT_ATTEMPT_REQUIRES_RECONCILIATION,
                     DEPLOYMENT_STATUS_WRITE_RECONCILE,
-                    completed_writes,
+                    completed_before_chunk,
                 )
                 .err()
                 .map(|journal_error| format!("；journal 更新失败: {}", journal_error.message))
@@ -14478,7 +14861,7 @@ async fn deploy_program(
         finalized_completed_writes,
     )?;
     let deploy_context = format!("Program ID: {program_id}；Buffer: {buffer_address}");
-    let deploy_submission = submit_signed_transaction_once(
+    let deploy_submission = submit_signed_transaction_with_rebroadcast(
         &client,
         &deploy_transaction,
         "部署",

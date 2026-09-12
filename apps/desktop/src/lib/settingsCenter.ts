@@ -51,6 +51,7 @@ export interface DappPermission {
 export interface PermissionWalletIdentity {
   id: string;
   public_key: string;
+  evm_address?: string | null;
 }
 
 export interface SettingsSnapshot {
@@ -279,9 +280,14 @@ export function dappPermissionMatchesWallet(
   wallet: PermissionWalletIdentity,
 ): boolean {
   if (permission.walletPublicKey?.trim()) {
-    return permission.walletId === wallet.id && permission.walletPublicKey === wallet.public_key;
+    const permittedAddress = permission.walletPublicKey.trim();
+    const addressMatches = permittedAddress === wallet.public_key
+      || Boolean(wallet.evm_address && permittedAddress.toLowerCase() === wallet.evm_address.toLowerCase());
+    return permission.walletId === wallet.id && addressMatches;
   }
-  return permission.walletId === wallet.id || permission.walletId === wallet.public_key;
+  return permission.walletId === wallet.id
+    || permission.walletId === wallet.public_key
+    || Boolean(wallet.evm_address && permission.walletId.toLowerCase() === wallet.evm_address.toLowerCase());
 }
 
 export function visibleEvmChainIds(

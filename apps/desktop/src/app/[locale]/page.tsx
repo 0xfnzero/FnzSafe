@@ -513,6 +513,7 @@ const WALLET_PASSWORD_FORM_IDS = new Set([
   "get-pubkey",
   "transfer-sol",
   "transfer-token",
+  "create-token-ata",
   "create-wsol-ata",
   "wrap-sol",
   "unwrap-sol",
@@ -826,6 +827,13 @@ function programDeploymentIntentKey(intent: ProgramDeploymentJournalIntent): str
     intent.maxDataLen,
     intent.upgradeAuthority,
   ]);
+}
+
+function isProgramDeploymentBusyError(message: unknown): boolean {
+  const raw = String(message || "").trim();
+  const normalized = raw.toLowerCase();
+  return raw.includes("已有 Program 部署正在进行")
+    || normalized.includes("another program deployment is already running");
 }
 
 function isNullableString(value: unknown): value is string | null {
@@ -1252,11 +1260,13 @@ interface DappSignRequestEvent {
   app_url: string;
   request_purpose?: string;
   method: "signTransaction" | "signAllTransactions" | "signAndSendTransaction" | "sendTransaction" | "signMessage" | string;
+  wallet_family?: "solana" | "evm";
   wallet_public_key: string;
   network: string;
   transaction_base64: string;
   transaction_format: "legacy" | "versioned" | "v0" | "auto" | string;
   message_base64?: string;
+  payload_json?: string;
   callback_url?: string;
   known_programs?: Array<{ program_id: string; label: string }>;
   created_at_ms: number;
@@ -1267,8 +1277,10 @@ interface DappConnectRequestEvent {
   app_id: string;
   app_name: string;
   app_url: string;
+  wallet_family: "solana" | "evm";
+  wallet_public_key?: string;
   network: string;
-  callback_url: string;
+  callback_url?: string;
   created_at_ms: number;
 }
 
@@ -1299,6 +1311,17 @@ interface DappTransactionPreview {
   readonly_accounts: string[];
   programs: string[];
   instructions: DappTransactionInstructionPreview[];
+  warnings: string[];
+}
+
+interface DappEvmSignPreview {
+  preview_id: string;
+  chain: DesktopEvmChainConfig;
+  wallet_address: string;
+  app_name: string;
+  app_url: string;
+  method: string;
+  summary: string;
   warnings: string[];
 }
 
@@ -2625,6 +2648,18 @@ function walletFamilyForNetwork(value: string): "solana" | "evm" | "bitcoin" | "
   return "solana";
 }
 
+function dappWalletAddress(wallet: SavedWallet, family: "solana" | "evm" | undefined): string {
+  return family === "evm" ? wallet.evm_address?.trim() || "" : wallet.public_key.trim();
+}
+
+function isDappMessageSigningMethod(method: string): boolean {
+  return method === "signMessage"
+    || method === "personal_sign"
+    || method === "eth_sign"
+    || method === "eth_signTypedData"
+    || method === "eth_signTypedData_v4";
+}
+
 function nativeBalanceKey(walletId: string, chainId: string): string {
   return `${walletId}:${chainId}`;
 }
@@ -3290,6 +3325,8 @@ function defaultBackTarget(formId: string): string | null {
     case "unwrap-sol":
     case "close-wsol-ata":
       return "wsol-workbench";
+    case "create-token-ata":
+      return "contract-tools";
     case "pumpfun-sell":
     case "pumpswap-sell":
     case "pumpfun-cashback":
@@ -3688,6 +3725,12 @@ export default function Home() {
           icon: <ShieldCheck className="w-4 h-4" />,
           network: true,
         },
+        {
+          id: "create-token-ata",
+          label: t("features.create-token-ata.title"),
+          icon: <Database className="w-4 h-4" />,
+          network: true,
+        },
       ],
     },
     {
@@ -3799,6 +3842,7 @@ export default function Home() {
   const [dappCategory, setDappCategory] = useState<DappCategoryId>("trend");
   const [dappSignBusy, setDappSignBusy] = useState(false);
   const [dappTransactionPreview, setDappTransactionPreview] = useState<DappTransactionPreview | null>(null);
+  const [dappEvmSignPreview, setDappEvmSignPreview] = useState<DappEvmSignPreview | null>(null);
   const [dappTransactionPreviewError, setDappTransactionPreviewError] = useState<string | null>(null);
   const [dappTransactionPreviewLoading, setDappTransactionPreviewLoading] = useState(false);
   const [dappPreviewDetailsOpen, setDappPreviewDetailsOpen] = useState(false);
@@ -3873,6 +3917,7 @@ export default function Home() {
   const [programDeploymentJournal, setProgramDeploymentJournal] = useState<ProgramDeploymentJournalState>(
     emptyProgramDeploymentJournalState,
   );
+  const [programDeploymentBackendActive, setProgramDeploymentBackendActive] = useState(false);
   const [lastProgramDeploymentIntent, setLastProgramDeploymentIntent] =
     useState<ProgramDeploymentJournalIntent | null>(null);
   const [programSourceLoading, setProgramSourceLoading] = useState(false);
@@ -3987,6 +4032,9 @@ export default function Home() {
   const twitterTranslateRef = useRef(tf);
   const openUrlInDappTabRef = useRef<(url: string) => void>(() => {});
   const openUrlInTwitterBrowserTabRef = useRef<(url: string) => void>(() => {});
+  const dappTabsRef = useRef(dappTabs);
+  const activeDappTabIdRef = useRef(activeDappTabId);
+  const dappProviderContextRef = useRef("");
   const twitterAiRequestIdRef = useRef(0);
   const twitterAiBusyRef = useRef(false);
   const twitterAiKeyRequestIdRef = useRef(0);
@@ -3996,6 +4044,8 @@ export default function Home() {
   twitterKolsRef.current = twitterKols;
   twitterWatchedUsersRef.current = twitterWatchedUsers;
   twitterTranslateRef.current = tf;
+  dappTabsRef.current = dappTabs;
+  activeDappTabIdRef.current = activeDappTabId;
   const updateTwitterKols = useCallback((
     updater: (current: TwitterKolProfile[]) => TwitterKolProfile[],
   ): TwitterKolProfile[] => {
@@ -4704,6 +4754,7 @@ export default function Home() {
     setDappSignRequest(null);
     setDappPassword("");
     setDappTransactionPreview(null);
+    setDappEvmSignPreview(null);
     setDappTransactionPreviewError(null);
     setDappTransactionPreviewLoading(false);
     setDappPreviewDetailsOpen(false);
@@ -5293,11 +5344,13 @@ export default function Home() {
       setDappSignRequest(request);
       setDappPassword("");
       setDappTransactionPreview(null);
+      setDappEvmSignPreview(null);
+      setDappEvmSignPreview(null);
       setDappTransactionPreviewError(null);
-      setDappTransactionPreviewLoading(request.method !== "signMessage");
+      setDappTransactionPreviewLoading(request.wallet_family === "evm" || request.method !== "signMessage");
       setDappPreviewDetailsOpen(false);
       toast.message(
-        request.method === "signMessage"
+        isDappMessageSigningMethod(request.method)
           ? tf("features.dapp-store.messageRequestToast", "DApp 发起了消息签名请求")
           : tf("features.dapp-store.transactionRequestToast", "DApp 发起了交易签名请求"),
       );
@@ -5333,49 +5386,70 @@ export default function Home() {
   }, [effectiveWalletId, tf]);
 
   useEffect(() => {
-    if (!dappSignRequest || dappSignRequest.method === "signMessage") {
+    const isEvmRequest = dappSignRequest?.wallet_family === "evm";
+    if (!dappSignRequest || (!isEvmRequest && dappSignRequest.method === "signMessage")) {
       setDappTransactionPreview(null);
+      setDappEvmSignPreview(null);
       setDappTransactionPreviewError(null);
       setDappTransactionPreviewLoading(false);
       return;
-	    }
-	    let cancelled = false;
-	    setDappTransactionPreview(null);
-	    setDappTransactionPreviewError(null);
-	    setDappTransactionPreviewLoading(true);
-	    void (async () => {
-	      try {
-	        const response = await apiFetch("external-sign/preview", {
-	          method: "POST",
-	          headers: { "Content-Type": "application/json" },
-	          body: JSON.stringify({
-	            required_signer: dappSignRequest.wallet_public_key,
-	            transaction_base64: dappSignRequest.transaction_base64,
-	            transaction_format: dappSignRequest.transaction_format || "auto",
-	            known_programs: dappSignRequest.known_programs ?? [],
-	          }),
-	        });
-	        const data = await response.json();
-	        if (!response.ok) {
-	          throw new Error(data.error || tf("features.dapp-store.previewFailed", "交易预览失败"));
-	        }
-	        if (!cancelled) {
-	          setDappTransactionPreview(data as DappTransactionPreview);
-	        }
-	      } catch (error) {
-	        if (!cancelled) {
-	          setDappTransactionPreviewError(errorMessage(error, tf("features.dapp-store.previewFailed", "交易预览失败")));
-	        }
-	      } finally {
-	        if (!cancelled) {
-	          setDappTransactionPreviewLoading(false);
-	        }
-	      }
-	    })();
-	    return () => {
-	      cancelled = true;
-	    };
-	  }, [dappSignRequest, tf]);
+    }
+    let cancelled = false;
+    setDappTransactionPreview(null);
+    setDappEvmSignPreview(null);
+    setDappTransactionPreviewError(null);
+    setDappTransactionPreviewLoading(true);
+    void (async () => {
+      try {
+        let response: Response;
+        if (isEvmRequest) {
+          const chainId = Number(dappSignRequest.network.replace(/^eip155:/, ""));
+          const chain = evmChains.find((item) => item.chain_id === chainId);
+          if (!chain) throw new Error(tf("features.dapp-store.evmChainMissing", "当前 EVM 网络不可用"));
+          response = await apiFetch("evm/dapp/preview", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              chain,
+              wallet_address: dappSignRequest.wallet_public_key,
+              app_name: dappSignRequest.app_name,
+              app_url: dappSignRequest.app_url,
+              method: dappSignRequest.method,
+              payload_json: dappSignRequest.payload_json || "[]",
+            }),
+          });
+        } else {
+          response = await apiFetch("external-sign/preview", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              required_signer: dappSignRequest.wallet_public_key,
+              transaction_base64: dappSignRequest.transaction_base64,
+              transaction_format: dappSignRequest.transaction_format || "auto",
+              known_programs: dappSignRequest.known_programs ?? [],
+            }),
+          });
+        }
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || tf("features.dapp-store.previewFailed", "交易预览失败"));
+        }
+        if (!cancelled) {
+          if (isEvmRequest) setDappEvmSignPreview(data as DappEvmSignPreview);
+          else setDappTransactionPreview(data as DappTransactionPreview);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setDappTransactionPreviewError(errorMessage(error, tf("features.dapp-store.previewFailed", "交易预览失败")));
+        }
+      } finally {
+        if (!cancelled) setDappTransactionPreviewLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [dappSignRequest, evmChains, tf]);
 
   const loadProgramDeploymentJournal = useCallback(async (
     intent: ProgramDeploymentJournalIntent,
@@ -8505,6 +8579,7 @@ export default function Home() {
     tabId: string,
     url: string,
     dapp?: DappCatalogItem,
+    hidden = false,
   ) => {
     if (!isTauriWebview()) {
       toast.error(tf("features.dapp-store.tauriOnly", "DApp 自动连接需要在桌面客户端中使用。"));
@@ -8513,15 +8588,22 @@ export default function Home() {
     const bounds = dappBrowserBounds();
     if (!bounds) {
       requestAnimationFrame(() => {
-        void createDappWebview(tabId, url, dapp);
+        void createDappWebview(tabId, url, dapp, hidden);
       });
       return;
     }
-    const wallet = dapp ? effectiveWallet : undefined;
-    if (dapp && !wallet) {
+    const evmMode = !dapp && currentWalletNetwork.startsWith("evm:") && Boolean(activeEvmChain);
+    const solanaMode = Boolean(dapp) || currentWalletNetwork === "solana";
+    const walletFamily = evmMode ? "evm" : solanaMode ? "solana" : undefined;
+    const wallet = walletFamily ? effectiveWallet : undefined;
+    const walletAddress = evmMode ? wallet?.evm_address?.trim() : wallet?.public_key.trim();
+    if (walletFamily && (!wallet || !walletAddress)) {
       toast.error(tf("features.dapp-store.noWallet", "请先选择一个钱包。"));
       return;
     }
+    const dappNetwork = evmMode && activeEvmChain
+      ? `eip155:${activeEvmChain.chain_id}`
+      : effectiveRpcRequest;
     setDappTabs((tabs) => tabs.map((tab) =>
       tab.id === tabId ? { ...tab, webviewOpen: true, loading: true } : tab,
     ));
@@ -8530,21 +8612,24 @@ export default function Home() {
         tabId,
         url,
         appId: dapp?.id ?? null,
-        walletPublicKey: wallet?.public_key ?? null,
-        network: effectiveRpcRequest,
+        walletPublicKey: walletAddress ?? null,
+        walletFamily: walletFamily ?? null,
+        network: dappNetwork,
         x: bounds.x,
         y: bounds.y,
         width: bounds.width,
         height: bounds.height,
-        hidden: false,
+        hidden,
       });
-      await invoke("dapp_set_active_tab", {
-        tabId,
-        x: bounds.x,
-        y: bounds.y,
-        width: bounds.width,
-        height: bounds.height,
-      });
+      if (!hidden) {
+        await invoke("dapp_set_active_tab", {
+          tabId,
+          x: bounds.x,
+          y: bounds.y,
+          width: bounds.width,
+          height: bounds.height,
+        });
+      }
       setDappTabs((tabs) => tabs.map((tab) =>
         tab.id === tabId
           ? {
@@ -8552,7 +8637,7 @@ export default function Home() {
             url,
             addressInput: url,
             appId: dapp?.id,
-            walletConnected: Boolean(dapp && wallet),
+            walletConnected: Boolean(walletFamily && wallet),
             webviewOpen: true,
           }
           : tab,
@@ -8563,7 +8648,7 @@ export default function Home() {
       ));
       toast.error(errorMessage(error, tf("features.dapp-store.openFailed", "打开 DApp 失败")));
     }
-  }, [dappBrowserBounds, effectiveRpcRequest, effectiveWallet, tf]);
+  }, [activeEvmChain, currentWalletNetwork, dappBrowserBounds, effectiveRpcRequest, effectiveWallet, tf]);
 
   const prepareDappWalletChain = useCallback((chain: string): boolean => {
     const target = walletNetworkForChain(chain);
@@ -8596,7 +8681,9 @@ export default function Home() {
       toast.error(errorMessage(error, "网址格式不正确"));
       return;
     }
-    const matchedDapp = options.dapp ?? (effectiveWallet ? dappForUrl(url) : undefined);
+    const matchedDapp = options.dapp ?? (
+      effectiveWallet && currentWalletNetwork === "solana" ? dappForUrl(url) : undefined
+    );
     const tabId = options.tabId ?? newDappTabId();
     const title = matchedDapp?.name ?? new URL(url).hostname;
     setDappTabs((tabs) => {
@@ -8629,7 +8716,7 @@ export default function Home() {
     requestAnimationFrame(() => {
       void createDappWebview(tabId, url, matchedDapp);
     });
-  }, [createDappWebview, effectiveWallet]);
+  }, [createDappWebview, currentWalletNetwork, effectiveWallet]);
 
   const createTwitterBrowserWebview = useCallback(async (
     tabId: string,
@@ -8972,6 +9059,34 @@ export default function Home() {
   openUrlInDappTabRef.current = openUrlInDappTab;
   openUrlInTwitterBrowserTabRef.current = openUrlInTwitterBrowserTab;
 
+  useEffect(() => {
+    if (!isTauriWebview()) return;
+    const walletAddress = effectiveWallet
+      ? dappWalletAddress(
+          effectiveWallet,
+          currentWalletNetwork.startsWith("evm:") ? "evm" : "solana",
+        )
+      : "";
+    const network = currentWalletNetwork.startsWith("evm:") && activeEvmChain
+      ? `eip155:${activeEvmChain.chain_id}`
+      : effectiveRpcRequest;
+    const providerContext = `${currentWalletNetwork.startsWith("evm:") ? "evm" : "solana"}:${network}:${effectiveWallet?.id || ""}:${walletAddress}`;
+    const previousContext = dappProviderContextRef.current;
+    dappProviderContextRef.current = providerContext;
+    if (!previousContext || previousContext === providerContext) return;
+
+    for (const tab of dappTabsRef.current) {
+      if (!tab.webviewOpen || !tab.url || tab.id === FOMO_ALERTS_TAB_ID) continue;
+      const dapp = currentWalletNetwork === "solana" ? dappForUrl(tab.url) : undefined;
+      void createDappWebview(
+        tab.id,
+        tab.url,
+        dapp,
+        tab.id !== activeDappTabIdRef.current,
+      );
+    }
+  }, [activeEvmChain, createDappWebview, currentWalletNetwork, effectiveRpcRequest, effectiveWallet]);
+
   const openDapp = async (dapp: DappCatalogItem) => {
     if (!prepareDappWalletChain(dapp.chain)) return;
     openUrlInDappTab(dapp.url, { dapp });
@@ -9053,6 +9168,13 @@ export default function Home() {
     if (tab.id === DAPP_HOME_TAB_ID || !tab.webviewOpen) {
       openUrlInDappTab(value, {
         tabId: tab.id === DAPP_HOME_TAB_ID ? undefined : tab.id,
+        showAddressBar: tab.showAddressBar,
+      });
+      return;
+    }
+    if (tab.appId) {
+      openUrlInDappTab(value, {
+        tabId: tab.id,
         showAddressBar: tab.showAddressBar,
       });
       return;
@@ -10884,6 +11006,20 @@ export default function Home() {
     });
   };
 
+  const dappConnectWallets = useMemo(() => dappConnectRequest
+    ? wallets.filter((wallet) => {
+        const address = dappWalletAddress(wallet, dappConnectRequest.wallet_family);
+        if (!address) return false;
+        if (!dappConnectRequest.wallet_public_key) return true;
+        return dappConnectRequest.wallet_family === "evm"
+          ? address.toLowerCase() === dappConnectRequest.wallet_public_key.toLowerCase()
+          : address === dappConnectRequest.wallet_public_key;
+      })
+    : [], [dappConnectRequest, wallets]);
+  const selectedDappConnectWalletId = dappConnectWallets.some((wallet) => wallet.id === dappConnectWalletId)
+    ? dappConnectWalletId
+    : dappConnectWallets[0]?.id || "";
+
   const rejectDappConnectRequest = async () => {
     const request = dappConnectRequest;
     if (!request) return;
@@ -10910,8 +11046,13 @@ export default function Home() {
   const approveDappConnectRequest = async () => {
     const request = dappConnectRequest;
     if (!request) return;
-    const wallet = wallets.find((item) => item.id === (dappConnectWalletId || effectiveWalletId)) || wallets[0];
+    const wallet = dappConnectWallets.find((item) => item.id === selectedDappConnectWalletId);
     if (!wallet) {
+      toast.error(tf("features.dapp-store.noWallet", "Select a wallet first."));
+      return;
+    }
+    const walletAddress = dappWalletAddress(wallet, request.wallet_family);
+    if (!walletAddress) {
       toast.error(tf("features.dapp-store.noWallet", "Select a wallet first."));
       return;
     }
@@ -10934,14 +11075,14 @@ export default function Home() {
             permission: {
               origin: request.app_url,
               walletId: wallet.id,
-              walletPublicKey: wallet.public_key,
+              walletPublicKey: walletAddress,
               network: request.network,
               appName: request.app_name,
             },
           }),
           approve: () => resolveDappConnectRequest(request, {
             approved: !applicationLockedRef.current,
-            public_key: applicationLockedRef.current ? undefined : wallet.public_key,
+            public_key: applicationLockedRef.current ? undefined : walletAddress,
             error: applicationLockedRef.current ? "APPLICATION_LOCKED" : undefined,
           }).then(() => {
             if (applicationLockedRef.current) throw new Error("APPLICATION_LOCKED");
@@ -10954,7 +11095,7 @@ export default function Home() {
         });
         const legacyPermission = dappPermissions.find((item) =>
           item.origin === permission.origin
-          && item.walletId === wallet.public_key
+          && item.walletId === walletAddress
           && item.network === permission.network,
         );
         if (legacyPermission) {
@@ -10974,7 +11115,7 @@ export default function Home() {
       } else {
         await resolveDappConnectRequest(request, {
           approved: true,
-          public_key: wallet.public_key,
+          public_key: walletAddress,
         });
       }
       toast.success(tf("features.dapp-store.connectSuccess", "DApp 已连接钱包"));
@@ -10993,7 +11134,7 @@ export default function Home() {
 
   useEffect(() => {
     if (!dappConnectRequest || applicationLocked || dappSignBusy) return;
-    const wallet = wallets.find((item) => item.id === (dappConnectWalletId || effectiveWalletId)) || wallets[0];
+    const wallet = dappConnectWallets.find((item) => item.id === selectedDappConnectWalletId);
     if (!wallet) return;
     let origin = "";
     try {
@@ -11010,7 +11151,7 @@ export default function Home() {
       autoApprovedDappRequestIdRef.current = dappConnectRequest.request_id;
       void approveDappConnectRequestRef.current?.();
     }
-  }, [applicationLocked, dappConnectRequest, dappConnectWalletId, dappPermissions, dappSignBusy, effectiveWalletId, wallets]);
+  }, [applicationLocked, dappConnectRequest, dappConnectWallets, dappPermissions, dappSignBusy, selectedDappConnectWalletId]);
 
   const rejectDappSignRequest = async () => {
     const request = dappSignRequest;
@@ -11037,50 +11178,73 @@ export default function Home() {
   const approveDappSignRequest = async (passwordOverride?: string) => {
     const request = dappSignRequest;
     if (!request) return;
-    const wallet = wallets.find((item) => item.public_key === request.wallet_public_key);
+    const isEvmRequest = request.wallet_family === "evm";
+    const wallet = wallets.find((item) => isEvmRequest
+      ? item.evm_address?.toLowerCase() === request.wallet_public_key.toLowerCase()
+      : item.public_key === request.wallet_public_key);
     if (!wallet) {
       toast.error(tf("features.dapp-store.walletMissing", "这个请求指定的钱包不在当前钱包列表中。"));
       return;
     }
     const walletPassword = passwordOverride ?? dappPassword;
-    const isMessageSignature = request.method === "signMessage";
-    if (!isMessageSignature) {
+    const isMessageSignature = isDappMessageSigningMethod(request.method);
+    if (isEvmRequest || !isMessageSignature) {
       if (dappTransactionPreviewLoading) {
         toast.error(tf("features.dapp-store.previewLoading", "交易预览仍在加载，请稍后再确认"));
         return;
       }
-      if (dappTransactionPreviewError || !dappTransactionPreview) {
+      if (dappTransactionPreviewError || (isEvmRequest ? !dappEvmSignPreview : !dappTransactionPreview)) {
         toast.error(dappTransactionPreviewError || tf("features.dapp-store.previewRequired", "需要先完成交易预览"));
         return;
       }
-      if (!dappTransactionPreview.required_signer_present) {
+      if (!isEvmRequest && !dappTransactionPreview?.required_signer_present) {
         toast.error(tf("features.dapp-store.signerMissing", "交易没有要求当前钱包签名，已拒绝"));
         return;
       }
     }
-    const shouldSubmit = request.method === "sendTransaction" || request.method === "signAndSendTransaction";
+    const shouldSubmit = request.method === "sendTransaction"
+      || request.method === "signAndSendTransaction"
+      || request.method === "eth_sendTransaction";
     setDappSignBusy(true);
     try {
-      const response = await apiFetch(
-        isMessageSignature ? "external-sign/message" : shouldSubmit ? "external-sign/submit" : "external-sign/sign",
-        {
+      const response = isEvmRequest
+        ? await apiFetch("evm/dapp/submit", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             wallet_id: wallet.id,
-            ...(walletPassword ? { password: walletPassword } : {}),
-            required_signer: request.wallet_public_key,
-            ...(isMessageSignature
-              ? { message_base64: request.message_base64 || "" }
-              : {
-                  transaction_base64: request.transaction_base64,
-                  transaction_format: request.transaction_format || "auto",
-                }),
-            network: request.network || effectiveRpcRequest,
-            request_id: request.request_id,
+            preview_id: dappEvmSignPreview?.preview_id || "",
+            approved: true,
+            chain: dappEvmSignPreview?.chain,
+            wallet_address: request.wallet_public_key,
+            app_name: request.app_name,
+            app_url: request.app_url,
+            keystore_json: "",
+            password: walletPassword,
+            method: request.method,
+            payload_json: request.payload_json || "[]",
           }),
-        },
-      );
+        })
+        : await apiFetch(
+          isMessageSignature ? "external-sign/message" : shouldSubmit ? "external-sign/submit" : "external-sign/sign",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              wallet_id: wallet.id,
+              ...(walletPassword ? { password: walletPassword } : {}),
+              required_signer: request.wallet_public_key,
+              ...(isMessageSignature
+                ? { message_base64: request.message_base64 || "" }
+                : {
+                    transaction_base64: request.transaction_base64,
+                    transaction_format: request.transaction_format || "auto",
+                  }),
+              network: request.network || effectiveRpcRequest,
+              request_id: request.request_id,
+            }),
+          },
+        );
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.error || tf("features.dapp-store.signFailed", "DApp 交易签名失败"));
@@ -11091,7 +11255,7 @@ export default function Home() {
       const result: DappSignResult = {
         approved: true,
         signature: String(data.signature || "").trim() || undefined,
-        raw_transaction: String(data.raw_transaction || data.rawTransaction || "").trim() || undefined,
+        raw_transaction: String(data.signed_transaction || data.raw_transaction || data.rawTransaction || "").trim() || undefined,
         recent_blockhash: String(data.recent_blockhash || data.recentBlockhash || "").trim() || undefined,
       };
       await resolveDappSignRequest(request, result);
@@ -11105,10 +11269,11 @@ export default function Home() {
       setDappSignRequest(null);
       setDappPassword("");
       setDappTransactionPreview(null);
+      setDappEvmSignPreview(null);
       setDappTransactionPreviewError(null);
       setDappTransactionPreviewLoading(false);
       setDappPreviewDetailsOpen(false);
-      if (!isMessageSignature) refreshWalletAfterMutation(wallet);
+      if (shouldSubmit) refreshWalletAfterMutation(wallet);
     } catch (error) {
       toast.error(
         errorMessage(
@@ -11127,7 +11292,10 @@ export default function Home() {
 
   useEffect(() => {
     if (!dappSignRequest || walletsLoading) return;
-    if (wallets.some((item) => item.public_key === dappSignRequest.wallet_public_key)) return;
+    const walletExists = wallets.some((item) => dappSignRequest.wallet_family === "evm"
+      ? item.evm_address?.toLowerCase() === dappSignRequest.wallet_public_key.toLowerCase()
+      : item.public_key === dappSignRequest.wallet_public_key);
+    if (walletExists) return;
     const request = dappSignRequest;
     void (async () => {
       try {
@@ -11142,6 +11310,7 @@ export default function Home() {
       setDappSignRequest(null);
       setDappPassword("");
       setDappTransactionPreview(null);
+      setDappEvmSignPreview(null);
       setDappTransactionPreviewError(null);
       setDappTransactionPreviewLoading(false);
       setDappPreviewDetailsOpen(false);
@@ -12582,6 +12751,35 @@ export default function Home() {
   ]);
 
   useEffect(() => {
+    if (selectedForm !== "program-deploy") {
+      setProgramDeploymentBackendActive(false);
+      return;
+    }
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const response = await apiFetch("program/deploy/progress", { method: "GET" });
+        const data = await response.json();
+        if (cancelled || !response.ok || typeof data?.active !== "boolean") return;
+        setProgramDeploymentBackendActive(data.active);
+        if (data.active) {
+          setProgramDeployInlineError((previous) =>
+            previous && isProgramDeploymentBusyError(previous.raw) ? null : previous,
+          );
+        }
+      } catch {
+        // Keep the last known state; the deployment journal remains the source of truth.
+      }
+    };
+    void poll();
+    const interval = window.setInterval(() => void poll(), 2_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [selectedForm]);
+
+  useEffect(() => {
     if (!loading || selectedForm !== "program-deploy") {
       programDeploymentWatchdogTrippedRef.current = false;
       return;
@@ -12605,14 +12803,38 @@ export default function Home() {
       return;
     }
     programDeploymentWatchdogTrippedRef.current = true;
-    setLoading(false);
-    const stalledMessage = t("features.program-deploy.journalStalledToast");
-    setProgramDeployInlineError({
-      friendly: t("features.program-deploy.friendlyJournalStalled"),
-      raw: stalledMessage,
-    });
+    const intentKey = programDeploymentJournal.intentKey;
+    void (async () => {
+      try {
+        const response = await apiFetch("program/deploy/progress", { method: "GET" });
+        const data = await response.json();
+        if (
+          selectedFormRef.current !== "program-deploy" ||
+          programDeploymentJournalRef.current.intentKey !== intentKey ||
+          programDeploymentJournalRef.current.journal?.status === "finalized"
+        ) {
+          return;
+        }
+        if (!response.ok || typeof data?.active !== "boolean") {
+          throw new Error("invalid deployment progress response");
+        }
+        if (data.active) {
+          toast.warning(t("features.program-deploy.journalStillRunningToast"));
+          return;
+        }
+        setLoading(false);
+        const stalledMessage = t("features.program-deploy.journalStalledToast");
+        setProgramDeployInlineError({
+          friendly: t("features.program-deploy.friendlyJournalStalled"),
+          raw: stalledMessage,
+        });
+      } catch {
+        toast.warning(t("features.program-deploy.journalStatusUnknownToast"));
+      }
+    })();
   }, [
     loading,
+    programDeploymentJournal.intentKey,
     programDeploymentJournal.deploymentAttempts,
     programDeploymentJournal.journal,
     programDeploymentNowMs,
@@ -12967,6 +13189,16 @@ export default function Home() {
         return nextFormData.to_address && nextFormData.mint && amount !== null
           ? true
           : fail(t("features.transfer-token.fillAllFields"));
+      case "create-token-ata": {
+        const mint = String(nextFormData.mint || "").trim();
+        const owner = String(nextFormData.token_owner || "").trim();
+        if (!isLikelySolanaPublicKey(mint)) {
+          return fail(t("features.create-token-ata.invalidMint"));
+        }
+        return isLikelySolanaPublicKey(owner)
+          ? true
+          : fail(t("features.create-token-ata.invalidOwner"));
+      }
       case "wrap-sol":
         return amount !== null ? true : fail(t("features.wrap-sol.fillAllFields"));
       case "program-deploy": {
@@ -14348,6 +14580,43 @@ export default function Home() {
     }, 0);
   };
 
+  const deriveTokenAtaAddress = async () => {
+    const mint = String(formData.mint || "").trim();
+    const owner = String(formData.token_owner || "").trim();
+    if (!isLikelySolanaPublicKey(mint)) {
+      toast.error(t("features.create-token-ata.invalidMint"));
+      return;
+    }
+    if (!isLikelySolanaPublicKey(owner)) {
+      toast.error(t("features.create-token-ata.invalidOwner"));
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await apiFetch("token/derive-ata", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mint, owner }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        toast.error(data.error || t("features.create-token-ata.deriveError"));
+        return;
+      }
+      setFormData((previous) => ({
+        ...previous,
+        tokenAtaAddress: String(data.ata || ""),
+        tokenAtaStatus: "derived",
+        signature: undefined,
+      }));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("features.create-token-ata.deriveError"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSubmit = async (formId: string, submitFormData: FormState = formData) => {
     const formData = formId === "program-deploy"
       ? normalizedProgramDeployFormState(submitFormData)
@@ -14850,6 +15119,54 @@ export default function Home() {
             }));
           } else {
             toast.error(data.error || t("features.create-wsol-ata.error"));
+          }
+          break;
+        }
+
+        case "create-token-ata": {
+          const m = walletAuth("create-token-ata");
+          const mint = String(formData.mint || "").trim();
+          const owner = String(formData.token_owner || "").trim();
+          if (!isLikelySolanaPublicKey(mint)) {
+            toast.error(t("features.create-token-ata.invalidMint"));
+            setLoading(false);
+            return;
+          }
+          if (!isLikelySolanaPublicKey(owner)) {
+            toast.error(t("features.create-token-ata.invalidOwner"));
+            setLoading(false);
+            return;
+          }
+          if (!validateWalletAuth(m, formData, "private_key")) {
+            toast.error(t("features.create-token-ata.selectFeePayer"));
+            setLoading(false);
+            return;
+          }
+
+          const requestBody: ApiRequestBody = {
+            mint,
+            owner,
+            network: submitNetwork(),
+          };
+          applyWalletAuth(requestBody, m, formData, "private_key");
+          const response = await apiFetch("token/create-ata", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(requestBody),
+          });
+          const data = await response.json();
+          if (response.ok) {
+            setFormData((previous) => ({
+              ...previous,
+              tokenAtaAddress: String(data.ata || ""),
+              tokenAtaStatus: String(data.status || "created"),
+              signature: data.signature || undefined,
+            }));
+            toast.success(data.status === "already_exists"
+              ? t("features.create-token-ata.alreadyExists", { ata: String(data.ata || "") })
+              : t("features.create-token-ata.success", { ata: String(data.ata || "") }));
+          } else {
+            toast.error(data.error || t("features.create-token-ata.error"));
           }
           break;
         }
@@ -22801,6 +23118,12 @@ export default function Home() {
                 icon: <ShieldCheck className="w-4 h-4" />,
                 preset: { wallet_id: effectiveWalletId, network: effectiveNetwork },
               },
+              {
+                id: "create-token-ata",
+                title: t("features.create-token-ata.title"),
+                icon: <Database className="w-4 h-4" />,
+                preset: { wallet_id: effectiveWalletId, network: effectiveNetwork },
+              },
             ])}
           </div>
         );
@@ -23999,6 +24322,149 @@ export default function Home() {
             )}
           </div>
         );
+
+      case "create-token-ata": {
+        const selectedFeePayer = wallets.find((wallet) => wallet.id === formData.wallet_id);
+        const tokenAtaAddress = String(formData.tokenAtaAddress || "").trim();
+        const tokenAtaStatus = String(formData.tokenAtaStatus || "").trim();
+        const resetTokenAtaResult = (nextFields: FormState) => {
+          setFormData((previous) => ({
+            ...previous,
+            ...nextFields,
+            tokenAtaAddress: undefined,
+            tokenAtaStatus: undefined,
+            signature: undefined,
+          }));
+        };
+        return (
+          <div className="space-y-4">
+            <div>
+              <label htmlFor="token-ata-fee-payer" className="mb-2 block text-sm font-medium">
+                {t("features.create-token-ata.feePayer")}
+              </label>
+              <select
+                id="token-ata-fee-payer"
+                value={formData.wallet_id || ""}
+                onChange={(event) => resetTokenAtaResult({ wallet_id: event.target.value || undefined })}
+                disabled={loading || walletsLoading}
+                className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-white/20 disabled:opacity-50"
+              >
+                <option value="">{t("formUi.selectWallet")}</option>
+                {wallets.map((wallet) => (
+                  <option key={wallet.id} value={wallet.id}>
+                    {walletLabel(wallet)}
+                  </option>
+                ))}
+              </select>
+              {selectedFeePayer && (
+                <code className="mt-2 block break-all text-xs text-gray-400">
+                  {selectedFeePayer.public_key}
+                </code>
+              )}
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label htmlFor="token-ata-mint" className="mb-2 block text-sm font-medium">
+                  {t("features.create-token-ata.mint")}
+                </label>
+                <input
+                  id="token-ata-mint"
+                  value={formData.mint || ""}
+                  onChange={(event) => resetTokenAtaResult({ mint: event.target.value.trim() })}
+                  autoComplete="off"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-2 font-mono text-xs text-white focus:outline-none focus:ring-2 focus:ring-white/20"
+                  placeholder={t("features.create-token-ata.mintPlaceholder")}
+                />
+              </div>
+              <div>
+                <label htmlFor="token-ata-owner" className="mb-2 block text-sm font-medium">
+                  {t("features.create-token-ata.owner")}
+                </label>
+                <input
+                  id="token-ata-owner"
+                  value={formData.token_owner || ""}
+                  onChange={(event) => resetTokenAtaResult({ token_owner: event.target.value.trim() })}
+                  autoComplete="off"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-2 font-mono text-xs text-white focus:outline-none focus:ring-2 focus:ring-white/20"
+                  placeholder={t("features.create-token-ata.ownerPlaceholder")}
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-4">
+              <p className="text-xs text-amber-100">
+                {t("features.create-token-ata.networkWarning", {
+                  network: String(formData.network || effectiveNetwork),
+                })}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void deriveTokenAtaAddress()}
+                  disabled={loading}
+                  className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-white/15 bg-white/5 px-4 py-2 text-sm font-semibold text-gray-100 hover:bg-white/10 disabled:opacity-50"
+                >
+                  <Hash className="h-4 w-4" />
+                  {t("features.create-token-ata.deriveButton")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => requestPasswordSubmit("create-token-ata")}
+                  disabled={loading || !selectedFeePayer}
+                  className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-purple-500 to-pink-500 px-4 py-2 text-sm font-semibold text-white hover:from-purple-600 hover:to-pink-600 disabled:opacity-50"
+                >
+                  <Plus className="h-4 w-4" />
+                  {loading
+                    ? t("features.create-token-ata.creating")
+                    : t("features.create-token-ata.createButton")}
+                </button>
+              </div>
+            </div>
+
+            {tokenAtaAddress && (
+              <div className="space-y-2 border-t border-white/10 pt-4">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-sm font-medium">{t("features.create-token-ata.ata")}</span>
+                  <span className="rounded bg-emerald-400/15 px-2 py-1 text-xs text-emerald-100">
+                    {t(`features.create-token-ata.status.${tokenAtaStatus || "derived"}`)}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <code className="min-w-0 flex-1 break-all rounded-lg bg-black/30 px-3 py-2 text-xs">
+                    {tokenAtaAddress}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={() => copyToClipboard(tokenAtaAddress, "token-ata-address")}
+                    className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white/10 hover:bg-white/20"
+                    aria-label={t("common.copy")}
+                    title={t("common.copy")}
+                  >
+                    {copied === "token-ata-address"
+                      ? <Check className="h-4 w-4" />
+                      : <Copy className="h-4 w-4" />}
+                  </button>
+                </div>
+                {formData.signature && (
+                  <div>
+                    <span className="mb-2 block text-sm font-medium">{t("formUi.txSignature")}</span>
+                    <code className="block break-all rounded-lg bg-black/30 px-3 py-2 text-xs">
+                      {formData.signature}
+                    </code>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      }
 
       case "create-wsol-ata":
         return (
@@ -25228,10 +25694,17 @@ export default function Home() {
             )}
             <button type="button"
               onClick={() => requestPasswordSubmit("program-deploy")}
-              disabled={loading || programSourceLoading || Boolean(deployBlockedMessage)}
+              disabled={
+                loading
+                || programDeploymentBackendActive
+                || programSourceLoading
+                || Boolean(deployBlockedMessage)
+              }
               className="w-full py-3 bg-gradient-to-r from-purple-500 to-pink-500 rounded-lg font-semibold hover:from-purple-600 hover:to-pink-600 transition-all disabled:opacity-50"
             >
-              {loading ? t("features.program-deploy.deploying") : t("features.program-deploy.deployButton")}
+              {loading || programDeploymentBackendActive
+                ? t("features.program-deploy.deploying")
+                : t("features.program-deploy.deployButton")}
             </button>
             {formData.programId && (
               <div className="space-y-3 p-4 bg-white/5 rounded-lg">
@@ -25574,9 +26047,6 @@ export default function Home() {
                         {selectedAccounts.map((account) => {
                           const accountValue = String(programInvoke.accountValues[account.path] || "").trim();
                           const resolvedAccountValue = resolveAnchorAccountAddress(accountValue, account);
-	                          const selectedSignerWallet = wallets.find(
-	                            (wallet) => wallet.id === programInvoke.signerWalletIds[account.path],
-	                          );
 	                          const defaultAddress = defaultAccountAddress(account.name, account);
 	                          const isAutoAccount = Boolean(account.address || account.pda || defaultAddress);
 	                          const walletLikeAccount = isWalletLikeInvokeAccount(account);
@@ -25584,7 +26054,14 @@ export default function Home() {
 	                            account.isSigner &&
 	                            Boolean(invokeWallet) &&
 	                            resolvedAccountValue === invokeWallet?.public_key;
-	                          const requiresManualAccountInput = !isAutoAccount && !accountValue;
+	                          const signerWalletSelection = isPrimarySigner
+	                            ? String(invokeWallet?.id || "")
+	                            : String(programInvoke.signerWalletIds[account.path] || "");
+	                          const selectedSignerWallet = wallets.find(
+	                            (wallet) => wallet.id === signerWalletSelection,
+	                          );
+	                          const requiresManualAccountInput =
+	                            !isAutoAccount && (account.isSigner ? !signerWalletSelection : !accountValue);
 	                          const waitsForAutoAccount = isAutoAccount && !accountValue;
 	                          return (
 	                          <div key={account.path} className="space-y-2">
@@ -25616,7 +26093,71 @@ export default function Home() {
                                 </span>
                               )}
                             </div>
-                            <div className="flex gap-2">
+	                            {account.isSigner && !isAutoAccount ? (
+	                              <div className="grid gap-2 rounded-lg border border-cyan-300/15 bg-cyan-400/5 p-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+	                                <div>
+	                                  <label className="mb-1 block text-xs font-medium text-cyan-100 select-text">
+	                                    {t("features.program-invoke.signerWallet")}
+	                                  </label>
+	                                  <select
+	                                    value={signerWalletSelection}
+	                                    onChange={(event) => {
+	                                      const wallet = wallets.find((item) => item.id === event.target.value);
+	                                      const usesPrimaryWallet =
+	                                        Boolean(wallet && invokeWallet) &&
+	                                        wallet?.public_key === invokeWallet?.public_key;
+	                                      setProgramInvoke((prev) => ({
+	                                        ...prev,
+	                                        accountValues: {
+	                                          ...prev.accountValues,
+	                                          [account.path]: wallet?.public_key || "",
+	                                        },
+	                                        signerWalletIds: {
+	                                          ...prev.signerWalletIds,
+	                                          [account.path]: wallet && !usesPrimaryWallet ? wallet.id : "",
+	                                        },
+	                                        signerPasswords: { ...prev.signerPasswords, [account.path]: "" },
+	                                        result: undefined,
+	                                      }));
+	                                    }}
+	                                    className="w-full select-text rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-xs text-white focus:outline-none focus:ring-2 focus:ring-white/20"
+	                                  >
+	                                    <option value="">{t("features.program-invoke.selectSignerWallet")}</option>
+	                                    {wallets.map((wallet) => (
+	                                      <option key={wallet.id} value={wallet.id}>
+	                                        {walletLabel(wallet)}
+	                                      </option>
+	                                    ))}
+	                                  </select>
+	                                </div>
+	                                <div>
+	                                  <label className="mb-1 block text-xs font-medium text-cyan-100 select-text">
+	                                    {t("features.program-invoke.signerPassword")}
+	                                  </label>
+	                                  <input
+	                                    type="password"
+	                                    data-sensitive-field="password"
+	                                    value={programInvoke.signerPasswords[account.path] || ""}
+	                                    onChange={(event) =>
+	                                      setProgramInvoke((prev) => ({
+	                                        ...prev,
+	                                        signerPasswords: {
+	                                          ...prev.signerPasswords,
+	                                          [account.path]: event.target.value,
+	                                        },
+	                                        result: undefined,
+	                                      }))
+	                                    }
+	                                    disabled={!selectedSignerWallet || isPrimarySigner}
+	                                    className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-xs text-white focus:outline-none focus:ring-2 focus:ring-white/20 disabled:opacity-50"
+	                                    placeholder={isPrimarySigner
+	                                      ? t("features.program-invoke.primarySignerPasswordPlaceholder")
+	                                      : t("features.program-invoke.signerPasswordPlaceholder")}
+	                                  />
+	                                </div>
+	                              </div>
+	                            ) : (
+	                              <div className="flex gap-2">
 	                              <input
 	                                value={accountValue}
 	                                onChange={(event) => {
@@ -25643,21 +26184,22 @@ export default function Home() {
 	                                    : t("features.program-invoke.accountPlaceholder")
 	                                }
 	                              />
-	                              {!isAutoAccount && (account.isSigner || walletLikeAccount) && (
+	                              {!isAutoAccount && walletLikeAccount && (
                                 <button
                                   type="button"
                                   onClick={() => openProgramInvokeWalletPicker({
                                     kind: "account",
                                     path: account.path,
-                                    signer: account.isSigner,
+                                    signer: false,
                                   })}
                                   className="shrink-0 rounded-lg bg-white/10 px-3 text-xs font-semibold text-gray-200 hover:bg-white/20"
                                 >
                                   {tf("features.program-invoke.chooseWallet", "选择钱包")}
                                 </button>
                               )}
-                            </div>
-                            {account.isSigner && !isPrimarySigner && (
+	                              </div>
+	                            )}
+                            {account.isSigner && isAutoAccount && !isPrimarySigner && (
                               <div className="grid gap-2 rounded-lg border border-cyan-300/15 bg-cyan-400/5 p-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
                                 <div>
                                   <label className="mb-1 block text-xs font-medium text-cyan-100 select-text">
@@ -28068,6 +28610,7 @@ export default function Home() {
         "get-pubkey": t("features.get-pubkey.title"),
         "transfer-sol": t("features.transfer-sol.title"),
         "transfer-token": t("features.transfer-token.title"),
+        "create-token-ata": t("features.create-token-ata.title"),
         "create-wsol-ata": t("features.create-wsol-ata.title"),
         "wrap-sol": t("features.wrap-sol.title"),
         "unwrap-sol": t("features.unwrap-sol.title"),
@@ -28642,18 +29185,18 @@ export default function Home() {
                   {tf("features.dapp-store.connectWallet", "连接钱包")}
                 </label>
                 <select
-                  value={dappConnectWalletId || effectiveWalletId}
+                  value={selectedDappConnectWalletId}
                   onChange={(event) => setDappConnectWalletId(event.target.value)}
                   className="w-full rounded-lg border border-white/10 bg-black/40 px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-white/20"
-                  disabled={dappSignBusy || walletsLoading}
+                  disabled={dappSignBusy || walletsLoading || Boolean(dappConnectRequest.wallet_public_key)}
                 >
-                  {wallets.map((wallet) => (
+                  {dappConnectWallets.map((wallet) => (
                     <option key={wallet.id} value={wallet.id}>
                       {walletLabel(wallet)}
                     </option>
                   ))}
                 </select>
-                {wallets.length === 0 && (
+                {dappConnectWallets.length === 0 && (
                   <p className="mt-2 text-xs text-amber-100">
                     {tf("features.dapp-store.noWallet", "Select a wallet first.")}
                   </p>
@@ -28671,7 +29214,7 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={() => void approveDappConnectRequest()}
-                  disabled={dappSignBusy || walletsLoading || wallets.length === 0}
+                  disabled={dappSignBusy || walletsLoading || dappConnectWallets.length === 0}
                   className="rounded-lg bg-gradient-to-r from-blue-500 to-cyan-400 px-4 py-3 font-semibold text-white hover:from-blue-600 hover:to-cyan-500 disabled:opacity-50"
                 >
                   {dappSignBusy ? t("common.processing") : tf("features.dapp-store.connectApprove", "连接钱包")}
@@ -28694,7 +29237,7 @@ export default function Home() {
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0">
                   <h3 className="text-lg font-semibold">
-                    {dappSignRequest.method === "signMessage"
+                    {isDappMessageSigningMethod(dappSignRequest.method)
                       ? tf("features.dapp-store.messageSignRequestTitle", "DApp 消息签名确认")
                       : tf("features.dapp-store.signRequestTitle", "DApp 交易确认")}
                   </h3>
@@ -28722,10 +29265,14 @@ export default function Home() {
                   [tf("features.dapp-store.requestWallet", "签名钱包"), dappSignRequest.wallet_public_key],
                   [tf("features.dapp-store.requestNetwork", "网络"), dappSignRequest.network],
                   [
-                    dappSignRequest.method === "signMessage"
+                    dappSignRequest.wallet_family === "evm"
+                      ? tf("features.dapp-store.requestPayload", "请求参数")
+                      : dappSignRequest.method === "signMessage"
                       ? tf("features.dapp-store.requestMessageBytes", "消息长度")
                       : tf("features.dapp-store.requestFormat", "交易格式"),
-                    dappSignRequest.method === "signMessage"
+                    dappSignRequest.wallet_family === "evm"
+                      ? `${new TextEncoder().encode(dappSignRequest.payload_json || "[]").byteLength} bytes`
+                      : dappSignRequest.method === "signMessage"
                       ? `${dappMessagePreview(dappSignRequest.message_base64)?.byteLength ?? 0} bytes`
                       : dappSignRequest.transaction_format,
                   ],
@@ -28736,7 +29283,7 @@ export default function Home() {
                   </div>
 	                ))}
 	              </div>
-	              {dappSignRequest.method !== "signMessage" && (
+	              {dappSignRequest.wallet_family !== "evm" && dappSignRequest.method !== "signMessage" && (
 	                <div className="rounded-lg border border-sky-300/20 bg-sky-400/10 p-3">
 	                  <div className="flex items-center justify-between gap-3">
 	                    <span className="text-xs font-medium text-sky-100">
@@ -28830,7 +29377,30 @@ export default function Home() {
 	                  )}
 	                </div>
 	              )}
-	              {dappSignRequest.method === "signMessage" && (
+	              {dappSignRequest.wallet_family === "evm" && (
+                <div className="rounded-lg border border-sky-300/20 bg-sky-400/10 p-3">
+                  <div className="flex items-center justify-between gap-3 text-xs font-medium text-sky-100">
+                    <span>{tf("features.dapp-store.transactionPreview", "交易预览")}</span>
+                    {dappEvmSignPreview && <span>{dappEvmSignPreview.chain.name}</span>}
+                  </div>
+                  {dappTransactionPreviewLoading && <p className="mt-2 text-xs text-sky-100/80">{t("common.loading")}</p>}
+                  {dappTransactionPreviewError && <p className="mt-2 break-words text-xs text-red-200">{dappTransactionPreviewError}</p>}
+                  {dappEvmSignPreview && (
+                    <div className="mt-2 space-y-2">
+                      <p className="text-xs text-sky-50/90">{dappEvmSignPreview.summary}</p>
+                      {dappEvmSignPreview.warnings.map((warning) => (
+                        <p key={warning} className="rounded border border-amber-300/20 bg-amber-300/10 p-2 text-xs text-amber-100">
+                          {warning}
+                        </p>
+                      ))}
+                      <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-all rounded bg-black/25 p-2 text-[11px] text-sky-50/80">
+                        {dappSignRequest.payload_json || "[]"}
+                      </pre>
+                    </div>
+                  )}
+                </div>
+              )}
+	              {dappSignRequest.wallet_family !== "evm" && dappSignRequest.method === "signMessage" && (
                 <div className="rounded-lg border border-amber-400/20 bg-amber-400/10 p-3">
                   <div className="text-xs font-medium text-amber-100">
                     {tf("features.dapp-store.requestMessage", "待签名消息")}

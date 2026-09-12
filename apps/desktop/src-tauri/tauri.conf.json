@@ -14,7 +14,6 @@
     "windows": [
       {
         "title": "FnzSafe",
-        "url": "en/index.html",
         "width": 1100,
         "height": 760,
         "resizable": true,

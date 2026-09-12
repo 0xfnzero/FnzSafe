@@ -37,9 +37,16 @@ test("search matches bilingual keywords and summaries", () => {
 });
 
 test("DApp permissions prefer stable wallet ids while accepting legacy public keys", () => {
-  const wallet = { id: "wallet-id", public_key: "wallet-public-key" };
+  const wallet = {
+    id: "wallet-id",
+    public_key: "wallet-public-key",
+    evm_address: "0x1111111111111111111111111111111111111111",
+  };
   assert.equal(settings.dappPermissionMatchesWallet({ walletId: "wallet-id" }, wallet), true);
   assert.equal(settings.dappPermissionMatchesWallet({ walletId: "wallet-public-key" }, wallet), true);
+  assert.equal(settings.dappPermissionMatchesWallet({
+    walletId: "0x1111111111111111111111111111111111111111".toUpperCase(),
+  }, wallet), true);
   assert.equal(settings.dappPermissionMatchesWallet({ walletId: "another-wallet" }, wallet), false);
   assert.equal(settings.dappPermissionMatchesWallet({
     walletId: "wallet-id",
@@ -49,6 +56,10 @@ test("DApp permissions prefer stable wallet ids while accepting legacy public ke
     walletId: "wallet-id",
     walletPublicKey: "different-public-key",
   }, wallet), false);
+  assert.equal(settings.dappPermissionMatchesWallet({
+    walletId: "wallet-id",
+    walletPublicKey: "0x1111111111111111111111111111111111111111".toUpperCase(),
+  }, wallet), true);
 });
 
 test("addresses normalize and duplicates are network scoped", () => {

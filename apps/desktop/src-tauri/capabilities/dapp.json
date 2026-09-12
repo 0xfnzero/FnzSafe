@@ -1,13 +1,16 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "dapp",
-  "description": "Narrow bridge permissions for allowlisted Solana DApp webviews.",
+  "description": "Narrow bridge permissions for embedded Solana and EVM DApp webviews.",
   "webviews": [
     "dapp-tab-*"
   ],
   "local": false,
   "remote": {
     "urls": [
+      "https://*/*",
+      "http://localhost:*/*",
+      "http://127.0.0.1:*/*",
       "https://jup.ag/*",
       "https://*.jup.ag/*",
       "https://pump.fun/*",
@@ -37,6 +40,8 @@
   "permissions": [
     "core:default",
     "allow-submit-dapp-page-text",
+    "allow-submit-dapp-connect-request",
+    "allow-poll-dapp-connect-request",
     "allow-submit-dapp-sign-request",
     "allow-poll-dapp-sign-request"
   ]
