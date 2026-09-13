@@ -26174,8 +26174,8 @@ export default function Home() {
         };
 
         return (
-          <div className="space-y-4">
-            <section className="space-y-3 rounded-lg border border-white/10 bg-white/[0.03] p-3">
+          <div className="space-y-4 xl:flex xl:min-h-0 xl:flex-1 xl:flex-col xl:space-y-0 xl:gap-4">
+            <section className="shrink-0 space-y-3 rounded-lg border border-white/10 bg-white/[0.03] p-3">
               <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                 <div className="min-w-0 space-y-1">
                   <p className="text-sm font-semibold text-gray-100">
@@ -26241,11 +26241,11 @@ export default function Home() {
               )}
             </section>
 
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,280px)_minmax(0,1fr)]">
-              <section className="min-w-0 space-y-2 rounded-lg border border-white/10 bg-white/[0.03] p-3">
+            <div className="grid gap-4 xl:min-h-0 xl:flex-1 xl:grid-cols-[minmax(0,280px)_minmax(0,1fr)]">
+              <section className="min-w-0 space-y-2 rounded-lg border border-white/10 bg-white/[0.03] p-3 xl:flex xl:min-h-0 xl:flex-col xl:space-y-0 xl:gap-2">
                 <h3 className="text-sm font-semibold text-gray-200">{t("features.program-invoke.functions")}</h3>
                 {programInvoke.idl?.instructions.length ? (
-                  <div className="max-h-96 space-y-1 overflow-y-auto pr-1">
+                  <div className="max-h-96 space-y-1 overflow-y-auto pr-1 scrollbar-thin xl:max-h-none xl:min-h-0 xl:flex-1">
                     {programInvoke.idl.instructions.map((instruction) => (
                       <div
                         key={instruction.name}
@@ -26295,7 +26295,7 @@ export default function Home() {
                 )}
               </section>
 
-              <section className="min-w-0 space-y-4 rounded-lg border border-white/10 bg-white/[0.03] p-3">
+              <section className="min-w-0 space-y-4 rounded-lg border border-white/10 bg-white/[0.03] p-3 xl:min-h-0 xl:overflow-y-auto xl:scrollbar-thin">
                 <div>
                   <label className="block text-sm font-medium mb-2 select-text">{t("features.program-invoke.programId")}</label>
                   <input
@@ -28838,8 +28838,13 @@ export default function Home() {
         ? aggregateTokenBalance(transferTokenAssets.tokens, transferTokenMint)
         : null;
 
+    const isProgramInvokeForm = formId === "program-invoke" || formId === "program-invoke-standalone";
     return (
-      <div className={formId === "dapp-store" || formId === "twitter-signals" || formId === "defillama-stats" ? "h-full min-h-0" : "space-y-4"}>
+      <div className={formId === "dapp-store" || formId === "twitter-signals" || formId === "defillama-stats"
+        ? "h-full min-h-0"
+        : isProgramInvokeForm
+          ? "space-y-4 xl:flex xl:min-h-0 xl:flex-1 xl:flex-col xl:space-y-0"
+          : "space-y-4"}>
         {showTokenActionHeader && (
           <div className="space-y-4 rounded-2xl border border-white/10 bg-white/5 p-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -28986,6 +28991,8 @@ export default function Home() {
     selectedForm === "dapp-store" ||
     selectedForm === "twitter-signals" ||
     selectedForm === "defillama-stats";
+  const isProgramInvokeWorkspace =
+    selectedForm === "program-invoke" || selectedForm === "program-invoke-standalone";
   const showFormHeader = selectedForm !== "wallet-list" && !isBrowserWorkspaceForm;
   const isWideWorkspaceForm = [
     "contract-tools",
@@ -29003,11 +29010,15 @@ export default function Home() {
   ].includes(selectedForm || "");
   const contentContainerClass = isBrowserWorkspaceForm
     ? "flex h-full min-h-0 w-full flex-col p-0"
+    : isProgramInvokeWorkspace
+    ? "mx-auto w-full max-w-[1760px] p-3 sm:p-4 lg:p-5 2xl:max-w-[1900px] xl:flex xl:h-full xl:min-h-0 xl:flex-col"
     : isWideWorkspaceForm
     ? "mx-auto w-full max-w-[1760px] p-3 space-y-3 sm:p-4 lg:p-5 lg:space-y-4 2xl:max-w-[1900px]"
     : "max-w-5xl mx-auto p-3 space-y-3 sm:p-4 lg:p-8 lg:space-y-4";
   const contentCardClass = isBrowserWorkspaceForm
     ? "app-content-card app-dapp-card flex h-full min-h-0 flex-col overflow-hidden bg-black/40"
+    : isProgramInvokeWorkspace
+    ? "app-content-card bg-black/40 backdrop-blur-xl rounded-xl border border-white/10 p-3 sm:p-4 lg:rounded-2xl lg:p-6 xl:flex xl:h-full xl:min-h-0 xl:flex-col xl:overflow-hidden"
     : "app-content-card bg-black/40 backdrop-blur-xl rounded-xl border border-white/10 p-3 sm:p-4 lg:rounded-2xl lg:p-6";
   const themeOptions: ThemeOption[] = [
     { id: "light", label: t("app.themeDay"), icon: <Sun className="h-4 w-4" /> },
@@ -29277,13 +29288,21 @@ export default function Home() {
 
       {/* Main Content */}
       <div className={`app-main-surface min-w-0 flex-1 bg-gradient-to-br from-black via-purple-950 to-black ${
-        isBrowserWorkspaceForm ? "overflow-hidden" : "overflow-y-auto"
+        isBrowserWorkspaceForm
+          ? "overflow-hidden"
+          : isProgramInvokeWorkspace
+            ? "overflow-y-auto xl:overflow-hidden"
+            : "overflow-y-auto"
       }`}>
-        <div className={isBrowserWorkspaceForm ? "flex h-full min-h-0 flex-col" : "min-h-full overflow-y-auto"}>
+        <div className={isBrowserWorkspaceForm
+          ? "flex h-full min-h-0 flex-col"
+          : isProgramInvokeWorkspace
+            ? "min-h-full overflow-y-auto xl:flex xl:h-full xl:min-h-0 xl:flex-col xl:overflow-hidden"
+            : "min-h-full overflow-y-auto"}>
           <div className={contentContainerClass}>
             <div className={contentCardClass}>
               {showFormHeader && (
-                <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center">
+                <div className="mb-5 shrink-0 flex flex-col gap-3 sm:flex-row sm:items-center">
                   {selectedForm && (backTarget || defaultBackTarget(selectedForm)) && (
                     <button
                       type="button"
