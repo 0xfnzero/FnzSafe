@@ -395,6 +395,7 @@ class DappSigningDraft {
     required this.appUrl,
     required this.method,
     required this.payloadBase64,
+    required this.pageContext,
     this.requestId,
     this.transactionFormat,
   });
@@ -404,6 +405,7 @@ class DappSigningDraft {
   final String appUrl;
   final String method;
   final String payloadBase64;
+  final DappPageContext pageContext;
   final String? requestId;
   final String? transactionFormat;
 }
@@ -413,12 +415,14 @@ class EvmDappSigningDraft {
     required this.preview,
     required this.method,
     required this.payloadJson,
+    required this.pageContext,
     this.requestId,
   });
 
   final EvmDappSignPreview preview;
   final String method;
   final String payloadJson;
+  final DappPageContext pageContext;
   final String? requestId;
 }
 
@@ -448,6 +452,7 @@ class DappSignResponse {
   const DappSignResponse({
     required this.requestId,
     required this.approved,
+    required this.pageContext,
     this.signature,
     this.signatureBase64,
     this.signedPayloadBase64,
@@ -459,6 +464,7 @@ class DappSignResponse {
 
   final String requestId;
   final bool approved;
+  final DappPageContext pageContext;
   final String? signature;
   final String? signatureBase64;
   final String? signedPayloadBase64;
@@ -466,6 +472,22 @@ class DappSignResponse {
   final List<String> signedPayloadsBase64;
   final String? transactionSignature;
   final String? error;
+}
+
+class DappPageContext {
+  const DappPageContext({
+    required this.origin,
+    required this.navigationGeneration,
+  });
+
+  final String origin;
+  final int navigationGeneration;
+
+  bool matches(DappPageContext? other) {
+    return other != null &&
+        origin == other.origin &&
+        navigationGeneration == other.navigationGeneration;
+  }
 }
 
 enum SquadsDraftKind {

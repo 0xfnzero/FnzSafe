@@ -24,6 +24,7 @@ class _ConfirmationScreenState extends ConsumerState<ConfirmationScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final session = ref.watch(mobileWalletSessionProvider);
     final preview = ref.watch(signingPreviewProvider);
     final rawPaymentDraft = ref.watch(paymentSigningDraftProvider);
     final rawEvmPaymentDraft = ref.watch(evmPaymentSigningDraftProvider);
@@ -142,7 +143,7 @@ class _ConfirmationScreenState extends ConsumerState<ConfirmationScreen> {
               ),
             ),
           const SizedBox(height: 16),
-          if (_requiresWalletPassword(preview)) ...[
+          if (_requiresWalletPassword(preview) && !session.isUnlocked) ...[
             TextField(
               controller: _passwordController,
               obscureText: true,
@@ -233,9 +234,18 @@ class _ConfirmationScreenState extends ConsumerState<ConfirmationScreen> {
         throw const MobileBridgeException(
             'invalid_input', 'Selected wallet no longer matches this preview');
       }
+      final dappContext = _dappPageContext(preview);
+      if (dappContext != null &&
+          !dappContext.matches(ref.read(dappPageContextProvider))) {
+        throw const MobileBridgeException(
+          'invalid_input',
+          'The dApp page changed. Review the request again from the current site.',
+        );
+      }
       final keystoreJson =
           await ref.read(mobileWalletStoreProvider).readKeystoreJson(wallet.id);
       await ref.read(biometricGateProvider).confirmSensitiveSubmit();
+      final password = await _signingPassword(wallet, keystoreJson);
       if (_isPayment(preview)) {
         final draft = ref.read(paymentSigningDraftProvider);
         if (draft == null) {
@@ -246,7 +256,7 @@ class _ConfirmationScreenState extends ConsumerState<ConfirmationScreen> {
               preview: preview,
               approved: true,
               keystoreJson: keystoreJson,
-              password: _passwordController.text,
+              password: password,
               recipient: draft.recipient,
               amountBaseUnits: draft.amountBaseUnits,
               operation: draft.operation,
@@ -266,14 +276,14 @@ class _ConfirmationScreenState extends ConsumerState<ConfirmationScreen> {
               preview: draft.preview,
               approved: true,
               keystoreJson: keystoreJson,
-              password: _passwordController.text,
+              password: password,
             );
         _complete('Submitted: ${result.transactionHash}');
         return;
       }
 
       if (_isSquads(preview)) {
-        final message = await _approveSquads(preview, keystoreJson);
+        final message = await _approveSquads(preview, keystoreJson, password);
         _complete(message);
         return;
       }
@@ -288,7 +298,7 @@ class _ConfirmationScreenState extends ConsumerState<ConfirmationScreen> {
               preview: draft.preview,
               approved: true,
               keystoreJson: keystoreJson,
-              password: _passwordController.text,
+              password: password,
               method: draft.method,
               payloadJson: draft.payloadJson,
             );
@@ -296,6 +306,7 @@ class _ConfirmationScreenState extends ConsumerState<ConfirmationScreen> {
           ref.read(dappSignResponseProvider.notifier).state = DappSignResponse(
             requestId: draft.requestId!,
             approved: true,
+            pageContext: draft.pageContext,
             signature: result.signature,
             signedTransaction: result.signedTransaction,
             transactionSignature: result.transaction?.transactionHash,
@@ -320,7 +331,7 @@ class _ConfirmationScreenState extends ConsumerState<ConfirmationScreen> {
             preview: preview,
             approved: true,
             keystoreJson: keystoreJson,
-            password: _passwordController.text,
+            password: password,
             appName: draft.appName,
             appUrl: draft.appUrl,
             method: draft.method,
@@ -331,6 +342,7 @@ class _ConfirmationScreenState extends ConsumerState<ConfirmationScreen> {
         ref.read(dappSignResponseProvider.notifier).state = DappSignResponse(
           requestId: draft.requestId!,
           approved: true,
+          pageContext: draft.pageContext,
           signature: result.signature,
           signatureBase64: result.signatureBase64,
           signedPayloadBase64: result.signedPayloadBase64,
@@ -397,6 +409,7 @@ class _ConfirmationScreenState extends ConsumerState<ConfirmationScreen> {
         ref.read(dappSignResponseProvider.notifier).state = DappSignResponse(
           requestId: draft!.requestId!,
           approved: false,
+          pageContext: draft.pageContext,
           error: 'User rejected the dApp signing request',
         );
         shouldReturnToPrevious = true;
@@ -423,6 +436,7 @@ class _ConfirmationScreenState extends ConsumerState<ConfirmationScreen> {
         ref.read(dappSignResponseProvider.notifier).state = DappSignResponse(
           requestId: draft!.requestId!,
           approved: false,
+          pageContext: draft.pageContext,
           error: 'User rejected the EVM dApp signing request',
         );
         shouldReturnToPrevious = true;
@@ -461,6 +475,7 @@ class _ConfirmationScreenState extends ConsumerState<ConfirmationScreen> {
   Future<String> _approveSquads(
     SigningPreview preview,
     String keystoreJson,
+    String password,
   ) async {
     final draft = ref.read(squadsSigningDraftProvider);
     if (draft == null) {
@@ -468,7 +483,6 @@ class _ConfirmationScreenState extends ConsumerState<ConfirmationScreen> {
           'invalid_input', 'Squads signing draft is missing');
     }
     final bridge = ref.read(mobileBridgeProvider);
-    final password = _passwordController.text;
     switch (draft.kind) {
       case SquadsDraftKind.create:
         final result = await bridge.confirmSquadsCreate(
@@ -546,6 +560,47 @@ class _ConfirmationScreenState extends ConsumerState<ConfirmationScreen> {
         );
         return 'Executed: ${result.signature}';
     }
+  }
+
+  Future<String> _signingPassword(
+    WalletSummary wallet,
+    String keystoreJson,
+  ) async {
+    final session = ref.read(mobileWalletSessionProvider);
+    if (session.isUnlocked) return session.revealPassword();
+
+    final password = _passwordController.text;
+    if (password.isEmpty) {
+      throw const MobileBridgeException(
+        'invalid_input',
+        'Enter the wallet password to continue.',
+      );
+    }
+    if (wallet.family == WalletFamily.evm) {
+      await ref.read(mobileBridgeProvider).unlockEvmWallet(
+            keystoreJson: keystoreJson,
+            password: password,
+          );
+    } else {
+      await ref.read(mobileBridgeProvider).unlockWallet(
+            keystoreJson: keystoreJson,
+            password: password,
+          );
+    }
+    await session.unlock(password);
+    return session.revealPassword();
+  }
+
+  DappPageContext? _dappPageContext(SigningPreview preview) {
+    final solana = ref.read(dappSigningDraftProvider);
+    if (solana != null && solana.preview.id == preview.id) {
+      return solana.pageContext;
+    }
+    final evm = ref.read(evmDappSigningDraftProvider);
+    if (evm != null && evm.preview.previewId == preview.id) {
+      return evm.pageContext;
+    }
+    return null;
   }
 
   Future<void> _rejectSquads(

@@ -1373,8 +1373,8 @@ final _developmentMultiChainCatalog = List<MultiChainDescriptor>.unmodifiable([
       name: 'Bitcoin',
       decimals: 8,
     ),
-    defaultDerivationPath: "m/84'/1'/0'/0/0",
-    addressFormats: ['p2wpkh'],
+    defaultDerivationPath: "m/86'/1'/0'/0/0",
+    addressFormats: ['p2tr', 'p2wpkh'],
     capabilities: [],
     endpoints: [
       const MultiChainEndpoint(

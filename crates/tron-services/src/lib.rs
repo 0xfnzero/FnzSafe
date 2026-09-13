@@ -590,6 +590,23 @@ pub async fn preview_transfer(
     transfer_preview_from_transaction(endpoint, &transaction, &sender, &recipient, amount_sun).await
 }
 
+pub async fn prepare_transfer(
+    chain_id: &str,
+    sender: &str,
+    recipient: &str,
+    amount_sun: u64,
+) -> TronServiceResult<(TronTransferPreview, Value)> {
+    let endpoint = network_endpoint(chain_id)?;
+    let sender = normalize_tron_address(sender)?;
+    let recipient = normalize_tron_address(recipient)?;
+    let transaction =
+        create_transfer_transaction(endpoint, &sender, &recipient, amount_sun).await?;
+    let preview =
+        transfer_preview_from_transaction(endpoint, &transaction, &sender, &recipient, amount_sun)
+            .await?;
+    Ok((preview, transaction))
+}
+
 fn sign_transaction(
     transaction: &mut Value,
     private_key: &[u8],
@@ -636,6 +653,38 @@ pub async fn submit_transfer(
     let private_key = private_key_from_mnemonic(mnemonic)?;
     let mut transaction =
         create_transfer_transaction(endpoint, &sender, &recipient, amount_sun).await?;
+    let txid = sign_transaction(
+        &mut transaction,
+        private_key.as_ref(),
+        &sender,
+        &recipient,
+        amount_sun,
+    )?;
+    let response = post_json(endpoint, "wallet/broadcasttransaction", transaction).await?;
+    if response.get("result").and_then(Value::as_bool) != Some(true) {
+        return Err(TronServiceError::Network(
+            response
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("TRON node rejected the signed transaction")
+                .to_string(),
+        ));
+    }
+    Ok(TronBroadcastResult { txid })
+}
+
+pub async fn submit_prepared_transfer(
+    chain_id: &str,
+    mnemonic: &str,
+    sender: &str,
+    recipient: &str,
+    amount_sun: u64,
+    mut transaction: Value,
+) -> TronServiceResult<TronBroadcastResult> {
+    let endpoint = network_endpoint(chain_id)?;
+    let sender = normalize_tron_address(sender)?;
+    let recipient = normalize_tron_address(recipient)?;
+    let private_key = private_key_from_mnemonic(mnemonic)?;
     let txid = sign_transaction(
         &mut transaction,
         private_key.as_ref(),

@@ -27,6 +27,7 @@ export interface WalletChainAddress {
   address: string;
   logoUri?: string;
   testnet?: boolean;
+  derivationPath?: string;
 }
 
 export interface UnifiedWalletAsset {
@@ -46,6 +47,7 @@ export interface UnifiedWalletAsset {
   tracked: boolean;
   loading?: boolean;
   testnet?: boolean;
+  derivationPath?: string;
 }
 
 export interface UnifiedWalletLabels {
@@ -369,14 +371,10 @@ export function WalletReceivePanel({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [qrFailed, setQrFailed] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const addressGroups = useMemo(() => {
-    const grouped = new Map<string, WalletChainAddress[]>();
-    for (const item of addresses) {
-      const key = `${item.family}:${item.address.toLowerCase()}`;
-      grouped.set(key, [...(grouped.get(key) ?? []), item]);
-    }
-    return Array.from(grouped.values()).map((items) => ({ primary: items[0], items }));
-  }, [addresses]);
+  const addressGroups = useMemo(
+    () => addresses.map((item) => ({ primary: item, items: [item] })),
+    [addresses],
+  );
   const selectedGroup = selectedId
     ? addressGroups.find((group) => group.primary.id === selectedId) ?? null
     : null;
@@ -403,8 +401,7 @@ export function WalletReceivePanel({
 
   if (selected) {
     const copyId = `wallet-receive:${selected.id}`;
-    const isSharedEvmAddress = selected.family === "evm" && (selectedGroup?.items.length ?? 0) > 1;
-    const displayName = isSharedEvmAddress ? "EVM" : selected.chainName;
+    const displayName = selected.chainName;
     return (
       <div className="mx-auto max-w-xl space-y-6">
         <button
@@ -421,7 +418,7 @@ export function WalletReceivePanel({
             <div className="text-left">
               <h3 className="text-xl font-semibold text-white">{displayName}</h3>
               <p className="text-sm text-gray-400">
-                {isSharedEvmAddress ? `${selectedGroup?.items.length} ${labels.networks}` : labels.receiveAddress}
+                {labels.receiveAddress}
               </p>
             </div>
           </div>
@@ -446,10 +443,10 @@ export function WalletReceivePanel({
           </button>
         </div>
         <p className="text-center text-sm text-amber-200/90">
-          {isSharedEvmAddress ? labels.chainFamily : labels.network}: {displayName}
+          {labels.network}: {displayName}
         </p>
         <p className="text-center text-xs text-gray-500">
-          {isSharedEvmAddress ? labels.sharedNetworkWarning : labels.receiveNetworkWarning}
+          {labels.receiveNetworkWarning}
         </p>
       </div>
     );
@@ -460,19 +457,17 @@ export function WalletReceivePanel({
       {addressGroups.length === 0 && (
         <p className="py-10 text-center text-sm text-gray-500">{labels.noAddresses}</p>
       )}
-      {addressGroups.map(({ primary: item, items }) => {
+      {addressGroups.map(({ primary: item }) => {
         const copyId = `wallet-receive-list:${item.id}`;
-        const isSharedEvmAddress = item.family === "evm" && items.length > 1;
-        const displayName = isSharedEvmAddress ? "EVM" : item.chainName;
+        const displayName = item.chainName;
         return (
           <div key={item.id} className="flex min-w-0 items-center gap-3 border-b border-white/10 px-1 py-3 last:border-b-0 lg:rounded-lg lg:border lg:bg-white/[0.04] lg:px-4">
             <ChainMark item={item} large />
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 items-center gap-2">
                 <p className="truncate font-semibold text-white">{displayName}</p>
-                {!isSharedEvmAddress && item.testnet && <span className="rounded bg-amber-400/15 px-1.5 py-0.5 text-[10px] text-amber-200">{labels.testnet}</span>}
+                {item.testnet && <span className="rounded bg-amber-400/15 px-1.5 py-0.5 text-[10px] text-amber-200">{labels.testnet}</span>}
               </div>
-              {isSharedEvmAddress && <p className="mt-1 truncate text-xs text-gray-500">{items.length} {labels.networks}</p>}
               <p className="mt-0.5 truncate font-mono text-sm text-gray-400" title={item.address}>{shortAddress(item.address)}</p>
             </div>
             <button
@@ -586,6 +581,7 @@ export function UnifiedAssetList({
 }
 
 interface NativeChainSendPreview {
+  preview_id: string;
   chain_id: string;
   family: "bitcoin" | "tron";
   sender: string;
@@ -614,7 +610,9 @@ function isNativeChainPreview(
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const preview = value as Partial<NativeChainSendPreview>;
   if (
-    preview.chain_id !== expected.networkId
+    typeof preview.preview_id !== "string"
+    || preview.preview_id.length < 16
+    || preview.chain_id !== expected.networkId
     || preview.family !== expected.family
     || preview.sender !== expected.sender
     || preview.recipient !== expected.recipient
@@ -658,17 +656,33 @@ export function NativeChainSendPanel({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState<"preview" | "submit" | null>(null);
   const busyRef = useRef(false);
+  const requestIdRef = useRef(0);
   const networkId = asset.networkId || "";
   const family = asset.family === "bitcoin" || asset.family === "tron" ? asset.family : null;
   const amountAtomic = decimalToAtomicUnits(amount, asset.decimals);
 
+  useEffect(() => {
+    requestIdRef.current += 1;
+    busyRef.current = false;
+    setBusy(null);
+    setPreview(null);
+    setTransactionId("");
+    setError("");
+  }, [asset.id, asset.derivationPath, sender, walletId]);
+
   const updateRecipient = (value: string) => {
+    requestIdRef.current += 1;
+    busyRef.current = false;
+    setBusy(null);
     setRecipient(value);
     setPreview(null);
     setTransactionId("");
     setError("");
   };
   const updateAmount = (value: string) => {
+    requestIdRef.current += 1;
+    busyRef.current = false;
+    setBusy(null);
     setAmount(value);
     setPreview(null);
     setTransactionId("");
@@ -677,6 +691,8 @@ export function NativeChainSendPanel({
 
   const request = async (mode: "preview" | "submit") => {
     if (busyRef.current || !family || !networkId || !amountAtomic || amountAtomic === "0" || !recipient.trim()) return;
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
     busyRef.current = true;
     setBusy(mode);
     setError("");
@@ -686,9 +702,10 @@ export function NativeChainSendPanel({
         sender,
         recipient: recipient.trim(),
         amount_atomic: amountAtomic,
+        derivation_path: asset.derivationPath,
       };
-      if (mode === "submit" && family === "bitcoin") {
-        body.fee_rate_sat_vb = preview?.fee_rate_sat_vb;
+      if (mode === "submit") {
+        body.preview_id = preview?.preview_id;
       }
       const response = await apiFetch(
         `wallets/${encodeURIComponent(walletId)}/${family}/send/${mode}`,
@@ -699,6 +716,7 @@ export function NativeChainSendPanel({
         },
       );
       const data = await response.json();
+      if (requestIdRef.current !== requestId) return;
       if (!response.ok) throw new Error(data?.error || (mode === "preview" ? labels.previewFailed : labels.sendFailed));
       if (mode === "preview") {
         if (!isNativeChainPreview(data, {
@@ -723,10 +741,13 @@ export function NativeChainSendPanel({
         onSubmitted();
       }
     } catch (cause) {
+      if (requestIdRef.current !== requestId) return;
       setError(cause instanceof Error ? cause.message : mode === "preview" ? labels.previewFailed : labels.sendFailed);
     } finally {
-      busyRef.current = false;
-      setBusy(null);
+      if (requestIdRef.current === requestId) {
+        busyRef.current = false;
+        setBusy(null);
+      }
     }
   };
 

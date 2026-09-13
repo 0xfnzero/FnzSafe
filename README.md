@@ -24,7 +24,7 @@ FnzSafe is an open-source multi-chain wallet for Solana and EVM-compatible netwo
 | Wallet lifecycle | Create a universal mnemonic wallet, import a mnemonic/private key/Keystore, switch and rename accounts, export encrypted backups or private keys, change passwords, and remove local wallets |
 | Solana wallet | SOL, SPL Token, and Token-2022 balances; token metadata; receive/send flows; token actions; transaction history; mainnet, devnet, testnet, and custom RPC endpoints |
 | EVM wallet | One derived address across EVM networks; native and ERC-20 assets; EIP-1559 transfers; Etherscan V2 transaction history when configured; built-in networks and custom EVM RPC configuration |
-| Bitcoin and TRON | Experimental BIP84/BIP44 account derivation and address validation through the shared Rust, desktop, and mobile chain APIs; transaction building and broadcasting are not enabled yet |
+| Bitcoin and TRON | Taproot with TP/Phantom-compatible private-key import by default, optional BIP84 Native SegWit, plus BIP44 TRON derivation; desktop BTC/TRX balance and native transfer flows are enabled |
 | dApp wallet | Built-in Solana dApp browser, provider injection, message/transaction signing, deep links, transaction previews, automatic chain selection, and revocable connected-app permissions |
 | Wallet security | Argon2id + AES-256-GCM keystores, Touch ID/biometric confirmation, TOTP, Triple Wallet (3FA), auto-lock, sensitive-log filtering, and normal signing without returning decrypted private keys to the frontend |
 | Shared operations | SOL/SPL/ERC-20 transfers, WSOL wrap/unwrap/close, durable nonce accounts, address book, Squads v4 multisig, and SOL/SPL payment proposals |

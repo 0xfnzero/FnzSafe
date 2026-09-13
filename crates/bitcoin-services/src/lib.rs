@@ -1,7 +1,7 @@
 //! Bitcoin account derivation and address validation for the multi-chain registry.
 //!
-//! Transaction building and broadcasting are intentionally not advertised yet. They will use
-//! PSBT-based flows rather than forcing Bitcoin into an account-chain transaction model.
+//! Transactions use bounded PSBT-based flows rather than forcing Bitcoin into an account-chain
+//! transaction model.
 
 #![forbid(unsafe_code)]
 
@@ -11,14 +11,14 @@ use bip39::{Language, Mnemonic};
 use bitcoin::absolute::LockTime;
 use bitcoin::consensus::encode;
 use bitcoin::hashes::Hash;
-use bitcoin::key::CompressedPublicKey;
+use bitcoin::key::{CompressedPublicKey, TapTweak};
 use bitcoin::psbt::Psbt;
-use bitcoin::secp256k1::{Message, PublicKey, Secp256k1, SecretKey};
-use bitcoin::sighash::{EcdsaSighashType, SighashCache};
+use bitcoin::secp256k1::{Keypair, Message, PublicKey, Secp256k1, SecretKey};
+use bitcoin::sighash::{EcdsaSighashType, Prevouts, SighashCache};
 use bitcoin::transaction::Version;
 use bitcoin::{
-    Address, AddressType, Amount, Network, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut,
-    Txid, Witness,
+    Address, AddressType, Amount, Network, OutPoint, PrivateKey, ScriptBuf, Sequence,
+    TapSighashType, Transaction, TxIn, TxOut, Txid, Witness,
 };
 use fnzero_safe_chain_core::{
     capabilities, capability_ids, families, validate_address_input, validate_derivation_path_input,
@@ -33,11 +33,15 @@ use zeroize::Zeroizing;
 
 pub const BITCOIN_MAINNET_CAIP2: &str = "bip122:000000000019d6689c085ae165831e93";
 pub const BITCOIN_TESTNET_CAIP2: &str = "bip122:000000000933ea01ad0ee984209779ba";
-pub const BITCOIN_MAINNET_DERIVATION_PATH: &str = "m/84'/0'/0'/0/0";
-pub const BITCOIN_TESTNET_DERIVATION_PATH: &str = "m/84'/1'/0'/0/0";
+pub const BITCOIN_MAINNET_DERIVATION_PATH: &str = "m/86'/0'/0'/0/0";
+pub const BITCOIN_TESTNET_DERIVATION_PATH: &str = "m/86'/1'/0'/0/0";
+pub const BITCOIN_MAINNET_NATIVE_SEGWIT_DERIVATION_PATH: &str = "m/84'/0'/0'/0/0";
+pub const BITCOIN_TESTNET_NATIVE_SEGWIT_DERIVATION_PATH: &str = "m/84'/1'/0'/0/0";
 pub const BITCOIN_MAINNET_ESPLORA_URL: &str = "https://blockstream.info/api";
 pub const BITCOIN_TESTNET_ESPLORA_URL: &str = "https://blockstream.info/testnet/api";
-const BITCOIN_DUST_SATS: u64 = 294;
+const P2WPKH_DUST_SATS: u64 = 294;
+const P2TR_DUST_SATS: u64 = 330;
+const LEGACY_DUST_SATS: u64 = 546;
 const DEFAULT_FEE_RATE_SAT_VB: f64 = 5.0;
 const MAX_FEE_RATE_SAT_VB: f64 = 500.0;
 const MAX_TRANSACTION_INPUTS: usize = 200;
@@ -171,7 +175,7 @@ impl BitcoinAdapter {
                     decimals: 8,
                 },
                 default_derivation_path: derivation_path.to_string(),
-                address_formats: vec!["p2wpkh".to_string()],
+                address_formats: vec!["p2tr".to_string(), "p2wpkh".to_string()],
                 capabilities: capability_ids(&[
                     capabilities::ACCOUNT_DERIVATION,
                     capabilities::ADDRESS_VALIDATION,
@@ -205,9 +209,13 @@ impl ChainAdapter for BitcoinAdapter {
                 self.descriptor.network
             ))
         })?;
-        if checked.address_type() != Some(AddressType::P2wpkh) {
+        if !matches!(
+            checked.address_type(),
+            Some(AddressType::P2tr | AddressType::P2wpkh)
+        ) {
             return Err(ChainError::InvalidAddress(
-                "only BIP84 P2WPKH addresses are enabled in the experimental adapter".to_string(),
+                "only BIP86 P2TR and BIP84 P2WPKH addresses are enabled in the experimental adapter"
+                    .to_string(),
             ));
         }
         Ok(checked.to_string())
@@ -231,16 +239,17 @@ impl ChainAdapter for BitcoinAdapter {
             .unwrap_or(&self.descriptor.default_derivation_path);
         let path = DerivationPath::from_str(path_text)
             .map_err(|error| ChainError::InvalidDerivationPath(error.to_string()))?;
-        validate_bip84_path(&path, self.network)?;
+        let purpose = validate_bitcoin_path(&path, self.network)?;
         let seed = Zeroizing::new(mnemonic.to_seed(""));
         let child = bip32::XPrv::derive_from_path(seed.as_slice(), &path)
             .map_err(|error| ChainError::DerivationFailed(error.to_string()))?;
-        let public_key = child.public_key().to_bytes();
-        let compressed = CompressedPublicKey(
-            PublicKey::from_slice(&public_key)
-                .map_err(|error| ChainError::DerivationFailed(error.to_string()))?,
-        );
-        let address = Address::p2wpkh(&compressed, self.network).to_string();
+        let child_secret_key = SecretKey::from_slice(&child.private_key().to_bytes())
+            .map_err(|error| ChainError::DerivationFailed(error.to_string()))?;
+        let secret_key = account_secret_key_for_purpose(&child_secret_key, purpose);
+        let secp = Secp256k1::new();
+        let public_key = PublicKey::from_secret_key(&secp, &secret_key);
+        let compressed = CompressedPublicKey(public_key);
+        let address = address_for_purpose(&secret_key, self.network, purpose).to_string();
         DerivedAccount::new(
             self.descriptor.chain_id.clone(),
             address,
@@ -250,12 +259,12 @@ impl ChainAdapter for BitcoinAdapter {
     }
 }
 
-fn validate_bip84_path(path: &DerivationPath, network: Network) -> ChainResult<()> {
+fn validate_bitcoin_path(path: &DerivationPath, network: Network) -> ChainResult<u32> {
     let coin_type = if network == Network::Bitcoin { 0 } else { 1 };
     let components = path.as_ref();
     let valid = components.len() == 5
         && components[0].is_hardened()
-        && components[0].index() == 84
+        && matches!(components[0].index(), 84 | 86)
         && components[1].is_hardened()
         && components[1].index() == coin_type
         && components[2].is_hardened()
@@ -264,10 +273,10 @@ fn validate_bip84_path(path: &DerivationPath, network: Network) -> ChainResult<(
         && !components[4].is_hardened();
     if !valid {
         return Err(ChainError::InvalidDerivationPath(format!(
-            "expected BIP84 path m/84'/{coin_type}'/account'/change/index"
+            "expected BIP86 or BIP84 path m/(86|84)'/{coin_type}'/account'/change/index"
         )));
     }
-    Ok(())
+    Ok(components[0].index())
 }
 
 fn network_config(chain_id: &str) -> BitcoinServiceResult<(Network, &'static str, &'static str)> {
@@ -292,7 +301,24 @@ pub fn private_key_from_mnemonic(
     mnemonic: &str,
     chain_id: &str,
 ) -> BitcoinServiceResult<Zeroizing<[u8; 32]>> {
-    let (network, derivation_path, _) = network_config(chain_id)?;
+    let (_, derivation_path, _) = network_config(chain_id)?;
+    private_key_from_mnemonic_at_path(mnemonic, chain_id, derivation_path)
+}
+
+pub fn private_key_from_mnemonic_at_path(
+    mnemonic: &str,
+    chain_id: &str,
+    derivation_path: &str,
+) -> BitcoinServiceResult<Zeroizing<[u8; 32]>> {
+    account_private_key_from_mnemonic_at_path(mnemonic, chain_id, derivation_path)
+}
+
+fn bip32_child_private_key_from_mnemonic_at_path(
+    mnemonic: &str,
+    chain_id: &str,
+    derivation_path: &str,
+) -> BitcoinServiceResult<Zeroizing<[u8; 32]>> {
+    let (network, _, _) = network_config(chain_id)?;
     validate_mnemonic_input(mnemonic)
         .map_err(|error| BitcoinServiceError::InvalidInput(error.to_string()))?;
     let normalized = Zeroizing::new(mnemonic.split_whitespace().collect::<Vec<_>>().join(" "));
@@ -300,7 +326,7 @@ pub fn private_key_from_mnemonic(
         .map_err(|_| BitcoinServiceError::InvalidInput("invalid mnemonic".to_string()))?;
     let path = DerivationPath::from_str(derivation_path)
         .map_err(|error| BitcoinServiceError::InvalidInput(error.to_string()))?;
-    validate_bip84_path(&path, network)
+    validate_bitcoin_path(&path, network)
         .map_err(|error| BitcoinServiceError::InvalidInput(error.to_string()))?;
     let seed = Zeroizing::new(mnemonic.to_seed(""));
     let child = bip32::XPrv::derive_from_path(seed.as_slice(), &path)
@@ -312,13 +338,118 @@ pub fn address_from_private_key(
     private_key: &[u8],
     chain_id: &str,
 ) -> BitcoinServiceResult<String> {
+    let (_, path, _) = network_config(chain_id)?;
+    address_from_private_key_at_path(private_key, chain_id, path)
+}
+
+pub fn address_from_private_key_at_path(
+    private_key: &[u8],
+    chain_id: &str,
+    derivation_path: &str,
+) -> BitcoinServiceResult<String> {
     let (network, _, _) = network_config(chain_id)?;
+    let path = DerivationPath::from_str(derivation_path)
+        .map_err(|error| BitcoinServiceError::InvalidInput(error.to_string()))?;
+    let purpose = validate_bitcoin_path(&path, network)
+        .map_err(|error| BitcoinServiceError::InvalidInput(error.to_string()))?;
     let secret_key = SecretKey::from_slice(private_key).map_err(|_| {
         BitcoinServiceError::InvalidInput("invalid Bitcoin private key".to_string())
     })?;
-    let public_key = PublicKey::from_secret_key(&Secp256k1::new(), &secret_key);
-    let compressed = CompressedPublicKey(public_key);
-    Ok(Address::p2wpkh(&compressed, network).to_string())
+    Ok(address_for_purpose(&secret_key, network, purpose).to_string())
+}
+
+fn address_for_purpose(secret_key: &SecretKey, network: Network, purpose: u32) -> Address {
+    let secp = Secp256k1::new();
+    if purpose == 86 {
+        let keypair = Keypair::from_secret_key(&secp, secret_key);
+        let (x_only, _) = keypair.x_only_public_key();
+        Address::p2tr(&secp, x_only, None, network)
+    } else {
+        let public_key = PublicKey::from_secret_key(&secp, secret_key);
+        Address::p2wpkh(&CompressedPublicKey(public_key), network)
+    }
+}
+
+fn account_secret_key_for_purpose(secret_key: &SecretKey, purpose: u32) -> SecretKey {
+    if purpose != 86 {
+        return *secret_key;
+    }
+
+    let secp = Secp256k1::new();
+    Keypair::from_secret_key(&secp, secret_key)
+        .tap_tweak(&secp, None)
+        .to_keypair()
+        .secret_key()
+}
+
+fn account_private_key_from_mnemonic_at_path(
+    mnemonic: &str,
+    chain_id: &str,
+    derivation_path: &str,
+) -> BitcoinServiceResult<Zeroizing<[u8; 32]>> {
+    let (network, _, _) = network_config(chain_id)?;
+    let path = DerivationPath::from_str(derivation_path)
+        .map_err(|error| BitcoinServiceError::InvalidInput(error.to_string()))?;
+    let purpose = validate_bitcoin_path(&path, network)
+        .map_err(|error| BitcoinServiceError::InvalidInput(error.to_string()))?;
+    let child_key =
+        bip32_child_private_key_from_mnemonic_at_path(mnemonic, chain_id, derivation_path)?;
+    let child_secret_key = SecretKey::from_slice(child_key.as_ref()).map_err(|_| {
+        BitcoinServiceError::InvalidInput("invalid Bitcoin private key".to_string())
+    })?;
+    Ok(Zeroizing::new(
+        account_secret_key_for_purpose(&child_secret_key, purpose).secret_bytes(),
+    ))
+}
+
+/// Exports the active Bitcoin account key as compressed Wallet Import Format (WIF).
+///
+/// For Taproot accounts this exports the first tweaked key as the imported wallet's internal key.
+/// Popular wallets then apply the Taproot key-path tweak and reproduce the address FnzSafe uses.
+pub fn private_key_wif_from_mnemonic(
+    mnemonic: &str,
+    chain_id: &str,
+) -> BitcoinServiceResult<Zeroizing<String>> {
+    let (_, path, _) = network_config(chain_id)?;
+    private_key_wif_from_mnemonic_at_path(mnemonic, chain_id, path)
+}
+
+pub fn private_key_wif_from_mnemonic_at_path(
+    mnemonic: &str,
+    chain_id: &str,
+    derivation_path: &str,
+) -> BitcoinServiceResult<Zeroizing<String>> {
+    let (network, _, _) = network_config(chain_id)?;
+    let private_key =
+        account_private_key_from_mnemonic_at_path(mnemonic, chain_id, derivation_path)?;
+    let secret_key = SecretKey::from_slice(private_key.as_ref()).map_err(|_| {
+        BitcoinServiceError::InvalidInput("invalid Bitcoin private key".to_string())
+    })?;
+    Ok(Zeroizing::new(
+        PrivateKey::new(secret_key, network).to_wif(),
+    ))
+}
+
+pub fn address_from_wif(wif: &str, chain_id: &str) -> BitcoinServiceResult<String> {
+    let (_, path, _) = network_config(chain_id)?;
+    address_from_wif_at_path(wif, chain_id, path)
+}
+
+pub fn address_from_wif_at_path(
+    wif: &str,
+    chain_id: &str,
+    derivation_path: &str,
+) -> BitcoinServiceResult<String> {
+    let (network, _, _) = network_config(chain_id)?;
+    let private_key = PrivateKey::from_wif(wif.trim()).map_err(|_| {
+        BitcoinServiceError::InvalidInput("invalid Bitcoin WIF private key".to_string())
+    })?;
+    if private_key.network != network.into() || !private_key.compressed {
+        return Err(BitcoinServiceError::InvalidInput(
+            "Bitcoin WIF does not match the selected network or compressed key format".to_string(),
+        ));
+    }
+    address_from_private_key_at_path(&private_key.inner.secret_bytes(), chain_id, derivation_path)
 }
 
 fn checked_address(value: &str, network: Network) -> BitcoinServiceResult<Address> {
@@ -436,24 +567,50 @@ async fn fetch_fee_rate(endpoint: &str) -> BitcoinServiceResult<f64> {
     Ok(fee_rate)
 }
 
-fn estimated_p2wpkh_vbytes(input_count: usize, output_count: usize) -> BitcoinServiceResult<u64> {
+fn estimated_vbytes(
+    sender_type: AddressType,
+    input_count: usize,
+    output_script_lengths: &[usize],
+) -> BitcoinServiceResult<u64> {
     let inputs = u64::try_from(input_count)
         .map_err(|_| BitcoinServiceError::InvalidInput("too many Bitcoin inputs".to_string()))?;
-    let outputs = u64::try_from(output_count)
-        .map_err(|_| BitcoinServiceError::InvalidInput("too many Bitcoin outputs".to_string()))?;
+    let input_vbytes = if sender_type == AddressType::P2tr {
+        58
+    } else {
+        69
+    };
+    let outputs = output_script_lengths
+        .iter()
+        .try_fold(0_u64, |total, length| {
+            let length = u64::try_from(*length).map_err(|_| {
+                BitcoinServiceError::InvalidInput("Bitcoin output size overflow".to_string())
+            })?;
+            total
+                .checked_add(9_u64.checked_add(length).ok_or_else(|| {
+                    BitcoinServiceError::InvalidInput(
+                        "Bitcoin transaction size overflow".to_string(),
+                    )
+                })?)
+                .ok_or_else(|| {
+                    BitcoinServiceError::InvalidInput(
+                        "Bitcoin transaction size overflow".to_string(),
+                    )
+                })
+        })?;
     11_u64
-        .checked_add(inputs.checked_mul(69).ok_or_else(|| {
+        .checked_add(inputs.checked_mul(input_vbytes).ok_or_else(|| {
             BitcoinServiceError::InvalidInput("Bitcoin transaction size overflow".to_string())
         })?)
-        .and_then(|value| value.checked_add(outputs.checked_mul(31)?))
+        .and_then(|value| value.checked_add(outputs))
         .ok_or_else(|| {
             BitcoinServiceError::InvalidInput("Bitcoin transaction size overflow".to_string())
         })
 }
 
 fn fee_for(
+    sender_type: AddressType,
     input_count: usize,
-    output_count: usize,
+    output_script_lengths: &[usize],
     fee_rate_sat_vb: f64,
 ) -> BitcoinServiceResult<u64> {
     if !fee_rate_sat_vb.is_finite() || !(1.0..=MAX_FEE_RATE_SAT_VB).contains(&fee_rate_sat_vb) {
@@ -461,14 +618,30 @@ fn fee_for(
             "Bitcoin fee rate is outside the supported range".to_string(),
         ));
     }
-    let fee = (estimated_p2wpkh_vbytes(input_count, output_count)? as f64 * fee_rate_sat_vb).ceil()
-        as u64;
+    let fee = (estimated_vbytes(sender_type, input_count, output_script_lengths)? as f64
+        * fee_rate_sat_vb)
+        .ceil() as u64;
     if fee > MAX_ABSOLUTE_FEE_SATS {
         return Err(BitcoinServiceError::InvalidInput(
             "Bitcoin miner fee exceeds the safety limit".to_string(),
         ));
     }
     Ok(fee)
+}
+
+fn required_input_sats(
+    amount_sats: u64,
+    fee_sats: u64,
+    change_dust_sats: u64,
+) -> BitcoinServiceResult<u64> {
+    amount_sats
+        .checked_add(fee_sats)
+        .and_then(|value| value.checked_add(change_dust_sats))
+        .ok_or_else(|| {
+            BitcoinServiceError::InvalidInput(
+                "Bitcoin amount and fee exceed the supported range".to_string(),
+            )
+        })
 }
 
 fn build_psbt(
@@ -479,18 +652,28 @@ fn build_psbt(
     fee_rate_sat_vb: f64,
     utxos: &[EsploraUtxo],
 ) -> BitcoinServiceResult<PreparedBitcoinTransfer> {
-    if amount_sats < BITCOIN_DUST_SATS {
+    let recipient = checked_address(recipient, network)?;
+    let recipient_dust = match recipient.address_type() {
+        Some(AddressType::P2wpkh) => P2WPKH_DUST_SATS,
+        Some(AddressType::P2tr) => P2TR_DUST_SATS,
+        _ => LEGACY_DUST_SATS,
+    };
+    if amount_sats < recipient_dust {
         return Err(BitcoinServiceError::InvalidInput(format!(
-            "Bitcoin amount must be at least {BITCOIN_DUST_SATS} sats"
+            "Bitcoin amount must be at least {recipient_dust} sats for this recipient address"
         )));
     }
     let sender = checked_address(sender, network)?;
-    if sender.address_type() != Some(AddressType::P2wpkh) {
-        return Err(BitcoinServiceError::InvalidInput(
-            "only BIP84 P2WPKH sender addresses are supported".to_string(),
-        ));
-    }
-    let recipient = checked_address(recipient, network)?;
+    let sender_type = match sender.address_type() {
+        Some(address_type @ (AddressType::P2tr | AddressType::P2wpkh)) => address_type,
+        _ => {
+            return Err(BitcoinServiceError::InvalidInput(
+                "only BIP86 P2TR and BIP84 P2WPKH sender addresses are supported".to_string(),
+            ));
+        }
+    };
+    let recipient_script_length = recipient.script_pubkey().len();
+    let sender_script_length = sender.script_pubkey().len();
     let mut selected = Vec::new();
     let mut total_input_sats = 0_u64;
     let mut fee_sats = 0_u64;
@@ -500,19 +683,38 @@ fn build_psbt(
             BitcoinServiceError::InvalidInput("Bitcoin input value overflow".to_string())
         })?;
         selected.push(utxo);
-        let two_output_fee = fee_for(selected.len(), 2, fee_rate_sat_vb)?;
-        if total_input_sats
-            >= amount_sats
-                .saturating_add(two_output_fee)
-                .saturating_add(BITCOIN_DUST_SATS)
-        {
+        let two_output_fee = fee_for(
+            sender_type,
+            selected.len(),
+            &[recipient_script_length, sender_script_length],
+            fee_rate_sat_vb,
+        )?;
+        let change_dust_sats = match sender_type {
+            AddressType::P2tr => P2TR_DUST_SATS,
+            _ => P2WPKH_DUST_SATS,
+        };
+        if total_input_sats >= required_input_sats(amount_sats, two_output_fee, change_dust_sats)? {
             fee_sats = two_output_fee;
-            change_sats = total_input_sats - amount_sats - fee_sats;
+            change_sats = total_input_sats
+                .checked_sub(amount_sats)
+                .and_then(|value| value.checked_sub(fee_sats))
+                .ok_or_else(|| {
+                    BitcoinServiceError::InvalidInput(
+                        "Bitcoin transaction value underflow".to_string(),
+                    )
+                })?;
             break;
         }
-        let one_output_fee = fee_for(selected.len(), 1, fee_rate_sat_vb)?;
-        if total_input_sats >= amount_sats.saturating_add(one_output_fee) {
-            fee_sats = total_input_sats - amount_sats;
+        let one_output_fee = fee_for(
+            sender_type,
+            selected.len(),
+            &[recipient_script_length],
+            fee_rate_sat_vb,
+        )?;
+        if total_input_sats >= required_input_sats(amount_sats, one_output_fee, 0)? {
+            fee_sats = total_input_sats.checked_sub(amount_sats).ok_or_else(|| {
+                BitcoinServiceError::InvalidInput("Bitcoin transaction value underflow".to_string())
+            })?;
             change_sats = 0;
             break;
         }
@@ -563,7 +765,11 @@ fn build_psbt(
             value: Amount::from_sat(utxo.value),
             script_pubkey: sender.script_pubkey(),
         });
-        input.sighash_type = Some(EcdsaSighashType::All.into());
+        input.sighash_type = Some(if sender.address_type() == Some(AddressType::P2tr) {
+            TapSighashType::Default.into()
+        } else {
+            EcdsaSighashType::All.into()
+        });
     }
     let psbt_base64 = BASE64.encode(psbt.serialize());
     Ok(PreparedBitcoinTransfer {
@@ -608,36 +814,68 @@ fn sign_psbt(
     let secp = Secp256k1::new();
     let public_key = PublicKey::from_secret_key(&secp, &secret_key);
     let compressed = CompressedPublicKey(public_key);
-    let sender = Address::p2wpkh(&compressed, network);
-    if sender.to_string() != expected_sender {
+    let keypair = Keypair::from_secret_key(&secp, &secret_key);
+    let (x_only, _) = keypair.x_only_public_key();
+    let p2tr_sender = Address::p2tr(&secp, x_only, None, network);
+    let p2wpkh_sender = Address::p2wpkh(&compressed, network);
+    let sender = if p2tr_sender.to_string() == expected_sender {
+        p2tr_sender
+    } else if p2wpkh_sender.to_string() == expected_sender {
+        p2wpkh_sender
+    } else {
         return Err(BitcoinServiceError::Signing(
             "wallet key does not match the selected Bitcoin account".to_string(),
         ));
-    }
+    };
     let unsigned_tx = psbt.unsigned_tx.clone();
+    let previous_outputs = psbt
+        .inputs
+        .iter()
+        .map(|input| {
+            input.witness_utxo.clone().ok_or_else(|| {
+                BitcoinServiceError::Signing("PSBT input is missing its UTXO".to_string())
+            })
+        })
+        .collect::<BitcoinServiceResult<Vec<_>>>()?;
     for index in 0..psbt.inputs.len() {
-        let previous_output = psbt.inputs[index].witness_utxo.as_ref().ok_or_else(|| {
-            BitcoinServiceError::Signing("PSBT input is missing its UTXO".to_string())
-        })?;
+        let previous_output = &previous_outputs[index];
         if previous_output.script_pubkey != sender.script_pubkey() {
             return Err(BitcoinServiceError::Signing(
                 "PSBT contains an input from a different address".to_string(),
             ));
         }
-        let sighash = SighashCache::new(&unsigned_tx)
-            .p2wpkh_signature_hash(
-                index,
-                &previous_output.script_pubkey,
-                previous_output.value,
-                EcdsaSighashType::All,
-            )
-            .map_err(|error| BitcoinServiceError::Signing(error.to_string()))?;
-        let message = Message::from_digest(sighash.to_byte_array());
-        let signature = bitcoin::ecdsa::Signature {
-            signature: secp.sign_ecdsa(&message, &secret_key),
-            sighash_type: EcdsaSighashType::All,
-        };
-        psbt.inputs[index].final_script_witness = Some(Witness::p2wpkh(&signature, &public_key));
+        if sender.address_type() == Some(AddressType::P2tr) {
+            let sighash = SighashCache::new(&unsigned_tx)
+                .taproot_key_spend_signature_hash(
+                    index,
+                    &Prevouts::All(&previous_outputs),
+                    TapSighashType::Default,
+                )
+                .map_err(|error| BitcoinServiceError::Signing(error.to_string()))?;
+            let message = Message::from_digest(sighash.to_byte_array());
+            let tweaked = keypair.tap_tweak(&secp, None);
+            let signature = bitcoin::taproot::Signature {
+                signature: secp.sign_schnorr_no_aux_rand(&message, tweaked.as_keypair()),
+                sighash_type: TapSighashType::Default,
+            };
+            psbt.inputs[index].final_script_witness = Some(Witness::p2tr_key_spend(&signature));
+        } else {
+            let sighash = SighashCache::new(&unsigned_tx)
+                .p2wpkh_signature_hash(
+                    index,
+                    &previous_output.script_pubkey,
+                    previous_output.value,
+                    EcdsaSighashType::All,
+                )
+                .map_err(|error| BitcoinServiceError::Signing(error.to_string()))?;
+            let message = Message::from_digest(sighash.to_byte_array());
+            let signature = bitcoin::ecdsa::Signature {
+                signature: secp.sign_ecdsa(&message, &secret_key),
+                sighash_type: EcdsaSighashType::All,
+            };
+            psbt.inputs[index].final_script_witness =
+                Some(Witness::p2wpkh(&signature, &public_key));
+        }
     }
     psbt.extract_tx()
         .map_err(|error| BitcoinServiceError::Signing(error.to_string()))
@@ -651,14 +889,33 @@ pub async fn submit_transfer(
     amount_sats: u64,
     fee_rate_sat_vb: f64,
 ) -> BitcoinServiceResult<BitcoinBroadcastResult> {
+    let (_, derivation_path, _) = network_config(chain_id)?;
+    submit_transfer_at_path(
+        chain_id,
+        mnemonic,
+        derivation_path,
+        sender,
+        recipient,
+        amount_sats,
+        fee_rate_sat_vb,
+    )
+    .await
+}
+
+pub async fn submit_transfer_at_path(
+    chain_id: &str,
+    mnemonic: &str,
+    derivation_path: &str,
+    sender: &str,
+    recipient: &str,
+    amount_sats: u64,
+    fee_rate_sat_vb: f64,
+) -> BitcoinServiceResult<BitcoinBroadcastResult> {
     let (network, _, endpoint) = network_config(chain_id)?;
     let sender = checked_address(sender, network)?.to_string();
-    let private_key = private_key_from_mnemonic(mnemonic, chain_id)?;
-    if address_from_private_key(private_key.as_ref(), chain_id)? != sender {
-        return Err(BitcoinServiceError::Signing(
-            "wallet mnemonic does not match the selected Bitcoin account".to_string(),
-        ));
-    }
+    let private_key =
+        account_private_key_from_mnemonic_at_path(mnemonic, chain_id, derivation_path)?;
+    validate_sender_key(private_key.as_ref(), chain_id, derivation_path, &sender)?;
     let utxos = fetch_confirmed_utxos(endpoint, &sender).await?;
     let prepared = build_psbt(
         network,
@@ -695,6 +952,133 @@ pub async fn submit_transfer(
     Ok(BitcoinBroadcastResult { txid })
 }
 
+pub async fn submit_prepared_transfer_at_path(
+    chain_id: &str,
+    mnemonic: &str,
+    derivation_path: &str,
+    sender: &str,
+    recipient: &str,
+    amount_sats: u64,
+    psbt_base64: &str,
+) -> BitcoinServiceResult<BitcoinBroadcastResult> {
+    let (network, _, endpoint) = network_config(chain_id)?;
+    let sender = checked_address(sender, network)?;
+    let recipient = checked_address(recipient, network)?;
+    let private_key =
+        account_private_key_from_mnemonic_at_path(mnemonic, chain_id, derivation_path)?;
+    validate_sender_key(
+        private_key.as_ref(),
+        chain_id,
+        derivation_path,
+        &sender.to_string(),
+    )?;
+    let bytes = BASE64.decode(psbt_base64).map_err(|_| {
+        BitcoinServiceError::InvalidInput("Bitcoin preview PSBT is invalid".to_string())
+    })?;
+    let psbt = Psbt::deserialize(&bytes).map_err(|_| {
+        BitcoinServiceError::InvalidInput("Bitcoin preview PSBT is invalid".to_string())
+    })?;
+    validate_prepared_psbt(&psbt, &sender, &recipient, amount_sats)?;
+    let transaction = sign_psbt(psbt, private_key.as_ref(), &sender.to_string(), network)?;
+    let expected_txid = transaction.compute_txid().to_string();
+    let response = http_client()?
+        .post(format!("{endpoint}/tx"))
+        .header(reqwest::header::CONTENT_TYPE, "text/plain")
+        .body(encode::serialize_hex(&transaction))
+        .send()
+        .await
+        .map_err(|error| BitcoinServiceError::Network(error.to_string()))?;
+    if !response.status().is_success() {
+        return Err(response_error(response).await);
+    }
+    let txid = response
+        .text()
+        .await
+        .map_err(|error| BitcoinServiceError::Network(error.to_string()))?
+        .trim()
+        .to_string();
+    if txid != expected_txid {
+        return Err(BitcoinServiceError::Network(
+            "broadcast service returned a mismatched transaction id".to_string(),
+        ));
+    }
+    Ok(BitcoinBroadcastResult { txid })
+}
+
+fn validate_prepared_psbt(
+    psbt: &Psbt,
+    sender: &Address,
+    recipient: &Address,
+    amount_sats: u64,
+) -> BitcoinServiceResult<()> {
+    if amount_sats == 0 || psbt.inputs.is_empty() || psbt.inputs.len() > MAX_TRANSACTION_INPUTS {
+        return Err(BitcoinServiceError::InvalidInput(
+            "Bitcoin preview transaction is invalid".to_string(),
+        ));
+    }
+    let total_input = psbt.inputs.iter().try_fold(0_u64, |total, input| {
+        let utxo = input.witness_utxo.as_ref().ok_or_else(|| {
+            BitcoinServiceError::InvalidInput(
+                "Bitcoin preview input is missing its UTXO".to_string(),
+            )
+        })?;
+        if utxo.script_pubkey != sender.script_pubkey() {
+            return Err(BitcoinServiceError::InvalidInput(
+                "Bitcoin preview contains an input from another account".to_string(),
+            ));
+        }
+        total.checked_add(utxo.value.to_sat()).ok_or_else(|| {
+            BitcoinServiceError::InvalidInput("Bitcoin preview input value overflow".to_string())
+        })
+    })?;
+    let mut found_recipient = false;
+    let total_output = psbt
+        .unsigned_tx
+        .output
+        .iter()
+        .try_fold(0_u64, |total, output| {
+            if !found_recipient
+                && output.script_pubkey == recipient.script_pubkey()
+                && output.value.to_sat() == amount_sats
+            {
+                found_recipient = true;
+            } else if output.script_pubkey != sender.script_pubkey() {
+                return Err(BitcoinServiceError::InvalidInput(
+                    "Bitcoin preview contains an unexpected output".to_string(),
+                ));
+            }
+            total.checked_add(output.value.to_sat()).ok_or_else(|| {
+                BitcoinServiceError::InvalidInput(
+                    "Bitcoin preview output value overflow".to_string(),
+                )
+            })
+        })?;
+    let fee = total_input.checked_sub(total_output).ok_or_else(|| {
+        BitcoinServiceError::InvalidInput("Bitcoin preview spends more than its inputs".to_string())
+    })?;
+    if !found_recipient || fee == 0 || fee > MAX_ABSOLUTE_FEE_SATS {
+        return Err(BitcoinServiceError::InvalidInput(
+            "Bitcoin preview recipient, amount, or fee is invalid".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_sender_key(
+    private_key: &[u8],
+    chain_id: &str,
+    derivation_path: &str,
+    sender: &str,
+) -> BitcoinServiceResult<()> {
+    let derived_address = address_from_private_key_at_path(private_key, chain_id, derivation_path)?;
+    if derived_address != sender {
+        return Err(BitcoinServiceError::Signing(
+            "wallet key does not match the selected Bitcoin account".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 pub fn builtin_adapters() -> ChainResult<Vec<BitcoinAdapter>> {
     Ok(vec![BitcoinAdapter::mainnet()?, BitcoinAdapter::testnet()?])
 }
@@ -707,12 +1091,12 @@ mod tests {
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
     #[test]
-    fn derives_bip84_mainnet_vector() {
+    fn derives_wallet_import_compatible_taproot_mainnet_vector() {
         let adapter = BitcoinAdapter::mainnet().unwrap();
         let account = adapter.derive_account(MNEMONIC, None).unwrap();
         assert_eq!(
             account.address,
-            "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu"
+            "bc1pmg5dhafms6h9nts4dtehgkanym6yeccfmk5hx3ts3jxnm4zh2knqv80ha5"
         );
         assert_eq!(account.derivation_path, BITCOIN_MAINNET_DERIVATION_PATH);
         assert!(adapter.normalize_address(&account.address).is_ok());
@@ -729,12 +1113,12 @@ mod tests {
     fn rejects_an_address_from_the_wrong_network() {
         let adapter = BitcoinAdapter::testnet().unwrap();
         assert!(adapter
-            .normalize_address("bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu")
+            .normalize_address("bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr")
             .is_err());
     }
 
     #[test]
-    fn rejects_non_bip84_and_wrong_network_derivation_paths() {
+    fn rejects_nonstandard_and_wrong_network_derivation_paths() {
         let mainnet = BitcoinAdapter::mainnet().unwrap();
         assert!(mainnet
             .derive_account(MNEMONIC, Some("m/44'/0'/0'/0/0"))
@@ -770,17 +1154,78 @@ mod tests {
     }
 
     #[test]
-    fn private_key_matches_the_bip84_account() {
+    fn private_key_matches_the_wallet_import_compatible_taproot_account() {
         let key = private_key_from_mnemonic(MNEMONIC, BITCOIN_MAINNET_CAIP2).unwrap();
         assert_eq!(
             address_from_private_key(key.as_ref(), BITCOIN_MAINNET_CAIP2).unwrap(),
-            "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu"
+            "bc1pmg5dhafms6h9nts4dtehgkanym6yeccfmk5hx3ts3jxnm4zh2knqv80ha5"
         );
     }
 
     #[test]
+    fn exports_wallet_import_compatible_taproot_wif() {
+        let wif = private_key_wif_from_mnemonic(MNEMONIC, BITCOIN_MAINNET_CAIP2).unwrap();
+        assert!(wif.starts_with(['K', 'L']));
+        assert_eq!(
+            address_from_wif(&wif, BITCOIN_MAINNET_CAIP2).unwrap(),
+            "bc1pmg5dhafms6h9nts4dtehgkanym6yeccfmk5hx3ts3jxnm4zh2knqv80ha5"
+        );
+        let internal_key = private_key_from_mnemonic(MNEMONIC, BITCOIN_MAINNET_CAIP2).unwrap();
+        let internal_wif = PrivateKey::new(
+            SecretKey::from_slice(internal_key.as_ref()).unwrap(),
+            Network::Bitcoin,
+        )
+        .to_wif();
+        assert_eq!(wif.as_str(), internal_wif);
+        assert!(address_from_wif(&wif, BITCOIN_TESTNET_CAIP2).is_err());
+    }
+
+    #[test]
+    fn explicitly_derives_the_legacy_bip84_account() {
+        let adapter = BitcoinAdapter::mainnet().unwrap();
+        let account = adapter
+            .derive_account(
+                MNEMONIC,
+                Some(BITCOIN_MAINNET_NATIVE_SEGWIT_DERIVATION_PATH),
+            )
+            .unwrap();
+        assert_eq!(
+            account.address,
+            "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu"
+        );
+        let key = private_key_from_mnemonic_at_path(
+            MNEMONIC,
+            BITCOIN_MAINNET_CAIP2,
+            BITCOIN_MAINNET_NATIVE_SEGWIT_DERIVATION_PATH,
+        )
+        .unwrap();
+        let wif = private_key_wif_from_mnemonic_at_path(
+            MNEMONIC,
+            BITCOIN_MAINNET_CAIP2,
+            BITCOIN_MAINNET_NATIVE_SEGWIT_DERIVATION_PATH,
+        )
+        .unwrap();
+        assert_eq!(
+            address_from_wif_at_path(
+                &wif,
+                BITCOIN_MAINNET_CAIP2,
+                BITCOIN_MAINNET_NATIVE_SEGWIT_DERIVATION_PATH,
+            )
+            .unwrap(),
+            account.address,
+        );
+        assert!(validate_sender_key(
+            key.as_ref(),
+            BITCOIN_MAINNET_CAIP2,
+            BITCOIN_MAINNET_NATIVE_SEGWIT_DERIVATION_PATH,
+            &account.address,
+        )
+        .is_ok());
+    }
+
+    #[test]
     fn builds_and_signs_a_bounded_rbf_psbt() {
-        let sender = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu";
+        let sender = "bc1pmg5dhafms6h9nts4dtehgkanym6yeccfmk5hx3ts3jxnm4zh2knqv80ha5";
         let utxos = vec![EsploraUtxo {
             txid: "0000000000000000000000000000000000000000000000000000000000000001".to_string(),
             vout: 0,
@@ -796,12 +1241,51 @@ mod tests {
 
         let key = private_key_from_mnemonic(MNEMONIC, BITCOIN_MAINNET_CAIP2).unwrap();
         let transaction = sign_psbt(prepared.psbt, key.as_ref(), sender, Network::Bitcoin).unwrap();
+        assert_eq!(transaction.input[0].witness.len(), 1);
+    }
+
+    #[test]
+    fn prepared_psbt_is_bound_to_the_approved_payment() {
+        let sender = "bc1pmg5dhafms6h9nts4dtehgkanym6yeccfmk5hx3ts3jxnm4zh2knqv80ha5";
+        let address = checked_address(sender, Network::Bitcoin).unwrap();
+        let utxos = vec![EsploraUtxo {
+            txid: "0000000000000000000000000000000000000000000000000000000000000001".to_string(),
+            vout: 0,
+            value: 100_000,
+            status: EsploraUtxoStatus { confirmed: true },
+        }];
+        let prepared = build_psbt(Network::Bitcoin, sender, sender, 50_000, 2.0, &utxos).unwrap();
+        assert!(validate_prepared_psbt(&prepared.psbt, &address, &address, 50_000).is_ok());
+        assert!(validate_prepared_psbt(&prepared.psbt, &address, &address, 49_999).is_err());
+
+        let mut altered = prepared.psbt;
+        altered.unsigned_tx.output[0].script_pubkey = ScriptBuf::new();
+        assert!(validate_prepared_psbt(&altered, &address, &address, 50_000).is_err());
+    }
+
+    #[test]
+    fn builds_and_signs_the_optional_bip84_account() {
+        let sender = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu";
+        let utxos = vec![EsploraUtxo {
+            txid: "0000000000000000000000000000000000000000000000000000000000000001".to_string(),
+            vout: 0,
+            value: 100_000,
+            status: EsploraUtxoStatus { confirmed: true },
+        }];
+        let prepared = build_psbt(Network::Bitcoin, sender, sender, 50_000, 2.0, &utxos).unwrap();
+        let key = private_key_from_mnemonic_at_path(
+            MNEMONIC,
+            BITCOIN_MAINNET_CAIP2,
+            BITCOIN_MAINNET_NATIVE_SEGWIT_DERIVATION_PATH,
+        )
+        .unwrap();
+        let transaction = sign_psbt(prepared.psbt, key.as_ref(), sender, Network::Bitcoin).unwrap();
         assert_eq!(transaction.input[0].witness.len(), 2);
     }
 
     #[test]
     fn refuses_dust_and_insufficient_funds() {
-        let sender = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu";
+        let sender = "bc1pmg5dhafms6h9nts4dtehgkanym6yeccfmk5hx3ts3jxnm4zh2knqv80ha5";
         assert!(matches!(
             build_psbt(Network::Bitcoin, sender, sender, 100, 2.0, &[]),
             Err(BitcoinServiceError::InvalidInput(_))
@@ -809,6 +1293,16 @@ mod tests {
         assert!(matches!(
             build_psbt(Network::Bitcoin, sender, sender, 50_000, 2.0, &[]),
             Err(BitcoinServiceError::InsufficientFunds)
+        ));
+        let oversized = [EsploraUtxo {
+            txid: "0000000000000000000000000000000000000000000000000000000000000001".to_string(),
+            vout: 0,
+            value: u64::MAX,
+            status: EsploraUtxoStatus { confirmed: true },
+        }];
+        assert!(matches!(
+            build_psbt(Network::Bitcoin, sender, sender, u64::MAX, 2.0, &oversized),
+            Err(BitcoinServiceError::InvalidInput(_))
         ));
     }
 }

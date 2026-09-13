@@ -189,7 +189,13 @@ const env = {
 };
 
 spawnManaged("Next.js", "npm", ["exec", "--", "next", "dev", "-H", "127.0.0.1", "-p", "3840"], env, desktopWebPidFileName);
-spawnManaged("Rust API", "cargo", ["run", "--release", "-p", "fnzero-safe-desktop-api"], env, desktopApiPidFileName);
+spawnManaged(
+  "Rust API",
+  "cargo",
+  ["run", "--release", "-p", "fnzero-safe-desktop-api", "--features", "developer-wallet-maintenance"],
+  env,
+  desktopApiPidFileName,
+);
 
 process.once("SIGINT", () => {
   cleanup("SIGINT");

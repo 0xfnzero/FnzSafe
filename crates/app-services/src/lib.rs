@@ -49,7 +49,7 @@ pub mod capabilities {
 }
 
 const TOKEN_PROGRAM_ID: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
-const TOKEN_2022_PROGRAM_ID: &str = "TokenzQdBNbLqP5VEhdkAS6EPFQYJYYo8M2ee9VhgC3Q";
+const TOKEN_2022_PROGRAM_ID: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 const DEFAULT_MNEMONIC_DERIVATION_PATH: &str = "m/44'/501'/0'/0'";
 const SOLANA_TRANSACTION_PACKET_DATA_BYTES: usize = 1232;
 
@@ -1884,11 +1884,8 @@ fn require_positive_amount(amount: u64, field: &'static str) -> AppServiceResult
 }
 
 fn wallet_id(public_key: &str) -> String {
-    format!(
-        "wallet-{}-{}",
-        &public_key[..4],
-        &public_key[public_key.len() - 4..]
-    )
+    let digest = Sha256::digest(public_key.as_bytes());
+    format!("wallet-{digest:x}")
 }
 
 fn normalize_mnemonic_phrase(phrase: &str) -> AppServiceResult<String> {
@@ -3228,7 +3225,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             bitcoin_account.address,
-            "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu"
+            "bc1pmg5dhafms6h9nts4dtehgkanym6yeccfmk5hx3ts3jxnm4zh2knqv80ha5"
         );
 
         let tron_id =
@@ -3249,7 +3246,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             bitcoin.account_id.as_str(),
-            "bip122:000000000019d6689c085ae165831e93:bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu"
+            "bip122:000000000019d6689c085ae165831e93:bc1pmg5dhafms6h9nts4dtehgkanym6yeccfmk5hx3ts3jxnm4zh2knqv80ha5"
         );
 
         let tron = multichain_derive_account(MultiChainDeriveAccountRequest {

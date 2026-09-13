@@ -31,6 +31,13 @@ interface ProxyRequestHeader {
   value: string;
 }
 
+interface ProxyRequestQuery {
+  name: string;
+  value: string;
+}
+
+export type ApiQuery = Readonly<Record<string, string>>;
+
 let secureKeyPromise: Promise<CryptoKey> | null = null;
 let secureSessionPromise: Promise<SecureSession> | null = null;
 const SECURE_KEY_DECRYPT_ERRORS = new Set([
@@ -390,7 +397,24 @@ async function responseJsonError(response: Response): Promise<string | null> {
   }
 }
 
-async function sendApiRequest(cleanPath: string, init: RequestInit): Promise<Response> {
+function queryEntries(query: ApiQuery | undefined): ProxyRequestQuery[] {
+  if (!query) return [];
+  return Object.entries(query).map(([name, value]) => ({ name, value }));
+}
+
+function browserApiUrl(cleanPath: string, query: ApiQuery | undefined): string {
+  const url = new URL(buildApiUrl(cleanPath));
+  for (const { name, value } of queryEntries(query)) {
+    url.searchParams.append(name, value);
+  }
+  return url.toString();
+}
+
+async function sendApiRequest(
+  cleanPath: string,
+  init: RequestInit,
+  query: ApiQuery | undefined,
+): Promise<Response> {
   const nextHeaders = new Headers(init.headers);
 
   if (isTauriWebview()) {
@@ -409,6 +433,7 @@ async function sendApiRequest(cleanPath: string, init: RequestInit): Promise<Res
       {
         method: init.method ?? "GET",
         path: cleanPath,
+        query: queryEntries(query),
         headers: headersForTauri(nextHeaders),
         body: bodyStr,
         secureProxy,
@@ -417,7 +442,7 @@ async function sendApiRequest(cleanPath: string, init: RequestInit): Promise<Res
     return normalizeApiResponse(new Response(result.body, { status: result.status }));
   }
 
-  return normalizeApiResponse(await fetch(buildApiUrl(cleanPath), init));
+  return normalizeApiResponse(await fetch(browserApiUrl(cleanPath, query), init));
 }
 
 /**
@@ -428,6 +453,7 @@ async function sendApiRequest(cleanPath: string, init: RequestInit): Promise<Res
 export async function apiFetch(
   path: string,
   init: RequestInit,
+  query?: ApiQuery,
 ): Promise<Response> {
   try {
     const cleanPath = normalizeApiPath(path);
@@ -438,13 +464,13 @@ export async function apiFetch(
     assertNoPlaintextSecretRequest(nextInit);
 
     const authorizedInit = await withApiToken(cleanPath, nextInit);
-    const response = await sendApiRequest(cleanPath, authorizedInit);
+    const response = await sendApiRequest(cleanPath, authorizedInit, query);
     const error = await responseJsonError(response);
     if (response.status === 401 || SECURE_KEY_DECRYPT_ERRORS.has(error ?? "")) {
       const retryInit = await secureInitBody(initialInit, headers, { refreshSecureSession: true });
       assertNoPlaintextSecretRequest(retryInit);
       const retryAuthorizedInit = await withApiToken(cleanPath, retryInit);
-      return sendApiRequest(cleanPath, retryAuthorizedInit);
+      return sendApiRequest(cleanPath, retryAuthorizedInit, query);
     }
 
     return response;

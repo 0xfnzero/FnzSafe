@@ -62,6 +62,10 @@ program-keypair.json
 /apps/mobile/android/app/.cxx/
 /apps/mobile/android/app/src/main/jniLibs/
 
+# Chrome extension
+/apps/extension/node_modules/
+/apps/extension/dist/
+
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore

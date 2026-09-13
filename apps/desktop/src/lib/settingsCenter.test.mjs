@@ -14,6 +14,10 @@ function memoryStorage(values) {
   return { getItem: (key) => values[key] ?? null };
 }
 
+test("dangerous wallet maintenance tools are disabled by default", () => {
+  assert.equal(settings.DEFAULT_APP_PREFERENCES.developerWalletMaintenance, false);
+});
+
 test("legacy RPC selections migrate to the selected profile network", () => {
   assert.equal(settings.resolveLegacySolanaNetwork("solana-devnet", undefined), "devnet");
   assert.equal(settings.resolveLegacySolanaNetwork("publicnode-testnet", undefined), "testnet");
@@ -90,6 +94,10 @@ test("Solana addresses must decode to exactly 32 bytes", () => {
 });
 
 test("Bitcoin and TRON address-book entries use their mainnet identities", () => {
+  assert.equal(
+    settings.normalizeAddress("bitcoin", "BC1P5CYXNUXMEUWUVKWFEM96LQZSZD02N6XDCJRS20CAC6YQJJWUDPXQKEDRCR"),
+    "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr",
+  );
   assert.equal(
     settings.normalizeAddress("bitcoin", "BC1QCR8TE4KR609GCAWUTMRZA0J4XV80JY8Z306FYU"),
     "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu",

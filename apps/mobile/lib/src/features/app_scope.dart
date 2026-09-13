@@ -3,13 +3,42 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../bridge/mobile_bridge_provider.dart';
 
-class AppScope extends ConsumerWidget {
+class AppScope extends ConsumerStatefulWidget {
   const AppScope({required this.child, super.key});
 
   final Widget child;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<AppScope> createState() => _AppScopeState();
+}
+
+class _AppScopeState extends ConsumerState<AppScope>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      ref.read(mobileWalletSessionProvider).lock();
+      ref.read(sensitiveClipboardProvider).clear();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     ref.listen(storedActiveWalletProvider, (previous, next) {
       next.whenData((wallet) {
         final active = ref.read(activeWalletProvider);
@@ -29,6 +58,6 @@ class AppScope extends ConsumerWidget {
       });
     });
 
-    return SafeArea(child: child);
+    return SafeArea(child: widget.child);
   }
 }

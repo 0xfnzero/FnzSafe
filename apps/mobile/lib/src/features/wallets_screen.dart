@@ -2,11 +2,27 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:share_plus/share_plus.dart';
 
 import '../bridge/mobile_bridge.dart';
 import '../bridge/mobile_bridge_provider.dart';
 import '../bridge/mobile_models.dart';
+
+enum _WalletChain { solana, evm, bitcoin, tron }
+
+extension on _WalletChain {
+  String get label => switch (this) {
+        _WalletChain.solana => 'Solana',
+        _WalletChain.evm => 'EVM',
+        _WalletChain.bitcoin => 'Bitcoin',
+        _WalletChain.tron => 'TRON',
+      };
+
+  WalletFamily? get walletFamily => switch (this) {
+        _WalletChain.solana => WalletFamily.solana,
+        _WalletChain.evm => WalletFamily.evm,
+        _WalletChain.bitcoin || _WalletChain.tron => null,
+      };
+}
 
 class WalletsScreen extends ConsumerStatefulWidget {
   const WalletsScreen({super.key});
@@ -21,7 +37,7 @@ class _WalletsScreenState extends ConsumerState<WalletsScreen> {
   final _secretController = TextEditingController();
   final _derivationPathController =
       TextEditingController(text: "m/44'/501'/0'/0'");
-  WalletFamily _family = WalletFamily.solana;
+  _WalletChain _chain = _WalletChain.solana;
   String _mode = 'create';
   bool _busy = false;
 
@@ -38,6 +54,8 @@ class _WalletsScreenState extends ConsumerState<WalletsScreen> {
   Widget build(BuildContext context) {
     final wallets = ref.watch(storedWalletsProvider);
     final activeWallet = ref.watch(activeWalletProvider);
+    final session = ref.watch(mobileWalletSessionProvider);
+    final selectedFamily = _chain.walletFamily;
 
     return Scaffold(
       appBar: AppBar(
@@ -51,143 +69,196 @@ class _WalletsScreenState extends ConsumerState<WalletsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          SegmentedButton<String>(
+          Text('Select chain', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          SegmentedButton<_WalletChain>(
             segments: const [
               ButtonSegment(
-                  value: 'create',
-                  icon: Icon(Icons.add),
-                  label: Text('Create')),
-              ButtonSegment(
-                  value: 'keystore',
-                  icon: Icon(Icons.upload_file),
-                  label: Text('Keystore')),
-              ButtonSegment(
-                  value: 'private_key',
-                  icon: Icon(Icons.key),
-                  label: Text('Private key')),
-              ButtonSegment(
-                  value: 'mnemonic',
-                  icon: Icon(Icons.subject),
-                  label: Text('Mnemonic')),
-            ],
-            selected: {_mode},
-            onSelectionChanged: (value) => setState(() => _mode = value.first),
-          ),
-          const SizedBox(height: 12),
-          SegmentedButton<WalletFamily>(
-            segments: const [
-              ButtonSegment(
-                value: WalletFamily.solana,
-                icon: Icon(Icons.token),
+                value: _WalletChain.solana,
+                icon: Icon(Icons.blur_on_rounded),
                 label: Text('Solana'),
               ),
               ButtonSegment(
-                value: WalletFamily.evm,
+                value: _WalletChain.evm,
                 icon: Icon(Icons.hexagon_outlined),
                 label: Text('EVM'),
               ),
+              ButtonSegment(
+                value: _WalletChain.bitcoin,
+                icon: Icon(Icons.currency_bitcoin),
+                label: Text('BTC'),
+              ),
+              ButtonSegment(
+                value: _WalletChain.tron,
+                icon: Icon(Icons.change_history),
+                label: Text('TRON'),
+              ),
             ],
-            selected: {_family},
+            selected: {_chain},
             onSelectionChanged: (value) {
-              final family = value.first;
+              final chain = value.first;
               setState(() {
-                _family = family;
-                _derivationPathController.text = family == WalletFamily.evm
-                    ? "m/44'/60'/0'/0/0"
-                    : "m/44'/501'/0'/0'";
+                _chain = chain;
+                _derivationPathController.text = switch (chain) {
+                  _WalletChain.solana => "m/44'/501'/0'/0'",
+                  _WalletChain.evm => "m/44'/60'/0'/0/0",
+                  _WalletChain.bitcoin => "m/86'/0'/0'/0/0",
+                  _WalletChain.tron => "m/44'/195'/0'/0/0",
+                };
               });
             },
           ),
           const SizedBox(height: 16),
-          TextField(
-            controller: _nameController,
-            decoration: const InputDecoration(
-                labelText: 'Wallet name', border: OutlineInputBorder()),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _passwordController,
-            obscureText: true,
-            enableSuggestions: false,
-            autocorrect: false,
-            decoration: const InputDecoration(
-                labelText: 'Password', border: OutlineInputBorder()),
-          ),
-          if (_mode != 'create') ...[
-            const SizedBox(height: 12),
-            TextField(
-              controller: _secretController,
-              minLines: _mode == 'private_key' ? 1 : 4,
-              maxLines: _mode == 'private_key' ? 1 : 8,
-              obscureText: _mode == 'private_key',
-              enableSuggestions: false,
-              autocorrect: false,
-              decoration: InputDecoration(
-                labelText: switch (_mode) {
-                  'keystore' => 'Keystore JSON',
-                  'private_key' => _family == WalletFamily.evm
-                      ? 'Private key hex'
-                      : 'Private key base58',
-                  _ => 'Mnemonic',
-                },
-                border: const OutlineInputBorder(),
-              ),
-            ),
-          ],
-          if (_mode == 'mnemonic') ...[
-            const SizedBox(height: 12),
-            TextField(
-              controller: _derivationPathController,
-              decoration: const InputDecoration(
-                labelText: 'Derivation path',
-                border: OutlineInputBorder(),
-              ),
-            ),
-          ],
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              FilledButton.icon(
-                onPressed: _busy ? null : _submit,
-                icon: Icon(_mode == 'create' ? Icons.add : Icons.download),
-                label: Text(_busy
-                    ? 'Working'
-                    : (_mode == 'create' ? 'Create wallet' : 'Import wallet')),
-              ),
-              if (_mode == 'keystore')
-                OutlinedButton.icon(
-                  onPressed: _busy ? null : _pickKeystore,
-                  icon: const Icon(Icons.folder_open),
-                  label: const Text('Choose file'),
+          if (selectedFamily == null) ...[
+            Card(
+              child: ListTile(
+                leading: Icon(_chain == _WalletChain.bitcoin
+                    ? Icons.currency_bitcoin
+                    : Icons.change_history),
+                title: Text('${_chain.label} account support'),
+                subtitle: const Text(
+                  'The native bridge supports address derivation and validation. Wallet storage, signing and broadcast are not enabled yet.',
                 ),
-              OutlinedButton.icon(
-                onPressed: activeWallet == null || _busy
-                    ? null
-                    : () => _unlock(activeWallet),
-                icon: const Icon(Icons.lock_open),
-                label: const Text('Unlock active'),
               ),
-              OutlinedButton.icon(
-                onPressed: activeWallet == null || _busy
-                    ? null
-                    : () => _exportPrivateKey(activeWallet),
-                icon: const Icon(Icons.ios_share),
-                label: const Text('Export private key'),
+            ),
+            const SizedBox(height: 24),
+          ] else ...[
+            SegmentedButton<String>(
+              segments: const [
+                ButtonSegment(
+                    value: 'create',
+                    icon: Icon(Icons.add),
+                    label: Text('Create')),
+                ButtonSegment(
+                    value: 'keystore',
+                    icon: Icon(Icons.upload_file),
+                    label: Text('Keystore')),
+                ButtonSegment(
+                    value: 'private_key',
+                    icon: Icon(Icons.key),
+                    label: Text('Private key')),
+                ButtonSegment(
+                    value: 'mnemonic',
+                    icon: Icon(Icons.subject),
+                    label: Text('Mnemonic')),
+              ],
+              selected: {_mode},
+              onSelectionChanged: (value) =>
+                  setState(() => _mode = value.first),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _nameController,
+              decoration: const InputDecoration(
+                  labelText: 'Wallet name', border: OutlineInputBorder()),
+            ),
+            const SizedBox(height: 12),
+            if (!session.isUnlocked)
+              TextField(
+                controller: _passwordController,
+                obscureText: true,
+                enableSuggestions: false,
+                autocorrect: false,
+                decoration: const InputDecoration(
+                  labelText: 'Global wallet password',
+                  helperText: 'The same password protects every local account.',
+                  border: OutlineInputBorder(),
+                ),
+              )
+            else
+              const ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(Icons.lock_open),
+                title: Text('Global password session unlocked'),
+                subtitle: Text('The password remains encrypted in memory.'),
+              ),
+            if (_mode != 'create') ...[
+              const SizedBox(height: 12),
+              TextField(
+                controller: _secretController,
+                minLines: _mode == 'private_key' ? 1 : 4,
+                maxLines: _mode == 'private_key' ? 1 : 8,
+                obscureText: _mode == 'private_key',
+                enableSuggestions: false,
+                autocorrect: false,
+                decoration: InputDecoration(
+                  labelText: switch (_mode) {
+                    'keystore' => 'Keystore JSON',
+                    'private_key' => selectedFamily == WalletFamily.evm
+                        ? 'Private key hex'
+                        : 'Private key base58',
+                    _ => 'Mnemonic',
+                  },
+                  border: const OutlineInputBorder(),
+                ),
               ),
             ],
-          ),
+            if (_mode == 'mnemonic') ...[
+              const SizedBox(height: 12),
+              TextField(
+                controller: _derivationPathController,
+                decoration: const InputDecoration(
+                  labelText: 'Derivation path',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilledButton.icon(
+                  onPressed: _busy ? null : _submit,
+                  icon: Icon(_mode == 'create' ? Icons.add : Icons.download),
+                  label: Text(_busy
+                      ? 'Working'
+                      : (_mode == 'create'
+                          ? 'Create wallet'
+                          : 'Import wallet')),
+                ),
+                if (_mode == 'keystore')
+                  OutlinedButton.icon(
+                    onPressed: _busy ? null : _pickKeystore,
+                    icon: const Icon(Icons.folder_open),
+                    label: const Text('Choose file'),
+                  ),
+                OutlinedButton.icon(
+                  onPressed: activeWallet == null || _busy
+                      ? null
+                      : () => _unlock(activeWallet),
+                  icon: const Icon(Icons.lock_open),
+                  label: const Text('Unlock active'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: activeWallet == null || _busy
+                      ? null
+                      : () => _exportPrivateKey(activeWallet),
+                  icon: const Icon(Icons.ios_share),
+                  label: const Text('Export private key'),
+                ),
+              ],
+            ),
+          ],
           const SizedBox(height: 24),
-          Text('Stored wallets',
+          Text('${_chain.label} wallets',
               style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
           wallets.when(
             data: (items) {
-              if (items.isEmpty) return const Text('No local wallets yet.');
+              final filtered = selectedFamily == null
+                  ? const <WalletSummary>[]
+                  : items
+                      .where((wallet) => wallet.family == selectedFamily)
+                      .toList(growable: false);
+              if (filtered.isEmpty) {
+                return Text(selectedFamily == null
+                    ? 'No stored ${_chain.label} wallets. Full wallet support is coming after native signing is available.'
+                    : 'No local ${_chain.label} wallets yet.');
+              }
               return Column(
                 children: [
-                  for (final wallet in items)
+                  for (final wallet in filtered)
                     Card(
                       child: ListTile(
                         leading: Icon(
@@ -229,14 +300,22 @@ class _WalletsScreenState extends ConsumerState<WalletsScreen> {
   Future<void> _submit() async {
     await _run(() async {
       final bridge = ref.read(mobileBridgeProvider);
-      final password = _passwordController.text;
-      final created = _family == WalletFamily.evm
+      final family = _chain.walletFamily;
+      if (family == null) {
+        throw MobileBridgeException(
+          'unsupported_chain',
+          '${_chain.label} transaction signing is not available yet.',
+        );
+      }
+      final password = await _passwordForWalletMutation();
+      final created = family == WalletFamily.evm
           ? await _submitEvm(bridge, password)
           : await _submitSolana(bridge, password);
       await ref.read(mobileWalletStoreProvider).saveWalletKeystore(created);
       ref.read(activeWalletProvider.notifier).state = created.wallet;
       ref.invalidate(storedWalletsProvider);
       ref.invalidate(storedActiveWalletProvider);
+      await ref.read(mobileWalletSessionProvider).unlock(password);
       _secretController.clear();
       _passwordController.clear();
       _show('Active wallet: ${created.wallet.name}');
@@ -247,11 +326,14 @@ class _WalletsScreenState extends ConsumerState<WalletsScreen> {
     await _run(() async {
       final keystoreJson =
           await ref.read(mobileWalletStoreProvider).readKeystoreJson(wallet.id);
+      final password = await _passwordForWallet(wallet, keystoreJson);
       final unlocked = wallet.family == WalletFamily.evm
-          ? await ref.read(mobileBridgeProvider).unlockEvmWallet(
-              keystoreJson: keystoreJson, password: _passwordController.text)
-          : await ref.read(mobileBridgeProvider).unlockWallet(
-              keystoreJson: keystoreJson, password: _passwordController.text);
+          ? await ref
+              .read(mobileBridgeProvider)
+              .unlockEvmWallet(keystoreJson: keystoreJson, password: password)
+          : await ref
+              .read(mobileBridgeProvider)
+              .unlockWallet(keystoreJson: keystoreJson, password: password);
       ref.read(activeWalletProvider.notifier).state = WalletSummary(
         id: wallet.id,
         name: wallet.name,
@@ -259,6 +341,7 @@ class _WalletsScreenState extends ConsumerState<WalletsScreen> {
         family: wallet.family,
         derivationPath: unlocked.derivationPath ?? wallet.derivationPath,
       );
+      await ref.read(mobileWalletSessionProvider).unlock(password);
       _passwordController.clear();
       _show('Unlocked ${wallet.name}');
     });
@@ -266,25 +349,138 @@ class _WalletsScreenState extends ConsumerState<WalletsScreen> {
 
   Future<void> _exportPrivateKey(WalletSummary wallet) async {
     await _run(() async {
+      final approved = await _confirmPrivateKeyExport();
+      if (!approved) return;
       final keystoreJson =
           await ref.read(mobileWalletStoreProvider).readKeystoreJson(wallet.id);
+      final password = await _passwordForWallet(wallet, keystoreJson);
+      await ref.read(biometricGateProvider).confirmSensitiveSubmit();
       final exportedText = wallet.family == WalletFamily.evm
           ? (await ref.read(mobileBridgeProvider).exportEvmPrivateKey(
-                  keystoreJson: keystoreJson,
-                  password: _passwordController.text))
+                  keystoreJson: keystoreJson, password: password))
               .privateKeyHex
           : (await ref.read(mobileBridgeProvider).exportPrivateKey(
-                  keystoreJson: keystoreJson,
-                  password: _passwordController.text))
+                  keystoreJson: keystoreJson, password: password))
               .privateKeyBase58;
-      await SharePlus.instance.share(
-        ShareParams(
-          text: exportedText,
-          subject: 'FnzSafe private key export',
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Private key'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Anyone with this key can take every asset in this account.',
+              ),
+              const SizedBox(height: 12),
+              SelectableText(exportedText),
+            ],
+          ),
+          actions: [
+            IconButton(
+              tooltip: 'Copy private key',
+              onPressed: () => _copyPrivateKeyTemporarily(exportedText),
+              icon: const Icon(Icons.copy_outlined),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Done'),
+            ),
+          ],
         ),
       );
       _passwordController.clear();
     });
+  }
+
+  Future<void> _copyPrivateKeyTemporarily(String privateKey) async {
+    await ref.read(sensitiveClipboardProvider).copy(privateKey);
+    if (mounted) _show('Private key copied. Clipboard clears in 15 seconds.');
+  }
+
+  Future<String> _passwordForWalletMutation() async {
+    final session = ref.read(mobileWalletSessionProvider);
+    if (session.isUnlocked) return session.revealPassword();
+    final password = _passwordController.text;
+    if (password.isEmpty) {
+      throw const MobileBridgeException(
+        'invalid_input',
+        'Enter the global wallet password.',
+      );
+    }
+    final wallets = await ref.read(mobileWalletStoreProvider).loadWallets();
+    if (wallets.isNotEmpty) {
+      final active = ref.read(activeWalletProvider) ?? wallets.first;
+      final keystoreJson =
+          await ref.read(mobileWalletStoreProvider).readKeystoreJson(active.id);
+      await _verifyPassword(active, keystoreJson, password);
+      await session.unlock(password);
+    }
+    return password;
+  }
+
+  Future<String> _passwordForWallet(
+    WalletSummary wallet,
+    String keystoreJson,
+  ) async {
+    final session = ref.read(mobileWalletSessionProvider);
+    if (session.isUnlocked) return session.revealPassword();
+    final password = _passwordController.text;
+    if (password.isEmpty) {
+      throw const MobileBridgeException(
+        'invalid_input',
+        'Enter the global wallet password.',
+      );
+    }
+    await _verifyPassword(wallet, keystoreJson, password);
+    await session.unlock(password);
+    return session.revealPassword();
+  }
+
+  Future<void> _verifyPassword(
+    WalletSummary wallet,
+    String keystoreJson,
+    String password,
+  ) async {
+    if (wallet.family == WalletFamily.evm) {
+      await ref.read(mobileBridgeProvider).unlockEvmWallet(
+            keystoreJson: keystoreJson,
+            password: password,
+          );
+    } else {
+      await ref.read(mobileBridgeProvider).unlockWallet(
+            keystoreJson: keystoreJson,
+            password: password,
+          );
+    }
+  }
+
+  Future<bool> _confirmPrivateKeyExport() async {
+    if (!mounted) return false;
+    return await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            icon: const Icon(Icons.warning_amber_rounded),
+            title: const Text('Reveal private key?'),
+            content: const Text(
+              'FnzSafe will show the key on screen. Never paste it into a website or send it to another person.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: const Text('Reveal'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
   }
 
   Future<void> _setActive(WalletSummary wallet) async {

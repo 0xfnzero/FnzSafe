@@ -10,8 +10,10 @@ import 'features/feature_screen.dart';
 import 'features/scanner_screen.dart';
 import 'features/security_screen.dart';
 import 'features/send_screen.dart';
+import 'features/settings_screen.dart';
 import 'features/squads_screen.dart';
 import 'features/wallets_screen.dart';
+import 'ui/wallet_ui.dart';
 
 final _router = GoRouter(
   initialLocation: '/',
@@ -97,18 +99,7 @@ final _router = GoRouter(
     ),
     GoRoute(
       path: '/settings',
-      builder: (context, state) => FeatureScreen(
-        title: 'Settings',
-        description:
-            'Network, RPC, security policy, diagnostics, and internal testing controls.',
-        actions: [
-          FeatureAction(
-            label: 'Bridge health',
-            icon: Icons.health_and_safety_outlined,
-            run: (bridge, network, wallet) => bridge.health(),
-          ),
-        ],
-      ),
+      builder: (context, state) => const SettingsScreen(),
     ),
     GoRoute(
       path: '/confirm',
@@ -132,16 +123,72 @@ class FnzSafeMobileApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp.router(
       title: 'FnzSafe',
+      themeMode: ThemeMode.system,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xff14b8a6),
+          seedColor: fnzBlue,
+          primary: fnzBlue,
+          secondary: fnzOrange,
+          surface: Colors.white,
+          brightness: Brightness.light,
+        ),
+        scaffoldBackgroundColor: fnzCanvas,
+        useMaterial3: true,
+        dividerColor: const Color(0xffdfe2e8),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Colors.white,
+          foregroundColor: fnzInk,
+          surfaceTintColor: Colors.transparent,
+          elevation: 0,
+        ),
+        navigationBarTheme: const NavigationBarThemeData(
+          backgroundColor: Colors.white,
+          indicatorColor: Color(0xffe6eaff),
+          elevation: 1,
+        ),
+        cardTheme: const CardThemeData(
+          margin: EdgeInsets.zero,
+          elevation: 0,
+          color: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.all(Radius.circular(8)),
+            side: BorderSide(color: Color(0xffdfe2e8)),
+          ),
+        ),
+        inputDecorationTheme: const InputDecorationTheme(
+          filled: true,
+          fillColor: Colors.white,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.all(Radius.circular(8)),
+          ),
+        ),
+      ),
+      darkTheme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xff8ea2ff),
+          primary: const Color(0xffaebcff),
+          secondary: const Color(0xffffa452),
           brightness: Brightness.dark,
         ),
         useMaterial3: true,
+        scaffoldBackgroundColor: const Color(0xff111318),
+        dividerColor: const Color(0xff343840),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xff181b21),
+          surfaceTintColor: Colors.transparent,
+          elevation: 0,
+        ),
+        navigationBarTheme: const NavigationBarThemeData(
+          backgroundColor: Color(0xff181b21),
+          indicatorColor: Color(0xff303a68),
+          elevation: 1,
+        ),
         cardTheme: const CardThemeData(
           margin: EdgeInsets.zero,
+          elevation: 0,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.all(Radius.circular(8)),
+            side: BorderSide(color: Color(0xff343840)),
           ),
         ),
       ),

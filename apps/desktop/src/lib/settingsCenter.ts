@@ -21,6 +21,7 @@ export interface AppPreferences {
   enabledEvmChainIds: number[];
   showTestnets: boolean;
   transactionDebugDetails: boolean;
+  developerWalletMaintenance: boolean;
   defaultSolanaNetwork: AppNetwork;
   defaultEvmChainId: number | null;
   migrationVersion: number;
@@ -131,6 +132,7 @@ export const DEFAULT_APP_PREFERENCES: AppPreferences = {
   enabledEvmChainIds: [],
   showTestnets: false,
   transactionDebugDetails: false,
+  developerWalletMaintenance: false,
   defaultSolanaNetwork: "mainnet",
   defaultEvmChainId: null,
   migrationVersion: 1,

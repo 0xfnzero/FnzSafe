@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 
 import '../bridge/mobile_bridge_provider.dart';
 import '../bridge/mobile_models.dart';
+import '../ui/wallet_ui.dart';
 
 class AssetsScreen extends ConsumerStatefulWidget {
   const AssetsScreen({super.key});
@@ -51,7 +52,8 @@ class _AssetsScreenState extends ConsumerState<AssetsScreen> {
     final canDeleteActiveChain =
         evmChain != null && customChainIds.contains(evmChain.chainId);
 
-    return Scaffold(
+    return WalletScaffold(
+      currentIndex: 1,
       appBar: AppBar(
         leading: IconButton(
           tooltip: 'Back',
@@ -160,7 +162,10 @@ class _AssetsScreenState extends ConsumerState<AssetsScreen> {
             Card(
               child: ListTile(
                 leading: const Icon(Icons.hexagon_outlined),
-                title: Text('${_evmSnapshot!.nativeBalanceWei} wei'),
+                title: Text(_formatNativeBalance(
+                  _evmSnapshot!.nativeBalanceWei,
+                  _evmSnapshot!.chain.nativeSymbol,
+                )),
                 subtitle: Text('${_evmSnapshot!.chain.label} balance'),
               ),
             ),
@@ -312,6 +317,18 @@ class _AssetsScreenState extends ConsumerState<AssetsScreen> {
   String _formatSol(int lamports) {
     final sol = lamports / 1000000000;
     return '${NumberFormat('#,##0.#########').format(sol)} SOL';
+  }
+
+  String _formatNativeBalance(String wei, String symbol) {
+    final value = BigInt.tryParse(wei);
+    if (value == null) return '$wei wei';
+    final padded = value.toString().padLeft(19, '0');
+    final whole = padded.substring(0, padded.length - 18);
+    final fraction = padded
+        .substring(padded.length - 18)
+        .substring(0, 8)
+        .replaceFirst(RegExp(r'0+$'), '');
+    return fraction.isEmpty ? '$whole $symbol' : '$whole.$fraction $symbol';
   }
 
   String _blockTime(TransactionHistoryEntry entry) {

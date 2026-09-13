@@ -8,7 +8,7 @@ FnzSafe 的多链层以链族适配器、CAIP 标识和显式能力声明为边�
 |---|---|---|---|
 | Solana | Mainnet、Devnet、Testnet | 账户、余额、Token、转账、历史、签名、DApp、Squads、Program | Stable |
 | EVM | Ethereum、BSC、Polygon、Arbitrum、Optimism、Base、Avalanche、Fantom、Linea、Scroll、zkSync Era、Robinhood Chain，以及 Sepolia、BSC Testnet、Polygon Amoy、Base Sepolia | 账户、原生币/ERC-20、转账、签名、移动端 EIP-1193；兼容 explorer 的网络提供历史能力；支持自定义 RPC | Beta |
-| Bitcoin | Mainnet、Testnet | BIP39/BIP84 账户派生、P2WPKH 地址校验、原生币余额、PSBT 交易预览与签名、RBF、广播；桌面钱包当前接入 Mainnet | Experimental |
+| Bitcoin | Mainnet、Testnet | 默认使用兼容 TP/Phantom 私钥导入的 Taproot，可切换 BIP84 Native SegWit；支持地址校验、原生币余额、PSBT 交易预览与签名、RBF、广播；桌面钱包当前接入 Mainnet | Experimental |
 | TRON | Mainnet、Shasta、Nile | BIP44 账户派生、Base58Check 地址校验、TRX 余额、带宽与账户激活费用预览、签名和广播；桌面钱包当前接入 Mainnet | Experimental |
 
 统一目录当前包含 24 个网络。`GET /api/chains` 和移动端生产 Rust Bridge 的 `MobileBridge.multichainCatalog()` 返回同一份链描述；无原生库的开发 fallback 只返回覆盖四个链族的代表性测试目录，并移除 fallback 未实现的账户派生与地址校验能力声明。旧的 `/api/evm/chains` 与现有 Solana/EVM DTO 继续保留，作为兼容层。
@@ -69,7 +69,7 @@ EVM 网络不是一个可穷举集合。目前尚未作为内置网络维护的�
 
 1. 增加交易确认状态和历史记录。
 2. 扩展 PSBT 预览，展示输入来源与区块确认数。
-3. 评估 BIP86/Taproot 与更细粒度的选币策略。
+3. 增加 BIP44 Legacy、BIP49 Nested SegWit 与更细粒度的选币策略。
 4. 硬件钱包与多签继续复用 PSBT，不将 Bitcoin 强行映射为账户链 nonce 模型。
 
 ### 尚未支持的主要链族

@@ -1,0 +1,46 @@
+{
+  "name": "@fnzero/safe-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22 <25"
+  },
+  "overrides": {
+    "stream-json": "^3.6.0",
+    "uuid": "^11.1.1"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "node build.mjs --watch",
+    "test:e2e": "node test/extension.e2e.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@noble/curves": "^1.9.7",
+    "@noble/hashes": "^1.7.1",
+    "@scure/base": "^1.2.4",
+    "@scure/bip32": "^1.6.2",
+    "@scure/bip39": "^1.5.4",
+    "@solana/web3.js": "^1.98.4",
+    "@wallet-standard/wallet": "^1.1.0",
+    "@wallet-standard/base": "^1.1.0",
+    "bs58": "^6.0.0",
+    "ethers": "^6.15.0",
+    "lucide-react": "^0.468.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tweetnacl": "^1.0.3"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.287",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.3",
+    "@types/react-dom": "^19.0.2",
+    "esbuild": "^0.28.2",
+    "playwright-core": "^1.55.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

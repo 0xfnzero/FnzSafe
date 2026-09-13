@@ -11,7 +11,7 @@ class MobileWalletStore {
     FlutterSecureStorage secureStorage = const FlutterSecureStorage(
       aOptions: AndroidOptions(encryptedSharedPreferences: true),
       iOptions: IOSOptions(
-        accessibility: KeychainAccessibility.first_unlock_this_device,
+        accessibility: KeychainAccessibility.unlocked_this_device,
       ),
     ),
   }) : _secureStorage = secureStorage;
@@ -21,7 +21,9 @@ class MobileWalletStore {
   static const _biometricEnabledKey = 'fnzero.mobile.biometric_enabled.v1';
   static const _customEvmChainsKey = 'fnzero.mobile.evm.custom_chains.v1';
   static const _customEvmTokensPrefix = 'fnzero.mobile.evm.tokens.v1';
+  static const _keystorePrefix = 'fnzero.mobile.keystore.v1';
   static final _evmAddressPattern = RegExp(r'^0x[0-9a-fA-F]{40}$');
+  static final _walletIdPattern = RegExp(r'^[A-Za-z0-9_-]{1,128}$');
 
   final FlutterSecureStorage _secureStorage;
 
@@ -64,7 +66,15 @@ class MobileWalletStore {
       keystore.wallet,
     ];
 
-    await _writeKeystoreFile(keystore.wallet.id, keystore.keystoreJson);
+    if (!_walletIdPattern.hasMatch(keystore.wallet.id)) {
+      throw const FormatException('Invalid wallet identifier');
+    }
+    await _secureStorage.write(
+      key: _keystoreKey(keystore.wallet.id),
+      value: keystore.keystoreJson,
+    );
+    final legacyFile = await _keystoreFile(keystore.wallet.id);
+    if (await legacyFile.exists()) await legacyFile.delete();
     await _secureStorage.write(
       key: _walletsKey,
       value: jsonEncode([for (final wallet in nextWallets) wallet.toJson()]),
@@ -86,6 +96,7 @@ class MobileWalletStore {
     if (await file.exists()) {
       await file.delete();
     }
+    await _secureStorage.delete(key: _keystoreKey(walletId));
     await _secureStorage.write(
       key: _walletsKey,
       value: jsonEncode([for (final wallet in nextWallets) wallet.toJson()]),
@@ -101,8 +112,18 @@ class MobileWalletStore {
   }
 
   Future<String> readKeystoreJson(String walletId) async {
+    if (!_walletIdPattern.hasMatch(walletId)) {
+      throw const FormatException('Invalid wallet identifier');
+    }
+    final stored = await _secureStorage.read(key: _keystoreKey(walletId));
+    if (stored != null && stored.isNotEmpty) return stored;
+
+    // Migrate encrypted v0 files only after the secure-store write succeeds.
     final file = await _keystoreFile(walletId);
-    return file.readAsString();
+    final legacy = await file.readAsString();
+    await _secureStorage.write(key: _keystoreKey(walletId), value: legacy);
+    await file.delete();
+    return legacy;
   }
 
   Future<void> setBiometricUnlockEnabled(bool enabled) async {
@@ -221,10 +242,12 @@ class MobileWalletStore {
     return '$_customEvmTokensPrefix.$chainId.${walletAddress.toLowerCase()}';
   }
 
+  String _keystoreKey(String walletId) => '$_keystorePrefix.$walletId';
+
   WalletSummary? _normalizeWallet(Map<String, Object?> json) {
     try {
       final wallet = WalletSummary.fromJson(json);
-      if (wallet.id.trim().isEmpty ||
+      if (!_walletIdPattern.hasMatch(wallet.id.trim()) ||
           wallet.name.trim().isEmpty ||
           wallet.publicKey.trim().isEmpty) {
         return null;
@@ -252,14 +275,17 @@ class MobileWalletStore {
       final explorerUri = chain.explorerUrl == null
           ? null
           : Uri.tryParse(chain.explorerUrl!.trim());
-      final validRpc = rpcUri != null &&
-          (rpcUri.scheme == 'http' || rpcUri.scheme == 'https');
-      final validExplorer = explorerUri == null ||
-          explorerUri.scheme == 'http' ||
-          explorerUri.scheme == 'https';
+      final validRpc = _isSecureEndpoint(rpcUri);
+      final validExplorer =
+          explorerUri == null || _isSecureEndpoint(explorerUri);
       if (chain.chainId <= 0 ||
+          chain.chainId > 9007199254740991 ||
           chain.name.trim().isEmpty ||
+          chain.name.trim().length > 64 ||
           chain.nativeSymbol.trim().isEmpty ||
+          chain.nativeSymbol.trim().length > 16 ||
+          chain.rpcUrl.length > 2048 ||
+          (chain.explorerUrl?.length ?? 0) > 2048 ||
           !validRpc ||
           !validExplorer) {
         return null;
@@ -280,13 +306,11 @@ class MobileWalletStore {
   }
 
   Future<File> _keystoreFile(String walletId) async {
+    if (!_walletIdPattern.hasMatch(walletId)) {
+      throw const FormatException('Invalid wallet identifier');
+    }
     final directory = await _walletDirectory();
     return File('${directory.path}/$walletId.json');
-  }
-
-  Future<void> _writeKeystoreFile(String walletId, String keystoreJson) async {
-    final file = await _keystoreFile(walletId);
-    await file.writeAsString(keystoreJson, flush: true);
   }
 
   Future<Directory> _walletDirectory() async {
@@ -296,6 +320,13 @@ class MobileWalletStore {
       await directory.create(recursive: true);
     }
     return directory;
+  }
+
+  bool _isSecureEndpoint(Uri? uri) {
+    if (uri == null || !uri.hasAuthority) return false;
+    if (uri.scheme == 'https') return true;
+    return uri.scheme == 'http' &&
+        (uri.host == 'localhost' || uri.host == '127.0.0.1');
   }
 }
 

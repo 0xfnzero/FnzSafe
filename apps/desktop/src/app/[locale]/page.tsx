@@ -102,6 +102,14 @@ import { apiFetch } from "@/lib/apiFetch";
 import { shouldShowNativeDappWebview } from "@/lib/dappVisibility";
 import { persistJsonAfterHydration } from "@/lib/hydratedStorage";
 import { atomicToDecimalUnits } from "@/lib/multichain";
+import { isMatchingEvmPaymentPreview } from "@/lib/evmPaymentPreview";
+import {
+  renderableSensitiveExportValue,
+  validateMnemonicExport,
+  validatePrivateKeyExport,
+  type WalletExportContext,
+  type WalletExportFamily,
+} from "@/lib/walletExport";
 import {
   AI_SKILL_CATALOG,
   type AiSkillLocale,
@@ -305,6 +313,7 @@ interface SettingsStoreBootstrap {
 }
 
 const MAX_KEYSTORE_FILE_BYTES = 128 * 1024;
+const IS_DEVELOPMENT_BUILD = process.env.NODE_ENV === "development";
 const MAX_WALLET_PASSWORD_CHARS = 1024;
 const FALLBACK_PROGRAM_WRITE_CHUNK_BYTES = 800;
 const TRANSACTION_PAGE_SIZE = 20;
@@ -1120,22 +1129,28 @@ type PasswordPromptRequest =
   | { kind: "master-password"; formId: string; formState: FormState }
   | { kind: "proposal"; proposal: WorkspaceProposal; action: WorkspaceProposalAction; formState: FormState }
   | { kind: "enable-biometric"; wallet: SavedWallet; formState: FormState }
-  | { kind: "export-bundle"; wallet: SavedWallet; formState: FormState }
+  | { kind: "export-bundle"; wallet: SavedWallet; context: WalletExportContext; formState: FormState }
   | { kind: "export-keystore"; wallet: SavedWallet; formState: FormState }
-  | { kind: "export-private-key"; wallet: SavedWallet; formState: FormState }
-  | { kind: "export-mnemonic"; wallet: SavedWallet; formState: FormState }
+  | { kind: "export-private-key"; wallet: SavedWallet; context: WalletExportContext; formState: FormState }
+  | { kind: "export-mnemonic"; wallet: SavedWallet; context: WalletExportContext; formState: FormState }
+  | { kind: "rotate-bitcoin-account"; wallet: SavedWallet; formState: FormState }
   | { kind: "migrate-keystore"; wallet: SavedWallet; formState: FormState };
 
 interface ExportedPrivateKeyPreview {
   walletName: string;
   publicKey: string;
   privateKey: string;
+  family?: WalletExportFamily;
+  encoding?: string;
+  derivationPath?: string;
 }
 
 interface ExportedMnemonicPreview {
   walletName: string;
   publicKey: string;
   mnemonic: string;
+  family?: WalletExportFamily;
+  derivationPath?: string;
 }
 
 type SensitiveExportKind = "private-key" | "mnemonic";
@@ -1145,6 +1160,9 @@ interface SensitiveExportPreview {
   walletName: string;
   publicKey: string;
   value: string;
+  family?: WalletExportFamily;
+  encoding?: string;
+  derivationPath?: string;
   title: string;
   hint: string;
   warning: string;
@@ -2769,6 +2787,8 @@ const DESKTOP_EVM_CUSTOM_CHAINS_STORAGE_KEY = "fnzero.desktop.evm.custom_chains.
 const DESKTOP_EVM_SELECTED_CHAIN_STORAGE_KEY = "fnzero.desktop.evm.selected_chain.v1";
 const DESKTOP_EVM_TOKENS_STORAGE_PREFIX = "fnzero.desktop.evm.tokens.v1";
 const CURRENT_WALLET_NETWORK_STORAGE_KEY = "fnzero.desktop.wallet.current_network.v1";
+const BITCOIN_ADDRESS_TYPE_STORAGE_KEY = "fnzero.desktop.bitcoin.address_type.v1";
+type BitcoinAddressType = "taproot" | "native-segwit";
 
 function isDesktopEvmAddress(value: string): boolean {
   return /^0x[0-9a-fA-F]{40}$/.test(value.trim());
@@ -2824,6 +2844,18 @@ function loadCurrentWalletNetwork(): string {
 function saveCurrentWalletNetwork(networkId: string) {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(CURRENT_WALLET_NETWORK_STORAGE_KEY, normalizeCurrentWalletNetwork(networkId));
+}
+
+function loadBitcoinAddressType(): BitcoinAddressType {
+  if (typeof window === "undefined") return "taproot";
+  return window.localStorage.getItem(BITCOIN_ADDRESS_TYPE_STORAGE_KEY) === "native-segwit"
+    ? "native-segwit"
+    : "taproot";
+}
+
+function saveBitcoinAddressType(value: BitcoinAddressType) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(BITCOIN_ADDRESS_TYPE_STORAGE_KEY, value);
 }
 
 function desktopEvmTokenStorageKey(chainId: number, walletAddress: string): string {
@@ -3771,6 +3803,8 @@ export default function Home() {
   const [externalSignInputMode, setExternalSignInputMode] = useState<ExternalSignInputMode>("json");
   const [copied, setCopied] = useState<string | null>(null);
   const copiedResetTimerRef = useRef<number | null>(null);
+  const sensitiveClipboardClearTimerRef = useRef<number | null>(null);
+  const sensitiveClipboardValueRef = useRef("");
   const [loading, setLoading] = useState(false);
   const [authMethod, setAuthMethod] = useState<{ [key: string]: "keystore" | "private" | "encrypted" }>({});
   const [wallets, setWallets] = useState<SavedWallet[]>([]);
@@ -3832,6 +3866,7 @@ export default function Home() {
   const [privateKeyExportMode, setPrivateKeyExportMode] = useState<PrivateKeyExportMode>("simple");
   const [privateKeySegmentCount, setPrivateKeySegmentCount] = useState(DEFAULT_PRIVATE_KEY_SEGMENTS);
   const [privateKeyQrRevealed, setPrivateKeyQrRevealed] = useState(false);
+  const [sensitivePlaintextRevealed, setSensitivePlaintextRevealed] = useState(false);
   const [dappTabs, setDappTabs] = useState<DappBrowserTab[]>([DAPP_HOME_TAB]);
   const [activeDappTabId, setActiveDappTabId] = useState(DAPP_HOME_TAB_ID);
   const [twitterBrowserTabs, setTwitterBrowserTabs] = useState<DappBrowserTab[]>([TWITTER_BROWSER_HOME_TAB]);
@@ -4074,6 +4109,7 @@ export default function Home() {
   const [walletTransactions, setWalletTransactions] = useState<WalletTransactionsState | null>(null);
   const [walletOverviewTab, setWalletOverviewTab] = useState<"assets" | "transactions">("assets");
   const [walletChainView, setWalletChainView] = useState<"all" | "solana" | "evm" | "bitcoin" | "tron" | "networks">("all");
+  const [bitcoinAddressType, setBitcoinAddressType] = useState<BitcoinAddressType>("taproot");
   const [visibleTokenCount, setVisibleTokenCount] = useState(TOKEN_ASSET_PAGE_SIZE);
   const clientSettingsLoadedRef = useRef(false);
   const walletAssetsRef = useRef<WalletAssetsState | null>(null);
@@ -4532,11 +4568,16 @@ export default function Home() {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Failed to preview payment");
     const preview = data as DesktopEvmPaymentPreview;
-    if (
-      evmPreviewRequestIdRef.current !== requestId ||
-      preview.chain?.chain_id !== chainId ||
-      preview.wallet_address?.toLowerCase() !== walletAddress.toLowerCase()
-    ) return;
+    if (evmPreviewRequestIdRef.current !== requestId) return;
+    if (!isMatchingEvmPaymentPreview(preview, {
+        chainId,
+        walletAddress,
+        recipient: evmRecipient.trim(),
+        amountAtomic: amount,
+        tokenContract: evmTokenContract.trim() || null,
+      })) {
+      throw new Error(tf("features.evm-workbench.previewMismatch", "Payment preview did not match the requested transaction"));
+    }
     setEvmPreview(preview);
     setEvmSubmitResult(null);
     setEvmTransactionStatus(null);
@@ -4752,6 +4793,7 @@ export default function Home() {
     setExportedPrivateKey(null);
     setExportedMnemonic(null);
     setPrivateKeyQrRevealed(false);
+    setSensitivePlaintextRevealed(false);
     setDappConnectRequest(null);
     setDappConnectWalletId("");
     setDappSignRequest(null);
@@ -6133,6 +6175,7 @@ export default function Home() {
         setPrivateKeyExportMode("simple");
         setPrivateKeySegmentCount(DEFAULT_PRIVATE_KEY_SEGMENTS);
         setPrivateKeyQrRevealed(false);
+        setSensitivePlaintextRevealed(false);
         setExportedPrivateKey(null);
         setExportedMnemonic({
           walletName: name,
@@ -6632,6 +6675,7 @@ export default function Home() {
       currentWalletIdRef.current = storedWalletId;
       setCurrentWalletId(storedWalletId);
       setCurrentWalletNetwork(loadCurrentWalletNetwork());
+      setBitcoinAddressType(loadBitcoinAddressType());
       setDownloadHistory(loadDownloadHistory());
     }
     void loadWallets();
@@ -7764,48 +7808,77 @@ export default function Home() {
   const exportPrivateKeyWithPassword = async (
     wallet: SavedWallet,
     password: string,
+    context: WalletExportContext,
   ): Promise<ExportedPrivateKeyPreview> => {
     const response = await apiFetch(`wallets/${wallet.id}/export-private-key`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({
+        password,
+        family: context.family,
+        chain_id: context.chainId,
+        expected_address: context.expectedAddress,
+        derivation_path: context.derivationPath,
+      }),
     });
     const data = await response.json();
     if (!response.ok) {
       throw new Error(data.error || t("features.settings.exportPrivateKeyFailed"));
     }
-    const privateKey = String(data.private_key || "").trim();
-    if (!privateKey) {
-      throw new Error(t("features.settings.exportPrivateKeyFailed"));
+    const validated = validatePrivateKeyExport(data, context);
+    if (!validated.ok) {
+      const messageKey = validated.error === "incompatible-backend"
+        ? "features.settings.exportBackendIncompatible"
+        : validated.error === "account-mismatch"
+          ? "features.settings.exportAddressMismatch"
+          : "features.settings.exportPrivateKeyInvalidFormat";
+      throw new Error(t(messageKey));
     }
     return {
       walletName: wallet.name,
-      publicKey: wallet.public_key,
-      privateKey,
+      publicKey: validated.value.address,
+      privateKey: validated.value.privateKey,
+      family: validated.value.family,
+      encoding: validated.value.encoding,
+      derivationPath: validated.value.derivationPath,
     };
   };
 
   const exportMnemonicWithPassword = async (
     wallet: SavedWallet,
     password: string,
+    context: WalletExportContext,
   ): Promise<ExportedMnemonicPreview> => {
     const response = await apiFetch(`wallets/${wallet.id}/export-mnemonic`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({
+        password,
+        family: context.family,
+        chain_id: context.chainId,
+        expected_address: context.expectedAddress,
+        derivation_path: context.derivationPath,
+      }),
     });
     const data = await response.json();
     if (!response.ok) {
       throw new Error(data.error || t("features.settings.exportMnemonicFailed"));
     }
-    const mnemonic = String(data.mnemonic || "").trim();
-    if (!mnemonic) {
-      throw new Error(t("features.settings.exportMnemonicFailed"));
+    const validated = validateMnemonicExport(data, context);
+    if (!validated.ok) {
+      const messageKey = validated.error === "incompatible-backend"
+        ? "features.settings.exportBackendIncompatible"
+        : validated.error === "account-mismatch"
+          ? "features.settings.exportAddressMismatch"
+          : "features.settings.exportMnemonicInvalidFormat";
+      throw new Error(t(messageKey));
     }
     return {
       walletName: wallet.name,
-      publicKey: wallet.public_key,
-      mnemonic,
+      publicKey: validated.value.address,
+      mnemonic: validated.value.mnemonic,
+      family: validated.value.family,
+      derivationPath: validated.value.derivationPath,
     };
   };
 
@@ -7813,6 +7886,7 @@ export default function Home() {
     setPrivateKeyExportMode("simple");
     setPrivateKeySegmentCount(DEFAULT_PRIVATE_KEY_SEGMENTS);
     setPrivateKeyQrRevealed(false);
+    setSensitivePlaintextRevealed(false);
     setSensitiveExportTab(tab);
   };
 
@@ -7834,7 +7908,11 @@ export default function Home() {
     }
   };
 
-  const handleExportPrivateKey = async (wallet: SavedWallet, passwordValue: string) => {
+  const handleExportPrivateKey = async (
+    wallet: SavedWallet,
+    passwordValue: string,
+    context: WalletExportContext,
+  ) => {
     const password = passwordValue;
     if (password.length === 0) {
       toast.error(t("features.settings.exportPasswordRequired"));
@@ -7843,7 +7921,7 @@ export default function Home() {
 
     setLoading(true);
     try {
-      const privateKey = await exportPrivateKeyWithPassword(wallet, password);
+      const privateKey = await exportPrivateKeyWithPassword(wallet, password, context);
       if (applicationLockedRef.current) return;
       resetSensitiveExportDisplay("private-key");
       setExportedMnemonic(null);
@@ -7856,7 +7934,11 @@ export default function Home() {
     }
   };
 
-  const handleExportMnemonic = async (wallet: SavedWallet, passwordValue: string) => {
+  const handleExportMnemonic = async (
+    wallet: SavedWallet,
+    passwordValue: string,
+    context: WalletExportContext,
+  ) => {
     const password = passwordValue;
     if (password.length === 0) {
       toast.error(t("features.settings.exportPasswordRequired"));
@@ -7865,7 +7947,7 @@ export default function Home() {
 
     setLoading(true);
     try {
-      const mnemonic = await exportMnemonicWithPassword(wallet, password);
+      const mnemonic = await exportMnemonicWithPassword(wallet, password, context);
       if (applicationLockedRef.current) return;
       resetSensitiveExportDisplay("mnemonic");
       setExportedPrivateKey(null);
@@ -7882,6 +7964,7 @@ export default function Home() {
     wallet: SavedWallet,
     passwordValue: string,
     selection: ExportBundleSelection,
+    context: WalletExportContext,
   ) => {
     const password = passwordValue;
     if (password.length === 0) {
@@ -7904,10 +7987,10 @@ export default function Home() {
         await exportKeystoreWithPassword(wallet, password, "mnemonic");
       }
       if (selection["private-key"]) {
-        privateKeyPreview = await exportPrivateKeyWithPassword(wallet, password);
+        privateKeyPreview = await exportPrivateKeyWithPassword(wallet, password, context);
       }
       if (selection.mnemonic) {
-        mnemonicPreview = await exportMnemonicWithPassword(wallet, password);
+        mnemonicPreview = await exportMnemonicWithPassword(wallet, password, context);
       }
 
       if (applicationLockedRef.current) return;
@@ -7931,15 +8014,61 @@ export default function Home() {
     }
   };
 
-  const requestExportBundle = (wallet: SavedWallet) => {
+  const requestExportBundle = (wallet: SavedWallet, context: WalletExportContext) => {
     setPasswordPromptValue("");
     setExportBundleSelection({
-      "private-key-keystore": true,
+      "private-key-keystore": context.family === "solana",
       "mnemonic-keystore": false,
-      "private-key": false,
+      "private-key": context.family !== "solana",
       mnemonic: false,
     });
-    setPasswordPrompt({ kind: "export-bundle", wallet, formState: {} });
+    setPasswordPrompt({ kind: "export-bundle", wallet, context, formState: {} });
+  };
+
+  const requestRotateBitcoinAccount = (wallet: SavedWallet) => {
+    setPasswordPromptValue("");
+    setPasswordPrompt({ kind: "rotate-bitcoin-account", wallet, formState: {} });
+  };
+
+  const handleRotateBitcoinAccount = async (wallet: SavedWallet, password: string): Promise<boolean> => {
+    setLoading(true);
+    try {
+      const response = await apiFetch(`wallets/${encodeURIComponent(wallet.id)}/bitcoin/rotate-account`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          password,
+          developer_mode: true,
+          confirmation: "ROTATE_EMPTY_BITCOIN_ACCOUNT",
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || t("features.settings.rotateBitcoinFailed"));
+      }
+      const taprootAddress = String(data.taproot_address || "").trim();
+      const nativeSegwitAddress = String(data.native_segwit_address || "").trim();
+      if (!taprootAddress.startsWith("bc1p") || !nativeSegwitAddress.startsWith("bc1q")) {
+        await loadWallets();
+        setNativeBalanceRefreshNonce((value) => value + 1);
+        toast.error(t("features.settings.rotateBitcoinInvalidResponse"));
+        return true;
+      }
+      setWalletNativeBalances((previous) => Object.fromEntries(
+        Object.entries(previous).filter(([key]) => !key.startsWith(`${wallet.id}:`)),
+      ));
+      await loadWallets();
+      setNativeBalanceRefreshNonce((value) => value + 1);
+      toast.success(t("features.settings.rotateBitcoinSuccess", {
+        address: bitcoinAddressType === "native-segwit" ? nativeSegwitAddress : taprootAddress,
+      }));
+      return true;
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("features.settings.rotateBitcoinFailed"));
+      return false;
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleMigrateKeystore = async (
@@ -11610,11 +11739,15 @@ export default function Home() {
     void (async () => {
       const entries = await Promise.all(mnemonicWallets.map(async (wallet) => {
         try {
-          const response = await apiFetch(`wallets/${encodeURIComponent(wallet.id)}/multichain-accounts`, {
-            method: "GET",
-            cache: "no-store",
-            signal: controller.signal,
-          });
+          const response = await apiFetch(
+            `wallets/${encodeURIComponent(wallet.id)}/multichain-accounts`,
+            {
+              method: "GET",
+              cache: "no-store",
+              signal: controller.signal,
+            },
+            { bitcoin_address_type: bitcoinAddressType },
+          );
           const data = await response.json();
           const accounts = parseWalletMultichainAccounts(data?.accounts);
           if (!response.ok || !accounts) {
@@ -11633,7 +11766,7 @@ export default function Home() {
       if (!controller.signal.aborted) setWalletMultichainAccountsByWallet(Object.fromEntries(entries));
     })();
     return () => controller.abort();
-  }, [applicationLocked, wallets]);
+  }, [applicationLocked, bitcoinAddressType, wallets]);
 
   useEffect(() => {
     if (applicationLocked || !effectiveWallet) return;
@@ -11666,7 +11799,11 @@ export default function Home() {
           const response = await apiFetch(`wallets/${encodeURIComponent(walletId)}/${action}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ chain_id: account.chain_id, address: account.address }),
+            body: JSON.stringify({
+              chain_id: account.chain_id,
+              address: account.address,
+              derivation_path: account.derivation_path,
+            }),
             signal: controller.signal,
           });
           const data = await response.json();
@@ -11738,6 +11875,7 @@ export default function Home() {
               chainName: account.chain_name,
               symbol: account.symbol,
               address: account.address,
+              derivationPath: account.derivation_path,
               logoUri: chainDescriptorLogoUri({ family: account.family, chain_id: account.chain_id }),
               testnet: account.testnet,
             })) ?? []),
@@ -11871,6 +12009,7 @@ export default function Home() {
         tracked: true,
         loading: balanceState?.loading ?? true,
         testnet: account.testnet,
+        derivationPath: account.derivation_path,
       });
     }
     return result;
@@ -13594,7 +13733,9 @@ export default function Home() {
     isProgramDeploymentPasswordPrompt || isProgramUpgradePasswordPrompt;
 
   const passwordPromptTitle =
-    passwordPrompt?.kind === "export-bundle"
+    passwordPrompt?.kind === "rotate-bitcoin-account"
+      ? t("features.settings.rotateBitcoinTitle")
+      : passwordPrompt?.kind === "export-bundle"
       ? t("features.settings.exportBundleTitle")
       : passwordPrompt?.kind === "export-keystore"
       ? t("features.settings.exportPasswordTitle")
@@ -13616,7 +13757,9 @@ export default function Home() {
         ? t("formUi.masterPasswordPromptTitle")
       : t("formUi.confirmPasswordTitle");
   const passwordPromptHint =
-    passwordPrompt?.kind === "export-bundle"
+    passwordPrompt?.kind === "rotate-bitcoin-account"
+      ? t("features.settings.rotateBitcoinHint")
+      : passwordPrompt?.kind === "export-bundle"
       ? t("features.settings.exportBundleHint")
       : passwordPrompt?.kind === "export-keystore"
       ? t("features.settings.exportPasswordHint")
@@ -13638,7 +13781,9 @@ export default function Home() {
         ? t("formUi.masterPasswordPromptHint")
       : t("formUi.confirmPasswordHint");
   const passwordPromptButton =
-    passwordPrompt?.kind === "export-bundle"
+    passwordPrompt?.kind === "rotate-bitcoin-account"
+      ? t("features.settings.rotateBitcoinButton")
+      : passwordPrompt?.kind === "export-bundle"
       ? t("features.settings.exportBundleButton")
       : passwordPrompt?.kind === "export-keystore"
       ? t("features.settings.exportPasswordButton")
@@ -13833,13 +13978,21 @@ export default function Home() {
         const biometricStored = await storeBiometricWalletPassword(wallet, password);
         if (!biometricStored) return;
       } else if (passwordPrompt.kind === "export-bundle") {
-        await handleExportBundle(passwordPrompt.wallet, password, exportBundleSelection);
+        await handleExportBundle(
+          passwordPrompt.wallet,
+          password,
+          exportBundleSelection,
+          passwordPrompt.context,
+        );
       } else if (passwordPrompt.kind === "export-keystore") {
         await handleExportKeystore(passwordPrompt.wallet, password);
       } else if (passwordPrompt.kind === "export-private-key") {
-        await handleExportPrivateKey(passwordPrompt.wallet, password);
+        await handleExportPrivateKey(passwordPrompt.wallet, password, passwordPrompt.context);
       } else if (passwordPrompt.kind === "export-mnemonic") {
-        await handleExportMnemonic(passwordPrompt.wallet, password);
+        await handleExportMnemonic(passwordPrompt.wallet, password, passwordPrompt.context);
+      } else if (passwordPrompt.kind === "rotate-bitcoin-account") {
+        const rotated = await handleRotateBitcoinAccount(passwordPrompt.wallet, password);
+        if (!rotated) return;
       } else {
         const changed = await handleMigrateKeystore(passwordPrompt.wallet, password, migrationNewPassword);
         if (!changed) return;
@@ -13914,6 +14067,40 @@ export default function Home() {
     }
   };
 
+  const clearSensitiveClipboard = useCallback(async () => {
+    if (sensitiveClipboardClearTimerRef.current !== null) {
+      window.clearTimeout(sensitiveClipboardClearTimerRef.current);
+      sensitiveClipboardClearTimerRef.current = null;
+    }
+    const expected = sensitiveClipboardValueRef.current;
+    sensitiveClipboardValueRef.current = "";
+    if (!expected || !navigator.clipboard?.writeText) return;
+    try {
+      const current = navigator.clipboard.readText
+        ? await navigator.clipboard.readText()
+        : expected;
+      if (current === expected) await navigator.clipboard.writeText("");
+    } catch {
+      // If reads are denied, clearing is safer than leaving wallet secrets behind.
+      try {
+        await navigator.clipboard.writeText("");
+      } catch {
+        // The OS can reject clipboard access while the app is shutting down.
+      }
+    }
+  }, []);
+
+  const copySensitiveToClipboard = async (text: string, id: string) => {
+    await copyToClipboard(text, id);
+    sensitiveClipboardValueRef.current = text;
+    if (sensitiveClipboardClearTimerRef.current !== null) {
+      window.clearTimeout(sensitiveClipboardClearTimerRef.current);
+    }
+    sensitiveClipboardClearTimerRef.current = window.setTimeout(() => {
+      void clearSensitiveClipboard();
+    }, 15_000);
+  };
+
   const recordDownload = (item: DownloadHistoryItem) => {
     setDownloadHistory((previous) => {
       const next = [item, ...previous.filter((candidate) => candidate.path !== item.path)]
@@ -13954,13 +14141,16 @@ export default function Home() {
     toast.success(t("common.downloaded", { filename }));
   };
 
-  const sensitiveExportPreviews: SensitiveExportPreview[] = [
+  const sensitiveExportCandidates: Array<SensitiveExportPreview | null> = [
     exportedPrivateKey
-      ? {
+      ? ({
         kind: "private-key",
         walletName: exportedPrivateKey.walletName,
         publicKey: exportedPrivateKey.publicKey,
         value: exportedPrivateKey.privateKey,
+        family: exportedPrivateKey.family,
+        encoding: exportedPrivateKey.encoding,
+        derivationPath: exportedPrivateKey.derivationPath,
         title: t("features.settings.exportPrivateKeyQrTitle"),
         hint: t("features.settings.exportPrivateKeyQrHint"),
         warning: t("features.settings.exportPrivateKeyQrWarning"),
@@ -13977,14 +14167,17 @@ export default function Home() {
         copyId: "export-private-key",
         segmentCopyPrefix: "export-private-key-segment",
         qrFailedMessage: t("features.settings.exportPrivateKeyQrFailed"),
-      }
+      } satisfies SensitiveExportPreview)
       : null,
     exportedMnemonic
-      ? {
+      ? ({
           kind: "mnemonic",
           walletName: exportedMnemonic.walletName,
           publicKey: exportedMnemonic.publicKey,
           value: exportedMnemonic.mnemonic,
+          family: exportedMnemonic.family,
+          encoding: "bip39",
+          derivationPath: exportedMnemonic.derivationPath,
           title: t("features.settings.exportMnemonicQrTitle"),
           hint: t("features.settings.exportMnemonicQrHint"),
           warning: t("features.settings.exportMnemonicQrWarning"),
@@ -14001,23 +14194,32 @@ export default function Home() {
           copyId: "export-mnemonic",
           segmentCopyPrefix: "export-mnemonic-segment",
           qrFailedMessage: t("features.settings.exportMnemonicQrFailed"),
-        }
+        } satisfies SensitiveExportPreview)
       : null,
-  ].filter((preview): preview is SensitiveExportPreview => Boolean(preview));
+  ];
+  const sensitiveExportPreviews = sensitiveExportCandidates.filter(
+    (preview): preview is SensitiveExportPreview => preview !== null,
+  );
   const sensitiveExport =
     sensitiveExportPreviews.find((preview) => preview.kind === sensitiveExportTab) ||
     sensitiveExportPreviews[0] ||
     null;
   const sensitiveExportValue = sensitiveExport?.value ?? null;
+  const renderableSensitiveValue = sensitiveExport
+    ? renderableSensitiveExportValue(sensitiveExport.value, sensitivePlaintextRevealed)
+    : null;
 
   const sensitiveExportContent = (preview: SensitiveExportPreview): string => [
     preview.kind === "mnemonic"
       ? "FnzSafe plaintext mnemonic export"
       : "FnzSafe plaintext private key export",
     `Wallet: ${preview.walletName}`,
-    `Public Key: ${preview.publicKey}`,
+    `Chain family: ${preview.family ?? "solana"}`,
+    `Account address: ${preview.publicKey}`,
+    ...(preview.derivationPath ? [`Derivation path: ${preview.derivationPath}`] : []),
+    ...(preview.encoding ? [`Encoding: ${preview.encoding}`] : []),
     "",
-    preview.kind === "mnemonic" ? "Mnemonic phrase:" : "Private Key (base58):",
+    preview.kind === "mnemonic" ? "Mnemonic phrase:" : "Private key:",
     preview.value,
     "",
     preview.kind === "mnemonic"
@@ -14033,14 +14235,28 @@ export default function Home() {
   }, []);
 
   const closeSensitiveExport = useCallback(() => {
+    void clearSensitiveClipboard();
     clearPrivateKeyQrCanvas();
     setExportedPrivateKey(null);
     setExportedMnemonic(null);
     setPrivateKeyExportMode("simple");
     setPrivateKeySegmentCount(DEFAULT_PRIVATE_KEY_SEGMENTS);
     setPrivateKeyQrRevealed(false);
+    setSensitivePlaintextRevealed(false);
     setSensitiveExportTab("private-key");
-  }, [clearPrivateKeyQrCanvas]);
+  }, [clearPrivateKeyQrCanvas, clearSensitiveClipboard]);
+
+  useEffect(() => {
+    const clearWhenBackgrounded = () => {
+      if (document.visibilityState === "hidden") closeSensitiveExport();
+    };
+    document.addEventListener("visibilitychange", clearWhenBackgrounded);
+    window.addEventListener("pagehide", closeSensitiveExport);
+    return () => {
+      document.removeEventListener("visibilitychange", clearWhenBackgrounded);
+      window.removeEventListener("pagehide", closeSensitiveExport);
+    };
+  }, [closeSensitiveExport]);
 
   const changePrivateKeySegmentCount = (delta: number) => {
     setPrivateKeySegmentCount((current) => clampPrivateKeySegmentCount(current + delta));
@@ -14750,6 +14966,7 @@ export default function Home() {
                 setPrivateKeyExportMode("simple");
                 setPrivateKeySegmentCount(DEFAULT_PRIVATE_KEY_SEGMENTS);
                 setPrivateKeyQrRevealed(false);
+                setSensitivePlaintextRevealed(false);
                 setExportedPrivateKey(null);
                 setExportedMnemonic({
                   walletName: name,
@@ -17152,6 +17369,32 @@ export default function Home() {
             <p className="text-xs leading-5 text-gray-500">
               {t("features.settings.walletNetworkHint")}
             </p>
+            {selectedNativeFamily === "bitcoin" && (
+              <div className="mt-3">
+                <p className="mb-2 text-xs font-medium text-gray-400">
+                  {tf("features.unified-wallet.bitcoinAddressType", "Bitcoin address type")}
+                </p>
+                <div className="inline-flex rounded-lg border border-white/10 bg-black/30 p-1">
+                  {(["taproot", "native-segwit"] as const).map((value) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => {
+                        setBitcoinAddressType(value);
+                        saveBitcoinAddressType(value);
+                      }}
+                      className={`h-8 rounded-md px-3 text-xs font-medium ${
+                        bitcoinAddressType === value
+                          ? "bg-emerald-400/15 text-emerald-100"
+                          : "text-gray-400 hover:bg-white/5 hover:text-white"
+                      }`}
+                    >
+                      {value === "taproot" ? "Taproot" : "Native SegWit (BIP84)"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
           {wallets.length === 0 ? (
             <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-sm text-gray-400">
@@ -17167,13 +17410,19 @@ export default function Home() {
             <div className="space-y-3">
               {walletsForSelectedNetwork.map((wallet) => {
                 const isCurrent = wallet.id === effectiveWalletId;
+                const nativeAccountState = isNativeChainSelected
+                  ? walletMultichainAccountsByWallet[wallet.id]
+                  : undefined;
                 const selectedNativeAccount = isNativeChainSelected
-                  ? walletMultichainAccountsByWallet[wallet.id]?.accounts
+                  ? nativeAccountState?.accounts
                     .find((account) => account.family === selectedNativeFamily)
                   : undefined;
                 let walletAddress = wallet.public_key;
                 if (selectedEvmChain) walletAddress = wallet.evm_address?.trim() || "";
                 if (isNativeChainSelected) walletAddress = selectedNativeAccount?.address || "";
+                const walletAddressFallback = nativeAccountState?.error
+                  ? t("features.settings.walletAddressUnavailable")
+                  : t("common.loading");
                 const selectedEvmAssets = selectedEvmChain
                   ? evmAssetsByChain[selectedEvmChain.chain_id]
                   : undefined;
@@ -17275,10 +17524,10 @@ export default function Home() {
                               copyToClipboard(walletAddress, copyId);
                             }}
                             className="min-w-0 truncate text-left font-mono text-xs text-gray-400 hover:text-white sm:rounded-lg sm:border sm:border-white/10 sm:bg-black/20 sm:px-2.5 sm:py-1.5 sm:text-gray-300 sm:hover:bg-white/10"
-                            title={walletAddress || t("common.loading")}
+                            title={walletAddress || nativeAccountState?.error || walletAddressFallback}
                           >
-                            <span className="sm:hidden">{walletAddress ? shortAddress(walletAddress) : t("common.loading")}</span>
-                            <span className="hidden sm:inline">{walletAddress || t("common.loading")}</span>
+                            <span className="sm:hidden">{walletAddress ? shortAddress(walletAddress) : walletAddressFallback}</span>
+                            <span className="hidden sm:inline">{walletAddress || walletAddressFallback}</span>
                           </button>
                           <button
                             type="button"
@@ -17319,7 +17568,7 @@ export default function Home() {
                           <Menu className="h-4 w-4" />
                         </button>
                         {walletActionsMenuOpen === wallet.id && (
-                          <div className="absolute right-0 z-50 mt-2 w-48 overflow-hidden rounded-xl border border-white/10 bg-zinc-950 p-1 shadow-2xl">
+                          <div className="absolute right-0 z-50 mt-2 w-56 overflow-hidden rounded-xl border border-white/10 bg-zinc-950 p-1 shadow-2xl">
                             <button
                               type="button"
                               onClick={(event) => {
@@ -17354,7 +17603,16 @@ export default function Home() {
                               onClick={(event) => {
                                 event.stopPropagation();
                                 setWalletActionsMenuOpen(null);
-                                requestExportBundle(wallet);
+                                requestExportBundle(wallet, {
+                                  family: selectedEvmChain
+                                    ? "evm"
+                                    : isNativeChainSelected
+                                      ? selectedNativeFamily
+                                      : "solana",
+                                  chainId: isNativeChainSelected ? currentWalletNetwork : undefined,
+                                  expectedAddress: walletAddress,
+                                  derivationPath: selectedNativeAccount?.derivation_path,
+                                });
                               }}
                               disabled={loading}
                               className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-gray-200 hover:bg-white/10 disabled:opacity-50"
@@ -17362,6 +17620,21 @@ export default function Home() {
                               <Download className="h-3.5 w-3.5" />
                               {t("features.settings.exportBundleMenu")}
                             </button>
+                            {IS_DEVELOPMENT_BUILD && selectedNativeFamily === "bitcoin" && appPreferences.developerWalletMaintenance && (
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setWalletActionsMenuOpen(null);
+                                  requestRotateBitcoinAccount(wallet);
+                                }}
+                                disabled={loading || !selectedNativeAccount}
+                                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-amber-100 hover:bg-amber-500/10 disabled:opacity-50"
+                              >
+                                <RefreshCw className="h-3.5 w-3.5" />
+                                {t("features.settings.rotateBitcoinMenu")}
+                              </button>
+                            )}
                             {biometricConfiguredFor(wallet) && (
                               <button
                                 type="button"
@@ -17767,6 +18040,27 @@ export default function Home() {
           <div className="space-y-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               {renderChainViewTabs()}
+              {family === "bitcoin" && (
+                <div className="inline-flex self-start rounded-lg border border-white/10 bg-black/30 p-1 sm:self-auto">
+                  {(["taproot", "native-segwit"] as const).map((value) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => {
+                        setBitcoinAddressType(value);
+                        saveBitcoinAddressType(value);
+                      }}
+                      className={`h-8 rounded-md px-3 text-xs font-medium ${
+                        bitcoinAddressType === value
+                          ? "bg-emerald-400/15 text-emerald-100"
+                          : "text-gray-400 hover:bg-white/5 hover:text-white"
+                      }`}
+                    >
+                      {value === "taproot" ? "Taproot" : "Native SegWit (BIP84)"}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
             {!effectiveWallet || !account || !asset ? (
               <section className="border-y border-white/10 py-10 text-center">
@@ -17793,6 +18087,9 @@ export default function Home() {
                         >
                           {account.address}
                         </button>
+                        {family === "bitcoin" && (
+                          <p className="mt-1 font-mono text-[11px] text-gray-500">{account.derivation_path}</p>
+                        )}
                       </div>
                     </div>
                     <div className="min-w-0 sm:text-right">
@@ -20546,6 +20843,20 @@ export default function Home() {
             <div className="grid gap-2 rounded-lg border border-emerald-300/20 bg-emerald-300/10 p-3 text-sm text-emerald-50 lg:grid-cols-2">
               <p>{tf("features.evm-workbench.chainId", "Chain ID")}: {evmPreview.chain.chain_id}</p>
               <p>{tf("features.evm-workbench.nonce", "Nonce")}: {evmPreview.nonce}</p>
+              {(() => {
+                const token = evmPreview.token_contract
+                  ? evmAssetsByChain[evmPreview.chain.chain_id]?.tokens.find(
+                    (asset) => asset.contract_address.toLowerCase() === evmPreview.token_contract?.toLowerCase(),
+                  )
+                  : null;
+                const decimals = token?.decimals ?? 18;
+                const symbol = token?.symbol ?? (evmPreview.token_contract ? "Token" : evmPreview.chain.native_symbol);
+                return (
+                  <p className="font-semibold">
+                    {tf("features.evm-workbench.amount", "Amount")}: {rawTokenAmountToUi(evmPreview.amount_wei_or_units, decimals)} {symbol}
+                  </p>
+                );
+              })()}
               <p>{tf("features.evm-workbench.gasLimit", "Gas limit")}: {evmPreview.gas_limit}</p>
               <p>{tf("features.evm-workbench.feeModel", "Fee model")}: {evmPreview.fee_model}</p>
               <p>{tf("features.evm-workbench.gasPrice", "Gas price")}: {evmPreview.gas_price_wei} wei</p>
@@ -20683,7 +20994,7 @@ export default function Home() {
                     <span className="rounded bg-emerald-400/15 px-1.5 py-0.5 text-[10px] text-emerald-200">{tf("features.chain-directory.walletReady", "Wallet ready")}</span>
                   </div>
                   <p className="mt-1 text-xs text-gray-500">
-                    {tf("features.create-wallet.bitcoinAccount", "A BIP84 native SegWit account supports BTC balance lookup, fee preview, and transfer.")}
+                    {tf("features.create-wallet.bitcoinAccount", "A wallet-import compatible Taproot account supports BTC balance lookup, fee preview, and transfer.")}
                   </p>
                 </div>
               </div>
@@ -22681,6 +22992,20 @@ export default function Home() {
                   <section className="space-y-4 rounded-lg border border-white/10 bg-white/[0.035] p-4">
                     <label className="flex items-center justify-between gap-4 text-sm text-gray-300"><span>{tf("features.settings.showTestnets", "显示测试网")}</span><input type="checkbox" checked={appPreferences.showTestnets} onChange={(event) => setAppPreferences((previous) => ({ ...previous, showTestnets: event.target.checked }))} className="h-4 w-4 accent-violet-500" /></label>
                     <label className="flex items-center justify-between gap-4 border-t border-white/10 pt-4 text-sm text-gray-300"><span>{tf("features.settings.transactionDebug", "显示交易调试详情")}</span><input type="checkbox" checked={appPreferences.transactionDebugDetails} onChange={(event) => setAppPreferences((previous) => ({ ...previous, transactionDebugDetails: event.target.checked }))} className="h-4 w-4 accent-violet-500" /></label>
+                    {IS_DEVELOPMENT_BUILD && (
+                      <label className="flex items-start justify-between gap-4 border-t border-white/10 pt-4 text-sm text-gray-300">
+                        <span>
+                          <span className="block">{t("features.settings.developerWalletMaintenance")}</span>
+                          <span className="mt-1 block text-xs leading-5 text-amber-200/80">{t("features.settings.developerWalletMaintenanceHint")}</span>
+                        </span>
+                        <input
+                          type="checkbox"
+                          checked={appPreferences.developerWalletMaintenance}
+                          onChange={(event) => setAppPreferences((previous) => ({ ...previous, developerWalletMaintenance: event.target.checked }))}
+                          className="mt-0.5 h-4 w-4 shrink-0 accent-amber-500"
+                        />
+                      </label>
+                    )}
                     <div className="border-t border-white/10 pt-4"><button type="button" onClick={() => void invoke("open_developer_tools").catch((error) => toast.error(errorMessage(error, "Developer tools unavailable")))} disabled={!isTauriWebview()} className="inline-flex h-10 items-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-200 hover:bg-white/10 disabled:opacity-40"><Code2 className="h-4 w-4" />{tf("features.settings.openDevtools", "打开开发者工具")}</button></div>
                   </section>
                 )}
@@ -29483,6 +29808,12 @@ export default function Home() {
                     <span className="truncate text-gray-200">{sensitiveExport.walletName}</span>
                     <span className="text-gray-500">{t("features.settings.exportPrivateKeyPublicKey")}</span>
                     <code className="break-all text-gray-300">{sensitiveExport.publicKey}</code>
+                    {sensitiveExport.family && (
+                      <>
+                        <span className="text-gray-500">{t("features.settings.exportChainFamily")}</span>
+                        <code className="break-all text-gray-300">{sensitiveExport.family}</code>
+                      </>
+                    )}
                   </div>
                 </div>
                 {sensitiveExportPreviews.length > 1 && (
@@ -29494,6 +29825,7 @@ export default function Home() {
                         onClick={() => {
                           setSensitiveExportTab(preview.kind);
                           setPrivateKeyQrRevealed(false);
+                          setSensitivePlaintextRevealed(false);
                         }}
                         className={`rounded-md px-3 py-2 text-xs font-semibold transition-colors ${
                           sensitiveExport.kind === preview.kind
@@ -29514,7 +29846,10 @@ export default function Home() {
                     <button
                       key={mode}
                       type="button"
-                      onClick={() => setPrivateKeyExportMode(mode)}
+                      onClick={() => {
+                        setPrivateKeyExportMode(mode);
+                        setSensitivePlaintextRevealed(false);
+                      }}
                       className={`rounded-md px-3 py-2 text-xs font-semibold transition-colors ${
                         privateKeyExportMode === mode
                           ? "bg-white text-zinc-950"
@@ -29536,6 +29871,12 @@ export default function Home() {
                   <p className="leading-relaxed">{sensitiveExport.warning}</p>
                 </div>
               </div>
+
+              {sensitiveExport.family === "bitcoin" && (
+                <div className="rounded-lg border border-amber-300/20 bg-amber-400/10 p-3 text-sm leading-relaxed text-amber-50">
+                  {t("features.settings.exportBitcoinCompatibilityHint")}
+                </div>
+              )}
 
               <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
                 <div className="rounded-lg border border-white/10 bg-black/30 p-3">
@@ -29576,28 +29917,41 @@ export default function Home() {
                   </div>
                 </div>
                 <div className="min-w-0 space-y-3">
-                  {privateKeyExportMode === "simple" ? (
+                  {!sensitivePlaintextRevealed ? (
+                    <div className="flex min-h-48 flex-col items-center justify-center gap-3 rounded-lg border border-white/10 bg-black/30 p-6 text-center">
+                      <EyeOff className="h-8 w-8 text-red-200" />
+                      <p className="max-w-md text-sm leading-relaxed text-gray-400">
+                        {t("features.settings.exportSensitivePlaintextHidden")}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setSensitivePlaintextRevealed(true)}
+                        className="rounded-lg bg-red-500/15 px-4 py-2 text-sm font-semibold text-red-50 hover:bg-red-500/25"
+                      >
+                        {t("features.settings.exportSensitiveRevealPlaintext")}
+                      </button>
+                    </div>
+                  ) : privateKeyExportMode === "simple" ? (
                     <div className="rounded-lg border border-white/10 bg-black/30 p-3">
                       <div className="mb-2 flex items-center justify-between gap-3">
                         <label className="text-sm font-semibold">
                           {sensitiveExport.plaintextLabel}
                         </label>
-                        <span className="text-xs text-gray-500">{t("features.settings.exportPrivateKeyHoverReveal")}</span>
+                        <button
+                          type="button"
+                          onClick={() => setSensitivePlaintextRevealed(false)}
+                          className="text-xs font-medium text-gray-400 hover:text-white"
+                        >
+                          {t("features.settings.exportSensitiveHidePlaintext")}
+                        </button>
                       </div>
-                      <div
-                        tabIndex={0}
-                        className="group relative rounded-lg border border-white/10 bg-black/40 p-3 outline-none focus:ring-2 focus:ring-red-300/20"
-                      >
-                        <div className="absolute inset-0 z-10 flex items-center justify-center gap-2 rounded-lg bg-black/45 text-sm font-semibold text-red-50 transition-opacity group-hover:pointer-events-none group-hover:opacity-0 group-focus:pointer-events-none group-focus:opacity-0">
-                          <EyeOff className="h-4 w-4" />
-                          {sensitiveExport.hiddenLabel}
-                        </div>
+                      <div className="rounded-lg border border-white/10 bg-black/40 p-3">
                         <code
-                          className={`block min-h-24 select-text font-mono text-xs leading-relaxed text-red-50 blur-sm transition group-hover:blur-0 group-focus:blur-0 ${
+                          className={`block min-h-24 select-text font-mono text-xs leading-relaxed text-red-50 ${
                             sensitiveExport.kind === "mnemonic" ? "whitespace-pre-wrap break-words" : "break-all"
                           }`}
                         >
-                          {sensitiveExport.value}
+                          {renderableSensitiveValue}
                         </code>
                       </div>
                       <p className="mt-2 text-xs leading-relaxed text-gray-400">
@@ -29635,12 +29989,19 @@ export default function Home() {
                             <Plus className="h-4 w-4" />
                           </button>
                         </div>
+                        <button
+                          type="button"
+                          onClick={() => setSensitivePlaintextRevealed(false)}
+                          className="text-xs font-medium text-gray-400 hover:text-white"
+                        >
+                          {t("features.settings.exportSensitiveHidePlaintext")}
+                        </button>
                       </div>
                       <p className="mt-2 text-xs leading-relaxed text-gray-400">
                         {sensitiveExport.segmentsHint}
                       </p>
                       <div className="mt-3 max-h-72 space-y-2 overflow-auto pr-1">
-                        {splitSensitiveExportIntoSegments(sensitiveExport.value, privateKeySegmentCount).map((segment, index) => {
+                        {splitSensitiveExportIntoSegments(renderableSensitiveValue ?? "", privateKeySegmentCount).map((segment, index) => {
                           const segmentCopyId = `${sensitiveExport.segmentCopyPrefix}:${index}`;
                           return (
                             <div
@@ -29658,7 +30019,7 @@ export default function Home() {
                               </code>
                               <button
                                 type="button"
-                                onClick={() => void copyToClipboard(segment, segmentCopyId)}
+                                onClick={() => void copySensitiveToClipboard(segment, segmentCopyId)}
                                 className="inline-flex h-8 w-8 items-center justify-center rounded-md text-gray-300 hover:bg-white/10 hover:text-white"
                                 aria-label={t("features.settings.exportPrivateKeyCopySegment", { index: index + 1 })}
                               >
@@ -29673,34 +30034,38 @@ export default function Home() {
                 </div>
               </div>
 
-              <div className="grid gap-2 sm:grid-cols-3">
-                <button
-                  type="button"
-                  onClick={() => void copyToClipboard(sensitiveExport.value, sensitiveExport.copyId)}
-                  className="inline-flex items-center justify-center gap-2 rounded-lg bg-white/10 px-4 py-3 text-sm font-semibold hover:bg-white/20"
-                >
-                  {copied === sensitiveExport.copyId ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                  {sensitiveExport.copyLabel}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const confirmMessage =
-                      sensitiveExport.kind === "mnemonic"
-                        ? t("features.settings.exportMnemonicDownloadConfirm")
-                        : t("features.settings.exportPrivateKeyDownloadConfirm");
-                    if (!window.confirm(confirmMessage)) return;
-                    void downloadFile(
-                      sensitiveExportContent(sensitiveExport),
-                      `${safeFilename(sensitiveExport.walletName)}-${sensitiveExport.publicKey.slice(0, 8)}-${sensitiveExport.downloadSuffix}.txt`,
-                      "text/plain",
-                    );
-                  }}
-                  className="inline-flex items-center justify-center gap-2 rounded-lg bg-white/10 px-4 py-3 text-sm font-semibold hover:bg-white/20"
-                >
-                  <Download className="h-4 w-4" />
-                  {sensitiveExport.downloadLabel}
-                </button>
+              <div className={`grid gap-2 ${sensitivePlaintextRevealed ? "sm:grid-cols-3" : "sm:grid-cols-1"}`}>
+                {sensitivePlaintextRevealed && renderableSensitiveValue !== null && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => void copySensitiveToClipboard(renderableSensitiveValue, sensitiveExport.copyId)}
+                      className="inline-flex items-center justify-center gap-2 rounded-lg bg-white/10 px-4 py-3 text-sm font-semibold hover:bg-white/20"
+                    >
+                      {copied === sensitiveExport.copyId ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                      {sensitiveExport.copyLabel}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const confirmMessage =
+                          sensitiveExport.kind === "mnemonic"
+                            ? t("features.settings.exportMnemonicDownloadConfirm")
+                            : t("features.settings.exportPrivateKeyDownloadConfirm");
+                        if (!window.confirm(confirmMessage)) return;
+                        void downloadFile(
+                          sensitiveExportContent(sensitiveExport),
+                          `${safeFilename(sensitiveExport.walletName)}-${sensitiveExport.publicKey.slice(0, 8)}-${sensitiveExport.downloadSuffix}.txt`,
+                          "text/plain",
+                        );
+                      }}
+                      className="inline-flex items-center justify-center gap-2 rounded-lg bg-white/10 px-4 py-3 text-sm font-semibold hover:bg-white/20"
+                    >
+                      <Download className="h-4 w-4" />
+                      {sensitiveExport.downloadLabel}
+                    </button>
+                  </>
+                )}
                 <button
                   type="button"
                   onClick={closeSensitiveExport}

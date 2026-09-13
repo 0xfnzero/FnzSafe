@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -18,6 +19,14 @@ class DappBrowserScreen extends ConsumerStatefulWidget {
 class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
   late final WebViewController _controller;
   final _urlController = TextEditingController(text: 'https://example.com');
+  final Map<String, String> _connectedScopes = <String, String>{};
+  final Map<String, DappPageContext> _requestContexts =
+      <String, DappPageContext>{};
+  String? _scheduledDappResponseId;
+  int _navigationGeneration = 0;
+
+  static const _maxProviderMessageBytes = 64 * 1024;
+  static final _requestIdPattern = RegExp(r'^[A-Za-z0-9_-]{1,128}$');
 
   @override
   void initState() {
@@ -32,7 +41,13 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
       )
       ..setNavigationDelegate(
         NavigationDelegate(
-          onPageFinished: (_) => _injectProvider(),
+          onNavigationRequest: (request) {
+            final uri = Uri.tryParse(request.url);
+            if (!_isAllowedDappUri(uri)) return NavigationDecision.prevent;
+            if (request.isMainFrame) _beginNavigation(uri!);
+            return NavigationDecision.navigate;
+          },
+          onPageFinished: _handlePageFinished,
         ),
       )
       ..loadRequest(Uri.parse(_urlController.text));
@@ -40,6 +55,8 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
 
   @override
   void dispose() {
+    _requestContexts.clear();
+    ref.read(dappPageContextProvider.notifier).state = null;
     _urlController.dispose();
     super.dispose();
   }
@@ -54,9 +71,16 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
       ref.read(scannedValueProvider.notifier).state = null;
       _load();
     }
-    if (dappResponse != null) {
+    if (dappResponse != null &&
+        _scheduledDappResponseId != dappResponse.requestId) {
+      _scheduledDappResponseId = dappResponse.requestId;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        _deliverDappResponse(dappResponse);
+        if (!mounted) return;
+        _deliverDappResponse(dappResponse).whenComplete(() {
+          if (_scheduledDappResponseId == dappResponse.requestId) {
+            _scheduledDappResponseId = null;
+          }
+        });
       });
     }
 
@@ -111,23 +135,35 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
   void _load() {
     final text = _urlController.text.trim();
     if (text.isEmpty) return;
-    final uri = Uri.parse(
+    final uri = Uri.tryParse(
         text.startsWith(RegExp(r'https?://')) ? text : 'https://$text');
-    _controller.loadRequest(uri);
+    if (!_isAllowedDappUri(uri)) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text(
+            'Only HTTPS sites and local HTTP development sites are allowed.'),
+      ));
+      return;
+    }
+    _controller.loadRequest(uri!);
   }
 
-  Future<void> _injectProvider() {
+  Future<void> _injectProvider() async {
     final wallet = ref.read(activeWalletProvider);
     final publicKey = wallet?.publicKey;
     final isEvm = wallet?.family == WalletFamily.evm;
     final evmChain = ref.read(activeEvmChainProvider);
     final evmChainId =
         evmChain == null ? '0x1' : '0x${evmChain.chainId.toRadixString(16)}';
+    final currentOrigin =
+        _originForUri(Uri.tryParse(await _controller.currentUrl() ?? ''));
+    final connectedForOrigin = currentOrigin != null &&
+        wallet != null &&
+        _isConnected(currentOrigin, wallet);
     final script = '''
 (() => {
   if (window.fnzeroSafe) return;
   const pending = new Map();
-  let connected = ${publicKey == null ? 'false' : 'true'};
+  let connected = ${connectedForOrigin ? 'true' : 'false'};
   let publicKeyValue = ${jsonEncode(publicKey)};
   let ethereumChainId = ${jsonEncode(evmChainId)};
   const toSerializable = (value) => {
@@ -195,7 +231,6 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
   };
   const provider = {
     isFnzSafe: true,
-    isPhantom: true,
     get isConnected() { return connected; },
     get publicKey() {
       if (!connected || !publicKeyValue) return null;
@@ -224,20 +259,29 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
       params: { transaction, options }
     }),
     request: (payload) => {
+      if (pending.size >= 100) return Promise.reject(new Error('Too many FnzSafe requests are pending'));
       const id = `\${Date.now()}-\${Math.random().toString(36).slice(2)}`;
       FnzSafeProvider.postMessage(JSON.stringify({ ...(payload || {}), __fnzeroRequestId: id }, (_, value) => toSerializable(value)));
-      return new Promise((resolve, reject) => pending.set(id, {
-        resolve,
-        reject,
-        method: payload && payload.method ? payload.method : 'request',
-        params: payload && payload.params ? payload.params : undefined
-      }));
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pending.delete(id);
+          reject(new Error('FnzSafe request timed out'));
+        }, 300000);
+        pending.set(id, {
+          resolve,
+          reject,
+          timer,
+          method: payload && payload.method ? payload.method : 'request',
+          params: payload && payload.params ? payload.params : undefined
+        });
+      });
     }
   };
   window.fnzeroSafeResolve = (id, ok, payload) => {
     const entry = pending.get(id);
     if (!entry) return;
     pending.delete(id);
+    clearTimeout(entry.timer);
     if (ok) {
       const previousConnected = connected;
       const previousPublicKey = publicKeyValue;
@@ -283,7 +327,6 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
   if (${isEvm ? 'true' : 'false'}) {
     const ethereum = {
       isFnzSafe: true,
-      isMetaMask: true,
       get chainId() { return ethereumChainId; },
       get networkVersion() { return String(parseInt(ethereumChainId, 16)); },
       get selectedAddress() { return connected ? publicKeyValue : null; },
@@ -303,17 +346,33 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
       }
     };
     window.ethereum = ethereum;
+    const providerInfo = Object.freeze({
+      uuid: '2fd1f1c0-b818-4ec8-a62d-4fc708e04d4c',
+      name: 'FnzSafe',
+      icon: 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"%3E%3Crect width="64" height="64" rx="14" fill="%2316181d"/%3E%3Cpath d="M17 15h32v9H27v7h18v9H27v15H17z" fill="white"/%3E%3C/svg%3E',
+      rdns: 'io.fnzero.safe'
+    });
+    const announceProvider = () => window.dispatchEvent(new CustomEvent(
+      'eip6963:announceProvider',
+      { detail: Object.freeze({ info: providerInfo, provider: ethereum }) }
+    ));
+    window.addEventListener('eip6963:requestProvider', announceProvider);
+    announceProvider();
   } else {
     window.solana = provider;
   }
   window.dispatchEvent(new Event('fnzero#initialized'));
 })();
 ''';
-    return _controller.runJavaScript(script);
+    await _controller.runJavaScript(script);
   }
 
   Future<void> _handleProviderMessage(String message) async {
+    String? requestId;
     try {
+      if (utf8.encode(message).length > _maxProviderMessageBytes) {
+        throw const FormatException('Provider request is too large');
+      }
       final wallet = ref.read(activeWalletProvider);
       if (wallet == null) {
         throw StateError('Select a wallet before using dApps');
@@ -322,13 +381,36 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
       final payload =
           decoded is Map<String, Object?> ? decoded : <String, Object?>{};
       final method = payload['method']?.toString() ?? 'request';
-      final requestId = payload['__fnzeroRequestId']?.toString();
+      requestId = payload['__fnzeroRequestId']?.toString();
+      if (requestId == null ||
+          !_requestIdPattern.hasMatch(requestId) ||
+          method.isEmpty ||
+          method.length > 80) {
+        throw const FormatException('Invalid provider request');
+      }
+      final currentUrl = await _controller.currentUrl() ?? '';
+      final currentUri = Uri.tryParse(currentUrl);
+      final origin = _originForUri(currentUri);
+      if (origin == null) throw const FormatException('Untrusted dApp origin');
+      final pageContext = DappPageContext(
+        origin: origin,
+        navigationGeneration: _navigationGeneration,
+      );
+      _requestContexts[requestId] = pageContext;
       if (wallet.family == WalletFamily.evm) {
         await _handleEvmProviderMessage(
-            wallet, method, requestId, payload, message);
+            wallet, method, requestId, payload, message, origin);
         return;
       }
       if (method == 'connect') {
+        if (!_isConnected(origin, wallet) &&
+            !await _confirmSiteAction('Connect wallet?', origin)) {
+          await _deliverProviderResponse(requestId, false,
+              {'code': 4001, 'message': 'User rejected the connection'});
+          return;
+        }
+        if (!await _requestIsCurrent(requestId)) return;
+        _connectedScopes[origin] = _connectionScope(wallet);
         await _deliverProviderResponse(
           requestId,
           true,
@@ -340,6 +422,7 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
         return;
       }
       if (method == 'disconnect') {
+        _connectedScopes.remove(origin);
         await _deliverProviderResponse(
           requestId,
           true,
@@ -350,11 +433,16 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
         );
         return;
       }
+      if (!_isConnected(origin, wallet)) {
+        await _deliverProviderResponse(requestId, false,
+            {'code': 4100, 'message': 'Connect this site before signing'});
+        return;
+      }
       final signingPayloadBase64 =
           _signingPayloadBase64(method, payload, message);
       final transactionFormat = _transactionFormat(method);
-      final appName = Uri.tryParse(_urlController.text)?.host ?? 'dApp';
-      final appUrl = _urlController.text;
+      final appName = currentUri?.host ?? 'dApp';
+      final appUrl = currentUrl;
       final preview = await ref.read(mobileBridgeProvider).previewDappSign(
             network: ref.read(activeNetworkProvider),
             walletPublicKey: wallet.publicKey,
@@ -364,6 +452,7 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
             payloadBase64: signingPayloadBase64,
             transactionFormat: transactionFormat,
           );
+      if (!await _requestIsCurrent(requestId)) return;
       ref.read(signingPreviewProvider.notifier).state = preview;
       ref.read(paymentSigningDraftProvider.notifier).state = null;
       ref.read(evmPaymentSigningDraftProvider.notifier).state = null;
@@ -373,6 +462,7 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
         appUrl: appUrl,
         method: method,
         payloadBase64: signingPayloadBase64,
+        pageContext: pageContext,
         requestId: requestId,
         transactionFormat: transactionFormat,
       );
@@ -380,6 +470,8 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
       ref.read(squadsSigningDraftProvider.notifier).state = null;
       if (mounted) await context.push('/confirm');
     } catch (error) {
+      await _deliverProviderResponse(
+          requestId, false, {'code': -32600, 'message': error.toString()});
       if (!mounted) return;
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(error.toString())));
@@ -392,6 +484,7 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
     String? requestId,
     Map<String, Object?> payload,
     String rawMessage,
+    String origin,
   ) async {
     final chain = ref.read(activeEvmChainProvider);
     if (chain == null) {
@@ -405,19 +498,28 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
       );
       return;
     }
-    if (method == 'eth_accounts' || method == 'eth_requestAccounts') {
+    if (method == 'eth_accounts') {
       await _deliverProviderResponse(
         requestId,
         true,
         {
-          'accounts': [wallet.publicKey],
-          'connected': true,
-          'publicKey': wallet.publicKey,
+          'accounts':
+              _isConnected(origin, wallet) ? [wallet.publicKey] : const [],
+          'connected': _isConnected(origin, wallet),
+          'publicKey': _isConnected(origin, wallet) ? wallet.publicKey : null,
         },
       );
       return;
     }
-    if (method == 'connect') {
+    if (method == 'connect' || method == 'eth_requestAccounts') {
+      if (!_isConnected(origin, wallet) &&
+          !await _confirmSiteAction('Connect wallet?', origin)) {
+        await _deliverProviderResponse(requestId, false,
+            {'code': 4001, 'message': 'User rejected the connection'});
+        return;
+      }
+      if (!await _requestIsCurrent(requestId)) return;
+      _connectedScopes[origin] = _connectionScope(wallet);
       await _deliverProviderResponse(
         requestId,
         true,
@@ -431,6 +533,7 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
       return;
     }
     if (method == 'disconnect') {
+      _connectedScopes.remove(origin);
       await _deliverProviderResponse(
         requestId,
         true,
@@ -444,6 +547,13 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
       return;
     }
     if (method == 'wallet_switchEthereumChain') {
+      if (!_isConnected(origin, wallet)) {
+        await _deliverProviderResponse(requestId, false, {
+          'code': 4100,
+          'message': 'Connect this site before switching networks'
+        });
+        return;
+      }
       final requestedChainId = _requestedEvmChainId(payload);
       if (requestedChainId == null) {
         await _deliverProviderResponse(
@@ -463,7 +573,15 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
         );
         return;
       }
+      if (!await _confirmSiteAction(
+          'Switch network?', '$origin\n${chain.name} -> ${nextChain.name}')) {
+        await _deliverProviderResponse(requestId, false,
+            {'code': 4001, 'message': 'User rejected the network switch'});
+        return;
+      }
+      if (!await _requestIsCurrent(requestId)) return;
       ref.read(activeEvmChainProvider.notifier).state = nextChain;
+      _connectedScopes[origin] = _connectionScope(wallet);
       await _setEthereumProviderState(nextChain, wallet);
       await _deliverProviderResponse(
         requestId,
@@ -473,6 +591,13 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
       return;
     }
     if (method == 'wallet_addEthereumChain') {
+      if (!_isConnected(origin, wallet)) {
+        await _deliverProviderResponse(requestId, false, {
+          'code': 4100,
+          'message': 'Connect this site before adding a network'
+        });
+        return;
+      }
       final nextChain = _chainFromAddEthereumChain(payload);
       if (nextChain == null) {
         await _deliverProviderResponse(
@@ -482,9 +607,42 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
         );
         return;
       }
+      final builtins = await ref.read(mobileBridgeProvider).evmChains();
+      final builtin = _findEvmChain(builtins, nextChain.chainId);
+      if (builtin != null) {
+        if (!await _requestIsCurrent(requestId)) return;
+        ref.read(activeEvmChainProvider.notifier).state = builtin;
+        _connectedScopes[origin] = _connectionScope(wallet);
+        await _setEthereumProviderState(builtin, wallet);
+        await _deliverProviderResponse(
+          requestId,
+          true,
+          {'chainId': _hexChainId(builtin.chainId)},
+        );
+        return;
+      }
+      if (!await _confirmSiteAction(
+          'Add network?', '$origin\n${nextChain.name}\n${nextChain.rpcUrl}')) {
+        await _deliverProviderResponse(requestId, false,
+            {'code': 4001, 'message': 'User rejected the network'});
+        return;
+      }
+      if (!await _rpcReportsChainId(nextChain)) {
+        await _deliverProviderResponse(
+          requestId,
+          false,
+          {
+            'code': 4902,
+            'message': 'RPC endpoint did not report the requested chain id',
+          },
+        );
+        return;
+      }
+      if (!await _requestIsCurrent(requestId)) return;
       await ref.read(mobileWalletStoreProvider).saveCustomEvmChain(nextChain);
       ref.invalidate(evmChainsProvider);
       ref.read(activeEvmChainProvider.notifier).state = nextChain;
+      _connectedScopes[origin] = _connectionScope(wallet);
       await _setEthereumProviderState(nextChain, wallet);
       await _deliverProviderResponse(
         requestId,
@@ -502,14 +660,28 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
       return;
     }
 
+    if (!_isConnected(origin, wallet)) {
+      await _deliverProviderResponse(requestId, false,
+          {'code': 4100, 'message': 'Connect this site before signing'});
+      return;
+    }
+
+    final pageContext = _requestContexts[requestId];
+    if (pageContext == null) {
+      throw StateError(
+          'The dApp page changed before the request could be reviewed');
+    }
+    final appUrl = await _controller.currentUrl() ?? '';
+    final appUri = Uri.tryParse(appUrl);
     final preview = await ref.read(mobileBridgeProvider).previewEvmDappSign(
           chain: chain,
           walletAddress: wallet.publicKey,
-          appName: Uri.tryParse(_urlController.text)?.host ?? 'dApp',
-          appUrl: _urlController.text,
+          appName: appUri?.host ?? 'dApp',
+          appUrl: appUrl,
           method: method,
           payloadJson: jsonEncode(payload),
         );
+    if (!await _requestIsCurrent(requestId)) return;
     ref.read(signingPreviewProvider.notifier).state = SigningPreview(
       id: preview.previewId,
       title: 'EVM dApp Request',
@@ -522,6 +694,7 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
       preview: preview,
       method: method,
       payloadJson: jsonEncode(payload),
+      pageContext: pageContext,
       requestId: requestId,
     );
     ref.read(paymentSigningDraftProvider.notifier).state = null;
@@ -653,6 +826,8 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
             'message': response.error ?? 'FnzSafe request rejected',
             'code': 4001,
           };
+    final expected = _requestContexts[response.requestId];
+    if (!response.pageContext.matches(expected)) return;
     await _deliverProviderResponse(
         response.requestId, response.approved, payload);
   }
@@ -663,6 +838,8 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
     Map<String, Object?> payload,
   ) async {
     if (requestId == null) return;
+    final expected = _requestContexts.remove(requestId);
+    if (expected == null || !await _isCurrentPageContext(expected)) return;
     final script =
         'window.fnzeroSafeResolve(${jsonEncode(requestId)}, $approved, ${jsonEncode(payload)});';
     await _controller.runJavaScript(script);
@@ -723,12 +900,19 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
 
     if (chainId == null ||
         chainId <= 0 ||
+        chainId > 9007199254740991 ||
         name == null ||
         name.isEmpty ||
+        name.length > 64 ||
         symbol == null ||
         symbol.isEmpty ||
+        symbol.length > 16 ||
         rpcUrl == null ||
-        !rpcUrl.startsWith(RegExp(r'https?://'))) {
+        rpcUrl.length > 2048 ||
+        !_isAllowedRpcUri(Uri.tryParse(rpcUrl)) ||
+        (explorerUrl != null &&
+            (explorerUrl.length > 2048 ||
+                !_isAllowedDappUri(Uri.tryParse(explorerUrl))))) {
       return null;
     }
 
@@ -745,7 +929,13 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
 
   int? _parseEvmChainId(Object? value) {
     if (value is int) return value;
-    if (value is num) return value.toInt();
+    if (value is num) {
+      if (!value.isFinite || value < 0 || value > 9007199254740991) {
+        return null;
+      }
+      final integer = value.toInt();
+      return value == integer ? integer : null;
+    }
     if (value is String) {
       final trimmed = value.trim().toLowerCase();
       if (trimmed.startsWith('0x')) {
@@ -757,4 +947,137 @@ class _DappBrowserScreenState extends ConsumerState<DappBrowserScreen> {
   }
 
   String _hexChainId(int chainId) => '0x${chainId.toRadixString(16)}';
+
+  bool _isConnected(String origin, WalletSummary wallet) {
+    return _connectedScopes[origin] == _connectionScope(wallet);
+  }
+
+  String _connectionScope(WalletSummary wallet) {
+    if (wallet.family == WalletFamily.evm) {
+      return '${wallet.id}:evm:${ref.read(activeEvmChainProvider)?.chainId ?? 0}';
+    }
+    return '${wallet.id}:solana:${ref.read(activeNetworkProvider).name}';
+  }
+
+  bool _isAllowedDappUri(Uri? uri) {
+    if (uri == null || !uri.hasAuthority) return false;
+    if (uri.scheme == 'https') return true;
+    return uri.scheme == 'http' &&
+        (uri.host == 'localhost' || uri.host == '127.0.0.1');
+  }
+
+  bool _isAllowedRpcUri(Uri? uri) {
+    if (uri == null || uri.userInfo.isNotEmpty || !uri.hasAuthority) {
+      return false;
+    }
+    if (uri.scheme == 'https') return true;
+    return uri.scheme == 'http' &&
+        (uri.host == 'localhost' || uri.host == '127.0.0.1');
+  }
+
+  void _beginNavigation(Uri uri) {
+    _navigationGeneration += 1;
+    _requestContexts.clear();
+    ref.read(dappPageContextProvider.notifier).state = DappPageContext(
+      origin: _originForUri(uri) ?? '',
+      navigationGeneration: _navigationGeneration,
+    );
+  }
+
+  Future<void> _handlePageFinished(String url) async {
+    final uri = Uri.tryParse(url);
+    final origin = _originForUri(uri);
+    if (origin == null) return;
+    final actualUrl = await _controller.currentUrl();
+    final actualOrigin = _originForUri(Uri.tryParse(actualUrl ?? ''));
+    if (actualOrigin != origin) return;
+    _urlController.text = actualUrl ?? url;
+    ref.read(dappPageContextProvider.notifier).state = DappPageContext(
+      origin: origin,
+      navigationGeneration: _navigationGeneration,
+    );
+    await _injectProvider();
+  }
+
+  Future<bool> _isCurrentPageContext(DappPageContext expected) async {
+    final currentOrigin =
+        _originForUri(Uri.tryParse(await _controller.currentUrl() ?? ''));
+    return expected.navigationGeneration == _navigationGeneration &&
+        expected.origin == currentOrigin &&
+        expected.matches(ref.read(dappPageContextProvider));
+  }
+
+  Future<bool> _requestIsCurrent(String? requestId) async {
+    if (requestId == null) return false;
+    final requestContext = _requestContexts[requestId];
+    return requestContext != null &&
+        await _isCurrentPageContext(requestContext);
+  }
+
+  Future<bool> _rpcReportsChainId(EvmChainConfig chain) async {
+    final uri = Uri.tryParse(chain.rpcUrl);
+    if (!_isAllowedRpcUri(uri)) return false;
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
+    try {
+      final request =
+          await client.postUrl(uri!).timeout(const Duration(seconds: 8));
+      request.followRedirects = false;
+      request.headers.contentType = ContentType.json;
+      request.write(jsonEncode({
+        'jsonrpc': '2.0',
+        'id': 1,
+        'method': 'eth_chainId',
+        'params': const [],
+      }));
+      final response =
+          await request.close().timeout(const Duration(seconds: 8));
+      if (response.statusCode != HttpStatus.ok ||
+          response.contentLength > 64 * 1024) {
+        return false;
+      }
+      final bytes = <int>[];
+      await for (final chunk in response.timeout(const Duration(seconds: 8))) {
+        if (bytes.length + chunk.length > 64 * 1024) return false;
+        bytes.addAll(chunk);
+      }
+      final body = utf8.decode(bytes);
+      final decoded = jsonDecode(body);
+      if (decoded is! Map<String, dynamic>) return false;
+      return _parseEvmChainId(decoded['result']) == chain.chainId;
+    } catch (_) {
+      return false;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  String? _originForUri(Uri? uri) {
+    if (!_isAllowedDappUri(uri)) return null;
+    final defaultPort = (uri!.scheme == 'https' && uri.port == 443) ||
+        (uri.scheme == 'http' && uri.port == 80);
+    return '${uri.scheme}://${uri.host}${defaultPort || !uri.hasPort ? '' : ':${uri.port}'}';
+  }
+
+  Future<bool> _confirmSiteAction(String title, String details) async {
+    if (!mounted) return false;
+    return await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            icon: const Icon(Icons.security_outlined),
+            title: Text(title),
+            content: Text(details),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: const Text('Approve'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+  }
 }

@@ -2084,7 +2084,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             bitcoin.address,
-            "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu"
+            "bc1pmg5dhafms6h9nts4dtehgkanym6yeccfmk5hx3ts3jxnm4zh2knqv80ha5"
         );
 
         let tron = multichain_normalize_address_bridge(MultiChainNormalizeAddressRequest {

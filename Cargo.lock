@@ -3619,7 +3619,7 @@ dependencies = [
 
 [[package]]
 name = "fnzero-safe-desktop"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -3662,7 +3662,7 @@ dependencies = [
 
 [[package]]
 name = "fnzero-safe-desktop-api"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "aes-gcm",
  "agave-syscalls",
@@ -3679,6 +3679,7 @@ dependencies = [
  "fnzero-safe-core",
  "fnzero-safe-tron-services",
  "futures",
+ "hex",
  "libc",
  "mime_guess",
  "pem-rfc7468",

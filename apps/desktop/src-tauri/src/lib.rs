@@ -757,6 +757,12 @@ struct ProxyRequestHeader {
 }
 
 #[derive(Deserialize)]
+struct ProxyRequestQuery {
+    name: String,
+    value: String,
+}
+
+#[derive(Deserialize)]
 struct SecureSessionResponse {
     version: String,
     public_key_pem: String,
@@ -1048,6 +1054,7 @@ async fn biometric_wallet_unlock_all(
             "POST".to_string(),
             "wallets/unlock-all".to_string(),
             None,
+            None,
             Some(body),
             Some(true),
         )
@@ -1136,6 +1143,22 @@ fn proxied_api_path_is_long_running_program_operation(path: &str) -> bool {
     )
 }
 
+fn local_api_url(
+    api_port: u16,
+    path: &str,
+    query: Option<&[ProxyRequestQuery]>,
+) -> Result<String, String> {
+    let mut url = reqwest::Url::parse(&format!("http://127.0.0.1:{api_port}/api/{path}"))
+        .map_err(|error| format!("invalid local API URL: {error}"))?;
+    if let Some(query) = query {
+        let mut query_pairs = url.query_pairs_mut();
+        for pair in query {
+            query_pairs.append_pair(&pair.name, &pair.value);
+        }
+    }
+    Ok(url.to_string())
+}
+
 async fn fetch_secure_session(
     client: &reqwest::Client,
     api_port: u16,
@@ -1168,6 +1191,7 @@ async fn proxy_api_request(
     process: tauri::State<'_, DesktopApiProcess>,
     method: String,
     path: String,
+    query: Option<Vec<ProxyRequestQuery>>,
     headers: Option<Vec<ProxyRequestHeader>>,
     body: Option<String>,
     secure_proxy: Option<bool>,
@@ -1176,6 +1200,7 @@ async fn proxy_api_request(
         process.inner(),
         method,
         path,
+        query,
         headers,
         body.map(Zeroizing::new),
         secure_proxy,
@@ -1187,6 +1212,7 @@ async fn proxy_api_request_inner(
     process: &DesktopApiProcess,
     method: String,
     path: String,
+    query: Option<Vec<ProxyRequestQuery>>,
     headers: Option<Vec<ProxyRequestHeader>>,
     body: Option<Zeroizing<String>>,
     secure_proxy: Option<bool>,
@@ -1208,7 +1234,7 @@ async fn proxy_api_request_inner(
         }
     }
     let api_port = process.port();
-    let url = format!("http://127.0.0.1:{api_port}/api/{path}");
+    let url = local_api_url(api_port, path, query.as_deref())?;
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(
@@ -6841,6 +6867,21 @@ mod tests {
         let first = process.api_token().to_string();
         assert!(!first.is_empty());
         assert_eq!(process.api_token(), first);
+    }
+
+    #[test]
+    fn local_api_url_encodes_query_parameters_separately_from_the_path() {
+        let query = [ProxyRequestQuery {
+            name: "bitcoin_address_type".to_string(),
+            value: "taproot & preferred".to_string(),
+        }];
+        let url = local_api_url(3841, "wallets/wallet-1/multichain-accounts", Some(&query))
+            .expect("local API URL");
+
+        assert_eq!(
+            url,
+            "http://127.0.0.1:3841/api/wallets/wallet-1/multichain-accounts?bitcoin_address_type=taproot+%26+preferred"
+        );
     }
 
     #[test]
