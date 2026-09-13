@@ -11379,12 +11379,10 @@ fn find_program_keypair_path(root: &FsPath, artifact_stem: Option<&str>) -> Opti
 }
 
 fn find_program_idl_path(root: &FsPath, artifact_stem: Option<&str>) -> Option<PathBuf> {
-    let mut candidates = Vec::new();
     if let Some(stem) = artifact_stem.and_then(safe_artifact_stem) {
-        candidates.push(format!("target/idl/{stem}.json"));
+        return first_existing_path_owned(root, &[format!("target/idl/{stem}.json")]);
     }
-    first_existing_path_owned(root, &candidates)
-        .or_else(|| first_json_file(root, &root.join("target/idl")))
+    first_json_file(root, &root.join("target/idl"))
 }
 
 fn find_release_manifest_path(root: &FsPath) -> Option<PathBuf> {
@@ -12041,6 +12039,7 @@ async fn start_program_source_build_job(
             build_blocked_reason,
             artifact_stem.as_deref(),
             find_program_so_path,
+            find_program_idl_path,
         )
         .await;
         let mut jobs = jobs.lock().await;
@@ -14322,6 +14321,29 @@ fnzero = "{stale_program_id}"
             .warnings
             .iter()
             .any(|warning| warning.contains("部署前一致性校验发现")));
+
+        let _ = fs::remove_dir_all(source);
+    }
+
+    #[test]
+    fn program_idl_discovery_never_substitutes_another_program() {
+        let source = unique_temp_path("source-artifact-idl-exact-match");
+        fs::create_dir_all(source.join("target/idl")).unwrap();
+        fs::write(
+            source.join("target/idl/other_program.json"),
+            r#"{"instructions":[]}"#,
+        )
+        .unwrap();
+
+        let canonical_source = source.canonicalize().unwrap();
+        assert!(find_program_idl_path(&canonical_source, Some("fnzero")).is_none());
+        assert_eq!(
+            find_program_idl_path(&canonical_source, None).unwrap(),
+            source
+                .join("target/idl/other_program.json")
+                .canonicalize()
+                .unwrap()
+        );
 
         let _ = fs::remove_dir_all(source);
     }

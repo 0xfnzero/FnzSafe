@@ -75,20 +75,7 @@ pub(crate) fn display_program_source_build_command(
 pub(crate) fn program_source_build_plans(
     root: &FsPath,
 ) -> (Vec<ProgramSourceBuildPlan>, Option<String>) {
-    let contains_source_keys = root.join(".keys").exists();
     let mut plans = Vec::new();
-    if !contains_source_keys && root.join("scripts/build-verifiable.sh").is_file() {
-        plans.push(ProgramSourceBuildPlan::new(
-            "项目脚本",
-            &["bash", "scripts/build-verifiable.sh"],
-        ));
-    }
-    if !contains_source_keys && root.join("Makefile").is_file() {
-        plans.push(ProgramSourceBuildPlan::new(
-            "项目 Makefile",
-            &["make", "build"],
-        ));
-    }
     if root.join("Anchor.toml").is_file() {
         plans.push(ProgramSourceBuildPlan::new(
             "fnzero-safe 内置 Anchor 模板",
@@ -104,11 +91,7 @@ pub(crate) fn program_source_build_plans(
     if plans.is_empty() {
         (
             plans,
-            Some(if contains_source_keys {
-                "源码目录包含 .keys；已跳过项目脚本和 Makefile，且未识别 Anchor.toml 或 Cargo.toml，无法使用内置模板编译".to_string()
-            } else {
-                "未识别 Anchor.toml、Cargo.toml 或构建脚本".to_string()
-            }),
+            Some("未识别 Anchor.toml 或 Cargo.toml，无法使用标准工具链编译".to_string()),
         )
     } else {
         (plans, None)
@@ -117,7 +100,7 @@ pub(crate) fn program_source_build_plans(
 
 pub(crate) fn program_source_keys_build_warning(root: &FsPath) -> Option<String> {
     root.join(".keys").exists().then(|| {
-        "源码目录包含 .keys；为避免项目脚本读取签名材料，已跳过 scripts/build-verifiable.sh 和 Makefile，仅使用 fnzero-safe 内置 Anchor/Cargo 构建模板".to_string()
+        "源码目录包含 .keys；FnzSafe 不会执行项目脚本或 Makefile，仅使用标准 Anchor/Cargo 工具链编译".to_string()
     })
 }
 
@@ -127,6 +110,7 @@ pub(crate) async fn execute_program_source_build(
     build_blocked_reason: Option<String>,
     artifact_stem: Option<&str>,
     find_program_so_path: impl Fn(&FsPath, Option<&str>) -> Option<PathBuf>,
+    find_program_idl_path: impl Fn(&FsPath, Option<&str>) -> Option<PathBuf>,
 ) -> Result<ProgramSourceBuildOutcome, ProgramSourceBuildError> {
     if build_plans.is_empty() {
         return Err(ProgramSourceBuildError::new(
@@ -143,7 +127,7 @@ pub(crate) async fn execute_program_source_build(
     }
     for plan in build_plans.iter() {
         match run_program_source_build(source_dir, plan).await {
-            Ok((build_stdout, build_stderr)) => {
+            Ok((mut build_stdout, mut build_stderr)) => {
                 if find_program_so_path(source_dir, artifact_stem).is_none() {
                     let message = format!(
                         "{}: 构建命令已结束，但未生成 target/verifiable/*.so 或 target/deploy/*.so",
@@ -153,18 +137,62 @@ pub(crate) async fn execute_program_source_build(
                     last_error = Some(message);
                     continue;
                 }
+                let mut completed_commands = vec![plan.display_command.clone()];
+                let mut completed_template = plan.template.clone();
+                if source_dir.join("Anchor.toml").is_file()
+                    && find_program_idl_path(source_dir, artifact_stem).is_none()
+                {
+                    let Some(idl_plan) = anchor_idl_build_plan(artifact_stem) else {
+                        let message =
+                            "Anchor 构建已生成 .so，但无法识别程序名称，不能生成 IDL".to_string();
+                        plan_failure_warnings.push(message.clone());
+                        last_error = Some(message);
+                        continue;
+                    };
+                    if let Err(error) = prepare_anchor_idl_output_dir(source_dir) {
+                        let message = format!("{}: {}", idl_plan.display_command, error.message);
+                        plan_failure_warnings.push(message.clone());
+                        last_error = Some(message);
+                        continue;
+                    }
+                    match run_program_source_build(source_dir, &idl_plan).await {
+                        Ok((idl_stdout, idl_stderr)) => {
+                            build_stdout = join_program_source_logs([build_stdout, idl_stdout]);
+                            build_stderr = join_program_source_logs([build_stderr, idl_stderr]);
+                        }
+                        Err(error) => {
+                            let message =
+                                format!("{}: {}", idl_plan.display_command, error.message);
+                            plan_failure_warnings.push(message.clone());
+                            last_error = Some(message);
+                            continue;
+                        }
+                    }
+                    if find_program_idl_path(source_dir, artifact_stem).is_none() {
+                        let message = format!(
+                            "{}: 命令已结束，但未生成 target/idl/*.json",
+                            idl_plan.display_command
+                        );
+                        plan_failure_warnings.push(message.clone());
+                        last_error = Some(message);
+                        continue;
+                    }
+                    completed_commands.push(idl_plan.display_command);
+                    completed_template = format!("{} + Anchor IDL", plan.template);
+                }
                 if !plan_failure_warnings.is_empty() {
                     warnings.append(&mut plan_failure_warnings);
                     warnings.push(format!("已改用 {} 完成编译", plan.template));
                 }
+                let build_command = completed_commands.join(" && ");
                 let command = if preparation.cleaned {
-                    plan.display_command_with_clean()
+                    format!("cargo clean && {build_command}")
                 } else {
-                    plan.display_command.clone()
+                    build_command
                 };
                 return Ok(ProgramSourceBuildOutcome {
                     command,
-                    template: plan.template.clone(),
+                    template: completed_template,
                     stdout: join_program_source_logs([preparation.stdout.clone(), build_stdout]),
                     stderr: join_program_source_logs([preparation.stderr.clone(), build_stderr]),
                     warnings,
@@ -356,6 +384,44 @@ async fn run_program_source_build(
     Ok((build_stdout, build_stderr))
 }
 
+fn anchor_idl_build_plan(artifact_stem: Option<&str>) -> Option<ProgramSourceBuildPlan> {
+    let stem = artifact_stem.and_then(safe_artifact_stem)?;
+    let output = format!("target/idl/{stem}.json");
+    let command = vec![
+        "anchor".to_string(),
+        "idl".to_string(),
+        "build".to_string(),
+        "--program-name".to_string(),
+        stem,
+        "--out".to_string(),
+        output,
+    ];
+    Some(ProgramSourceBuildPlan {
+        display_command: command.join(" "),
+        command,
+        template: "fnzero-safe 内置 Anchor IDL 模板".to_string(),
+    })
+}
+
+fn prepare_anchor_idl_output_dir(root: &FsPath) -> Result<(), ProgramSourceBuildError> {
+    let target_dir = canonical_child_path(root, &root.join("target"), "target")?;
+    if !target_dir.is_dir() {
+        return Err(ProgramSourceBuildError::new("target 不是目录"));
+    }
+    let idl_dir = target_dir.join("idl");
+    if idl_dir.exists() {
+        let idl_dir = canonical_child_path(root, &idl_dir, "target/idl")?;
+        if !idl_dir.is_dir() {
+            return Err(ProgramSourceBuildError::new("target/idl 不是目录"));
+        }
+        return Ok(());
+    }
+    fs::create_dir(&idl_dir)
+        .map_err(|error| ProgramSourceBuildError::new(format!("创建 target/idl 失败: {error}")))?;
+    let _ = canonical_child_path(root, &idl_dir, "target/idl")?;
+    Ok(())
+}
+
 fn safe_artifact_stem(value: &str) -> Option<String> {
     let stem = value.trim().replace('-', "_");
     if stem.is_empty()
@@ -443,6 +509,49 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(source);
+    }
+
+    #[test]
+    fn standard_build_plans_ignore_project_owned_commands() {
+        let source = unique_temp_path("standard-build-plans-only");
+        fs::create_dir_all(source.join("scripts")).unwrap();
+        fs::write(source.join("Anchor.toml"), "[workspace]\n").unwrap();
+        fs::write(source.join("Cargo.toml"), "[workspace]\n").unwrap();
+        fs::write(source.join("Makefile"), "build:\n\t@true\n").unwrap();
+        fs::write(source.join("scripts/build-verifiable.sh"), "#!/bin/sh\n").unwrap();
+
+        let (plans, blocked_reason) = program_source_build_plans(&source);
+
+        assert!(blocked_reason.is_none());
+        assert_eq!(
+            plans
+                .iter()
+                .map(|plan| plan.display_command.as_str())
+                .collect::<Vec<_>>(),
+            vec!["anchor build", "cargo build-sbf",]
+        );
+
+        let _ = fs::remove_dir_all(source);
+    }
+
+    #[test]
+    fn anchor_idl_plan_targets_the_selected_program() {
+        let plan = anchor_idl_build_plan(Some("my-program")).unwrap();
+
+        assert_eq!(
+            plan.command,
+            vec![
+                "anchor",
+                "idl",
+                "build",
+                "--program-name",
+                "my_program",
+                "--out",
+                "target/idl/my_program.json",
+            ]
+        );
+        assert!(anchor_idl_build_plan(Some("../outside")).is_none());
+        assert!(anchor_idl_build_plan(None).is_none());
     }
 
     #[test]
