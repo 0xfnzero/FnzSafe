@@ -1,6 +1,6 @@
 {
   "name": "@fnzero/safe",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "private": true,
   "engines": {
     "node": ">=22 <25"
@@ -10,7 +10,7 @@
     "prepare:ai-runtime": "npm run install:ai-runtime && node scripts/prepare-ai-runtime.cjs",
     "test:ai-runtime": "npm test --prefix ai-runtime",
     "test:ai-runtime-live": "npm run test:live --prefix ai-runtime",
-    "test:unit": "node --test src/lib/appStorage.test.mjs src/lib/browserStorage.test.mjs src/lib/chainMetadata.test.mjs src/lib/multichain.test.mjs src/lib/defillamaStats.test.mjs src/lib/fomoSignals.test.mjs src/lib/hydratedStorage.test.mjs src/lib/requestIntent.test.mjs src/lib/researchAiProviders.test.mjs src/lib/settingsCenter.test.mjs src/lib/tokenMarketTable.test.mjs src/lib/twitterChainDetection.test.mjs src/lib/twitterKols.test.mjs src/lib/twitterSignals.test.mjs",
+    "test:unit": "node --test src/lib/appStorage.test.mjs src/lib/browserStorage.test.mjs src/lib/chainMetadata.test.mjs src/lib/dappVisibility.test.mjs src/lib/multichain.test.mjs src/lib/defillamaStats.test.mjs src/lib/fomoSignals.test.mjs src/lib/hydratedStorage.test.mjs src/lib/requestIntent.test.mjs src/lib/researchAiProviders.test.mjs src/lib/settingsCenter.test.mjs src/lib/tokenMarketTable.test.mjs src/lib/twitterChainDetection.test.mjs src/lib/twitterKols.test.mjs src/lib/twitterSignals.test.mjs",
     "dev": "next dev -H 127.0.0.1 -p 3840",
     "predev:stack": "node scripts/kill-dev-processes.cjs && node scripts/ensure-out.cjs",
     "dev:stack": "node scripts/dev-stack.cjs",

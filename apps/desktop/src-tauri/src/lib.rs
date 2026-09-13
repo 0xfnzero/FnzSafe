@@ -1638,6 +1638,10 @@ fn is_safe_dapp_webview_navigation_url(url: &tauri::Url) -> bool {
     matches!(url.scheme(), "about" | "blob")
 }
 
+fn dapp_session_request_url(tracked_session_url: &str) -> Option<tauri::Url> {
+    tracked_session_url.parse().ok().filter(is_safe_browser_url)
+}
+
 fn update_dapp_session_navigation(session: &mut DappSession, url: &tauri::Url) {
     session.url = url.to_string();
     if !session.app_id.starts_with("web:") {
@@ -2236,6 +2240,24 @@ fn parse_sign_deep_link(url: &tauri::Url) -> Result<DappSignRequestEvent, String
     })
 }
 
+fn prune_expired_dapp_sign_requests(
+    requests: &mut HashMap<String, DappPendingRequest>,
+    current_time_ms: u64,
+) {
+    requests.retain(|_, pending| {
+        current_time_ms.saturating_sub(pending.event.created_at_ms) <= DAPP_REQUEST_TTL_MS
+    });
+}
+
+fn prune_expired_dapp_connect_requests(
+    requests: &mut HashMap<String, DappPendingConnectRequest>,
+    current_time_ms: u64,
+) {
+    requests.retain(|_, pending| {
+        current_time_ms.saturating_sub(pending.event.created_at_ms) <= DAPP_REQUEST_TTL_MS
+    });
+}
+
 fn enqueue_dapp_sign_request(
     app: &DesktopAppHandle,
     state: &DappBridgeState,
@@ -2248,11 +2270,13 @@ fn enqueue_dapp_sign_request(
         .lock()
         .map_err(|_| "dapp request lock poisoned".to_string())?;
     ensure_dapp_connections_active(state)?;
-    requests.retain(|_, pending| {
-        now_ms().saturating_sub(pending.event.created_at_ms) <= DAPP_REQUEST_TTL_MS
-            && pending.result.is_none()
-    });
-    if requests.len() >= MAX_PENDING_DAPP_REQUESTS {
+    prune_expired_dapp_sign_requests(&mut requests, now_ms());
+    if requests
+        .values()
+        .filter(|pending| pending.result.is_none())
+        .count()
+        >= MAX_PENDING_DAPP_REQUESTS
+    {
         return Err("too many pending dapp signing requests".to_string());
     }
     if requests.contains_key(&event.request_id) {
@@ -2270,6 +2294,7 @@ fn enqueue_dapp_sign_request(
 
     let request_id = event.request_id.clone();
     if let Err(error) = app.emit_to("main", DAPP_SIGN_REQUEST_EVENT, event) {
+        log::warn!("failed to notify main window about dapp signing request {request_id}: {error}");
         state
             .requests
             .lock()
@@ -2277,6 +2302,7 @@ fn enqueue_dapp_sign_request(
             .remove(&request_id);
         return Err(format!("failed to notify main window: {error}"));
     }
+    log::info!("queued dapp signing request {request_id} and notified the main window");
     Ok(())
 }
 
@@ -2292,11 +2318,13 @@ fn enqueue_dapp_connect_request(
         .lock()
         .map_err(|_| "dapp connect request lock poisoned".to_string())?;
     ensure_dapp_connections_active(state)?;
-    requests.retain(|_, pending| {
-        now_ms().saturating_sub(pending.event.created_at_ms) <= DAPP_REQUEST_TTL_MS
-            && pending.result.is_none()
-    });
-    if requests.len() >= MAX_PENDING_DAPP_REQUESTS {
+    prune_expired_dapp_connect_requests(&mut requests, now_ms());
+    if requests
+        .values()
+        .filter(|pending| pending.result.is_none())
+        .count()
+        >= MAX_PENDING_DAPP_REQUESTS
+    {
         return Err("too many pending dapp connection requests".to_string());
     }
     if requests.contains_key(&event.request_id) {
@@ -2314,6 +2342,7 @@ fn enqueue_dapp_connect_request(
 
     let request_id = event.request_id.clone();
     if let Err(error) = app.emit_to("main", DAPP_CONNECT_REQUEST_EVENT, event) {
+        log::warn!("failed to notify main window about dapp connect request {request_id}: {error}");
         state
             .connect_requests
             .lock()
@@ -2323,6 +2352,7 @@ fn enqueue_dapp_connect_request(
             .remove(&request_id);
         return Err(format!("failed to notify main window: {error}"));
     }
+    log::info!("queued dapp connect request {request_id} and notified the main window");
     Ok(())
 }
 
@@ -3785,15 +3815,6 @@ async fn dapp_open_tab(
         .map(|value| value.name.to_string())
         .unwrap_or_else(|| url.host_str().unwrap_or("DApp").to_string());
 
-    if let Some(existing) = app.get_webview(&label) {
-        let _ = existing.close();
-    }
-    state
-        .sessions
-        .lock()
-        .map_err(|_| "dapp session lock poisoned".to_string())?
-        .remove(&label);
-
     let main_window = app
         .get_window("main")
         .ok_or_else(|| "main window is unavailable".to_string())?;
@@ -3804,6 +3825,7 @@ async fn dapp_open_tab(
     let dapp_for_nav = dapp.clone();
     let allow_any_safe_navigation = dapp.is_none() && !wallet_family.is_empty();
     let app_for_nav = app.clone();
+    let label_for_nav = label.clone();
     let app_for_title = app.clone();
     let app_for_new_window = app.clone();
     let app_for_download = app.clone();
@@ -3824,6 +3846,14 @@ async fn dapp_open_tab(
                 None => false,
             };
             if is_safe_browser_url(target_url) {
+                if allowed {
+                    let state = app_for_nav.state::<DappBridgeState>();
+                    if let Ok(mut sessions) = state.sessions.lock() {
+                        if let Some(session) = sessions.get_mut(&label_for_nav) {
+                            update_dapp_session_navigation(session, target_url);
+                        }
+                    };
+                }
                 let _ = app_for_nav.emit_to(
                     "main",
                     DAPP_TAB_URL_EVENT,
@@ -3941,45 +3971,71 @@ async fn dapp_open_tab(
         .lock()
         .map_err(|_| "dapp webview visibility lock poisoned".to_string())?;
     ensure_dapp_connections_active(state.inner())?;
-    let webview = main_window
-        .add_child(builder, bounds.position, bounds.size)
-        .map_err(|error| format!("failed to open dapp tab: {error}"))?;
-    webview
-        .set_bounds(bounds)
-        .map_err(|error| format!("failed to position dapp tab: {error}"))?;
-    if hidden.unwrap_or(false) && !keep_running_in_background {
-        webview
-            .hide()
-            .map_err(|error| format!("failed to hide dapp tab: {error}"))?;
-    } else {
-        webview
-            .show()
-            .map_err(|error| format!("failed to show dapp tab: {error}"))?;
-        raise_embedded_webview(&webview)?;
+    if let Some(existing) = app.get_webview(&label) {
+        existing
+            .close()
+            .map_err(|error| format!("failed to replace dapp tab: {error}"))?;
     }
-
-    if let Some(wallet_public_key) = wallet_public_key {
+    let session_registered = wallet_public_key.is_some();
+    {
         let mut sessions = state
             .sessions
             .lock()
             .map_err(|_| "dapp session lock poisoned".to_string())?;
-        if let Err(error) = ensure_dapp_connections_active(state.inner()) {
-            drop(sessions);
-            let _ = webview.close();
-            return Err(error);
+        sessions.remove(&label);
+        if let Some(wallet_public_key) = wallet_public_key.clone() {
+            // Initialization scripts can call the bridge while add_child is still
+            // loading the first document, so the session must exist beforehand.
+            sessions.insert(
+                label.clone(),
+                DappSession {
+                    app_id: app_id.clone(),
+                    app_name: app_name.clone(),
+                    url: url.as_str().to_string(),
+                    wallet_family: wallet_family.clone(),
+                    wallet_public_key,
+                    network: network.clone(),
+                    opened_at_ms: now_ms(),
+                },
+            );
+            log::info!(
+                "registered dapp session for {label}: family={wallet_family}, network={network}"
+            );
         }
-        sessions.insert(
-            label,
-            DappSession {
-                app_id,
-                app_name,
-                url: url.as_str().to_string(),
-                wallet_family,
-                wallet_public_key,
-                network,
-                opened_at_ms: now_ms(),
-            },
-        );
+    }
+
+    let open_result = (|| -> Result<(), String> {
+        ensure_dapp_connections_active(state.inner())?;
+        let webview = main_window
+            .add_child(builder, bounds.position, bounds.size)
+            .map_err(|error| format!("failed to open dapp tab: {error}"))?;
+        webview
+            .set_bounds(bounds)
+            .map_err(|error| format!("failed to position dapp tab: {error}"))?;
+        if hidden.unwrap_or(false) && !keep_running_in_background {
+            webview
+                .hide()
+                .map_err(|error| format!("failed to hide dapp tab: {error}"))?;
+        } else {
+            webview
+                .show()
+                .map_err(|error| format!("failed to show dapp tab: {error}"))?;
+            raise_embedded_webview(&webview)?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = open_result {
+        if session_registered {
+            state
+                .sessions
+                .lock()
+                .map_err(|_| "dapp session lock poisoned during open rollback".to_string())?
+                .remove(&label);
+        }
+        if let Some(webview) = app.get_webview(&label) {
+            let _ = webview.close();
+        }
+        return Err(error);
     }
     Ok(())
 }
@@ -4175,6 +4231,10 @@ async fn dapp_close_tab(
     tab_id: String,
 ) -> Result<(), String> {
     let label = dapp_tab_label(&tab_id)?;
+    let _visibility = state
+        .webview_visibility
+        .lock()
+        .map_err(|_| "dapp webview visibility lock poisoned".to_string())?;
     if let Some(webview) = app.get_webview(&label) {
         webview
             .close()
@@ -5398,28 +5458,45 @@ fn dapp_submit_connect_request(
     state: tauri::State<'_, DappBridgeState>,
 ) -> Result<String, String> {
     let webview_label = webview.label().to_string();
+    log::info!("received dapp connect request from webview {webview_label}");
     if dapp_tab_id_from_label(&webview_label).is_none() {
+        log::warn!("rejected dapp connect request from invalid webview label {webview_label}");
         return Err("dapp connection requests are only accepted from dapp tabs".to_string());
     }
-    let session = state
-        .sessions
-        .lock()
-        .map_err(|_| "dapp session lock poisoned".to_string())?
-        .get(&webview_label)
-        .cloned()
-        .ok_or_else(|| "no active dapp session for this tab".to_string())?;
+    let session = {
+        let sessions = state
+            .sessions
+            .lock()
+            .map_err(|_| "dapp session lock poisoned".to_string())?;
+        let Some(session) = sessions.get(&webview_label).cloned() else {
+            log::warn!(
+                "rejected dapp connect request from {webview_label}: no session is registered (active session count={})",
+                sessions.len()
+            );
+            return Err("no active dapp session for this tab".to_string());
+        };
+        session
+    };
     if session.wallet_family != "evm" && session.wallet_family != "solana" {
+        log::warn!(
+            "rejected dapp connect request from {webview_label}: unsupported wallet family {}",
+            session.wallet_family
+        );
         return Err("unsupported embedded wallet session".to_string());
     }
     if now_ms().saturating_sub(session.opened_at_ms) > 12 * 60 * 60 * 1000 {
+        log::warn!("rejected dapp connect request from {webview_label}: session expired");
         return Err("dapp session expired".to_string());
     }
-    let current_url = webview
-        .url()
-        .ok()
-        .filter(is_safe_browser_url)
-        .ok_or_else(|| "dapp connection origin is unavailable".to_string())?;
+    // Reading webview.url() synchronously from a command invoked by that same
+    // CEF renderer can deadlock. Navigation handlers already keep session.url
+    // current and reject unsafe destinations, so use the tracked URL directly.
+    let Some(current_url) = dapp_session_request_url(&session.url) else {
+        log::warn!("rejected dapp connect request from {webview_label}: no safe tracked URL");
+        return Err("dapp connection origin is unavailable".to_string());
+    };
     let request_id = dapp_request_id();
+    let request_origin = current_url.origin().ascii_serialization();
     let event = DappConnectRequestEvent {
         request_id: request_id.clone(),
         app_id: session.app_id,
@@ -5434,7 +5511,17 @@ fn dapp_submit_connect_request(
         callback_url: None,
         created_at_ms: now_ms(),
     };
-    enqueue_dapp_connect_request(&app, state.inner(), Some(webview_label), event)?;
+    log::info!(
+        "submitting dapp connect request {request_id} from {webview_label}: family={}, network={}, origin={request_origin}",
+        event.wallet_family,
+        event.network,
+    );
+    if let Err(error) =
+        enqueue_dapp_connect_request(&app, state.inner(), Some(webview_label.clone()), event)
+    {
+        log::warn!("rejected dapp connect request {request_id} from {webview_label}: {error}");
+        return Err(error);
+    }
     Ok(request_id)
 }
 
@@ -5471,6 +5558,10 @@ fn dapp_poll_connect_request(
     }
     if let Some(result) = pending.result.clone() {
         requests.remove(request_id);
+        log::info!(
+            "dapp tab {webview_label} consumed connect request {request_id}: approved={}",
+            result.approved,
+        );
         return Ok(DappPollResponse {
             status: if result.approved {
                 "approved"
@@ -5498,17 +5589,27 @@ fn dapp_submit_sign_request(
     payload_json: Option<String>,
 ) -> Result<String, String> {
     let webview_label = webview.label().to_string();
+    log::info!("received dapp signing request from webview {webview_label}: method={method}");
     let Some(_tab_id) = dapp_tab_id_from_label(&webview_label) else {
+        log::warn!("rejected dapp signing request from invalid webview label {webview_label}");
         return Err("dapp signing requests are only accepted from dapp tabs".to_string());
     };
-    let session = state
-        .sessions
-        .lock()
-        .map_err(|_| "dapp session lock poisoned".to_string())?
-        .get(&webview_label)
-        .cloned()
-        .ok_or_else(|| "no active dapp session for this tab".to_string())?;
+    let session = {
+        let sessions = state
+            .sessions
+            .lock()
+            .map_err(|_| "dapp session lock poisoned".to_string())?;
+        let Some(session) = sessions.get(&webview_label).cloned() else {
+            log::warn!(
+                "rejected dapp signing request from {webview_label}: no session is registered (active session count={})",
+                sessions.len()
+            );
+            return Err("no active dapp session for this tab".to_string());
+        };
+        session
+    };
     if now_ms().saturating_sub(session.opened_at_ms) > 12 * 60 * 60 * 1000 {
+        log::warn!("rejected dapp signing request from {webview_label}: session expired");
         return Err("dapp session expired".to_string());
     }
     let (method, transaction_base64, transaction_format, message_base64, payload_json) = if session
@@ -5555,11 +5656,13 @@ fn dapp_submit_sign_request(
             None,
         )
     };
-    let current_url = webview
-        .url()
-        .ok()
-        .filter(is_safe_browser_url)
-        .unwrap_or_else(|| tauri::Url::parse(&session.url).expect("validated dapp session URL"));
+    // This command runs on the requesting renderer's IPC path. Synchronously
+    // asking CEF for that same webview's URL can deadlock before the request is
+    // queued, so use the URL maintained by the validated navigation handlers.
+    let Some(current_url) = dapp_session_request_url(&session.url) else {
+        log::warn!("rejected dapp signing request from {webview_label}: no safe tracked URL");
+        return Err("dapp signing origin is unavailable".to_string());
+    };
     let app_name = if session.wallet_family == "evm" || session.app_id.starts_with("web:") {
         current_url
             .host_str()
@@ -5589,7 +5692,18 @@ fn dapp_submit_sign_request(
         created_at_ms: now_ms(),
     };
 
-    enqueue_dapp_sign_request(&app, state.inner(), webview_label, event)?;
+    let request_origin = current_url.origin().ascii_serialization();
+    log::info!(
+        "submitting dapp signing request {request_id} from {webview_label}: method={}, family={}, network={}, origin={request_origin}",
+        event.method,
+        event.wallet_family,
+        event.network,
+    );
+    if let Err(error) = enqueue_dapp_sign_request(&app, state.inner(), webview_label.clone(), event)
+    {
+        log::warn!("rejected dapp signing request {request_id} from {webview_label}: {error}");
+        return Err(error);
+    }
     Ok(request_id)
 }
 
@@ -5626,6 +5740,10 @@ fn dapp_poll_sign_request(
     }
     if let Some(result) = pending.result.clone() {
         requests.remove(request_id);
+        log::info!(
+            "dapp tab {webview_label} consumed signing request {request_id}: approved={}",
+            result.approved,
+        );
         return Ok(DappPollResponse {
             status: if result.approved {
                 "approved"
@@ -5652,12 +5770,10 @@ fn dapp_pending_sign_request(
         .requests
         .lock()
         .map_err(|_| "dapp request lock poisoned".to_string())?;
-    requests.retain(|_, pending| {
-        now_ms().saturating_sub(pending.event.created_at_ms) <= DAPP_REQUEST_TTL_MS
-            && pending.result.is_none()
-    });
+    prune_expired_dapp_sign_requests(&mut requests, now_ms());
     Ok(requests
         .values()
+        .filter(|pending| pending.result.is_none())
         .map(|pending| pending.event.clone())
         .min_by_key(|event| event.created_at_ms))
 }
@@ -5673,12 +5789,10 @@ fn dapp_pending_connect_request(
         .connect_requests
         .lock()
         .map_err(|_| "dapp connect request lock poisoned".to_string())?;
-    requests.retain(|_, pending| {
-        now_ms().saturating_sub(pending.event.created_at_ms) <= DAPP_REQUEST_TTL_MS
-            && pending.result.is_none()
-    });
+    prune_expired_dapp_connect_requests(&mut requests, now_ms());
     Ok(requests
         .values()
+        .filter(|pending| pending.result.is_none())
         .map(|pending| pending.event.clone())
         .min_by_key(|event| event.created_at_ms))
 }
@@ -5716,6 +5830,7 @@ fn resolve_dapp_sign_request(
         spawn_system_browser(callback_target)?;
     }
     pending.result = Some(result);
+    log::info!("resolved dapp signing request {request_id}");
     Ok(())
 }
 
@@ -5763,6 +5878,7 @@ fn resolve_dapp_connect_request(
         spawn_system_browser(&callback_target)?;
     }
     pending.result = Some(result);
+    log::info!("resolved dapp connect request {request_id}");
     Ok(())
 }
 
@@ -7384,6 +7500,59 @@ mod tests {
     }
 
     #[test]
+    fn resolved_connect_result_survives_recovery_pruning_until_webview_consumes_it() {
+        let current_time_ms = DAPP_REQUEST_TTL_MS + 10_000;
+        let connect_event = |request_id: &str, created_at_ms: u64| DappConnectRequestEvent {
+            request_id: request_id.to_string(),
+            app_id: "web:app.uniswap.org".to_string(),
+            app_name: "app.uniswap.org".to_string(),
+            app_url: "https://app.uniswap.org/".to_string(),
+            wallet_family: "evm".to_string(),
+            wallet_public_key: Some("0x1111111111111111111111111111111111111111".to_string()),
+            network: "eip155:4663".to_string(),
+            callback_url: None,
+            created_at_ms,
+        };
+        let mut requests = HashMap::from([
+            (
+                "approved".to_string(),
+                DappPendingConnectRequest {
+                    webview_label: Some("dapp-tab-uniswap".to_string()),
+                    event: connect_event("approved", current_time_ms),
+                    result: Some(DappSignResult {
+                        approved: true,
+                        error: None,
+                        public_key: Some("0x1111111111111111111111111111111111111111".to_string()),
+                        signature: None,
+                        raw_transaction: None,
+                        recent_blockhash: None,
+                    }),
+                },
+            ),
+            (
+                "expired".to_string(),
+                DappPendingConnectRequest {
+                    webview_label: Some("dapp-tab-expired".to_string()),
+                    event: connect_event("expired", 0),
+                    result: None,
+                },
+            ),
+        ]);
+
+        prune_expired_dapp_connect_requests(&mut requests, current_time_ms);
+
+        assert!(requests.contains_key("approved"));
+        assert!(!requests.contains_key("expired"));
+        assert_eq!(
+            requests
+                .values()
+                .filter(|pending| pending.result.is_none())
+                .count(),
+            0
+        );
+    }
+
+    #[test]
     fn wallet_disconnect_keeps_other_wallet_sessions() {
         let state = DappBridgeState::default();
         let session = |wallet_public_key: &str| DappSession {
@@ -7535,6 +7704,17 @@ mod tests {
         assert_eq!(session.url, "https://app.uniswap.org/swap");
         assert_eq!(session.app_id, "web:app.uniswap.org");
         assert_eq!(session.app_name, "app.uniswap.org");
+    }
+
+    #[test]
+    fn dapp_requests_use_validated_session_url_without_querying_cef() {
+        let tracked_url = "https://app.uniswap.org/swap";
+
+        assert_eq!(
+            dapp_session_request_url(tracked_url).unwrap().as_str(),
+            tracked_url
+        );
+        assert!(dapp_session_request_url("http://example.com/").is_none());
     }
 
     #[test]

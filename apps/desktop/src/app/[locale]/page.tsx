@@ -99,6 +99,7 @@ import { BrowserMenu } from "@/components/BrowserMenu";
 import { ChainDirectory } from "@/components/ChainDirectory";
 import { DEFAULT_API_PORT } from "@/lib/api";
 import { apiFetch } from "@/lib/apiFetch";
+import { shouldShowNativeDappWebview } from "@/lib/dappVisibility";
 import { persistJsonAfterHydration } from "@/lib/hydratedStorage";
 import { atomicToDecimalUnits } from "@/lib/multichain";
 import {
@@ -1590,6 +1591,7 @@ function DappLogo({ dapp, size = "md" }: { dapp: DappCatalogItem; size?: "sm" | 
 }
 
 const DAPP_HOME_TAB_ID = "dapp-home";
+const DAPP_PENDING_REQUEST_RECONCILE_MS = 750;
 const DAPP_HOME_TAB: DappBrowserTab = {
   id: DAPP_HOME_TAB_ID,
   title: "DApp 首页",
@@ -3837,7 +3839,6 @@ export default function Home() {
   const [dappConnectRequest, setDappConnectRequest] = useState<DappConnectRequestEvent | null>(null);
   const [dappConnectWalletId, setDappConnectWalletId] = useState("");
   const [dappSignRequest, setDappSignRequest] = useState<DappSignRequestEvent | null>(null);
-  const [dappPassword, setDappPassword] = useState("");
   const [dappSearch, setDappSearch] = useState("");
   const [dappCategory, setDappCategory] = useState<DappCategoryId>("trend");
   const [dappSignBusy, setDappSignBusy] = useState(false);
@@ -4061,10 +4062,12 @@ export default function Home() {
   const applicationLockedRef = useRef(false);
   const currentWalletIdRef = useRef("");
   const selectedFormRef = useRef<string | null>(selectedForm);
-  const approveDappSignRequestRef = useRef<((passwordOverride?: string) => Promise<void>) | null>(null);
+  const approveDappSignRequestRef = useRef<(() => Promise<void>) | null>(null);
   const approveDappConnectRequestRef = useRef<(() => Promise<void>) | null>(null);
   const autoApprovedDappRequestIdRef = useRef<string | null>(null);
   const dappConnectResolutionInFlightRef = useRef<string | null>(null);
+  const presentedDappConnectRequestIdRef = useRef<string | null>(null);
+  const presentedDappSignRequestIdRef = useRef<string | null>(null);
   selectedFormRef.current = selectedForm;
   const [walletAssets, setWalletAssets] = useState<WalletAssetsState | null>(null);
   const [walletSolBalanceCache, setWalletSolBalanceCache] = useState<Record<string, string>>({});
@@ -4752,7 +4755,6 @@ export default function Home() {
     setDappConnectRequest(null);
     setDappConnectWalletId("");
     setDappSignRequest(null);
-    setDappPassword("");
     setDappTransactionPreview(null);
     setDappEvmSignPreview(null);
     setDappTransactionPreviewError(null);
@@ -5317,10 +5319,14 @@ export default function Home() {
 
   useEffect(() => {
     if (!isTauriWebview()) return;
+    let cancelled = false;
+    let reconciliationInFlight = false;
     let unlisten: UnlistenFn | undefined;
     let unlistenConnect: UnlistenFn | undefined;
     const showConnectRequest = (request: DappConnectRequestEvent) => {
       if (applicationLockedRef.current) return;
+      if (presentedDappConnectRequestIdRef.current === request.request_id) return;
+      presentedDappConnectRequestIdRef.current = request.request_id;
       void invoke("dapp_set_active_tab", {
         tabId: null,
         x: 0,
@@ -5334,6 +5340,8 @@ export default function Home() {
     };
     const showSignRequest = (request: DappSignRequestEvent) => {
       if (applicationLockedRef.current) return;
+      if (presentedDappSignRequestIdRef.current === request.request_id) return;
+      presentedDappSignRequestIdRef.current = request.request_id;
       void invoke("dapp_set_active_tab", {
         tabId: null,
         x: 0,
@@ -5342,9 +5350,7 @@ export default function Home() {
         height: 0,
       }).catch(() => {});
       setDappSignRequest(request);
-      setDappPassword("");
       setDappTransactionPreview(null);
-      setDappEvmSignPreview(null);
       setDappEvmSignPreview(null);
       setDappTransactionPreviewError(null);
       setDappTransactionPreviewLoading(request.wallet_family === "evm" || request.method !== "signMessage");
@@ -5358,28 +5364,42 @@ export default function Home() {
     void listen<DappConnectRequestEvent>("dapp://connect-request", (event) => {
       showConnectRequest(event.payload);
     }).then((cleanup) => {
-      unlistenConnect = cleanup;
+      if (cancelled) cleanup();
+      else unlistenConnect = cleanup;
     }).catch(() => {
       // The web build has no Tauri event bridge.
     });
     void listen<DappSignRequestEvent>("dapp://sign-request", (event) => {
       showSignRequest(event.payload);
     }).then((cleanup) => {
-      unlisten = cleanup;
+      if (cancelled) cleanup();
+      else unlisten = cleanup;
     }).catch(() => {
       // The web build has no Tauri event bridge.
     });
-    void invoke<DappConnectRequestEvent | null>("dapp_pending_connect_request")
-      .then((request) => {
-        if (request) showConnectRequest(request);
-      })
-      .catch(() => {});
-    void invoke<DappSignRequestEvent | null>("dapp_pending_sign_request")
-      .then((request) => {
-        if (request) showSignRequest(request);
-      })
-      .catch(() => {});
+    const reconcilePendingRequests = async () => {
+      if (cancelled || reconciliationInFlight || applicationLockedRef.current) return;
+      reconciliationInFlight = true;
+      try {
+        const [connectRequest, signRequest] = await Promise.all([
+          invoke<DappConnectRequestEvent | null>("dapp_pending_connect_request").catch(() => null),
+          invoke<DappSignRequestEvent | null>("dapp_pending_sign_request").catch(() => null),
+        ]);
+        if (cancelled) return;
+        if (connectRequest) showConnectRequest(connectRequest);
+        if (signRequest) showSignRequest(signRequest);
+      } finally {
+        reconciliationInFlight = false;
+      }
+    };
+    void reconcilePendingRequests();
+    const reconciliationTimer = window.setInterval(
+      () => void reconcilePendingRequests(),
+      DAPP_PENDING_REQUEST_RECONCILE_MS,
+    );
     return () => {
+      cancelled = true;
+      window.clearInterval(reconciliationTimer);
       unlisten?.();
       unlistenConnect?.();
     };
@@ -8540,12 +8560,14 @@ export default function Home() {
     const activeTabId = showTwitterLogin
       ? TWITTER_CAPTURE_TAB_ID
       : isDappWorkspace ? activeDappTabId : activeTwitterBrowserTabId;
-    const shouldShowNativeTab =
-      (showTwitterLogin || isDappWorkspace || isTwitterWorkspace) &&
-      !dappSignRequest &&
-      (showTwitterLogin || !overlayOpen) &&
-      Boolean(tab?.webviewOpen) &&
-      Boolean(bounds);
+    const shouldShowNativeTab = shouldShowNativeDappWebview({
+      workspaceVisible: showTwitterLogin || isDappWorkspace || isTwitterWorkspace,
+      connectRequestOpen: Boolean(dappConnectRequest),
+      signRequestOpen: Boolean(dappSignRequest),
+      overlayOpen: !showTwitterLogin && overlayOpen,
+      webviewOpen: Boolean(tab?.webviewOpen),
+      hasBounds: Boolean(bounds),
+    });
     try {
       await invoke("dapp_set_active_tab", {
         tabId: shouldShowNativeTab ? activeTabId : null,
@@ -8563,6 +8585,7 @@ export default function Home() {
     activeTwitterBrowserTabId,
     dappBrowserBounds,
     dappBrowserOverlayOpen,
+    dappConnectRequest,
     dappSignRequest,
     dappTabs,
     selectedForm,
@@ -11163,7 +11186,6 @@ export default function Home() {
         error: "用户拒绝了 DApp 交易签名请求",
       });
       setDappSignRequest(null);
-      setDappPassword("");
       setDappTransactionPreview(null);
       setDappTransactionPreviewError(null);
       setDappTransactionPreviewLoading(false);
@@ -11175,7 +11197,7 @@ export default function Home() {
     }
   };
 
-  const approveDappSignRequest = async (passwordOverride?: string) => {
+  const approveDappSignRequest = async () => {
     const request = dappSignRequest;
     if (!request) return;
     const isEvmRequest = request.wallet_family === "evm";
@@ -11186,7 +11208,6 @@ export default function Home() {
       toast.error(tf("features.dapp-store.walletMissing", "这个请求指定的钱包不在当前钱包列表中。"));
       return;
     }
-    const walletPassword = passwordOverride ?? dappPassword;
     const isMessageSignature = isDappMessageSigningMethod(request.method);
     if (isEvmRequest || !isMessageSignature) {
       if (dappTransactionPreviewLoading) {
@@ -11220,7 +11241,7 @@ export default function Home() {
             app_name: request.app_name,
             app_url: request.app_url,
             keystore_json: "",
-            password: walletPassword,
+            password: "",
             method: request.method,
             payload_json: request.payload_json || "[]",
           }),
@@ -11232,7 +11253,6 @@ export default function Home() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               wallet_id: wallet.id,
-              ...(walletPassword ? { password: walletPassword } : {}),
               required_signer: request.wallet_public_key,
               ...(isMessageSignature
                 ? { message_base64: request.message_base64 || "" }
@@ -11267,7 +11287,6 @@ export default function Home() {
           : tf("features.dapp-store.signSuccess", "DApp 交易已签名"),
       );
       setDappSignRequest(null);
-      setDappPassword("");
       setDappTransactionPreview(null);
       setDappEvmSignPreview(null);
       setDappTransactionPreviewError(null);
@@ -11308,7 +11327,6 @@ export default function Home() {
       }
       toast.error(tf("features.dapp-store.walletMissing", "这个请求指定的钱包不在当前钱包列表中。"));
       setDappSignRequest(null);
-      setDappPassword("");
       setDappTransactionPreview(null);
       setDappEvmSignPreview(null);
       setDappTransactionPreviewError(null);
@@ -29411,24 +29429,6 @@ export default function Home() {
                   </pre>
                 </div>
               )}
-              <div>
-                <label className="block text-sm font-medium mb-2">{t("formUi.walletPassword")}</label>
-                <input
-                  autoFocus
-                  type="password"
-                  data-sensitive-field="password"
-                  value={dappPassword}
-                  onChange={(event) => setDappPassword(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      void approveDappSignRequest();
-                    }
-                  }}
-                  className="w-full rounded-lg border border-white/10 bg-black/40 px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-white/20"
-                  placeholder={t("formUi.placeholderKeystorePassword")}
-                />
-              </div>
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
