@@ -36,7 +36,7 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../../../build-cache/release/fnzero-safe-desktop-api": "fnzero-safe-desktop-api",
+      "../../../build-cache-fnzsafe/release/fnzero-safe-desktop-api": "fnzero-safe-desktop-api",
       "../../../build-cache/ai-runtime/node": "ai-runtime/bin/node",
       "../ai-runtime": "ai-runtime"
     },

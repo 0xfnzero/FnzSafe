@@ -6497,12 +6497,18 @@ fn desktop_api_binary_candidates(app: &DesktopApp) -> Vec<PathBuf> {
     if let Ok(exe) = env::current_exe() {
         for ancestor in exe.ancestors() {
             candidates.push(ancestor.join(&binary_name));
+            candidates.push(
+                ancestor
+                    .join("build-cache-fnzsafe/release")
+                    .join(&binary_name),
+            );
             candidates.push(ancestor.join("build-cache/release").join(&binary_name));
             candidates.push(ancestor.join("target/release").join(&binary_name));
         }
     }
 
     for root in repository_root_candidates() {
+        candidates.push(root.join("build-cache-fnzsafe/release").join(&binary_name));
         candidates.push(root.join("build-cache/release").join(&binary_name));
         candidates.push(root.join("target/release").join(&binary_name));
     }
