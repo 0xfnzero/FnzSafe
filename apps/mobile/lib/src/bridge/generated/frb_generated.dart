@@ -1896,13 +1896,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   EvmTokenAsset dco_decode_evm_token_asset(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 5) throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    if (arr.length != 6) throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
     return EvmTokenAsset(
       contractAddress: dco_decode_String(arr[0]),
       symbol: dco_decode_String(arr[1]),
       name: dco_decode_String(arr[2]),
       balance: dco_decode_String(arr[3]),
       decimals: dco_decode_u_8(arr[4]),
+      logoUri: dco_decode_opt_String(arr[5]),
     );
   }
 
@@ -3472,12 +3473,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_name = sse_decode_String(deserializer);
     var var_balance = sse_decode_String(deserializer);
     var var_decimals = sse_decode_u_8(deserializer);
+    var var_logoUri = sse_decode_opt_String(deserializer);
     return EvmTokenAsset(
         contractAddress: var_contractAddress,
         symbol: var_symbol,
         name: var_name,
         balance: var_balance,
-        decimals: var_decimals);
+        decimals: var_decimals,
+        logoUri: var_logoUri);
   }
 
   @protected
@@ -5046,6 +5049,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_String(self.name, serializer);
     sse_encode_String(self.balance, serializer);
     sse_encode_u_8(self.decimals, serializer);
+    sse_encode_opt_String(self.logoUri, serializer);
   }
 
   @protected

@@ -12,6 +12,7 @@ import {
   QrCode,
   RefreshCw,
   Search,
+  Send,
   X,
 } from "lucide-react";
 import { apiFetch } from "@/lib/apiFetch";
@@ -56,6 +57,10 @@ export interface UnifiedWalletLabels {
   allAssets: string;
   addAndContinue: string;
   addingAsset: string;
+  addAsset: string;
+  assetDetails: string;
+  assetName: string;
+  assetSymbol: string;
   address: string;
   back: string;
   close: string;
@@ -63,8 +68,10 @@ export interface UnifiedWalletLabels {
   copy: string;
   copied: string;
   current: string;
+  decimals: string;
   chainFamily: string;
   network: string;
+  nativeAsset: string;
   networks: string;
   noEvmNetworks: string;
   noAssets: string;
@@ -81,6 +88,7 @@ export interface UnifiedWalletLabels {
   send: string;
   testnet: string;
   tracked: string;
+  tokenAddress: string;
   untracked: string;
   recipient: string;
   amount: string;
@@ -121,6 +129,8 @@ function chainGlyph(address: WalletChainAddress | UnifiedWalletAsset): string {
 
 function ChainMark({ item, large = false }: { item: WalletChainAddress | UnifiedWalletAsset; large?: boolean }) {
   const logoUri = "logoUri" in item ? item.logoUri : undefined;
+  const [failedLogoUri, setFailedLogoUri] = useState<string | null>(null);
+  const showLogo = Boolean(logoUri && failedLogoUri !== logoUri);
   const logoPadding = logoUri?.startsWith("/chain-icons/") ? "" : "p-1.5";
   return (
     <span
@@ -129,9 +139,16 @@ function ChainMark({ item, large = false }: { item: WalletChainAddress | Unified
       }`}
       aria-hidden="true"
     >
-      {logoUri ? (
+      {showLogo ? (
         // eslint-disable-next-line @next/next/no-img-element -- token logos are local or validated metadata URLs.
-        <img src={logoUri} alt="" className={`h-full w-full object-contain ${logoPadding}`} />
+        <img
+          src={logoUri}
+          alt=""
+          className={`h-full w-full object-contain ${logoPadding}`}
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          onError={() => setFailedLogoUri(logoUri || null)}
+        />
       ) : (
         chainGlyph(item)
       )}
@@ -535,6 +552,7 @@ export function UnifiedAssetList({
   assets,
   error,
   labels,
+  onAddAsset,
   onSelect,
   preferredChainId,
   refreshing,
@@ -544,6 +562,7 @@ export function UnifiedAssetList({
   assets: UnifiedWalletAsset[];
   error?: string | null;
   labels: UnifiedWalletLabels;
+  onAddAsset?: () => void;
   onSelect?: (asset: UnifiedWalletAsset) => void;
   preferredChainId?: string;
   refreshing: boolean;
@@ -556,15 +575,28 @@ export function UnifiedAssetList({
       {showHeader && (
         <div className="flex items-center justify-between gap-3">
           <h3 className="text-sm font-semibold text-gray-200">{labels.allAssets}</h3>
-          <button
-            type="button"
-            onClick={onRefresh}
-            disabled={refreshing}
-            className="inline-flex h-9 items-center gap-2 rounded-lg bg-white/10 px-3 text-xs text-gray-200 hover:bg-white/15 disabled:opacity-50"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
-            {labels.refresh}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onRefresh}
+              disabled={refreshing}
+              className="inline-flex h-9 items-center gap-2 rounded-lg bg-white/10 px-3 text-xs text-gray-200 hover:bg-white/15 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
+              {labels.refresh}
+            </button>
+            {onAddAsset && (
+              <button
+                type="button"
+                onClick={onAddAsset}
+                aria-label={labels.addAsset}
+                title={labels.addAsset}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/20 text-gray-100 hover:bg-white/10"
+              >
+                <Plus className="h-5 w-5" />
+              </button>
+            )}
+          </div>
         </div>
       )}
       {error && (
@@ -577,6 +609,85 @@ export function UnifiedAssetList({
         {sortedAssets.length === 0 && <p className="py-8 text-center text-sm text-gray-500">{labels.noAssets}</p>}
       </div>
     </section>
+  );
+}
+
+export function WalletAssetDetailPanel({
+  asset,
+  copied,
+  labels,
+  onCopy,
+  onSend,
+}: {
+  asset: UnifiedWalletAsset;
+  copied: boolean;
+  labels: UnifiedWalletLabels;
+  onCopy: (value: string, id: string) => void;
+  onSend: (asset: UnifiedWalletAsset) => void;
+}) {
+  const tokenAddressLabel = asset.family === "solana" ? "Mint" : labels.tokenAddress;
+  return (
+    <div className="mx-auto max-w-2xl space-y-5">
+      <section className="flex items-center gap-4 border-y border-white/10 py-5">
+        <ChainMark item={asset} large />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-xl font-semibold text-white">{asset.symbol}</h3>
+            <span className="rounded bg-white/10 px-2 py-0.5 text-xs text-gray-300">{asset.chainName}</span>
+          </div>
+          <p className="mt-1 text-sm text-gray-400">{asset.name}</p>
+        </div>
+        <div className="min-w-0 text-right">
+          <p className="text-xs text-gray-500">{labels.available}</p>
+          <p className="mt-1 max-w-48 truncate text-lg font-semibold text-white" title={asset.balance}>
+            {asset.loading ? "--" : asset.balance} {asset.symbol}
+          </p>
+        </div>
+      </section>
+
+      <dl aria-label={labels.assetDetails} className="divide-y divide-white/10 border-y border-white/10">
+        {[
+          [labels.assetName, asset.name],
+          [labels.assetSymbol, asset.symbol],
+          [labels.decimals, String(asset.decimals)],
+          [labels.network, asset.chainName],
+        ].map(([label, value]) => (
+          <div key={label} className="grid gap-1 py-3 text-sm sm:grid-cols-[10rem_minmax(0,1fr)]">
+            <dt className="text-gray-500">{label}</dt>
+            <dd className="break-words text-gray-100 sm:text-right">{value}</dd>
+          </div>
+        ))}
+        <div className="grid gap-2 py-3 text-sm sm:grid-cols-[10rem_minmax(0,1fr)] sm:items-start">
+          <dt className="text-gray-500">{tokenAddressLabel}</dt>
+          {asset.tokenAddress ? (
+            <dd className="flex min-w-0 items-start justify-between gap-2 sm:justify-end">
+              <span className="break-all font-mono text-xs leading-5 text-gray-100">{asset.tokenAddress}</span>
+              <button
+                type="button"
+                onClick={() => onCopy(asset.tokenAddress || "", `asset-detail:${asset.id}`)}
+                aria-label={copied ? labels.copied : labels.copy}
+                title={copied ? labels.copied : labels.copy}
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-gray-300 hover:bg-white/10 hover:text-white"
+              >
+                <CopyIcon copied={copied} />
+              </button>
+            </dd>
+          ) : (
+            <dd className="text-gray-300 sm:text-right">{labels.nativeAsset}</dd>
+          )}
+        </div>
+      </dl>
+
+      <button
+        type="button"
+        onClick={() => onSend(asset)}
+        disabled={asset.loading}
+        className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-white px-4 text-sm font-semibold text-black hover:bg-gray-200 disabled:opacity-50 sm:w-auto"
+      >
+        <Send className="h-4 w-4" />
+        {labels.send}
+      </button>
+    </div>
   );
 }
 

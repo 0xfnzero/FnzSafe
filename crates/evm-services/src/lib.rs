@@ -46,7 +46,9 @@ const PRIVATE_KEY_BYTES: usize = 32;
 const ARGON2_MEMORY_KIB: u32 = 64 * 1024;
 const ARGON2_ITERATIONS: u32 = 3;
 const ARGON2_PARALLELISM: u32 = 1;
-const JSON_RPC_TIMEOUT_SECS: u64 = 20;
+const JSON_RPC_TIMEOUT_SECS: u64 = 10;
+const JSON_RPC_FAILOVER_DELAY_MS: u64 = 150;
+const TOKEN_METADATA_TIMEOUT_SECS: u64 = 4;
 const ERC20_TRANSFER_SELECTOR: [u8; 4] = [0xa9, 0x05, 0x9c, 0xbb];
 const ERC20_BALANCE_OF_SELECTOR: [u8; 4] = [0x70, 0xa0, 0x82, 0x31];
 const ERC20_DECIMALS_SELECTOR: [u8; 4] = [0x31, 0x3c, 0xe5, 0x67];
@@ -55,6 +57,9 @@ const ERC20_NAME_SELECTOR: [u8; 4] = [0x06, 0xfd, 0xde, 0x03];
 const DEFAULT_PRIORITY_FEE_WEI: &str = "1500000000";
 const ETHERSCAN_API_KEY_ENV: &str = "FNZERO_SAFE_ETHERSCAN_API_KEY";
 const MAX_ETHERSCAN_RESPONSE_BYTES: usize = 1024 * 1024;
+const MAX_TOKEN_METADATA_RESPONSE_BYTES: usize = 1024 * 1024;
+const MAX_TOKEN_LIST_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+const MAX_TOKEN_METADATA_BATCH_SIZE: usize = 30;
 
 #[derive(Debug, Error)]
 pub enum EvmServiceError {
@@ -269,6 +274,7 @@ pub struct EvmTokenAsset {
     pub name: String,
     pub balance: String,
     pub decimals: u8,
+    pub logo_uri: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -508,7 +514,7 @@ pub fn builtin_chains() -> Vec<EvmChainConfig> {
             56,
             "BNB Smart Chain",
             "BNB",
-            "https://bsc-dataseed.binance.org",
+            "https://bsc-rpc.publicnode.com",
             Some("https://bscscan.com"),
             false,
         ),
@@ -532,7 +538,7 @@ pub fn builtin_chains() -> Vec<EvmChainConfig> {
             10,
             "Optimism",
             "ETH",
-            "https://mainnet.optimism.io",
+            "https://optimism-rpc.publicnode.com",
             Some("https://optimistic.etherscan.io"),
             false,
         ),
@@ -604,7 +610,7 @@ pub fn builtin_chains() -> Vec<EvmChainConfig> {
             97,
             "BSC Testnet",
             "tBNB",
-            "https://data-seed-prebsc-1-s1.binance.org:8545",
+            "https://bsc-testnet-rpc.publicnode.com",
             Some("https://testnet.bscscan.com"),
             true,
         ),
@@ -612,7 +618,7 @@ pub fn builtin_chains() -> Vec<EvmChainConfig> {
             80002,
             "Polygon Amoy",
             "POL",
-            "https://rpc-amoy.polygon.technology",
+            "https://polygon-amoy-bor-rpc.publicnode.com",
             Some("https://amoy.polygonscan.com"),
             true,
         ),
@@ -760,7 +766,7 @@ fn load_asset_snapshot_with_history(
     validate_rpc_chain_id(&req.chain)?;
     let wallet_address = normalize_address(&req.wallet_address, "wallet address")?;
     let native_balance_wei = rpc_call(
-        &req.chain.rpc_url,
+        &req.chain,
         "eth_getBalance",
         serde_json::json!([wallet_address, "latest"]),
     )
@@ -775,6 +781,7 @@ fn load_asset_snapshot_with_history(
             &query.contract_address,
         )?);
     }
+    enrich_token_metadata(&req.chain, &mut tokens);
 
     let (recent_transactions, history_status, history_message) = if include_history {
         load_recent_transactions(&req.chain, &wallet_address)
@@ -818,7 +825,7 @@ pub fn preview_payment(req: EvmPaymentPreviewRequest) -> EvmResult<EvmPaymentPre
         amount.as_str()
     };
     let nonce = rpc_call(
-        &req.chain.rpc_url,
+        &req.chain,
         "eth_getTransactionCount",
         serde_json::json!([wallet_address, "pending"]),
     )
@@ -961,6 +968,8 @@ where
             "EVM signing key does not match preview wallet address".to_string(),
         ));
     }
+    let current_nonce = load_nonce(&req.chain, &wallet_address)?;
+    ensure_preview_nonce_is_current(&nonce, &current_nonce)?;
     let raw_tx = sign_evm_transaction(&EvmTxSigningInput {
         signing_key: &signing_key,
         chain_id: req.chain.chain_id,
@@ -979,7 +988,7 @@ where
         transaction_hash: tx_hash,
         chain: req.chain.clone(),
         submitted_at: submitted_at(),
-        status: format!("submitted from {from}"),
+        status: format!("broadcast from {from}; awaiting confirmation"),
         block_number: None,
     })
 }
@@ -1141,7 +1150,7 @@ pub fn transaction_status(req: EvmTransactionStatusRequest) -> EvmResult<EvmTran
     validate_rpc_chain_id(&req.chain)?;
     let transaction_hash = normalize_tx_hash(&req.transaction_hash)?;
     let receipt = rpc_call(
-        &req.chain.rpc_url,
+        &req.chain,
         "eth_getTransactionReceipt",
         serde_json::json!([transaction_hash]),
     )?;
@@ -1726,7 +1735,7 @@ fn keystore_aad_v2(address: &str, secret_type: &str, derivation_path: Option<&st
     aad
 }
 
-fn rpc_call(
+fn rpc_call_url(
     rpc_url: &str,
     method: &str,
     params: serde_json::Value,
@@ -1761,9 +1770,106 @@ fn rpc_call(
     rpc.result.ok_or(EvmServiceError::RpcUnavailable)
 }
 
+fn builtin_rpc_fallbacks(chain_id: u64) -> &'static [&'static str] {
+    match chain_id {
+        1 => &["https://eth.drpc.org"],
+        10 => &["https://mainnet.optimism.io", "https://optimism.drpc.org"],
+        56 => &["https://bsc-dataseed1.bnbchain.org", "https://bsc.drpc.org"],
+        97 => &["https://data-seed-prebsc-1-s1.bnbchain.org:8545"],
+        137 => &["https://polygon.drpc.org"],
+        250 => &["https://fantom.drpc.org"],
+        324 => &["https://zksync.drpc.org"],
+        4_663 => &[
+            "https://robinhood-rpc.publicnode.com",
+            "https://rpc.ordofi.network",
+        ],
+        8_453 => &[
+            "https://base-rpc.publicnode.com",
+            "https://developer-access-mainnet.base.org",
+        ],
+        42_161 => &["https://arbitrum-one-rpc.publicnode.com"],
+        43_114 => &["https://avalanche-c-chain-rpc.publicnode.com"],
+        59_144 => &["https://linea-rpc.publicnode.com"],
+        80_002 => &[
+            "https://rpc-amoy.polygon.technology",
+            "https://polygon-amoy.drpc.org",
+        ],
+        84_532 => &["https://base-sepolia-rpc.publicnode.com"],
+        534_352 => &["https://scroll-rpc.publicnode.com"],
+        11_155_111 => &[
+            "https://sepolia.gateway.tenderly.co",
+            "https://rpc.sepolia.ethpandaops.io",
+            "https://1rpc.io/sepolia",
+        ],
+        _ => &[],
+    }
+}
+
+fn rpc_candidates(chain: &EvmChainConfig) -> Vec<&str> {
+    let mut candidates = Vec::with_capacity(1 + builtin_rpc_fallbacks(chain.chain_id).len());
+    candidates.push(chain.rpc_url.as_str());
+    for fallback in builtin_rpc_fallbacks(chain.chain_id) {
+        if !candidates.iter().any(|candidate| candidate == fallback) {
+            candidates.push(fallback);
+        }
+    }
+    candidates
+}
+
+fn rpc_call(
+    chain: &EvmChainConfig,
+    method: &str,
+    params: serde_json::Value,
+) -> EvmResult<serde_json::Value> {
+    let candidates = rpc_candidates(chain);
+    rpc_call_candidates(chain.chain_id, &candidates, method, params)
+}
+
+fn rpc_call_candidates(
+    chain_id: u64,
+    candidates: &[&str],
+    method: &str,
+    params: serde_json::Value,
+) -> EvmResult<serde_json::Value> {
+    let mut last_error = EvmServiceError::RpcUnavailable;
+    for (index, rpc_url) in candidates.iter().enumerate() {
+        let chain_id_result =
+            rpc_call_url(rpc_url, "eth_chainId", serde_json::json!([])).and_then(|reported| {
+                validate_reported_chain_id(chain_id, &reported)?;
+                Ok(reported)
+            });
+        match chain_id_result {
+            Ok(reported) if method == "eth_chainId" => return Ok(reported),
+            Ok(_) => {}
+            Err(error) => {
+                last_error = error;
+                if index + 1 < candidates.len() {
+                    std::thread::sleep(Duration::from_millis(
+                        JSON_RPC_FAILOVER_DELAY_MS.saturating_mul(1_u64 << index.min(3)),
+                    ));
+                }
+                continue;
+            }
+        }
+
+        match rpc_call_url(rpc_url, method, params.clone()) {
+            Ok(value) => return Ok(value),
+            Err(error @ EvmServiceError::InsufficientFunds)
+            | Err(error @ EvmServiceError::GasEstimateFailed) => return Err(error),
+            Err(error) => last_error = error,
+        }
+        if index + 1 < candidates.len() {
+            std::thread::sleep(Duration::from_millis(
+                JSON_RPC_FAILOVER_DELAY_MS.saturating_mul(1_u64 << index.min(3)),
+            ));
+        }
+    }
+    Err(last_error)
+}
+
 pub fn validate_rpc_chain_id(chain: &EvmChainConfig) -> EvmResult<()> {
     validate_chain(chain)?;
-    let reported = rpc_call(&chain.rpc_url, "eth_chainId", serde_json::json!([]))?;
+    let reported = rpc_call(chain, "eth_chainId", serde_json::json!([]))?;
     validate_reported_chain_id(chain.chain_id, &reported)
 }
 
@@ -1976,21 +2082,53 @@ fn estimate_gas(
 ) -> EvmResult<String> {
     let value = decimal_to_hex_quantity(value_decimal)?;
     let data = if data.is_empty() { "0x" } else { data };
-    rpc_call(
-        &chain.rpc_url,
-        "eth_estimateGas",
-        serde_json::json!([{
-            "from": from,
-            "to": to,
-            "value": value,
-            "data": data,
-        }]),
-    )
-    .and_then(rpc_hex_quantity_to_decimal)
-    .map_err(|error| match error {
-        EvmServiceError::InsufficientFunds => EvmServiceError::InsufficientFunds,
-        _ => EvmServiceError::GasEstimateFailed,
-    })
+    let params = serde_json::json!([{
+        "from": from,
+        "to": to,
+        "value": &value,
+        "data": data,
+    }]);
+
+    for attempt in 0..3 {
+        match rpc_call(chain, "eth_estimateGas", params.clone())
+            .and_then(rpc_hex_quantity_to_decimal)
+        {
+            Ok(gas_limit) => return Ok(gas_limit),
+            Err(EvmServiceError::InsufficientFunds) => {
+                return Err(EvmServiceError::InsufficientFunds);
+            }
+            Err(_) if attempt < 2 => {
+                std::thread::sleep(Duration::from_millis(120 * (attempt + 1) as u64));
+            }
+            Err(_) => break,
+        }
+    }
+
+    // A plain transfer to an account with no bytecode always consumes the
+    // protocol intrinsic gas. Never apply this fallback to contracts or tokens.
+    let recipient_code = rpc_call(chain, "eth_getCode", serde_json::json!([to, "latest"]))
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned));
+    if recipient_code
+        .as_deref()
+        .is_some_and(|code| can_use_intrinsic_gas_fallback(to, data, code))
+    {
+        return Ok("21000".to_string());
+    }
+
+    Err(EvmServiceError::GasEstimateFailed)
+}
+
+fn can_use_intrinsic_gas_fallback(to: &str, data: &str, recipient_code: &str) -> bool {
+    let Some(address) = to.strip_prefix("0x") else {
+        return false;
+    };
+    let is_low_system_address =
+        address.len() == 40 && address.as_bytes()[..38].iter().all(|byte| *byte == b'0');
+    data == "0x"
+        && recipient_code.eq_ignore_ascii_case("0x")
+        && address.len() == 40
+        && !is_low_system_address
 }
 
 fn load_token_asset(
@@ -2031,12 +2169,287 @@ fn load_token_asset(
         name,
         balance,
         decimals,
+        logo_uri: None,
     })
+}
+
+#[derive(Debug, Default)]
+struct ExternalTokenMetadata {
+    name: Option<String>,
+    symbol: Option<String>,
+    logo_uri: Option<String>,
+}
+
+fn enrich_token_metadata(chain: &EvmChainConfig, tokens: &mut [EvmTokenAsset]) {
+    if let Some(chain_slug) = coingecko_chain_slug(chain.chain_id) {
+        if let Ok(metadata) = load_coingecko_token_metadata(chain_slug) {
+            apply_external_token_metadata(tokens, &metadata);
+        }
+    }
+    if !tokens.iter().any(token_needs_external_metadata) {
+        return;
+    }
+    let Some(chain_slug) = dexscreener_chain_slug(chain.chain_id) else {
+        return;
+    };
+    for chunk in tokens.chunks_mut(MAX_TOKEN_METADATA_BATCH_SIZE) {
+        let addresses = chunk
+            .iter()
+            .map(|token| token.contract_address.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+        let Ok(metadata) = load_dexscreener_token_metadata(chain_slug, &addresses) else {
+            continue;
+        };
+        apply_external_token_metadata(chunk, &metadata);
+    }
+}
+
+fn token_needs_external_metadata(token: &EvmTokenAsset) -> bool {
+    token.logo_uri.is_none() || token.symbol == "ERC20" || token.name.starts_with("Token 0x")
+}
+
+fn apply_external_token_metadata(
+    tokens: &mut [EvmTokenAsset],
+    metadata: &std::collections::HashMap<String, ExternalTokenMetadata>,
+) {
+    for token in tokens {
+        let Some(external) = metadata.get(&token.contract_address) else {
+            continue;
+        };
+        if token.symbol == "ERC20" {
+            if let Some(symbol) = external.symbol.as_ref() {
+                token.symbol = symbol.clone();
+            }
+        }
+        if token.name.starts_with("Token 0x") {
+            if let Some(name) = external.name.as_ref() {
+                token.name = name.clone();
+            }
+        }
+        if token.logo_uri.is_none() {
+            token.logo_uri = external.logo_uri.clone();
+        }
+    }
+}
+
+fn coingecko_chain_slug(chain_id: u64) -> Option<&'static str> {
+    match chain_id {
+        1 => Some("ethereum"),
+        10 => Some("optimism"),
+        56 => Some("binance-smart-chain"),
+        137 => Some("polygon-pos"),
+        250 => Some("fantom"),
+        324 => Some("zksync"),
+        4_663 => Some("robinhood"),
+        8_453 => Some("base"),
+        42_161 => Some("arbitrum-one"),
+        43_114 => Some("avalanche"),
+        59_144 => Some("linea"),
+        534_352 => Some("scroll"),
+        _ => None,
+    }
+}
+
+fn load_coingecko_token_metadata(
+    chain_slug: &str,
+) -> EvmResult<std::collections::HashMap<String, ExternalTokenMetadata>> {
+    let mut url = reqwest::Url::parse("https://tokens.coingecko.com/")
+        .map_err(|_| EvmServiceError::RpcUnavailable)?;
+    url.path_segments_mut()
+        .map_err(|_| EvmServiceError::RpcUnavailable)?
+        .push(chain_slug)
+        .push("all.json");
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(TOKEN_METADATA_TIMEOUT_SECS))
+        .build()
+        .map_err(|_| EvmServiceError::RpcUnavailable)?;
+    let response = client
+        .get(url)
+        .send()
+        .and_then(reqwest::blocking::Response::error_for_status)
+        .map_err(|_| EvmServiceError::RpcUnavailable)?;
+    let mut body = Vec::new();
+    response
+        .take((MAX_TOKEN_LIST_RESPONSE_BYTES + 1) as u64)
+        .read_to_end(&mut body)
+        .map_err(|_| EvmServiceError::RpcUnavailable)?;
+    if body.len() > MAX_TOKEN_LIST_RESPONSE_BYTES {
+        return Err(EvmServiceError::RpcUnavailable);
+    }
+    parse_coingecko_token_metadata(&body)
+}
+
+fn parse_coingecko_token_metadata(
+    body: &[u8],
+) -> EvmResult<std::collections::HashMap<String, ExternalTokenMetadata>> {
+    let response: serde_json::Value =
+        serde_json::from_slice(body).map_err(|_| EvmServiceError::RpcUnavailable)?;
+    let tokens = response
+        .get("tokens")
+        .and_then(serde_json::Value::as_array)
+        .ok_or(EvmServiceError::RpcUnavailable)?;
+    let mut metadata = std::collections::HashMap::new();
+    for token in tokens {
+        let Some(address) = token
+            .get("address")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| normalize_address(value, "token address").ok())
+        else {
+            continue;
+        };
+        metadata.insert(
+            address,
+            ExternalTokenMetadata {
+                name: token
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|value| clean_token_metadata_text(value, 128)),
+                symbol: token
+                    .get("symbol")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|value| clean_token_metadata_text(value, 32)),
+                logo_uri: token
+                    .get("logoURI")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(validate_token_logo_uri),
+            },
+        );
+    }
+    Ok(metadata)
+}
+
+fn dexscreener_chain_slug(chain_id: u64) -> Option<&'static str> {
+    match chain_id {
+        1 | 11_155_111 => Some("ethereum"),
+        10 => Some("optimism"),
+        56 | 97 => Some("bsc"),
+        137 | 80_002 => Some("polygon"),
+        250 => Some("fantom"),
+        324 => Some("zksync"),
+        4_663 | 46_630 => Some("robinhood"),
+        8_453 | 84_532 => Some("base"),
+        42_161 | 421_614 => Some("arbitrum"),
+        43_114 | 43_113 => Some("avalanche"),
+        59_144 => Some("linea"),
+        534_352 => Some("scroll"),
+        _ => None,
+    }
+}
+
+fn load_dexscreener_token_metadata(
+    chain_slug: &str,
+    addresses: &str,
+) -> EvmResult<std::collections::HashMap<String, ExternalTokenMetadata>> {
+    let mut url = reqwest::Url::parse("https://api.dexscreener.com/latest/dex/tokens/")
+        .map_err(|_| EvmServiceError::RpcUnavailable)?;
+    url.path_segments_mut()
+        .map_err(|_| EvmServiceError::RpcUnavailable)?
+        .push(addresses);
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(TOKEN_METADATA_TIMEOUT_SECS))
+        .build()
+        .map_err(|_| EvmServiceError::RpcUnavailable)?;
+    let response = client
+        .get(url)
+        .send()
+        .and_then(reqwest::blocking::Response::error_for_status)
+        .map_err(|_| EvmServiceError::RpcUnavailable)?;
+    let mut body = Vec::new();
+    response
+        .take((MAX_TOKEN_METADATA_RESPONSE_BYTES + 1) as u64)
+        .read_to_end(&mut body)
+        .map_err(|_| EvmServiceError::RpcUnavailable)?;
+    if body.len() > MAX_TOKEN_METADATA_RESPONSE_BYTES {
+        return Err(EvmServiceError::RpcUnavailable);
+    }
+    parse_dexscreener_token_metadata(chain_slug, &body)
+}
+
+fn parse_dexscreener_token_metadata(
+    chain_slug: &str,
+    body: &[u8],
+) -> EvmResult<std::collections::HashMap<String, ExternalTokenMetadata>> {
+    let response: serde_json::Value =
+        serde_json::from_slice(body).map_err(|_| EvmServiceError::RpcUnavailable)?;
+    let pairs = response
+        .get("pairs")
+        .and_then(serde_json::Value::as_array)
+        .ok_or(EvmServiceError::RpcUnavailable)?;
+    let mut metadata = std::collections::HashMap::new();
+    for pair in pairs {
+        if pair.get("chainId").and_then(serde_json::Value::as_str) != Some(chain_slug) {
+            continue;
+        }
+        let base = pair.get("baseToken");
+        let quote = pair.get("quoteToken");
+        for (token, may_use_pair_logo) in [(base, true), (quote, false)] {
+            let Some(token) = token else { continue };
+            let Some(address) = token
+                .get("address")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| normalize_address(value, "token address").ok())
+            else {
+                continue;
+            };
+            let entry = metadata
+                .entry(address)
+                .or_insert_with(ExternalTokenMetadata::default);
+            if entry.name.is_none() {
+                entry.name = token
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|value| clean_token_metadata_text(value, 128));
+            }
+            if entry.symbol.is_none() {
+                entry.symbol = token
+                    .get("symbol")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|value| clean_token_metadata_text(value, 32));
+            }
+            if may_use_pair_logo && entry.logo_uri.is_none() {
+                entry.logo_uri = pair
+                    .get("info")
+                    .and_then(|info| info.get("imageUrl"))
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(validate_token_logo_uri);
+            }
+        }
+    }
+    Ok(metadata)
+}
+
+fn clean_token_metadata_text(value: &str, max_bytes: usize) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() || value.len() > max_bytes || value.chars().any(char::is_control) {
+        return None;
+    }
+    Some(value.to_string())
+}
+
+fn validate_token_logo_uri(value: &str) -> Option<String> {
+    if value.len() > 2_048 || value.trim() != value {
+        return None;
+    }
+    let url = reqwest::Url::parse(value).ok()?;
+    let trusted_host = matches!(
+        url.host_str(),
+        Some("assets.coingecko.com" | "cdn.dexscreener.com" | "dd.dexscreener.com")
+    );
+    if url.scheme() != "https"
+        || !trusted_host
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return None;
+    }
+    Some(url.to_string())
 }
 
 fn eth_call(chain: &EvmChainConfig, to: &str, data: &str) -> EvmResult<String> {
     rpc_call(
-        &chain.rpc_url,
+        chain,
         "eth_call",
         serde_json::json!([{"to": to, "data": data}, "latest"]),
     )
@@ -2179,7 +2592,7 @@ fn dapp_sign_preview_id(input: &DappSignPreviewIdInput<'_>) -> String {
 
 fn load_nonce(chain: &EvmChainConfig, wallet_address: &str) -> EvmResult<String> {
     rpc_call(
-        &chain.rpc_url,
+        chain,
         "eth_getTransactionCount",
         serde_json::json!([wallet_address, "pending"]),
     )
@@ -2187,12 +2600,23 @@ fn load_nonce(chain: &EvmChainConfig, wallet_address: &str) -> EvmResult<String>
     .map_err(|_| EvmServiceError::RpcUnavailable)
 }
 
+fn ensure_preview_nonce_is_current(preview_nonce: &str, current_nonce: &str) -> EvmResult<()> {
+    if normalize_decimal(preview_nonce, "preview nonce")?
+        != normalize_decimal(current_nonce, "current nonce")?
+    {
+        return Err(EvmServiceError::InvalidInput(
+            "EVM account nonce changed after preview; review the transaction again".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn load_fee_quote(chain: &EvmChainConfig) -> EvmResult<EvmFeeQuote> {
-    let gas_price_wei = rpc_call(&chain.rpc_url, "eth_gasPrice", serde_json::json!([]))
+    let gas_price_wei = rpc_call(chain, "eth_gasPrice", serde_json::json!([]))
         .and_then(rpc_hex_quantity_to_decimal)
         .map_err(|_| EvmServiceError::RpcUnavailable)?;
     let latest_block = rpc_call(
-        &chain.rpc_url,
+        chain,
         "eth_getBlockByNumber",
         serde_json::json!(["latest", false]),
     )
@@ -2211,13 +2635,9 @@ fn load_fee_quote(chain: &EvmChainConfig) -> EvmResult<EvmFeeQuote> {
         });
     };
 
-    let priority_fee_wei = rpc_call(
-        &chain.rpc_url,
-        "eth_maxPriorityFeePerGas",
-        serde_json::json!([]),
-    )
-    .and_then(rpc_hex_quantity_to_decimal)
-    .unwrap_or_else(|_| DEFAULT_PRIORITY_FEE_WEI.to_string());
+    let priority_fee_wei = rpc_call(chain, "eth_maxPriorityFeePerGas", serde_json::json!([]))
+        .and_then(rpc_hex_quantity_to_decimal)
+        .unwrap_or_else(|_| DEFAULT_PRIORITY_FEE_WEI.to_string());
     let doubled_base_fee = decimal_mul_u64(&base_fee_wei, 2)?;
     let mut max_fee_per_gas_wei = decimal_add(&doubled_base_fee, &priority_fee_wei)?;
     if decimal_cmp(&max_fee_per_gas_wei, &gas_price_wei)? == std::cmp::Ordering::Less {
@@ -2234,17 +2654,55 @@ fn load_fee_quote(chain: &EvmChainConfig) -> EvmResult<EvmFeeQuote> {
 
 fn send_raw_transaction(chain: &EvmChainConfig, raw_tx: &str) -> EvmResult<String> {
     validate_rpc_chain_id(chain)?;
-    rpc_call(
-        &chain.rpc_url,
-        "eth_sendRawTransaction",
-        serde_json::json!([raw_tx]),
-    )
-    .and_then(|value| {
-        value
-            .as_str()
-            .map(str::to_string)
-            .ok_or(EvmServiceError::RpcUnavailable)
-    })
+    let expected_hash = raw_transaction_hash(raw_tx)?;
+    let returned_hash = rpc_call(chain, "eth_sendRawTransaction", serde_json::json!([raw_tx]))
+        .and_then(|value| {
+            value
+                .as_str()
+                .map(normalize_tx_hash)
+                .ok_or(EvmServiceError::RpcUnavailable)
+        });
+    let returned_hash = match returned_hash {
+        Ok(Ok(hash)) => hash,
+        Ok(Err(error)) => return Err(error),
+        Err(submit_error) => {
+            // A node can accept the raw transaction and then time out before
+            // returning its hash. Finding the locally-derived hash proves broadcast.
+            for attempt in 0..2 {
+                if attempt > 0 {
+                    std::thread::sleep(Duration::from_millis(JSON_RPC_FAILOVER_DELAY_MS * 2));
+                }
+                if rpc_call(
+                    chain,
+                    "eth_getTransactionByHash",
+                    serde_json::json!([&expected_hash]),
+                )
+                .is_ok_and(|transaction| !transaction.is_null())
+                {
+                    return Ok(expected_hash);
+                }
+            }
+            return Err(submit_error);
+        }
+    };
+    if returned_hash != expected_hash {
+        return Err(EvmServiceError::RpcUnavailable);
+    }
+    Ok(returned_hash)
+}
+
+fn raw_transaction_hash(raw_tx: &str) -> EvmResult<String> {
+    let encoded = raw_tx.strip_prefix("0x").ok_or_else(|| {
+        EvmServiceError::InvalidInput("Raw EVM transaction must start with 0x".to_string())
+    })?;
+    if encoded.is_empty() || encoded.len() % 2 != 0 {
+        return Err(EvmServiceError::InvalidInput(
+            "Raw EVM transaction is invalid".to_string(),
+        ));
+    }
+    let bytes = hex::decode(encoded)
+        .map_err(|_| EvmServiceError::InvalidInput("Raw EVM transaction is invalid".to_string()))?;
+    Ok(format!("0x{}", hex::encode(keccak256(&bytes))))
 }
 
 fn sign_evm_transaction(input: &EvmTxSigningInput<'_>) -> EvmResult<String> {
@@ -2374,7 +2832,7 @@ fn sign_type2_transaction(input: &Type2TxSigningInput<'_>) -> EvmResult<String> 
         rlp_bytes(&decimal_to_be_bytes(input.value)?),
         rlp_bytes(&data),
         access_list,
-        rlp_bytes(&[recovery_id.to_byte()]),
+        rlp_bytes(&u64_to_be_bytes(u64::from(recovery_id.to_byte()))),
         rlp_bytes(trim_leading_zeroes(&sig_bytes[..32])),
         rlp_bytes(trim_leading_zeroes(&sig_bytes[32..])),
     ];
@@ -3016,19 +3474,36 @@ fn decode_erc20_string(value: &str) -> EvmResult<String> {
             EvmServiceError::InvalidInput("ERC-20 bytes32 string is invalid".to_string())
         });
     }
-    if bytes.len() >= 96 {
-        let len = be_bytes_to_decimal(&bytes[64..96])
+    if bytes.len() >= 64 {
+        let offset = be_bytes_to_decimal(&bytes[..32])
+            .parse::<usize>()
+            .map_err(|_| {
+                EvmServiceError::InvalidInput("ERC-20 string offset is invalid".to_string())
+            })?;
+        let length_end = offset.checked_add(32).ok_or_else(|| {
+            EvmServiceError::InvalidInput("ERC-20 string offset is invalid".to_string())
+        })?;
+        if offset % 32 != 0 || offset < 32 || length_end > bytes.len() {
+            return Err(EvmServiceError::InvalidInput(
+                "ERC-20 string offset is invalid".to_string(),
+            ));
+        }
+        let len = be_bytes_to_decimal(&bytes[offset..length_end])
             .parse::<usize>()
             .map_err(|_| {
                 EvmServiceError::InvalidInput("ERC-20 dynamic string length is invalid".to_string())
             })?;
-        let start = 96;
-        let end = start + len;
-        if end <= bytes.len() {
-            return String::from_utf8(bytes[start..end].to_vec()).map_err(|_| {
-                EvmServiceError::InvalidInput("ERC-20 dynamic string is invalid".to_string())
-            });
+        let end = length_end.checked_add(len).ok_or_else(|| {
+            EvmServiceError::InvalidInput("ERC-20 dynamic string length is invalid".to_string())
+        })?;
+        if end > bytes.len() || len > 128 {
+            return Err(EvmServiceError::InvalidInput(
+                "ERC-20 dynamic string length is invalid".to_string(),
+            ));
         }
+        return String::from_utf8(bytes[length_end..end].to_vec()).map_err(|_| {
+            EvmServiceError::InvalidInput("ERC-20 dynamic string is invalid".to_string())
+        });
     }
     Err(EvmServiceError::InvalidInput(
         "ERC-20 string response is invalid".to_string(),
@@ -3240,11 +3715,69 @@ fn short_address(address: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write as _;
+    use std::net::TcpListener;
 
     const DEV_PRIVATE_KEY: &str =
         "0x0000000000000000000000000000000000000000000000000000000000000001";
     const DEV_MNEMONIC: &str =
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+    fn spawn_rpc_server(expected_requests: usize) -> (String, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            for _ in 0..expected_requests {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0_u8; 4_096];
+                let length = stream.read(&mut request).unwrap();
+                let request = String::from_utf8_lossy(&request[..length]);
+                let result = if request.contains("eth_chainId") {
+                    "\"0x539\""
+                } else {
+                    "\"0x2a\""
+                };
+                let body = format!("{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{result}}}");
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body,
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        (format!("http://{address}"), handle)
+    }
+
+    #[test]
+    fn every_builtin_chain_has_a_distinct_rpc_fallback() {
+        for chain in builtin_chains() {
+            let candidates = rpc_candidates(&chain);
+            assert!(candidates.len() >= 2, "{} has no RPC fallback", chain.name);
+            let unique = candidates.iter().collect::<std::collections::HashSet<_>>();
+            assert_eq!(
+                unique.len(),
+                candidates.len(),
+                "{} has duplicate RPCs",
+                chain.name
+            );
+            assert!(candidates.iter().all(|url| url.starts_with("https://")));
+        }
+    }
+
+    #[test]
+    fn rpc_call_retries_the_next_endpoint_after_transport_failure() {
+        let (backup, server) = spawn_rpc_server(2);
+        let result = rpc_call_candidates(
+            1_337,
+            &["http://127.0.0.1:1", &backup],
+            "eth_getBalance",
+            serde_json::json!(["0x0000000000000000000000000000000000000001", "latest"]),
+        )
+        .unwrap();
+        assert_eq!(result, serde_json::json!("0x2a"));
+        server.join().unwrap();
+    }
 
     fn legacy_private_key_keystore(password: &str) -> String {
         let signing_key = signing_key_from_hex(DEV_PRIVATE_KEY).unwrap();
@@ -3358,6 +3891,43 @@ mod tests {
     }
 
     #[test]
+    fn intrinsic_gas_fallback_only_accepts_plain_eoa_transfers() {
+        let eoa = "0xcf310a2ada52ba0d93feb888239233447e864b8d";
+        assert!(can_use_intrinsic_gas_fallback(eoa, "0x", "0x"));
+        assert!(!can_use_intrinsic_gas_fallback(eoa, "0xa9059cbb", "0x"));
+        assert!(!can_use_intrinsic_gas_fallback(eoa, "0x", "0x60016000"));
+        assert!(!can_use_intrinsic_gas_fallback(
+            "0x0000000000000000000000000000000000000001",
+            "0x",
+            "0x",
+        ));
+        assert!(!can_use_intrinsic_gas_fallback(
+            "not-an-address",
+            "0x",
+            "0x"
+        ));
+    }
+
+    #[test]
+    fn stale_payment_nonce_is_rejected_before_signing() {
+        assert!(ensure_preview_nonce_is_current("42", "00042").is_ok());
+        let error = ensure_preview_nonce_is_current("42", "43").unwrap_err();
+        assert!(
+            matches!(error, EvmServiceError::InvalidInput(message) if message.contains("nonce changed"))
+        );
+    }
+
+    #[test]
+    fn hashes_the_exact_signed_transaction_bytes() {
+        assert_eq!(
+            raw_transaction_hash("0x02c0").unwrap(),
+            "0xcace66b6a82a5dc496a5b21a4032eb58baf223ea6f142a01593a5d105d5ee150"
+        );
+        assert!(raw_transaction_hash("02c0").is_err());
+        assert!(raw_transaction_hash("0x2").is_err());
+    }
+
+    #[test]
     fn chain_configuration_rejects_malformed_or_ambiguous_rpc_urls() {
         let mut config = builtin_chains()[0].clone();
         for rpc_url in [
@@ -3440,6 +4010,113 @@ mod tests {
         assert_eq!(robinhood.name, "Robinhood Chain");
         assert_eq!(robinhood.native_symbol, "ETH");
         assert!(!robinhood.testnet);
+    }
+
+    #[test]
+    fn decodes_standard_and_bytes32_erc20_strings() {
+        let dynamic = concat!(
+            "0x0000000000000000000000000000000000000000000000000000000000000020",
+            "0000000000000000000000000000000000000000000000000000000000000003",
+            "5a5a5a0000000000000000000000000000000000000000000000000000000000"
+        );
+        assert_eq!(decode_erc20_string(dynamic).unwrap(), "ZZZ");
+        assert_eq!(
+            decode_erc20_string(
+                "0x5553444700000000000000000000000000000000000000000000000000000000"
+            )
+            .unwrap(),
+            "USDG"
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_erc20_dynamic_strings() {
+        let bad_offset = concat!(
+            "0x0000000000000000000000000000000000000000000000000000000000000041",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "0000000000000000000000000000000000000000000000000000000000000000"
+        );
+        let out_of_bounds = concat!(
+            "0x0000000000000000000000000000000000000000000000000000000000000020",
+            "0000000000000000000000000000000000000000000000000000000000000081",
+            "0000000000000000000000000000000000000000000000000000000000000000"
+        );
+        assert!(decode_erc20_string(bad_offset).is_err());
+        assert!(decode_erc20_string(out_of_bounds).is_err());
+    }
+
+    #[test]
+    fn parses_chain_scoped_dexscreener_metadata_and_trusted_logo() {
+        let body = serde_json::json!({
+            "pairs": [{
+                "chainId": "robinhood",
+                "baseToken": {
+                    "address": "0x7dbf38976f6D3b9c529e7D9484A71898B409eE6a",
+                    "name": "ZZZ",
+                    "symbol": "ZZZ"
+                },
+                "quoteToken": {
+                    "address": "0x0000000000000000000000000000000000000000",
+                    "name": "Ether",
+                    "symbol": "ETH"
+                },
+                "info": {
+                    "imageUrl": "https://cdn.dexscreener.com/cms/images/token?width=800"
+                }
+            }, {
+                "chainId": "ethereum",
+                "baseToken": {
+                    "address": "0x7dbf38976f6D3b9c529e7D9484A71898B409eE6a",
+                    "name": "Wrong chain",
+                    "symbol": "WRONG"
+                }
+            }]
+        });
+        let parsed =
+            parse_dexscreener_token_metadata("robinhood", body.to_string().as_bytes()).unwrap();
+        let token = parsed
+            .get("0x7dbf38976f6d3b9c529e7d9484a71898b409ee6a")
+            .unwrap();
+        assert_eq!(token.name.as_deref(), Some("ZZZ"));
+        assert_eq!(token.symbol.as_deref(), Some("ZZZ"));
+        assert_eq!(
+            token.logo_uri.as_deref(),
+            Some("https://cdn.dexscreener.com/cms/images/token?width=800")
+        );
+        assert!(validate_token_logo_uri("https://evil.example/token.png").is_none());
+        assert!(validate_token_logo_uri("http://cdn.dexscreener.com/token.png").is_none());
+    }
+
+    #[test]
+    fn parses_coingecko_token_list_metadata() {
+        let body = serde_json::json!({
+            "name": "CoinGecko",
+            "tokens": [{
+                "chainId": 4663,
+                "address": "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
+                "name": "Global Dollar",
+                "symbol": "USDG",
+                "decimals": 6,
+                "logoURI": "https://assets.coingecko.com/coins/images/51281/thumb/usdg.png"
+            }, {
+                "chainId": 4663,
+                "address": "invalid",
+                "name": "Invalid",
+                "symbol": "BAD",
+                "logoURI": "https://evil.example/token.png"
+            }]
+        });
+        let parsed = parse_coingecko_token_metadata(body.to_string().as_bytes()).unwrap();
+        let token = parsed
+            .get("0x5fc5360d0400a0fd4f2af552add042d716f1d168")
+            .unwrap();
+        assert_eq!(token.name.as_deref(), Some("Global Dollar"));
+        assert_eq!(token.symbol.as_deref(), Some("USDG"));
+        assert_eq!(
+            token.logo_uri.as_deref(),
+            Some("https://assets.coingecko.com/coins/images/51281/thumb/usdg.png")
+        );
+        assert_eq!(parsed.len(), 1);
     }
 
     #[test]
@@ -3763,7 +4440,7 @@ mod tests {
     }
 
     #[test]
-    fn signs_eip1559_transaction_with_type2_prefix() {
+    fn signs_standard_eip1559_transaction() {
         let key = signing_key_from_hex(DEV_PRIVATE_KEY).unwrap();
         let raw = sign_evm_transaction(&EvmTxSigningInput {
             signing_key: &key,
@@ -3778,8 +4455,14 @@ mod tests {
             max_priority_fee_per_gas_wei: Some("1000000000"),
         })
         .unwrap();
-        assert!(raw.starts_with("0x02"));
-        assert!(raw.len() > 130);
+        assert_eq!(
+            raw,
+            concat!(
+                "0x02f86d83aa36a780843b9aca00847735940082520894000000000000000000000000000000000000dead0180c080",
+                "a02f13b8d85ea9156a13b3e264d15745152ab8dd2ffd713248b9a96eab02356dde",
+                "a0403ee61e225cb0e5f0d0c44d91f3324be30ea84fb92d3d3b587aa70994ca514e"
+            )
+        );
     }
 
     #[test]

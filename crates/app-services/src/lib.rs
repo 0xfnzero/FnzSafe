@@ -601,6 +601,7 @@ pub struct EvmTokenAsset {
     pub name: String,
     pub balance: String,
     pub decimals: u8,
+    pub logo_uri: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1307,6 +1308,7 @@ impl From<evm::EvmTokenAsset> for EvmTokenAsset {
             name: value.name,
             balance: value.balance,
             decimals: value.decimals,
+            logo_uri: value.logo_uri,
         }
     }
 }

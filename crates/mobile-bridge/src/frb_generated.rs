@@ -2086,12 +2086,14 @@ impl SseDecode for crate::api::EvmTokenAsset {
         let mut var_name = <String>::sse_decode(deserializer);
         let mut var_balance = <String>::sse_decode(deserializer);
         let mut var_decimals = <u8>::sse_decode(deserializer);
+        let mut var_logoUri = <Option<String>>::sse_decode(deserializer);
         return crate::api::EvmTokenAsset {
             contract_address: var_contractAddress,
             symbol: var_symbol,
             name: var_name,
             balance: var_balance,
             decimals: var_decimals,
+            logo_uri: var_logoUri,
         };
     }
 }
@@ -3991,6 +3993,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::EvmTokenAsset {
             self.name.into_into_dart().into_dart(),
             self.balance.into_into_dart().into_dart(),
             self.decimals.into_into_dart().into_dart(),
+            self.logo_uri.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -5511,6 +5514,7 @@ impl SseEncode for crate::api::EvmTokenAsset {
         <String>::sse_encode(self.name, serializer);
         <String>::sse_encode(self.balance, serializer);
         <u8>::sse_encode(self.decimals, serializer);
+        <Option<String>>::sse_encode(self.logo_uri, serializer);
     }
 }
 

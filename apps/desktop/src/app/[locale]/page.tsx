@@ -88,6 +88,7 @@ import { useSecureKeyboardInput } from "@/hooks/useSecureKeyboardInput";
 import {
   NativeChainSendPanel,
   UnifiedAssetList,
+  WalletAssetDetailPanel,
   WalletAddressPopover,
   WalletReceivePanel,
   WalletSendAssetPicker,
@@ -102,6 +103,7 @@ import { apiFetch } from "@/lib/apiFetch";
 import { shouldShowNativeDappWebview } from "@/lib/dappVisibility";
 import { persistJsonAfterHydration } from "@/lib/hydratedStorage";
 import { atomicToDecimalUnits } from "@/lib/multichain";
+import { resolveEvmAssetSendContext } from "@/lib/evmAssetSend";
 import { isMatchingEvmPaymentPreview } from "@/lib/evmPaymentPreview";
 import {
   renderableSensitiveExportValue,
@@ -264,6 +266,7 @@ import {
 } from "@/lib/settingsCenter";
 import { LOCAL_TOKEN_METADATA, localTokenMetadata } from "@/lib/localTokenRegistry";
 import { chainDescriptorLogoUri, chainLogoUri, SOLANA_CHAIN_LOGO_URI } from "@/lib/chainMetadata";
+import { formatDappPayloadForDisplay } from "@/lib/dappPayload";
 import {
   buildProgramDeploymentReceiptJson,
   compactProgramDeploymentReceiptJson,
@@ -2635,6 +2638,15 @@ interface WalletNativeBalanceState {
   error?: string;
 }
 
+interface WalletEvmBalanceState {
+  walletId: string;
+  chainId: number;
+  address: string;
+  balanceWei: string;
+  loading: boolean;
+  error?: string;
+}
+
 const BITCOIN_MAINNET_ID = "bip122:000000000019d6689c085ae165831e93";
 const TRON_MAINNET_ID = "tron:728126428";
 
@@ -2684,6 +2696,10 @@ function nativeBalanceKey(walletId: string, chainId: string): string {
   return `${walletId}:${chainId}`;
 }
 
+function evmBalanceKey(walletId: string, chainId: number): string {
+  return `${walletId}:${chainId}`;
+}
+
 function defaultAddressBookNetwork(
   chain: AddressBookChain,
   solanaNetwork: AppNetwork,
@@ -2708,6 +2724,7 @@ interface DesktopEvmTokenAsset {
   name: string;
   balance: string;
   decimals: number;
+  logo_uri?: string | null;
 }
 
 interface DesktopEvmTransactionHistoryEntry {
@@ -2737,7 +2754,14 @@ function mergeEvmAssetSnapshotTokens(
     previous.wallet_address.toLowerCase() !== next.wallet_address.toLowerCase()
   ) return next;
   const tokens = new Map(previous.tokens.map((token) => [token.contract_address.toLowerCase(), token]));
-  for (const token of next.tokens) tokens.set(token.contract_address.toLowerCase(), token);
+  for (const token of next.tokens) {
+    const key = token.contract_address.toLowerCase();
+    const previousToken = tokens.get(key);
+    tokens.set(key, {
+      ...token,
+      logo_uri: token.logo_uri || previousToken?.logo_uri,
+    });
+  }
   const history = next.history_status === "not_requested"
     ? {
         recent_transactions: previous.recent_transactions,
@@ -3350,6 +3374,7 @@ function defaultBackTarget(formId: string): string | null {
     case "transfer-sol":
     case "transfer-token":
     case "wallet-send":
+    case "wallet-asset-detail":
     case "wallet-receive":
       return "wallet-list";
     case "native-chain-send":
@@ -3845,7 +3870,9 @@ export default function Home() {
   const [currentWalletNetwork, setCurrentWalletNetwork] = useState("solana");
   const [walletMultichainAccountsByWallet, setWalletMultichainAccountsByWallet] = useState<Record<string, WalletMultichainAccountsState>>({});
   const [walletNativeBalances, setWalletNativeBalances] = useState<Record<string, WalletNativeBalanceState>>({});
+  const [walletEvmBalances, setWalletEvmBalances] = useState<Record<string, WalletEvmBalanceState>>({});
   const [nativeBalanceRefreshNonce, setNativeBalanceRefreshNonce] = useState(0);
+  const [walletAccountBalanceRefreshNonce, setWalletAccountBalanceRefreshNonce] = useState(0);
   const [newRpcName, setNewRpcName] = useState("");
   const [newRpcUrl, setNewRpcUrl] = useState("");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -4108,6 +4135,7 @@ export default function Home() {
   const [walletSolBalanceCache, setWalletSolBalanceCache] = useState<Record<string, string>>({});
   const [walletTransactions, setWalletTransactions] = useState<WalletTransactionsState | null>(null);
   const [walletOverviewTab, setWalletOverviewTab] = useState<"assets" | "transactions">("assets");
+  const [selectedAssetDetailId, setSelectedAssetDetailId] = useState("");
   const [walletChainView, setWalletChainView] = useState<"all" | "solana" | "evm" | "bitcoin" | "tron" | "networks">("all");
   const [bitcoinAddressType, setBitcoinAddressType] = useState<BitcoinAddressType>("taproot");
   const [visibleTokenCount, setVisibleTokenCount] = useState(TOKEN_ASSET_PAGE_SIZE);
@@ -4130,7 +4158,6 @@ export default function Home() {
   const [evmWallet, setEvmWallet] = useState<DesktopEvmWalletSummary | null>(null);
   const [evmRecipient, setEvmRecipient] = useState("");
   const [evmAmount, setEvmAmount] = useState("");
-  const [evmTokenContract, setEvmTokenContract] = useState("");
   const [evmTokenContracts, setEvmTokenContracts] = useState<string[]>([]);
   const [evmNewTokenContract, setEvmNewTokenContract] = useState("");
   const [evmAssets, setEvmAssets] = useState<DesktopEvmAssetSnapshot | null>(null);
@@ -4182,6 +4209,15 @@ export default function Home() {
       : null;
   const activeEvmChainIsCustom =
     Boolean(activeEvmChain && evmCustomChainIds.includes(activeEvmChain.chain_id));
+  const isUnifiedEvmSend = Number(formData.unified_evm_send) === 1;
+  const isEvmAssetManager = Number(formData.evm_asset_manager) === 1;
+  const evmAssetSendContext = useMemo(() => {
+    try {
+      return resolveEvmAssetSendContext(formData);
+    } catch {
+      return null;
+    }
+  }, [formData]);
 
   const resetEvmChainScopedState = useCallback(() => {
     evmPreviewRequestIdRef.current += 1;
@@ -4189,6 +4225,7 @@ export default function Home() {
     setEvmPreview(null);
     setEvmSubmitResult(null);
     setEvmTransactionStatus(null);
+    setEvmError(null);
   }, []);
 
   useEffect(() => {
@@ -4388,6 +4425,7 @@ export default function Home() {
       setEvmPreview(null);
       setEvmSubmitResult(null);
       setEvmTransactionStatus(null);
+      setEvmError(null);
     });
   };
 
@@ -4423,6 +4461,7 @@ export default function Home() {
       [chain.chain_id]: mergeEvmAssetSnapshotTokens(previous[chain.chain_id], snapshot),
     }));
     setEvmNewTokenContract("");
+    if (isEvmAssetManager) handleSelectForm("wallet-list");
   });
 
   const removeDesktopEvmToken = (contract: string) => {
@@ -4542,27 +4581,29 @@ export default function Home() {
   }, [evmChainId, evmChains, evmWallet, loadEvmAssetSnapshot]);
 
   const previewEvmPayment = () => withEvmBusy(async () => {
-    if (!activeEvmChain || !evmWallet) throw new Error("Select a chain and wallet first");
-    const unifiedSendDecimals = Number(formData.evm_asset_decimals);
-    const amount = Number(formData.unified_evm_send) === 1
-      ? uiTokenAmountToRaw(evmAmount, unifiedSendDecimals)
-      : evmAmount.trim();
+    if (!evmWallet) throw new Error("Select a wallet first");
+    const assetContext = resolveEvmAssetSendContext(formData);
+    if (!assetContext) throw new Error("Select an asset before creating a payment preview");
+    const paymentChain = evmChains.find((chain) => chain.chain_id === assetContext.chainId);
+    if (!paymentChain) throw new Error("The selected EVM network is unavailable");
+    const tokenContract = assetContext.tokenContract;
+    const amount = uiTokenAmountToRaw(evmAmount, assetContext.decimals);
     if (!amount) {
       throw new Error(tf("features.evm-workbench.invalidAmount", "Enter a valid amount with no more than the asset's supported decimal places"));
     }
     const requestId = evmPreviewRequestIdRef.current + 1;
     evmPreviewRequestIdRef.current = requestId;
-    const chainId = activeEvmChain.chain_id;
+    const chainId = paymentChain.chain_id;
     const walletAddress = evmWallet.address;
     const response = await apiFetch("evm/payment/preview", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        chain: activeEvmChain,
+        chain: paymentChain,
         wallet_address: evmWallet.address,
         recipient: evmRecipient.trim(),
         amount_wei_or_units: amount,
-        token_contract: evmTokenContract.trim() || null,
+        token_contract: tokenContract,
       }),
     });
     const data = await response.json();
@@ -4574,7 +4615,7 @@ export default function Home() {
         walletAddress,
         recipient: evmRecipient.trim(),
         amountAtomic: amount,
-        tokenContract: evmTokenContract.trim() || null,
+        tokenContract,
       })) {
       throw new Error(tf("features.evm-workbench.previewMismatch", "Payment preview did not match the requested transaction"));
     }
@@ -4589,7 +4630,6 @@ export default function Home() {
       setEvmPreview(null);
       setEvmSubmitResult(null);
       setEvmTransactionStatus(null);
-      toast.success(tf("features.evm-workbench.transactionRejected", "Transaction preview cancelled"));
       return;
     }
     const requestId = evmPreviewRequestIdRef.current + 1;
@@ -4629,8 +4669,51 @@ export default function Home() {
     const data = await response.json();
     if (!operationIsCurrent()) return;
     if (!response.ok) throw new Error(data.error || "Failed to submit payment");
-    setEvmSubmitResult(data as DesktopEvmTransactionSubmitResult);
-    toast.success(tf("features.evm-workbench.transactionSubmitted", "Transaction submitted"));
+    const submitted = data as DesktopEvmTransactionSubmitResult;
+    if (
+      !/^0x[0-9a-f]{64}$/i.test(submitted.transaction_hash || "")
+      || submitted.chain?.chain_id !== preview.chain.chain_id
+    ) {
+      throw new Error(tf("features.evm-workbench.invalidBroadcastResponse", "The RPC did not return a valid transaction hash"));
+    }
+    setEvmSubmitResult(submitted);
+    setEvmTransactionStatus({
+      transaction_hash: submitted.transaction_hash,
+      chain: submitted.chain,
+      block_number: null,
+      status: "pending",
+      gas_used: null,
+      effective_gas_price_wei: null,
+    });
+    toast.message(tf("features.evm-workbench.transactionBroadcast", "Transaction broadcast; waiting for confirmation"));
+
+    for (let attempt = 0; attempt < 15 && operationIsCurrent(); attempt += 1) {
+      await wait(1_000);
+      try {
+        const statusResponse = await apiFetch("evm/transaction/status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chain: submitted.chain,
+            transaction_hash: submitted.transaction_hash,
+          }),
+        });
+        const status = await statusResponse.json() as DesktopEvmTransactionStatus & { error?: string };
+        if (!operationIsCurrent()) return;
+        if (!statusResponse.ok) continue;
+        setEvmTransactionStatus(status);
+        if (status.status === "confirmed") {
+          toast.success(tf("features.evm-workbench.transactionConfirmed", "Transaction confirmed on-chain"));
+          return;
+        }
+        if (status.status === "failed") {
+          toast.error(tf("features.evm-workbench.transactionFailed", "Transaction failed on-chain"));
+          return;
+        }
+      } catch {
+        // Keep the hash visible so the user can retry receipt lookup manually.
+      }
+    }
   });
 
   const refreshEvmTransactionStatus = () => withEvmBusy(async () => {
@@ -11666,6 +11749,10 @@ export default function Home() {
     allAssets: tf("features.unified-wallet.allAssets", "Assets across networks"),
     addAndContinue: tf("features.unified-wallet.addAndContinue", "Add and continue"),
     addingAsset: tf("features.unified-wallet.addingAsset", "Checking asset..."),
+    addAsset: tf("features.unified-wallet.addAsset", "Add asset"),
+    assetDetails: tf("features.unified-wallet.assetDetails", "Asset details"),
+    assetName: tf("features.unified-wallet.assetName", "Name"),
+    assetSymbol: tf("features.unified-wallet.assetSymbol", "Symbol"),
     address: tf("features.unified-wallet.address", "Address"),
     back: t("common.back"),
     close: tf("features.unified-wallet.close", "Close"),
@@ -11673,8 +11760,10 @@ export default function Home() {
     copy: t("common.copy"),
     copied: t("common.copied"),
     current: tf("features.unified-wallet.current", "Current"),
+    decimals: tf("features.unified-wallet.decimals", "Decimals"),
     chainFamily: tf("features.unified-wallet.chainFamily", "Chain family"),
     network: tf("features.unified-wallet.network", "Network"),
+    nativeAsset: tf("features.unified-wallet.nativeAsset", "Native asset (no token contract)"),
     networks: tf("features.unified-wallet.networks", "networks"),
     noEvmNetworks: tf("features.unified-wallet.noEvmNetworks", "No EVM networks are available"),
     noAssets: tf("features.unified-wallet.noAssets", "No assets available"),
@@ -11690,6 +11779,7 @@ export default function Home() {
     selectAsset: tf("features.unified-wallet.selectAsset", "Select an asset"),
     send: t("features.wallet-list.send"),
     testnet: tf("features.unified-wallet.testnet", "testnet"),
+    tokenAddress: tf("features.unified-wallet.tokenAddress", "Token contract"),
     tracked: tf("features.unified-wallet.tracked", "Tracked"),
     untracked: tf("features.unified-wallet.untracked", "Not added"),
     recipient: tf("features.unified-wallet.recipient", "Recipient"),
@@ -11770,8 +11860,9 @@ export default function Home() {
 
   useEffect(() => {
     if (applicationLocked || !effectiveWallet) return;
+    const loadAllWallets = selectedForm === "settings" && settingsSection === "accounts";
     const targets = Object.values(walletMultichainAccountsByWallet)
-      .filter((state) => state.walletId === effectiveWallet.id)
+      .filter((state) => loadAllWallets || state.walletId === effectiveWallet.id)
       .flatMap((state) => state.accounts.map((account) => ({ walletId: state.walletId, account })));
     if (targets.length === 0) {
       setWalletNativeBalances({});
@@ -11842,7 +11933,86 @@ export default function Home() {
       if (!controller.signal.aborted) setWalletNativeBalances(Object.fromEntries(entries));
     })();
     return () => controller.abort();
-  }, [applicationLocked, effectiveWallet, nativeBalanceRefreshNonce, walletMultichainAccountsByWallet]);
+  }, [
+    applicationLocked,
+    effectiveWallet,
+    nativeBalanceRefreshNonce,
+    selectedForm,
+    settingsSection,
+    walletAccountBalanceRefreshNonce,
+    walletMultichainAccountsByWallet,
+  ]);
+
+  useEffect(() => {
+    if (applicationLocked) {
+      setWalletEvmBalances({});
+      return;
+    }
+    if (selectedForm !== "settings" || settingsSection !== "accounts") return;
+    const chainIdMatch = currentWalletNetwork.match(/^evm:([1-9]\d*)$/);
+    const chainId = Number(chainIdMatch?.[1]);
+    const chain = evmChains.find((item) => (
+      item.chain_id === chainId && visibleEvmChainIds(evmChains, appPreferences).includes(item.chain_id)
+    ));
+    if (!chain) return;
+    const targets = wallets.flatMap((wallet) => {
+      const address = wallet.evm_address?.trim();
+      return address ? [{ wallet, address }] : [];
+    });
+    const controller = new AbortController();
+    setWalletEvmBalances((previous) => {
+      const next = { ...previous };
+      for (const { wallet, address } of targets) {
+        const key = evmBalanceKey(wallet.id, chain.chain_id);
+        const prior = previous[key];
+        next[key] = {
+          walletId: wallet.id,
+          chainId: chain.chain_id,
+          address,
+          balanceWei: prior?.address.toLowerCase() === address.toLowerCase() ? prior.balanceWei : "",
+          loading: true,
+        };
+      }
+      return next;
+    });
+    void (async () => {
+      const entries = await Promise.all(targets.map(async ({ wallet, address }) => {
+        const key = evmBalanceKey(wallet.id, chain.chain_id);
+        try {
+          const snapshot = await loadEvmAssetSnapshot(chain, address, [], false);
+          return [key, {
+            walletId: wallet.id,
+            chainId: chain.chain_id,
+            address,
+            balanceWei: snapshot.native_balance_wei,
+            loading: false,
+          }] as const;
+        } catch (error) {
+          return [key, {
+            walletId: wallet.id,
+            chainId: chain.chain_id,
+            address,
+            balanceWei: "",
+            loading: false,
+            error: errorMessage(error, "Unable to load EVM balance"),
+          }] as const;
+        }
+      }));
+      if (controller.signal.aborted) return;
+      setWalletEvmBalances((previous) => ({ ...previous, ...Object.fromEntries(entries) }));
+    })();
+    return () => controller.abort();
+  }, [
+    applicationLocked,
+    appPreferences,
+    currentWalletNetwork,
+    evmChains,
+    loadEvmAssetSnapshot,
+    selectedForm,
+    settingsSection,
+    walletAccountBalanceRefreshNonce,
+    wallets,
+  ]);
 
   const walletChainAddresses = useMemo<WalletChainAddress[]>(() => (
     effectiveWallet
@@ -11984,6 +12154,7 @@ export default function Home() {
             rawBalance: token.balance,
             decimals: token.decimals,
             tokenAddress: token.contract_address,
+            logoUri: token.logo_uri || undefined,
             tracked: true,
             testnet: chain.testnet,
           });
@@ -12024,6 +12195,50 @@ export default function Home() {
     walletNativeBalances,
   ]);
 
+  const activeEvmOwnedAssets = useMemo<UnifiedWalletAsset[]>(() => {
+    if (!activeEvmChain) return [];
+    const currentSnapshot = evmWallet
+      && evmAssets?.wallet_address.toLowerCase() === evmWallet.address.toLowerCase()
+      && evmAssets.chain.chain_id === activeEvmChain.chain_id
+      ? evmAssets
+      : null;
+    const rawNativeBalance = currentSnapshot?.native_balance_wei ?? "";
+    return [
+      {
+        id: `evm:${activeEvmChain.chain_id}:native`,
+        family: "evm",
+        chainId: activeEvmChain.chain_id,
+        chainName: activeEvmChain.name,
+        chainSymbol: activeEvmChain.native_symbol,
+        symbol: activeEvmChain.native_symbol,
+        name: activeEvmChain.name,
+        balance: rawNativeBalance ? atomicToDecimalUnits(rawNativeBalance, 18) : "--",
+        rawBalance: rawNativeBalance,
+        decimals: 18,
+        logoUri: chainLogoUri(activeEvmChain.chain_id),
+        tracked: true,
+        loading: evmBusy && !currentSnapshot,
+        testnet: activeEvmChain.testnet,
+      },
+      ...(currentSnapshot?.tokens ?? []).map((token) => ({
+        id: `evm:${activeEvmChain.chain_id}:${token.contract_address.toLowerCase()}`,
+        family: "evm" as const,
+        chainId: activeEvmChain.chain_id,
+        chainName: activeEvmChain.name,
+        chainSymbol: activeEvmChain.native_symbol,
+        symbol: token.symbol,
+        name: token.name,
+        balance: rawTokenAmountToUi(token.balance, token.decimals),
+        rawBalance: token.balance,
+        decimals: token.decimals,
+        tokenAddress: token.contract_address,
+        logoUri: token.logo_uri || undefined,
+        tracked: true,
+        testnet: activeEvmChain.testnet,
+      })),
+    ];
+  }, [activeEvmChain, evmAssets, evmBusy, evmWallet]);
+
   const unifiedSearchAssets = useMemo<UnifiedWalletAsset[]>(() => {
     const assets = [...unifiedOwnedAssets];
     const knownIds = new Set(assets.map((asset) => asset.id));
@@ -12057,7 +12272,13 @@ export default function Home() {
     return assets;
   }, [effectiveNetwork, unifiedOwnedAssets]);
 
-  const openUnifiedAssetForSend = (asset: UnifiedWalletAsset) => {
+  const openEvmAssetManager = () => {
+    setEvmNewTokenContract("");
+    setEvmError(null);
+    handleOpenForm("evm-workbench", { evm_asset_manager: 1 }, "wallet-list");
+  };
+
+  const openUnifiedAssetForSend = (asset: UnifiedWalletAsset, sourceForm = "wallet-send") => {
     if (!effectiveWallet) return;
     if (asset.family === "solana") {
       if (asset.tokenAddress) {
@@ -12068,12 +12289,12 @@ export default function Home() {
           decimals: asset.decimals,
           token_balance: asset.balance,
           token_raw_amount: asset.rawBalance,
-        }, "wallet-send");
+        }, sourceForm);
       } else {
         handleOpenForm("transfer-sol", {
           wallet_id: effectiveWallet.id,
           network: effectiveNetwork,
-        }, "wallet-send");
+        }, sourceForm);
       }
       return;
     }
@@ -12082,24 +12303,34 @@ export default function Home() {
         wallet_id: effectiveWallet.id,
         network_id: asset.networkId,
         asset_id: asset.id,
-      }, "wallet-send");
+      }, sourceForm);
       return;
     }
-    const chain = portfolioEvmChains.find((item) => item.chain_id === asset.chainId);
+    const chain = evmChains.find((item) => item.chain_id === asset.chainId);
     if (!chain) return;
     selectEvmChain(String(chain.chain_id));
     setEvmRecipient("");
     setEvmAmount("");
-    setEvmTokenContract(asset.tokenAddress || "");
     setEvmPreview(null);
     setEvmSubmitResult(null);
     setEvmTransactionStatus(null);
+    setEvmError(null);
     handleOpenForm("evm-workbench", {
       unified_evm_send: 1,
+      evm_asset_chain_id: chain.chain_id,
+      evm_asset_kind: asset.tokenAddress ? "erc20" : "native",
+      evm_asset_contract: asset.tokenAddress || "",
       evm_asset_decimals: asset.decimals,
       evm_asset_symbol: asset.symbol,
       evm_asset_chain: chain.name,
-    }, "wallet-send");
+      evm_asset_balance: asset.balance,
+      evm_asset_logo_uri: asset.logoUri || "",
+    }, sourceForm);
+  };
+
+  const openUnifiedAssetDetails = (asset: UnifiedWalletAsset) => {
+    setSelectedAssetDetailId(asset.id);
+    handleOpenForm("wallet-asset-detail", { asset_id: asset.id }, "wallet-list");
   };
 
   const addEvmContractFromUnifiedSend = async (chainId: number, contract: string) => {
@@ -12107,7 +12338,7 @@ export default function Home() {
     const requestId = evmTokenLookupRequestIdRef.current + 1;
     evmTokenLookupRequestIdRef.current = requestId;
     const walletId = effectiveWallet.id;
-    const chain = portfolioEvmChains.find((item) => item.chain_id === chainId);
+    const chain = evmChains.find((item) => item.chain_id === chainId);
     if (!chain) throw new Error("Select an EVM network");
     const stored = loadStoredDesktopEvmTokens(chainId, effectiveWallet.evm_address);
     const contracts = Array.from(new Map([...stored, contract].map((item) => [item.toLowerCase(), item])).values());
@@ -12131,15 +12362,20 @@ export default function Home() {
       setEvmTokenContracts(contracts);
       setEvmRecipient("");
       setEvmAmount("");
-      setEvmTokenContract(contract);
       setEvmPreview(null);
       setEvmSubmitResult(null);
       setEvmTransactionStatus(null);
+      setEvmError(null);
       handleOpenForm("evm-workbench", {
         unified_evm_send: 1,
+        evm_asset_chain_id: chain.chain_id,
+        evm_asset_kind: "erc20",
+        evm_asset_contract: token.contract_address,
         evm_asset_decimals: token.decimals,
         evm_asset_symbol: token.symbol,
         evm_asset_chain: chain.name,
+        evm_asset_balance: rawTokenAmountToUi(token.balance, token.decimals),
+        evm_asset_logo_uri: token.logo_uri || "",
       }, "wallet-send");
     } catch (error) {
       toast.error(errorMessage(error, tf("features.unified-wallet.assetLookupFailed", "Unable to query this token")));
@@ -17326,7 +17562,11 @@ export default function Home() {
             </div>
             <button
               type="button"
-              onClick={() => void loadWallets()}
+              onClick={() => {
+                setWalletAccountBalanceRefreshNonce((value) => value + 1);
+                void loadWallets();
+              }}
+              disabled={walletsLoading}
               className="shrink-0 rounded-lg bg-white/10 px-3 py-2 text-xs hover:bg-white/20 transition-colors"
             >
               {walletsLoading ? t("common.loading") : t("formUi.refreshWallets")}
@@ -17423,13 +17663,9 @@ export default function Home() {
                 const walletAddressFallback = nativeAccountState?.error
                   ? t("features.settings.walletAddressUnavailable")
                   : t("common.loading");
-                const selectedEvmAssets = selectedEvmChain
-                  ? evmAssetsByChain[selectedEvmChain.chain_id]
+                const evmBalance = selectedEvmChain
+                  ? walletEvmBalances[evmBalanceKey(wallet.id, selectedEvmChain.chain_id)]
                   : undefined;
-                const liveEvmBalance =
-                  selectedEvmAssets?.wallet_address.toLowerCase() === walletAddress.toLowerCase()
-                    ? rawTokenAmountToUi(selectedEvmAssets.native_balance_wei, 18)
-                    : undefined;
                 const liveSolBalance = !selectedEvmChain &&
                   !isNativeChainSelected &&
                   walletAssets?.address === wallet.public_key &&
@@ -17441,11 +17677,21 @@ export default function Home() {
                   ? walletNativeBalances[nativeBalanceKey(wallet.id, selectedNativeAccount.chain_id)]
                   : undefined;
                 let walletBalance = liveSolBalance ?? walletSolBalanceCache[wallet.public_key] ?? "--";
-                if (selectedEvmChain) walletBalance = liveEvmBalance ?? "--";
+                let walletBalanceLoading = false;
+                let walletBalanceError: string | undefined;
+                if (selectedEvmChain) {
+                  walletBalance = evmBalance?.balanceWei
+                    ? rawTokenAmountToUi(evmBalance.balanceWei, 18)
+                    : "--";
+                  walletBalanceLoading = evmBalance?.loading ?? true;
+                  walletBalanceError = evmBalance?.error;
+                }
                 if (isNativeChainSelected) {
                   walletBalance = nativeBalance?.balanceAtomic
                     ? atomicToDecimalUnits(nativeBalance.balanceAtomic, nativeBalance.decimals)
                     : "--";
+                  walletBalanceLoading = nativeAccountState?.loading || nativeBalance?.loading || false;
+                  walletBalanceError = nativeAccountState?.error || nativeBalance?.error;
                 }
                 const copyId = `settings-wallet:${selectedWalletNetworkId}:${wallet.id}`;
                 return (
@@ -17546,12 +17792,17 @@ export default function Home() {
                       </div>
                     </div>
                     <div className="flex items-center justify-end gap-2 lg:justify-end">
-                      <div className="hidden min-w-28 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-right sm:block">
+                      <div
+                        className="hidden min-w-28 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-right sm:block"
+                        title={walletBalanceError}
+                      >
                         <p className="text-[11px] uppercase tracking-normal text-gray-500">
                           {t("features.settings.walletNetworkBalance", { symbol: selectedWalletNetworkSymbol })}
                         </p>
                         <p className="mt-0.5 truncate text-sm font-semibold text-white">
-                          {walletBalance} {selectedWalletNetworkSymbol}
+                          {walletBalanceLoading && walletBalance === "--"
+                            ? t("common.loading")
+                            : `${walletBalance} ${selectedWalletNetworkSymbol}`}
                         </p>
                       </div>
                       <div className="relative" data-wallet-actions-menu>
@@ -17772,41 +18023,7 @@ export default function Home() {
         const evmNativeBalance = currentEvmAssets
           ? atomicToDecimalUnits(currentEvmAssets.native_balance_wei, 18)
           : "--";
-        const evmAssetsForCurrentChain: UnifiedWalletAsset[] = activeEvmChain
-          ? [
-              {
-                id: `evm:${activeEvmChain.chain_id}:native`,
-                family: "evm",
-                chainId: activeEvmChain.chain_id,
-                chainName: activeEvmChain.name,
-                chainSymbol: activeEvmChain.native_symbol,
-                symbol: activeEvmChain.native_symbol,
-                name: activeEvmChain.name,
-                balance: evmNativeBalance,
-                rawBalance: currentEvmAssets?.native_balance_wei ?? "",
-                decimals: 18,
-                logoUri: chainLogoUri(activeEvmChain.chain_id),
-                tracked: true,
-                loading: evmBusy && !currentEvmAssets,
-                testnet: activeEvmChain.testnet,
-              },
-              ...(currentEvmAssets?.tokens ?? []).map((token) => ({
-                id: `evm:${activeEvmChain.chain_id}:${token.contract_address.toLowerCase()}`,
-                family: "evm" as const,
-                chainId: activeEvmChain.chain_id,
-                chainName: activeEvmChain.name,
-                chainSymbol: activeEvmChain.native_symbol,
-                symbol: token.symbol,
-                name: token.name,
-                balance: rawTokenAmountToUi(token.balance, token.decimals),
-                rawBalance: token.balance,
-                decimals: token.decimals,
-                tokenAddress: token.contract_address,
-                tracked: true,
-                testnet: activeEvmChain.testnet,
-              })),
-            ]
-          : [];
+        const evmAssetsForCurrentChain = activeEvmOwnedAssets;
         const evmTransactions = currentEvmAssets?.recent_transactions ?? [];
         return (
           <div className="space-y-4">
@@ -17961,11 +18178,12 @@ export default function Home() {
                       {walletOverviewTab === "assets" && (
                         <button
                           type="button"
-                          onClick={() => handleSelectForm("evm-workbench")}
-                          className="inline-flex h-9 items-center gap-2 rounded-lg bg-white/10 px-3 text-xs text-gray-200 hover:bg-white/15"
+                          onClick={openEvmAssetManager}
+                          aria-label={unifiedWalletLabels.addAsset}
+                          title={unifiedWalletLabels.addAsset}
+                          className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/20 text-gray-100 hover:bg-white/10"
                         >
-                          <Plus className="h-3.5 w-3.5" />
-                          {tf("features.wallet-list.otherChainsAddToken", "Add token")}
+                          <Plus className="h-5 w-5" />
                         </button>
                       )}
                       <button
@@ -17986,7 +18204,7 @@ export default function Home() {
                       assets={evmAssetsForCurrentChain}
                       error={evmError}
                       labels={unifiedWalletLabels}
-                      onSelect={openUnifiedAssetForSend}
+                      onSelect={openUnifiedAssetDetails}
                       preferredChainId={`evm:${activeEvmChain?.chain_id ?? ""}`}
                       refreshing={evmBusy}
                       onRefresh={refreshEvmAssets}
@@ -18113,6 +18331,7 @@ export default function Home() {
                   assets={[asset]}
                   error={error}
                   labels={unifiedWalletLabels}
+                  onSelect={openUnifiedAssetDetails}
                   preferredChainId={account.chain_id}
                   refreshing={loading}
                   onRefresh={() => setNativeBalanceRefreshNonce((value) => value + 1)}
@@ -18326,6 +18545,8 @@ export default function Home() {
               assets={unifiedOwnedAssets}
               error={unifiedPortfolioError}
               labels={unifiedWalletLabels}
+              onAddAsset={openEvmAssetManager}
+              onSelect={openUnifiedAssetDetails}
               preferredChainId={selectedWalletChain?.id}
               refreshing={unifiedAssetsRefreshing}
               onRefresh={refreshUnifiedAssets}
@@ -20644,14 +20865,18 @@ export default function Home() {
 
     const renderEvmWorkbench = () => (
       <div className="space-y-5">
-        <section className="px-1 pt-1">
+        {!isUnifiedEvmSend && <section className="px-1 pt-1">
           <p className="text-xs font-semibold uppercase text-emerald-300">
-            {tf("features.evm-workbench.eyebrow", "One wallet for every EVM network")}
+            {isEvmAssetManager
+              ? tf("features.evm-workbench.manageTokens", "Add asset")
+              : tf("features.evm-workbench.eyebrow", "One wallet for every EVM network")}
           </p>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-400">
-            {tf("features.evm-workbench.subtitle", "Create one wallet once. The same address works across every EVM-compatible network, with no chain selection required during creation.")}
+            {isEvmAssetManager
+              ? tf("features.evm-workbench.addAssetHint", "Choose the asset's network, then enter its ERC-20 contract address.")
+              : tf("features.evm-workbench.subtitle", "Create one wallet once. The same address works across every EVM-compatible network, with no chain selection required during creation.")}
           </p>
-        </section>
+        </section>}
 
         {evmError && <div className="rounded-lg border border-red-400/30 bg-red-500/10 p-3 text-sm text-red-100">{evmError}</div>}
 
@@ -20676,7 +20901,7 @@ export default function Home() {
           </section>
         ) : (
           <>
-            <section className="grid gap-4 rounded-lg border border-white/10 bg-white/[0.03] p-5 lg:grid-cols-[minmax(0,1fr)_minmax(16rem,0.55fr)] lg:items-end">
+            {!isUnifiedEvmSend && <section className="grid gap-4 rounded-lg border border-white/10 bg-white/[0.03] p-5 lg:grid-cols-[minmax(0,1fr)_minmax(16rem,0.55fr)] lg:items-end">
               <div className="min-w-0">
                 <p className="text-xs font-medium text-gray-400">
                   {tf("features.evm-workbench.walletAddress", "Wallet address")}
@@ -20691,7 +20916,7 @@ export default function Home() {
                 <select
                   value={evmChainId}
                   onChange={(event) => selectEvmChain(event.target.value)}
-                  disabled={visibleEvmChains.length === 0 || Number(formData.unified_evm_send) === 1}
+                  disabled={visibleEvmChains.length === 0}
                   className="h-11 w-full rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none focus:ring-2 focus:ring-emerald-400/40 disabled:opacity-50"
                 >
                   {visibleEvmChains.map((chain) => (
@@ -20703,75 +20928,153 @@ export default function Home() {
                   ))}
                 </select>
               </label>
-            </section>
+            </section>}
 
-            <section className="max-w-3xl">
+            {!isUnifiedEvmSend && <section className="max-w-3xl">
               <div className="space-y-3 rounded-lg border border-white/10 bg-white/[0.03] p-4">
             <div className="flex items-center justify-between gap-3">
-              <h3 className="text-lg font-semibold text-white">{tf("features.evm-workbench.assets", "Assets")}</h3>
-              <button type="button" onClick={refreshEvmAssets} disabled={evmBusy || !evmWallet} className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-100 hover:bg-white/10 disabled:opacity-50">
-                <RefreshCw className="h-4 w-4" />
-                {tf("features.evm-workbench.refresh", "Refresh")}
-              </button>
-            </div>
-            <div className="flex gap-2">
-              <input value={evmNewTokenContract} onChange={(event) => setEvmNewTokenContract(event.target.value)} placeholder={tf("features.evm-workbench.contractPlaceholder", "ERC-20 contract address")} className="h-10 min-w-0 flex-1 rounded-lg border border-white/10 bg-black/40 px-3 font-mono text-sm text-white outline-none" />
-              <button type="button" onClick={() => void addDesktopEvmToken()} disabled={evmBusy || !evmNewTokenContract.trim()} className="inline-flex h-10 items-center justify-center rounded-lg bg-emerald-500 px-3 text-sm font-semibold text-black hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50">
-                {tf("features.evm-workbench.addToken", "Add token")}
-              </button>
-            </div>
-            {evmTokenContracts.length > 0 && (
-              <div className="space-y-2">
-                {evmTokenContracts.map((contract) => (
-                  <div key={contract} className="flex items-center gap-2 rounded-lg border border-white/10 bg-black/20 p-2 text-xs text-gray-400">
-                    <span className="min-w-0 flex-1 break-all">{contract}</span>
-                    <button
-                      type="button"
-                      onClick={() => removeDesktopEvmToken(contract)}
-                      className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/10 text-gray-300 hover:bg-white/10 hover:text-white"
-                      aria-label={tf("features.evm-workbench.removeToken", "Remove token")}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </div>
-                ))}
+              <h3 className="text-lg font-semibold text-white">
+                {isEvmAssetManager
+                  ? tf("features.evm-workbench.manageTokens", "Add asset")
+                  : tf("features.evm-workbench.assets", "Assets")}
+              </h3>
+              <div className="flex items-center gap-2">
+                {isEvmAssetManager && <button type="button" onClick={() => handleSelectForm("wallet-list")} className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-100 hover:bg-white/10">
+                  <ArrowLeft className="h-4 w-4" />
+                  {tf("features.evm-workbench.backToAssets", "Back to assets")}
+                </button>}
+                {!isEvmAssetManager && <button type="button" onClick={refreshEvmAssets} disabled={evmBusy || !evmWallet} className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-100 hover:bg-white/10 disabled:opacity-50">
+                  <RefreshCw className="h-4 w-4" />
+                  {tf("features.evm-workbench.refresh", "Refresh")}
+                </button>}
               </div>
-            )}
-            <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-sm text-gray-300">
-              <p>
-                {tf("features.evm-workbench.nativeBalance", "{symbol} balance", { symbol: activeEvmChain?.native_symbol || "Native" })}: {activeEvmAssets?.native_balance_wei
-                  ? rawTokenAmountToUi(activeEvmAssets.native_balance_wei, 18)
-                  : "-"} {activeEvmChain?.native_symbol || ""}
-              </p>
-              <p className="mt-1 text-xs text-gray-500">
-                {tf("features.evm-workbench.history", "History")}: {activeEvmAssets?.history_status ?? tf("features.evm-workbench.historyNotLoaded", "not loaded")} {activeEvmAssets?.history_message ? `- ${activeEvmAssets.history_message}` : ""}
-              </p>
+            </div>
+            {isEvmAssetManager ? (
+              <div className="space-y-4 border-t border-white/10 pt-4">
+                <div>
+                  <h4 className="text-sm font-semibold text-white">{tf("features.evm-workbench.addToken", "Add token")}</h4>
+                  <p className="mt-1 text-xs text-gray-500">{tf("features.evm-workbench.contractHint", "Enter the ERC-20 contract on the selected network.")}</p>
+                </div>
+                <div className="flex gap-2">
+                  <input value={evmNewTokenContract} onChange={(event) => setEvmNewTokenContract(event.target.value)} placeholder={tf("features.evm-workbench.contractPlaceholder", "ERC-20 contract address")} className="h-10 min-w-0 flex-1 rounded-lg border border-white/10 bg-black/40 px-3 font-mono text-sm text-white outline-none" />
+                  <button type="button" onClick={() => void addDesktopEvmToken()} disabled={evmBusy || !evmNewTokenContract.trim()} className="inline-flex h-10 items-center justify-center rounded-lg bg-emerald-500 px-3 text-sm font-semibold text-black hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50">
+                    {tf("features.evm-workbench.addToken", "Add token")}
+                  </button>
+                </div>
+                {evmTokenContracts.length > 0 && (
+                  <div className="divide-y divide-white/10 border-y border-white/10">
+                    {evmTokenContracts.map((contract) => (
+                      <div key={contract} className="flex items-center gap-2 py-2 text-xs text-gray-400">
+                        <span className="min-w-0 flex-1 break-all">{contract}</span>
+                        <button
+                          type="button"
+                          onClick={() => removeDesktopEvmToken(contract)}
+                          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-gray-300 hover:bg-white/10 hover:text-white"
+                          aria-label={tf("features.evm-workbench.removeToken", "Remove token")}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : <>
+            <div className="flex items-center gap-3 border-y border-white/10 py-3 text-sm text-gray-300">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-400/10 text-xs font-bold text-emerald-100">
+                {(activeEvmChain?.native_symbol || "EVM").slice(0, 4)}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="font-medium text-white">{activeEvmChain?.native_symbol || "Native"}</p>
+                <p className="text-xs text-gray-500">{activeEvmChain?.name || "EVM"}</p>
+              </div>
+              <p className="text-right font-medium text-white">{activeEvmAssets?.native_balance_wei
+                ? rawTokenAmountToUi(activeEvmAssets.native_balance_wei, 18)
+                : "-"}</p>
+              <button
+                type="button"
+                disabled={!activeEvmChain || !activeEvmAssets}
+                onClick={() => {
+                  if (!activeEvmChain || !activeEvmAssets) return;
+                  openUnifiedAssetForSend({
+                    id: `evm:${activeEvmChain.chain_id}:native`,
+                    family: "evm",
+                    chainId: activeEvmChain.chain_id,
+                    chainName: activeEvmChain.name,
+                    chainSymbol: activeEvmChain.native_symbol,
+                    symbol: activeEvmChain.native_symbol,
+                    name: activeEvmChain.name,
+                    balance: rawTokenAmountToUi(activeEvmAssets.native_balance_wei, 18),
+                    rawBalance: activeEvmAssets.native_balance_wei,
+                    decimals: 18,
+                    logoUri: chainLogoUri(activeEvmChain.chain_id),
+                    tracked: true,
+                    testnet: activeEvmChain.testnet,
+                  });
+                }}
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-100 hover:bg-white/10 disabled:opacity-40"
+              >
+                <Send className="h-4 w-4" />
+                {tf("features.unified-wallet.send", "Send")}
+              </button>
             </div>
             <div className="space-y-2">
               {(activeEvmAssets?.tokens || []).map((token) => (
-                <div key={token.contract_address} className="rounded-lg border border-white/10 bg-black/20 p-3 text-sm">
-                  <p className="font-medium text-white">{token.symbol} {rawTokenAmountToUi(token.balance, token.decimals)}</p>
-                  <p className="break-all text-xs text-gray-500">{token.name} · {token.contract_address}</p>
-                </div>
-              ))}
-              {(activeEvmAssets?.recent_transactions || []).map((entry) => (
-                <div key={entry.hash} className="rounded-lg border border-white/10 bg-black/20 p-3 text-sm">
-                  <p className="text-white">{entry.status} · block {entry.block_number ?? "-"}</p>
-                  <p className="break-all text-xs text-gray-500">{entry.hash}</p>
+                <div key={token.contract_address} className="flex items-center gap-3 border-b border-white/10 py-3 text-sm">
+                  <div className="min-w-0 flex-1">
+                    <p className="font-medium text-white">{token.symbol}</p>
+                    <p className="truncate text-xs text-gray-500" title={token.contract_address}>{token.name}</p>
+                  </div>
+                  <p className="text-right font-medium text-white">{rawTokenAmountToUi(token.balance, token.decimals)}</p>
+                  <button
+                    type="button"
+                    onClick={() => activeEvmChain && openUnifiedAssetForSend({
+                      id: `evm:${activeEvmChain.chain_id}:${token.contract_address.toLowerCase()}`,
+                      family: "evm",
+                      chainId: activeEvmChain.chain_id,
+                      chainName: activeEvmChain.name,
+                      chainSymbol: activeEvmChain.native_symbol,
+                      symbol: token.symbol,
+                      name: token.name,
+                      balance: rawTokenAmountToUi(token.balance, token.decimals),
+                      rawBalance: token.balance,
+                      decimals: token.decimals,
+                      tokenAddress: token.contract_address,
+                      logoUri: token.logo_uri || undefined,
+                      tracked: true,
+                      testnet: activeEvmChain.testnet,
+                    })}
+                    className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-100 hover:bg-white/10"
+                  >
+                    <Send className="h-4 w-4" />
+                    {tf("features.unified-wallet.send", "Send")}
+                  </button>
                 </div>
               ))}
             </div>
+            </>}
           </div>
-        </section>
+        </section>}
 
-        <section className="space-y-3 rounded-lg border border-white/10 bg-white/[0.03] p-4">
+        {isUnifiedEvmSend && <section className="max-w-2xl space-y-4 rounded-lg border border-white/10 bg-white/[0.03] p-4">
           <h3 className="text-lg font-semibold text-white">
-            {tf("features.evm-workbench.transferTitle", "Send asset")}
+            {evmAssetSendContext
+              ? tf("features.evm-workbench.sendSelectedAsset", "Send {symbol}", { symbol: evmAssetSendContext.symbol })
+              : tf("features.evm-workbench.transferTitle", "Send asset")}
           </h3>
-          {Number(formData.unified_evm_send) === 1 && (
-            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-emerald-300/20 bg-emerald-300/[0.06] px-3 py-2 text-sm">
-              <span className="font-semibold text-emerald-100">{String(formData.evm_asset_symbol || activeEvmChain?.native_symbol || "")}</span>
-              <span className="text-gray-400">{String(formData.evm_asset_chain || activeEvmChain?.name || "")}</span>
+          {evmAssetSendContext && (
+            <div className="flex items-center gap-3 border-y border-white/10 py-3">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-400/10 text-xs font-bold text-emerald-100">
+                {evmAssetSendContext.symbol.slice(0, 4)}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold text-white">{evmAssetSendContext.symbol}</p>
+                <p className="text-xs text-gray-400">{evmAssetSendContext.chainName}</p>
+              </div>
+              <div className="text-right">
+                <p className="text-xs text-gray-500">{tf("features.unified-wallet.available", "Available")}</p>
+                <p className="text-sm font-medium text-gray-200">{evmAssetSendContext.balance} {evmAssetSendContext.symbol}</p>
+              </div>
             </div>
           )}
           <div className="grid gap-3 sm:grid-cols-2">
@@ -20803,41 +21106,51 @@ export default function Home() {
                   setEvmAmount(event.target.value);
                   setEvmPreview(null);
                 }}
-                inputMode={Number(formData.unified_evm_send) === 1 ? "decimal" : "numeric"}
-                placeholder={Number(formData.unified_evm_send) === 1
+                inputMode={isUnifiedEvmSend ? "decimal" : "numeric"}
+                placeholder={isUnifiedEvmSend
                   ? tf("features.evm-workbench.amountPlaceholder", "Enter asset amount")
                   : tf("features.evm-workbench.rawAmountPlaceholder", "Amount in wei or token units")}
                 className="h-10 w-full rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none"
               />
             </label>
-            <label className="space-y-1.5 text-sm text-gray-300">
-              {tf("features.evm-workbench.tokenContract", "Token contract")}
-              <input
-                value={evmTokenContract}
-                onChange={(event) => {
-                  evmPreviewRequestIdRef.current += 1;
-                  setEvmTokenContract(event.target.value);
-                  setEvmPreview(null);
-                }}
-                readOnly={Number(formData.unified_evm_send) === 1}
-                placeholder={tf("features.evm-workbench.tokenContractPlaceholder", "Optional for native asset")}
-                className="h-10 w-full rounded-lg border border-white/10 bg-black/40 px-3 font-mono text-sm text-white outline-none read-only:cursor-not-allowed read-only:text-gray-500"
-              />
-            </label>
           </div>
           <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={previewEvmPayment} disabled={evmBusy || !evmWallet} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-white px-3 text-sm font-semibold text-black disabled:opacity-50">
-              <ShieldCheck className="h-4 w-4" />
-              {tf("features.evm-workbench.preview", "Preview transaction")}
-            </button>
-            <button type="button" onClick={() => void submitEvmPayment(true)} disabled={evmBusy || !evmPreview} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-500 px-3 text-sm font-semibold text-black hover:bg-emerald-400 disabled:opacity-50">
-              <Send className="h-4 w-4" />
-              {tf("features.evm-workbench.confirmSubmit", "Confirm send")}
-            </button>
-            <button type="button" onClick={() => void submitEvmPayment(false)} disabled={evmBusy || !evmPreview} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-100 hover:bg-white/10 disabled:opacity-50">
-              <X className="h-4 w-4" />
-              {tf("features.evm-workbench.reject", "Cancel preview")}
-            </button>
+            {!evmPreview ? (
+              <button
+                type="button"
+                onClick={previewEvmPayment}
+                disabled={evmBusy || !evmWallet || !evmRecipient.trim() || !evmAmount.trim()}
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-white px-4 text-sm font-semibold text-black hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <ShieldCheck className="h-4 w-4" />
+                {evmBusy
+                  ? tf("features.unified-wallet.previewing", "Loading preview...")
+                  : tf("features.evm-workbench.reviewTransaction", "Review transaction")}
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => void submitEvmPayment(true)}
+                  disabled={evmBusy}
+                  className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-emerald-500 px-4 text-sm font-semibold text-black hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Send className="h-4 w-4" />
+                  {evmBusy
+                    ? tf("features.unified-wallet.sending", "Sending...")
+                    : tf("features.evm-workbench.confirmSubmit", "Confirm send")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void submitEvmPayment(false)}
+                  disabled={evmBusy}
+                  className="inline-flex h-11 items-center justify-center gap-2 rounded-lg border border-white/10 px-4 text-sm text-gray-100 hover:bg-white/10 disabled:opacity-50"
+                >
+                  <Pencil className="h-4 w-4" />
+                  {tf("features.evm-workbench.editTransaction", "Edit transaction")}
+                </button>
+              </>
+            )}
           </div>
           {evmPreview && (
             <div className="grid gap-2 rounded-lg border border-emerald-300/20 bg-emerald-300/10 p-3 text-sm text-emerald-50 lg:grid-cols-2">
@@ -20868,9 +21181,24 @@ export default function Home() {
             </div>
           )}
           {evmSubmitResult && (
-            <div className="space-y-3 rounded-lg border border-white/10 bg-black/20 p-3 text-sm text-gray-300">
-              <p>{tf("features.evm-workbench.status", "Status")}: {evmSubmitResult.status}</p>
-              <p className="break-all">{tf("features.evm-workbench.transactionHash", "Transaction hash")}: {evmSubmitResult.transaction_hash}</p>
+            <div aria-live="polite" className="space-y-3 rounded-lg border border-white/10 bg-black/20 p-3 text-sm text-gray-300">
+              <p className={evmTransactionStatus?.status === "confirmed" ? "text-emerald-200" : evmTransactionStatus?.status === "failed" ? "text-red-200" : "text-amber-100"}>
+                {tf("features.evm-workbench.status", "Status")}: {evmTransactionStatus?.status === "confirmed"
+                  ? tf("features.evm-workbench.confirmedOnChain", "Confirmed on-chain")
+                  : evmTransactionStatus?.status === "failed"
+                    ? tf("features.evm-workbench.failedOnChain", "Failed on-chain")
+                    : tf("features.evm-workbench.awaitingConfirmation", "Broadcast; awaiting on-chain confirmation")}
+              </p>
+              <p className="break-all">
+                {tf("features.evm-workbench.transactionHash", "Transaction hash")}: {evmSubmitResult.transaction_hash}
+              </p>
+              {evmPreview && (
+                <div className="grid gap-1 text-xs text-gray-400 lg:grid-cols-2">
+                  <p className="break-all lg:col-span-2">{tf("features.evm-workbench.transactionRecipient", "Recipient")}: {evmPreview.recipient}</p>
+                  <p>{tf("features.evm-workbench.nonce", "Nonce")}: {evmPreview.nonce}</p>
+                  <p>{tf("features.evm-workbench.chainId", "Chain ID")}: {evmPreview.chain.chain_id}</p>
+                </div>
+              )}
               <button type="button" onClick={refreshEvmTransactionStatus} disabled={evmBusy} className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-100 hover:bg-white/10 disabled:opacity-50">
                 <RefreshCw className="h-4 w-4" />
                 {tf("features.evm-workbench.checkReceipt", "Check transaction status")}
@@ -20885,7 +21213,7 @@ export default function Home() {
               )}
             </div>
           )}
-        </section>
+        </section>}
           </>
         )}
       </div>
@@ -20905,6 +21233,24 @@ export default function Home() {
             onCopy={copyToClipboard}
           />
         );
+
+      case "wallet-asset-detail": {
+        const assetId = selectedAssetDetailId || String(formData.asset_id || "");
+        const asset = unifiedOwnedAssets.find((item) => item.id === assetId)
+          ?? activeEvmOwnedAssets.find((item) => item.id === assetId);
+        if (!asset) {
+          return <p className="py-10 text-center text-sm text-gray-500">{unifiedWalletLabels.noAssets}</p>;
+        }
+        return (
+          <WalletAssetDetailPanel
+            asset={asset}
+            copied={copied === `asset-detail:${asset.id}`}
+            labels={unifiedWalletLabels}
+            onCopy={copyToClipboard}
+            onSend={(selectedAsset) => openUnifiedAssetForSend(selectedAsset, "wallet-asset-detail")}
+          />
+        );
+      }
 
       case "wallet-send":
         return (
@@ -28932,6 +29278,7 @@ export default function Home() {
         .find((c) => c?.id === selectedForm)?.label ||
       ({
         "wallet-list": t("features.wallet-list.title"),
+        "wallet-asset-detail": tf("features.unified-wallet.assetDetails", "Asset details"),
         "wallet-send": tf("features.unified-wallet.selectAsset", "Select an asset"),
         "native-chain-send": tf("features.unified-wallet.sendNativeAsset", "Send native asset"),
         "wallet-receive": tf("features.unified-wallet.receiveAddress", "Receive address"),
@@ -29756,7 +30103,7 @@ export default function Home() {
                         </p>
                       ))}
                       <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-all rounded bg-black/25 p-2 text-[11px] text-sky-50/80">
-                        {dappSignRequest.payload_json || "[]"}
+                        {formatDappPayloadForDisplay(dappSignRequest.payload_json)}
                       </pre>
                     </div>
                   )}
