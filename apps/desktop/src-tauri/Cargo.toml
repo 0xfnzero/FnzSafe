@@ -1,6 +1,6 @@
 [package]
 name = "fnzero-safe-desktop"
-version = "0.5.4"
+version = "0.5.5"
 description = "FnzSafe — Tauri desktop shell"
 authors = ["you"]
 license = "MIT"
