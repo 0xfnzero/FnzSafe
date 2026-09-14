@@ -13,6 +13,7 @@ import {
   RefreshCw,
   Search,
   Send,
+  WalletCards,
   X,
 } from "lucide-react";
 import { apiFetch } from "@/lib/apiFetch";
@@ -49,6 +50,13 @@ export interface UnifiedWalletAsset {
   loading?: boolean;
   testnet?: boolean;
   derivationPath?: string;
+}
+
+export interface WalletRecipientOption {
+  id: string;
+  name: string;
+  address: string;
+  current: boolean;
 }
 
 export interface UnifiedWalletLabels {
@@ -112,6 +120,9 @@ export interface UnifiedWalletLabels {
   sendFailed: string;
   previewFailed: string;
   reviewWarning: string;
+  chooseWallet: string;
+  chooseRecipientWallet: string;
+  noRecipientWallets: string;
 }
 
 type CopyHandler = (value: string, id: string) => void;
@@ -158,6 +169,114 @@ function ChainMark({ item, large = false }: { item: WalletChainAddress | Unified
 
 function CopyIcon({ copied }: { copied: boolean }) {
   return copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />;
+}
+
+export function RecipientWalletPicker({
+  wallets,
+  labels,
+  onSelect,
+}: {
+  wallets: WalletRecipientOption[];
+  labels: Pick<UnifiedWalletLabels, "chooseWallet" | "chooseRecipientWallet" | "noRecipientWallets" | "current" | "close">;
+  onSelect: (wallet: WalletRecipientOption) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const dialogId = useId();
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+
+  const close = useCallback(() => {
+    setOpen(false);
+    window.requestAnimationFrame(() => triggerRef.current?.focus());
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [close, open]);
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={() => setOpen(true)}
+        aria-controls={open ? dialogId : undefined}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        aria-label={labels.chooseWallet}
+        title={labels.chooseWallet}
+        className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.06] text-gray-200 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300/60"
+      >
+        <WalletCards className="h-5 w-5" />
+      </button>
+      {open && createPortal(
+        <div className="fixed inset-0 z-[120] flex items-end justify-center bg-black/65" onMouseDown={close}>
+          <section
+            id={dialogId}
+            role="dialog"
+            aria-modal="true"
+            aria-label={labels.chooseRecipientWallet}
+            className="max-h-[72vh] w-full max-w-2xl overflow-hidden rounded-t-lg border border-b-0 border-white/10 bg-zinc-950 shadow-2xl"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+              <h3 className="text-sm font-semibold text-white">{labels.chooseRecipientWallet}</h3>
+              <button
+                type="button"
+                onClick={close}
+                autoFocus
+                aria-label={labels.close}
+                title={labels.close}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-gray-400 hover:bg-white/10 hover:text-white"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="max-h-[calc(72vh-4rem)] overflow-y-auto p-2 sm:p-3">
+              {wallets.length === 0 ? (
+                <p className="py-8 text-center text-sm text-gray-500">{labels.noRecipientWallets}</p>
+              ) : wallets.map((wallet) => (
+                <button
+                  key={wallet.id}
+                  type="button"
+                  disabled={wallet.current}
+                  aria-current={wallet.current ? "true" : undefined}
+                  onClick={() => {
+                    onSelect(wallet);
+                    close();
+                  }}
+                  className="flex w-full min-w-0 items-center gap-3 border-b border-white/10 px-2 py-3 text-left last:border-b-0 enabled:hover:bg-white/[0.06] disabled:cursor-default disabled:opacity-65 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-300/60"
+                >
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/10 text-sm font-semibold text-white">
+                    {wallet.name.trim().slice(0, 2).toUpperCase() || "W"}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="truncate text-sm font-semibold text-white">{wallet.name}</span>
+                      {wallet.current && (
+                        <span className="shrink-0 rounded bg-emerald-400/15 px-2 py-0.5 text-[10px] font-medium text-emerald-200">
+                          {labels.current}
+                        </span>
+                      )}
+                    </span>
+                    <span className="mt-1 block truncate font-mono text-xs text-gray-400" title={wallet.address}>
+                      {shortAddress(wallet.address)}
+                    </span>
+                  </span>
+                  {!wallet.current && <ChevronRight className="h-4 w-4 shrink-0 text-gray-500" />}
+                </button>
+              ))}
+            </div>
+          </section>
+        </div>,
+        document.body,
+      )}
+    </>
+  );
 }
 
 function hasPositiveBalance(value: string): boolean {
@@ -751,12 +870,14 @@ export function NativeChainSendPanel({
   asset,
   sender,
   walletId,
+  recipientWallets,
   labels,
   onSubmitted,
 }: {
   asset: UnifiedWalletAsset;
   sender: string;
   walletId: string;
+  recipientWallets: WalletRecipientOption[];
   labels: UnifiedWalletLabels;
   onSubmitted: () => void;
 }) {
@@ -874,17 +995,21 @@ export function NativeChainSendPanel({
         </div>
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
-        <label className="space-y-1.5 text-sm text-gray-300 sm:col-span-2">
-          {labels.recipient}
-          <input
-            value={recipient}
-            onChange={(event) => updateRecipient(event.target.value)}
-            autoComplete="off"
-            spellCheck={false}
-            placeholder={family === "bitcoin" ? "bc1..." : "T..."}
-            className="h-11 w-full rounded-lg border border-white/10 bg-black/40 px-3 font-mono text-sm text-white outline-none focus:ring-2 focus:ring-emerald-400/30"
-          />
-        </label>
+        <div className="space-y-1.5 text-sm text-gray-300 sm:col-span-2">
+          <label htmlFor="native-chain-recipient">{labels.recipient}</label>
+          <span className="flex min-w-0 gap-2">
+            <input
+              id="native-chain-recipient"
+              value={recipient}
+              onChange={(event) => updateRecipient(event.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder={family === "bitcoin" ? "bc1..." : "T..."}
+              className="h-11 min-w-0 flex-1 rounded-lg border border-white/10 bg-black/40 px-3 font-mono text-sm text-white outline-none focus:ring-2 focus:ring-emerald-400/30"
+            />
+            <RecipientWalletPicker wallets={recipientWallets} labels={labels} onSelect={(wallet) => updateRecipient(wallet.address)} />
+          </span>
+        </div>
         <label className="space-y-1.5 text-sm text-gray-300 sm:col-span-2">
           {labels.amount} ({asset.symbol})
           <input

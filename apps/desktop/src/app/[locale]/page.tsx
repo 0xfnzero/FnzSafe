@@ -87,6 +87,7 @@ import { SettingsCenterLayout, type SettingsNavigationItem } from "@/components/
 import { useSecureKeyboardInput } from "@/hooks/useSecureKeyboardInput";
 import {
   NativeChainSendPanel,
+  RecipientWalletPicker,
   UnifiedAssetList,
   WalletAssetDetailPanel,
   WalletAddressPopover,
@@ -95,6 +96,7 @@ import {
   type UnifiedWalletAsset,
   type UnifiedWalletLabels,
   type WalletChainAddress,
+  type WalletRecipientOption,
 } from "@/components/UnifiedWallet";
 import { BrowserMenu } from "@/components/BrowserMenu";
 import { ChainDirectory } from "@/components/ChainDirectory";
@@ -4201,12 +4203,25 @@ export default function Home() {
   const visibleEvmChains = evmChains.filter((chain) => enabledEvmChainIds.includes(chain.chain_id));
   const activeEvmChain =
     visibleEvmChains.find((chain) => String(chain.chain_id) === evmChainId) || visibleEvmChains[0];
-  const activeEvmAssets =
+  const directActiveEvmAssets =
     evmAssets && activeEvmChain && evmWallet &&
     evmAssets.chain.chain_id === activeEvmChain.chain_id &&
     evmAssets.wallet_address.toLowerCase() === evmWallet.address.toLowerCase()
       ? evmAssets
       : null;
+  const chainActiveEvmAssets = activeEvmChain ? evmAssetsByChain[activeEvmChain.chain_id] : undefined;
+  const matchingChainActiveEvmAssets =
+    chainActiveEvmAssets && evmWallet &&
+    chainActiveEvmAssets.wallet_address.toLowerCase() === evmWallet.address.toLowerCase()
+      ? chainActiveEvmAssets
+      : null;
+  const activeEvmAssets = !directActiveEvmAssets
+    ? matchingChainActiveEvmAssets
+    : !matchingChainActiveEvmAssets
+      ? directActiveEvmAssets
+      : matchingChainActiveEvmAssets.refreshed_at_ms >= directActiveEvmAssets.refreshed_at_ms
+        ? matchingChainActiveEvmAssets
+        : directActiveEvmAssets;
   const activeEvmChainIsCustom =
     Boolean(activeEvmChain && evmCustomChainIds.includes(activeEvmChain.chain_id));
   const isUnifiedEvmSend = Number(formData.unified_evm_send) === 1;
@@ -6306,7 +6321,8 @@ export default function Home() {
     const background = options.background === true;
     const requestKey = `${wallet.public_key}:${effectiveRpcRequest}:${refresh ? "refresh" : "cache"}`;
     const walletKey = `${wallet.public_key}:${effectiveRpcRequest}`;
-    const intentGeneration = beginAsyncRequestIntent(walletAssetsIntentRef.current, walletKey);
+    const inFlight = walletAssetsInFlightRef.current.get(requestKey);
+    if (inFlight && !options.force) return inFlight;
     if (refresh && !options.force) {
       const lastRefresh = lastAssetRefreshRef.current.get(walletKey) ?? 0;
       if (Date.now() - lastRefresh < ASSET_AUTO_REFRESH_TTL_MS) {
@@ -6316,8 +6332,7 @@ export default function Home() {
           : null;
       }
     }
-    const inFlight = walletAssetsInFlightRef.current.get(requestKey);
-    if (inFlight) return inFlight;
+    const intentGeneration = beginAsyncRequestIntent(walletAssetsIntentRef.current, walletKey);
 
     const request = (async (): Promise<WalletAssetsState | null> => {
       setWalletAssets((prev) => ({
@@ -6360,7 +6375,7 @@ export default function Home() {
         }));
         return null;
       }
-      if (refresh) {
+      if (refresh && !data.cached) {
         lastAssetRefreshRef.current.set(walletKey, Date.now());
       }
       const nextAssetsBase: WalletAssetsState = {
@@ -6372,10 +6387,12 @@ export default function Home() {
         refreshing: false,
         cached: Boolean(data.cached),
         updatedAt: typeof data.updated_at === "number" ? data.updated_at : undefined,
-        error: undefined,
+        error: refresh && data.cached
+          ? t("features.wallet-list.assetRefreshUsedCache")
+          : undefined,
       };
       if (!isCurrentAsyncRequest(walletAssetsIntentRef.current, walletKey, intentGeneration)) {
-        return nextAssetsBase;
+        return null;
       }
       const pendingAdjustment = pendingTokenBalanceAdjustmentRef.current;
       if (!pendingTokenBalanceAdjustmentStillNeeded(nextAssetsBase, pendingAdjustment)) {
@@ -6413,7 +6430,9 @@ export default function Home() {
       }));
       return null;
     } finally {
-      walletAssetsInFlightRef.current.delete(requestKey);
+      if (walletAssetsInFlightRef.current.get(requestKey) === request) {
+        walletAssetsInFlightRef.current.delete(requestKey);
+      }
     }
   }, [effectiveNetwork, effectiveRpcRequest, t]);
 
@@ -11598,34 +11617,33 @@ export default function Home() {
   const normalizedProgramDeployFormState = (state: FormState): FormState =>
     programDeployStateWithProgramSize(state, Number(state.programSoSize || 0));
 
-  const refreshCurrentWalletAssets = (wallet?: SavedWallet) => {
+  const refreshCurrentWalletAssets = async (wallet?: SavedWallet): Promise<void> => {
     const targetWallet = wallet ?? selectedSavedWallet() ?? effectiveWallet;
     if (!targetWallet) return;
-    void loadWalletAssets(targetWallet, { refresh: true, background: true, force: true }).then((assets) => {
-      if (!assets) return;
-      const mint = String((tokenActionContext?.mint ?? formData.mint) || "").trim();
-      if (!mint) return;
-      const balance = aggregateTokenBalance(assets.tokens, mint);
-      if (!balance) return;
-      setTokenActionContext((prev) => {
-        if (!prev || String(prev.mint ?? "").trim() !== mint) return prev;
-        return {
-          ...prev,
-          amount: balance.amount,
-          token_balance: balance.amount,
-          token_raw_amount: balance.rawAmount,
-          decimals: balance.decimals,
-        };
-      });
-      if (selectedForm && CURRENT_WALLET_TOKEN_BALANCE_FORM_IDS.has(selectedForm)) {
-        setFormData((prev) => ({
-          ...prev,
-          token_balance: balance.amount,
-          token_raw_amount: balance.rawAmount,
-          decimals: balance.decimals,
-        }));
-      }
+    const assets = await loadWalletAssets(targetWallet, { refresh: true, background: true, force: true });
+    if (!assets) return;
+    const mint = String((tokenActionContext?.mint ?? formData.mint) || "").trim();
+    if (!mint) return;
+    const balance = aggregateTokenBalance(assets.tokens, mint);
+    if (!balance) return;
+    setTokenActionContext((prev) => {
+      if (!prev || String(prev.mint ?? "").trim() !== mint) return prev;
+      return {
+        ...prev,
+        amount: balance.amount,
+        token_balance: balance.amount,
+        token_raw_amount: balance.rawAmount,
+        decimals: balance.decimals,
+      };
     });
+    if (selectedForm && CURRENT_WALLET_TOKEN_BALANCE_FORM_IDS.has(selectedForm)) {
+      setFormData((prev) => ({
+        ...prev,
+        token_balance: balance.amount,
+        token_raw_amount: balance.rawAmount,
+        decimals: balance.decimals,
+      }));
+    }
   };
 
   const handleSelectForm = (formId: string) => {
@@ -11804,7 +11822,37 @@ export default function Home() {
     sendFailed: tf("features.unified-wallet.sendFailed", "Unable to send transaction"),
     previewFailed: tf("features.unified-wallet.previewFailed", "Unable to preview transaction"),
     reviewWarning: tf("features.unified-wallet.reviewWarning", "Review the address, amount, and network carefully before sending."),
+    chooseWallet: tf("features.unified-wallet.chooseWallet", "Choose a wallet"),
+    chooseRecipientWallet: tf("features.unified-wallet.chooseRecipientWallet", "Choose recipient wallet"),
+    noRecipientWallets: tf("features.unified-wallet.noRecipientWallets", "No wallets are available on this network"),
   }), [t, tf]);
+
+  const solanaRecipientWallets: WalletRecipientOption[] = wallets
+    .filter((wallet) => Boolean(wallet.public_key.trim()))
+    .map((wallet) => ({
+      id: wallet.id,
+      name: wallet.name,
+      address: wallet.public_key.trim(),
+      current: wallet.id === effectiveWalletId,
+    }));
+  const evmRecipientWallets: WalletRecipientOption[] = wallets.flatMap((wallet) => {
+    const address = wallet.evm_address?.trim();
+    return address ? [{
+      id: wallet.id,
+      name: wallet.name,
+      address,
+      current: wallet.id === effectiveWalletId,
+    }] : [];
+  });
+  const nativeRecipientWallets = (family: "bitcoin" | "tron"): WalletRecipientOption[] => wallets.flatMap((wallet) => {
+    const account = walletMultichainAccountsByWallet[wallet.id]?.accounts.find((item) => item.family === family);
+    return account ? [{
+      id: wallet.id,
+      name: wallet.name,
+      address: account.address,
+      current: wallet.id === effectiveWalletId,
+    }] : [];
+  });
 
   useEffect(() => {
     if (applicationLocked) {
@@ -12197,11 +12245,7 @@ export default function Home() {
 
   const activeEvmOwnedAssets = useMemo<UnifiedWalletAsset[]>(() => {
     if (!activeEvmChain) return [];
-    const currentSnapshot = evmWallet
-      && evmAssets?.wallet_address.toLowerCase() === evmWallet.address.toLowerCase()
-      && evmAssets.chain.chain_id === activeEvmChain.chain_id
-      ? evmAssets
-      : null;
+    const currentSnapshot = activeEvmAssets;
     const rawNativeBalance = currentSnapshot?.native_balance_wei ?? "";
     return [
       {
@@ -12237,7 +12281,7 @@ export default function Home() {
         testnet: activeEvmChain.testnet,
       })),
     ];
-  }, [activeEvmChain, evmAssets, evmBusy, evmWallet]);
+  }, [activeEvmAssets, activeEvmChain, evmBusy]);
 
   const unifiedSearchAssets = useMemo<UnifiedWalletAsset[]>(() => {
     const assets = [...unifiedOwnedAssets];
@@ -18013,13 +18057,7 @@ export default function Home() {
       );
 
       const renderEvmWalletPanel = () => {
-        const currentEvmAssets =
-          evmWallet &&
-          activeEvmChain &&
-          evmAssets?.wallet_address.toLowerCase() === evmWallet.address.toLowerCase() &&
-          evmAssets.chain.chain_id === activeEvmChain.chain_id
-            ? evmAssets
-            : null;
+        const currentEvmAssets = activeEvmAssets;
         const evmNativeBalance = currentEvmAssets
           ? atomicToDecimalUnits(currentEvmAssets.native_balance_wei, 18)
           : "--";
@@ -18467,16 +18505,21 @@ export default function Home() {
           || walletMultichainAccountsByWallet[effectiveWallet.id]?.loading
           || currentNativeBalances.some((state) => state.loading),
         );
-        const refreshUnifiedAssets = () => {
-          refreshCurrentWalletAssets(effectiveWallet);
-          void refreshEvmPortfolio();
+        const refreshUnifiedAssets = async () => {
+          const refreshes = [refreshCurrentWalletAssets(effectiveWallet), refreshEvmPortfolio()];
           setNativeBalanceRefreshNonce((value) => value + 1);
+          await Promise.allSettled(refreshes);
         };
         let unifiedPortfolioError: string | null = null;
         if (evmPortfolioError === "all") {
           unifiedPortfolioError = tf("features.unified-wallet.portfolioFailed", "EVM assets could not be refreshed. Try again later.");
         } else if (evmPortfolioError === "partial") {
           unifiedPortfolioError = tf("features.unified-wallet.portfolioPartial", "Some EVM networks did not respond. Available balances are still shown.");
+        }
+        if (walletAssets?.error) {
+          unifiedPortfolioError = unifiedPortfolioError
+            ? `${walletAssets.error} ${unifiedPortfolioError}`
+            : walletAssets.error;
         }
         const nativeError = walletMultichainAccountsByWallet[effectiveWallet.id]?.error
           || currentNativeBalances.find((state) => state.error)?.error;
@@ -21078,25 +21121,37 @@ export default function Home() {
             </div>
           )}
           <div className="grid gap-3 sm:grid-cols-2">
-            <label className="space-y-1.5 text-sm text-gray-300">
-              {tf("features.evm-workbench.recipient", "Recipient")}
-              <input
-                value={evmRecipient}
-                list="evm-address-book-recipients"
-                onChange={(event) => {
-                  evmPreviewRequestIdRef.current += 1;
-                  setEvmRecipient(event.target.value);
-                  setEvmPreview(null);
-                }}
-                placeholder={tf("features.evm-workbench.recipientPlaceholder", "0x recipient address")}
-                className="h-10 w-full rounded-lg border border-white/10 bg-black/40 px-3 font-mono text-sm text-white outline-none"
-              />
+            <div className="space-y-1.5 text-sm text-gray-300">
+              <label htmlFor="evm-payment-recipient">{tf("features.evm-workbench.recipient", "Recipient")}</label>
+              <div className="flex min-w-0 gap-2">
+                <input
+                  id="evm-payment-recipient"
+                  value={evmRecipient}
+                  list="evm-address-book-recipients"
+                  onChange={(event) => {
+                    evmPreviewRequestIdRef.current += 1;
+                    setEvmRecipient(event.target.value);
+                    setEvmPreview(null);
+                  }}
+                  placeholder={tf("features.evm-workbench.recipientPlaceholder", "0x recipient address")}
+                  className="h-11 min-w-0 flex-1 rounded-lg border border-white/10 bg-black/40 px-3 font-mono text-sm text-white outline-none"
+                />
+                <RecipientWalletPicker
+                  wallets={evmRecipientWallets}
+                  labels={unifiedWalletLabels}
+                  onSelect={(wallet) => {
+                    evmPreviewRequestIdRef.current += 1;
+                    setEvmRecipient(wallet.address);
+                    setEvmPreview(null);
+                  }}
+                />
+              </div>
               <datalist id="evm-address-book-recipients">
                 {addressBookEntries.filter((entry) => entry.chain === "evm" && (!activeEvmChain || entry.network === String(activeEvmChain.chain_id))).map((entry) => (
                   <option key={entry.id} value={entry.address}>{entry.label}</option>
                 ))}
               </datalist>
-            </label>
+            </div>
             <label className="space-y-1.5 text-sm text-gray-300">
               {tf("features.evm-workbench.amount", "Amount")}
               <input
@@ -21286,6 +21341,7 @@ export default function Home() {
             asset={asset}
             sender={account.address}
             walletId={effectiveWallet.id}
+            recipientWallets={nativeRecipientWallets(asset.family)}
             labels={unifiedWalletLabels}
             onSubmitted={() => setNativeBalanceRefreshNonce((value) => value + 1)}
           />
@@ -24749,13 +24805,16 @@ export default function Home() {
 
             <div>
               <label className="block text-sm font-medium mb-2">{t("features.transfer-sol.toAddress")}</label>
-              <input
-                type="text"
-                value={formData.to_address || ""}
-                onChange={(e) => handleFormChange("to_address", e.target.value)}
-                className="w-full px-4 py-2 bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-white/20 text-white"
-                placeholder={t("features.transfer-sol.addressPlaceholder")}
-              />
+              <div className="flex min-w-0 gap-2">
+                <input
+                  type="text"
+                  value={formData.to_address || ""}
+                  onChange={(e) => handleFormChange("to_address", e.target.value)}
+                  className="h-11 min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-white/20"
+                  placeholder={t("features.transfer-sol.addressPlaceholder")}
+                />
+                <RecipientWalletPicker wallets={solanaRecipientWallets} labels={unifiedWalletLabels} onSelect={(wallet) => handleFormChange("to_address", wallet.address)} />
+              </div>
             </div>
             <div>
               <label className="block text-sm font-medium mb-2">{t("features.transfer-sol.amount")}</label>
@@ -24922,13 +24981,16 @@ export default function Home() {
 
             <div>
               <label className="block text-sm font-medium mb-2">{t("features.transfer-token.toAddress")}</label>
-              <input
-                type="text"
-                value={formData.to_address || ""}
-                onChange={(e) => handleFormChange("to_address", e.target.value)}
-                className="w-full px-4 py-2 bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-white/20 text-white"
-                placeholder={t("features.transfer-token.addressPlaceholder")}
-              />
+              <div className="flex min-w-0 gap-2">
+                <input
+                  type="text"
+                  value={formData.to_address || ""}
+                  onChange={(e) => handleFormChange("to_address", e.target.value)}
+                  className="h-11 min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-white/20"
+                  placeholder={t("features.transfer-token.addressPlaceholder")}
+                />
+                <RecipientWalletPicker wallets={solanaRecipientWallets} labels={unifiedWalletLabels} onSelect={(wallet) => handleFormChange("to_address", wallet.address)} />
+              </div>
             </div>
             <div>
               <label className="block text-sm font-medium mb-2">{t("features.transfer-token.mintAddress")}</label>
@@ -27609,12 +27671,15 @@ export default function Home() {
                   {renderMultisigInput()}
                   <div>
                     <label className="block text-sm font-medium mb-2">{t("formUi.recipientAddress")}</label>
-                    <input
-                      value={formData.to_address || ""}
-                      onChange={(e) => handleFormChange("to_address", e.target.value)}
-                      className="w-full px-4 py-2 bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-white/20 text-white"
-                      placeholder={t("formUi.placeholderRecipient")}
-                    />
+                    <div className="flex min-w-0 gap-2">
+                      <input
+                        value={formData.to_address || ""}
+                        onChange={(e) => handleFormChange("to_address", e.target.value)}
+                        className="h-11 min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-white/20"
+                        placeholder={t("formUi.placeholderRecipient")}
+                      />
+                      <RecipientWalletPicker wallets={solanaRecipientWallets} labels={unifiedWalletLabels} onSelect={(wallet) => handleFormChange("to_address", wallet.address)} />
+                    </div>
                   </div>
                   <div>
                     <label className="block text-sm font-medium mb-2">{t("formUi.amountSol")}</label>
@@ -27684,13 +27749,16 @@ export default function Home() {
                   </div>
                   <div>
                     <label className="block text-sm font-medium mb-2">{t("formUi.recipientAddress")}</label>
-                    <input
-                      value={formData.recipient || ""}
-                      list="solana-address-book-recipients"
-                      onChange={(e) => handleFormChange("recipient", e.target.value)}
-                      className="w-full px-4 py-2 bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-white/20 text-white"
-                      placeholder={t("formUi.placeholderRecipient")}
-                    />
+                    <div className="flex min-w-0 gap-2">
+                      <input
+                        value={formData.recipient || ""}
+                        list="solana-address-book-recipients"
+                        onChange={(e) => handleFormChange("recipient", e.target.value)}
+                        className="h-11 min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-white/20"
+                        placeholder={t("formUi.placeholderRecipient")}
+                      />
+                      <RecipientWalletPicker wallets={solanaRecipientWallets} labels={unifiedWalletLabels} onSelect={(wallet) => handleFormChange("recipient", wallet.address)} />
+                    </div>
                     <datalist id="solana-address-book-recipients">
                       {addressBookEntries.filter((entry) => entry.chain === "solana" && entry.network === effectiveNetwork).map((entry) => (
                         <option key={entry.id} value={entry.address}>{entry.label}</option>
