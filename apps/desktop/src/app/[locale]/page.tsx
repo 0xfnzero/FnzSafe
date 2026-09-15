@@ -11576,6 +11576,9 @@ export default function Home() {
   };
 
   const defaultFormPreset = (formId: string): FormState => {
+    if (formId === "create-token-ata") {
+      return { token_owner: effectiveWallet?.public_key.trim() || "" };
+    }
     if (formId === "pumpfun-sell") {
       return { slippage: 1 };
     }
@@ -18537,10 +18540,6 @@ export default function Home() {
             <section className="overflow-visible border-white/10 bg-transparent lg:rounded-lg lg:border lg:bg-black/50">
               <div className="rounded-lg border border-white/10 bg-zinc-900 p-5 lg:rounded-none lg:border-0 lg:p-4">
                 <div className="flex min-w-0 items-center gap-3">
-                  <WalletChainMark
-                    logoUri={selectedWalletChain?.logoUri}
-                    fallback={selectedWalletChain?.symbol || walletAvatarText(effectiveWallet)}
-                  />
                   <WalletAddressPopover
                     addresses={walletChainAddresses}
                     copiedId={copied}
@@ -18548,20 +18547,33 @@ export default function Home() {
                     onCopy={copyToClipboard}
                     onSelect={selectWalletChain}
                     selectedId={selectedWalletChain?.id ?? ""}
-                    trigger={(
-                      <div className="min-w-0">
-                        <div className="flex min-w-0 flex-wrap items-center gap-2">
-                          <h3 className="max-w-full truncate text-lg font-semibold text-white">{effectiveWallet.name}</h3>
-                          <span className="rounded bg-white/10 px-2 py-0.5 text-xs text-gray-300">
-                            {unifiedWalletLabels.current} · {selectedWalletChain?.chainName ?? "Solana"}
-                          </span>
-                        </div>
-                        <p className="mt-1 truncate font-mono text-xs text-gray-400">
-                          {shortAddress(selectedWalletChain?.address ?? effectiveWallet.public_key)}
-                        </p>
-                      </div>
-                    )}
+                    trigger={<WalletChainMark
+                      logoUri={selectedWalletChain?.logoUri}
+                      fallback={selectedWalletChain?.symbol || walletAvatarText(effectiveWallet)}
+                    />}
                   />
+                  <div className="min-w-0">
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      <h3 className="max-w-full truncate text-lg font-semibold text-white">{effectiveWallet.name}</h3>
+                      <span className="rounded bg-white/10 px-2 py-0.5 text-xs text-gray-300">
+                        {unifiedWalletLabels.current} · {selectedWalletChain?.chainName ?? "Solana"}
+                      </span>
+                    </div>
+                    <div className="mt-1 flex min-w-0 items-center gap-1">
+                      <span className="truncate font-mono text-xs text-gray-400" title={selectedWalletChain?.address ?? effectiveWallet.public_key}>
+                        {shortAddress(selectedWalletChain?.address ?? effectiveWallet.public_key)}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => copyToClipboard(selectedWalletChain?.address ?? effectiveWallet.public_key, "wallet-header-address")}
+                        className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-gray-400 hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300/60"
+                        title={copied === "wallet-header-address" ? unifiedWalletLabels.copied : unifiedWalletLabels.copy}
+                        aria-label={`${copied === "wallet-header-address" ? unifiedWalletLabels.copied : unifiedWalletLabels.copy} ${unifiedWalletLabels.address}`}
+                      >
+                        {copied === "wallet-header-address" ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
               <div className="mt-3 grid grid-cols-2 gap-3 lg:mt-0 lg:gap-0 lg:border-t lg:border-white/10 lg:bg-white/[0.03]">
@@ -25135,17 +25147,31 @@ export default function Home() {
                 <label htmlFor="token-ata-owner" className="mb-2 block text-sm font-medium">
                   {t("features.create-token-ata.owner")}
                 </label>
-                <input
-                  id="token-ata-owner"
-                  value={formData.token_owner || ""}
-                  onChange={(event) => resetTokenAtaResult({ token_owner: event.target.value.trim() })}
-                  autoComplete="off"
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-2 font-mono text-xs text-white focus:outline-none focus:ring-2 focus:ring-white/20"
-                  placeholder={t("features.create-token-ata.ownerPlaceholder")}
-                />
+                <div className="flex min-w-0 gap-2">
+                  <input
+                    id="token-ata-owner"
+                    value={formData.token_owner || ""}
+                    onChange={(event) => resetTokenAtaResult({ token_owner: event.target.value.trim() })}
+                    autoComplete="off"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    className="h-11 min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-4 py-2 font-mono text-xs text-white focus:outline-none focus:ring-2 focus:ring-white/20"
+                    placeholder={t("features.create-token-ata.ownerPlaceholder")}
+                  />
+                  <RecipientWalletPicker
+                    wallets={solanaRecipientWallets}
+                    allowCurrent
+                    labels={{
+                      ...unifiedWalletLabels,
+                      chooseWallet: t("features.create-token-ata.chooseOwner"),
+                      chooseRecipientWallet: t("features.create-token-ata.chooseOwner"),
+                      noRecipientWallets: t("features.create-token-ata.noOwnerWallets"),
+                    }}
+                    onSelect={(wallet) => resetTokenAtaResult({ token_owner: wallet.address })}
+                  />
+                </div>
+                <p className="mt-1.5 text-xs text-gray-400">{t("features.create-token-ata.ownerHint")}</p>
               </div>
             </div>
 

@@ -175,10 +175,12 @@ export function RecipientWalletPicker({
   wallets,
   labels,
   onSelect,
+  allowCurrent = false,
 }: {
   wallets: WalletRecipientOption[];
   labels: Pick<UnifiedWalletLabels, "chooseWallet" | "chooseRecipientWallet" | "noRecipientWallets" | "current" | "close">;
   onSelect: (wallet: WalletRecipientOption) => void;
+  allowCurrent?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const dialogId = useId();
@@ -243,7 +245,7 @@ export function RecipientWalletPicker({
                 <button
                   key={wallet.id}
                   type="button"
-                  disabled={wallet.current}
+                  disabled={wallet.current && !allowCurrent}
                   aria-current={wallet.current ? "true" : undefined}
                   onClick={() => {
                     onSelect(wallet);
@@ -267,7 +269,7 @@ export function RecipientWalletPicker({
                       {shortAddress(wallet.address)}
                     </span>
                   </span>
-                  {!wallet.current && <ChevronRight className="h-4 w-4 shrink-0 text-gray-500" />}
+                  {(!wallet.current || allowCurrent) && <ChevronRight className="h-4 w-4 shrink-0 text-gray-500" />}
                 </button>
               ))}
             </div>
@@ -401,10 +403,11 @@ export function WalletAddressPopover({
   }, [open, placePopover]);
 
   return (
-    <div className="relative min-w-0" onMouseEnter={cancelClose} onMouseLeave={scheduleClose}>
+    <div className="relative shrink-0" onMouseLeave={scheduleClose}>
       <button
         ref={triggerRef}
         type="button"
+        onMouseEnter={cancelClose}
         onClick={togglePinned}
         onFocus={() => {
           if (!suppressFocusOpenRef.current) cancelClose();
@@ -413,7 +416,9 @@ export function WalletAddressPopover({
         aria-controls={open ? popoverId : undefined}
         aria-expanded={open}
         aria-haspopup="dialog"
-        className="block min-w-0 max-w-full text-left"
+        className="block rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300/60"
+        title={labels.accountAddresses}
+        aria-label={labels.accountAddresses}
       >
         {trigger}
       </button>
