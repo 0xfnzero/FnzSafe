@@ -834,13 +834,14 @@ class DevelopmentMobileBridgeBackend implements MobileBridgeBackend {
       nativeBalanceWei: '0',
       tokens: [
         for (final contract in tokenContracts)
-          EvmTokenAsset(
-            contractAddress: contract,
-            symbol: 'ERC20',
-            name: 'Development Token',
-            balance: '0',
-            decimals: 18,
-          ),
+          if (!chain.isNativeTokenAlias(contract))
+            EvmTokenAsset(
+              contractAddress: contract,
+              symbol: 'ERC20',
+              name: 'Development Token',
+              balance: '0',
+              decimals: 18,
+            ),
       ],
       recentTransactions: const [],
       historyStatus: 'unsupported',
@@ -1313,9 +1314,43 @@ const _developmentEvmChains = [
     explorerUrl: 'https://etherscan.io',
     testnet: false,
   ),
+  EvmChainConfig(
+    chainId: 5042,
+    name: 'Arc',
+    nativeSymbol: 'USDC',
+    rpcUrl: 'https://rpc.mainnet.arc.io',
+    explorerUrl: 'https://explorer.arc.io',
+    testnet: false,
+  ),
+  EvmChainConfig(
+    chainId: 5042002,
+    name: 'Arc Testnet',
+    nativeSymbol: 'USDC',
+    rpcUrl: 'https://rpc.testnet.arc.io',
+    explorerUrl: 'https://explorer.testnet.arc.io',
+    testnet: true,
+  ),
 ];
 
 final _developmentMultiChainCatalog = List<MultiChainDescriptor>.unmodifiable([
+  MultiChainDescriptor(
+    chainId: 'eip155:5042002',
+    family: 'evm',
+    name: 'Arc Testnet',
+    network: 'testnet',
+    testnet: true,
+    nativeAsset:
+        const MultiChainNativeAsset(symbol: 'USDC', name: 'USDC', decimals: 18),
+    defaultDerivationPath: "m/44'/60'/0'/0/0",
+    addressFormats: ['hex20'],
+    capabilities: ['transactions:transfer'],
+    endpoints: [
+      const MultiChainEndpoint(
+          kind: 'ethereum-json-rpc', url: 'https://rpc.testnet.arc.io')
+    ],
+    explorerUrl: 'https://explorer.testnet.arc.io',
+    supportLevel: 'beta',
+  ),
   MultiChainDescriptor(
     chainId: 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1',
     family: 'solana',

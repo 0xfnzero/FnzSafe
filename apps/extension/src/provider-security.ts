@@ -16,7 +16,7 @@ const EVM_METHODS = new Set([
   'eth_getTransactionCount', 'eth_getTransactionReceipt', 'eth_maxPriorityFeePerGas',
   'eth_requestAccounts', 'eth_sendTransaction', 'eth_sign', 'eth_signTransaction',
   'eth_signTypedData_v4', 'eth_syncing', 'net_version', 'personal_sign',
-  'wallet_getCapabilities', 'wallet_switchEthereumChain', 'web3_clientVersion',
+  'wallet_getCapabilities', 'wallet_switchEthereumChain', 'wallet_addEthereumChain', 'web3_clientVersion',
 ]);
 
 const SOLANA_METHODS = new Set([

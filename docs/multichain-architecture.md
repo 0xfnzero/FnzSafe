@@ -7,17 +7,30 @@ FnzSafe 的多链层以链族适配器、CAIP 标识和显式能力声明为边�
 | 链族 | 已注册网络 | 当前能力 | 支持级别 |
 |---|---|---|---|
 | Solana | Mainnet、Devnet、Testnet | 账户、余额、Token、转账、历史、签名、DApp、Squads、Program | Stable |
-| EVM | Ethereum、BSC、Polygon、Arbitrum、Optimism、Base、Avalanche、Fantom、Linea、Scroll、zkSync Era、Robinhood Chain，以及 Sepolia、BSC Testnet、Polygon Amoy、Base Sepolia | 账户、原生币/ERC-20、转账、签名、移动端 EIP-1193；兼容 explorer 的网络提供历史能力；支持自定义 RPC | Beta |
+| EVM | Ethereum、BSC、Polygon、Arbitrum、Optimism、Base、Avalanche、Fantom、Linea、Scroll、zkSync Era、Robinhood Chain、Arc，以及 Arc Testnet、Sepolia、BSC Testnet、Polygon Amoy、Base Sepolia | 账户、原生币/ERC-20、转账、签名、移动端 EIP-1193；兼容 explorer 的网络提供历史能力；支持自定义 RPC | Beta |
 | Bitcoin | Mainnet、Testnet | 默认使用兼容 TP/Phantom 私钥导入的 Taproot，可切换 BIP84 Native SegWit；支持地址校验、原生币余额、PSBT 交易预览与签名、RBF、广播；桌面钱包当前接入 Mainnet | Experimental |
 | TRON | Mainnet、Shasta、Nile | BIP44 账户派生、Base58Check 地址校验、TRX 余额、带宽与账户激活费用预览、签名和广播；桌面钱包当前接入 Mainnet | Experimental |
 
-统一目录当前包含 24 个网络。`GET /api/chains` 和移动端生产 Rust Bridge 的 `MobileBridge.multichainCatalog()` 返回同一份链描述；无原生库的开发 fallback 只返回覆盖四个链族的代表性测试目录，并移除 fallback 未实现的账户派生与地址校验能力声明。旧的 `/api/evm/chains` 与现有 Solana/EVM DTO 继续保留，作为兼容层。
+统一目录当前包含 26 个网络。`GET /api/chains` 和移动端生产 Rust Bridge 的 `MobileBridge.multichainCatalog()` 返回同一份链描述；无原生库的开发 fallback 只返回覆盖四个链族的代表性测试目录，并移除 fallback 未实现的账户派生与地址校验能力声明。旧的 `/api/evm/chains` 与现有 Solana/EVM DTO 继续保留，作为兼容层。
 
 身份层操作通过同一个 CAIP-2 注册表路由。桌面端提供 `POST /api/chains/address/normalize` 和 `POST /api/chains/account/derive`，移动端提供 `MobileBridge.normalizeMultichainAddress()` 和 `MobileBridge.deriveMultichainAccount()`。桌面派生请求使用既有加密请求体并在阻塞任务中执行；助记词进入服务层后立即移入可清零内存。移动开发 fallback 不伪造链地址或派生结果，这两个操作会明确返回 `unsupported`，生产构建则调用本地 Rust Bridge。
 
 “网络已注册”不等于“所有钱包操作均已实现”。调用端必须读取 `capabilities`，只有声明了对应能力时才展示或调用功能。Bitcoin 和 TRON 已声明原生币余额与转账能力，并在桌面端接入 Mainnet；两者尚未声明 Token、历史、交易状态或 DApp 能力。
 
 EVM 历史能力使用 Etherscan V2。只有启动时存在有效的 `FNZERO_SAFE_ETHERSCAN_API_KEY`，并且 explorer 域名与 CAIP-2 中的 EIP-155 chain ID 精确匹配，链描述才会声明 `transactions:history`；未配置 Key 时历史功能按不支持降级，而不会发布虚假能力。
+
+### Arc
+
+Arc 主网（`eip155:5042`）和 Arc Testnet（`eip155:5042002`）作为内置 EVM 网络接入桌面、生产移动 Rust Bridge 和浏览器扩展，复用 Ethereum 的账户派生路径、地址与签名流程。
+
+- 原生资产和 Gas 均为 USDC；`eth_getBalance` 与原生转账按 18 位精度处理。
+- `0x3600000000000000000000000000000000000000` 是同一余额的 6 位 ERC-20 接口，资产列表不重复计入。其他 ERC-20 仍按合约返回的精度处理。
+- 自动费用报价不低于 20 Gwei 对应的原生单位；签名前拒绝过低的显式费用上限，非零 USDC 不允许发送到零地址。
+- Arc 的 Gas 估算失败不使用普通 EVM 的 21000 Gas 兜底，以免忽略运行时 USDC 限制；单个成功 receipt 即视为确认。
+- Arc Explorer 不是 Etherscan V2，因此暂不声明历史能力；配置保留官方浏览器地址，提交后的状态仍通过 RPC receipt 查询。主网 Explorer API 当前需要访问认证，扩展暂不接入 Arc 自动代币发现，避免把 HTML 认证页面当作资产数据；桌面/生产移动端仍可手动添加其他 ERC-20。尚未接入 Arc 专用系统事件索引、桥接和兑换。
+- 桌面 DApp 与 Ethereum 一致：需要先在钱包切换当前网络。扩展的 DApp 添加内置链不覆盖钱包 RPC，再通过切链请求选择 Arc。
+
+网络配置及特殊语义以官方 [连接说明](https://docs.arc.io/arc/references/connect-to-arc)、[EVM 差异](https://docs.arc.io/arc/references/evm-differences) 和 [合约地址](https://docs.arc.io/arc/references/contract-addresses) 为准。
 
 EVM 网络不是一个可穷举集合。目前尚未作为内置网络维护的代表包括 Gnosis、Celo、Moonbeam、Cronos、Mantle、Blast、opBNB、Zora、Berachain、Sonic、Polygon zkEVM、Ronin、Aurora、Metis、Kava EVM、Arbitrum Nova、Sei EVM、HyperEVM 和 Monad。它们可以通过自定义 EVM RPC 配置尝试接入，但在完成保存前 `eth_chainId` 核验、链级回归测试和费用模型验证前，不视为 FnzSafe 正式支持的内置网络。
 

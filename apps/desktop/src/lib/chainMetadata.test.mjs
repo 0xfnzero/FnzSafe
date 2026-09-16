@@ -11,7 +11,7 @@ const moduleUrl = `data:text/javascript;base64,${Buffer.from(compiled).toString(
 const metadata = await import(moduleUrl);
 
 test("built-in mainnets have locally bundled chain logos", () => {
-  const builtInMainnetIds = [1, 10, 56, 137, 250, 324, 4663, 8453, 42161, 43114, 59144, 534352];
+  const builtInMainnetIds = [1, 10, 56, 137, 250, 324, 4663, 5042, 8453, 42161, 43114, 59144, 534352];
   for (const chainId of builtInMainnetIds) {
     const logoUri = metadata.chainLogoUri(chainId);
     assert.match(logoUri, /^\/chain-icons\/[a-z0-9-]+\.svg$/);
@@ -29,6 +29,8 @@ test("custom networks keep the glyph fallback", () => {
 });
 
 test("chain descriptors resolve family and EVM network logos", () => {
+  assert.equal(metadata.chainDescriptorLogoUri({ family: "evm", chain_id: "eip155:5042" }), "/chain-icons/arc.svg");
+  assert.equal(metadata.chainDescriptorLogoUri({ family: "evm", chain_id: "eip155:5042002" }), "/chain-icons/arc.svg");
   assert.equal(metadata.chainFamilyLogoUri("evm"), "/chain-icons/ethereum.svg");
   assert.equal(metadata.chainDescriptorLogoUri({ family: "evm", chain_id: "eip155:8453" }), "/chain-icons/base.svg");
   assert.equal(metadata.chainDescriptorLogoUri({ family: "solana", chain_id: "solana:mainnet" }), metadata.SOLANA_CHAIN_LOGO_URI);

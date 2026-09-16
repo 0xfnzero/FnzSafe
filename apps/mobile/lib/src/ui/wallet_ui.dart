@@ -12,6 +12,16 @@ const fnzOrange = Color(0xfff6851b);
 const fnzInk = Color(0xff16181d);
 const fnzCanvas = Color(0xfff6f7f9);
 
+String evmFeeLabel(EvmChainConfig chain, String raw) {
+  if (!chain.isArc) return '$raw wei';
+  if (!RegExp(r'^\d+$').hasMatch(raw)) return '-';
+  final padded = BigInt.parse(raw).toString().padLeft(19, '0');
+  final whole = padded.substring(0, padded.length - 18);
+  final fraction =
+      padded.substring(padded.length - 18).replaceFirst(RegExp(r'0+$'), '');
+  return '$whole${fraction.isEmpty ? '' : '.$fraction'} USDC';
+}
+
 String compactAddress(String value, {int edge = 6}) {
   if (value.length <= edge * 2 + 3) return value;
   return '${value.substring(0, edge)}...${value.substring(value.length - edge)}';

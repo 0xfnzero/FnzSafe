@@ -268,6 +268,7 @@ import {
 } from "@/lib/settingsCenter";
 import { LOCAL_TOKEN_METADATA, localTokenMetadata } from "@/lib/localTokenRegistry";
 import { chainDescriptorLogoUri, chainLogoUri, SOLANA_CHAIN_LOGO_URI } from "@/lib/chainMetadata";
+import { evmFeeLabel, isNativeTokenAlias } from "@/lib/evmChainRules";
 import { formatDappPayloadForDisplay } from "@/lib/dappPayload";
 import {
   buildProgramDeploymentReceiptJson,
@@ -2750,6 +2751,7 @@ function mergeEvmAssetSnapshotTokens(
   previous: DesktopEvmAssetSnapshot | undefined | null,
   next: DesktopEvmAssetSnapshot,
 ): DesktopEvmAssetSnapshot {
+  next = { ...next, tokens: next.tokens.filter((token) => !isNativeTokenAlias(next.chain.chain_id, token.contract_address)) };
   if (
     !previous ||
     previous.chain.chain_id !== next.chain.chain_id ||
@@ -2771,7 +2773,7 @@ function mergeEvmAssetSnapshotTokens(
         history_message: previous.history_message,
       }
     : {};
-  return { ...next, ...history, tokens: Array.from(tokens.values()) };
+  return { ...next, ...history, tokens: Array.from(tokens.values()).filter((token) => !isNativeTokenAlias(next.chain.chain_id, token.contract_address)) };
 }
 
 interface DesktopEvmPaymentPreview {
@@ -2896,7 +2898,7 @@ function loadStoredDesktopEvmTokens(chainId: number, walletAddress: string): str
     if (!Array.isArray(parsed)) return [];
     return parsed
       .map((item) => (typeof item === "string" ? item.trim() : ""))
-      .filter((item): item is string => isDesktopEvmAddress(item));
+      .filter((item): item is string => isDesktopEvmAddress(item) && !isNativeTokenAlias(chainId, item));
   } catch {
     return [];
   }
@@ -2908,6 +2910,7 @@ function saveStoredDesktopEvmTokens(chainId: number, walletAddress: string, toke
     tokens
       .map((token) => token.trim())
       .filter(isDesktopEvmAddress)
+      .filter((token) => !isNativeTokenAlias(chainId, token))
       .map((token) => [token.toLowerCase(), token]),
   ).values());
   window.localStorage.setItem(desktopEvmTokenStorageKey(chainId, walletAddress), JSON.stringify(normalized));
@@ -4449,6 +4452,9 @@ export default function Home() {
     if (!contract) return;
     if (!activeEvmChain || !evmWallet) {
       throw new Error(tf("features.evm-workbench.selectChainWallet", "Select a chain and wallet before adding a token"));
+    }
+    if (isNativeTokenAlias(activeEvmChain.chain_id, contract)) {
+      throw new Error(tf("features.evm-workbench.nativeUsdcAlreadyShown", "Arc USDC is already shown as the native balance"));
     }
     const next = Array.from(new Map([...evmTokenContracts, contract].map((item) => [item.toLowerCase(), item])).values());
     if (!isDesktopEvmAddress(contract)) {
@@ -21239,7 +21245,7 @@ export default function Home() {
               })()}
               <p>{tf("features.evm-workbench.gasLimit", "Gas limit")}: {evmPreview.gas_limit}</p>
               <p>{tf("features.evm-workbench.feeModel", "Fee model")}: {evmPreview.fee_model}</p>
-              <p>{tf("features.evm-workbench.gasPrice", "Gas price")}: {evmPreview.gas_price_wei} wei</p>
+              <p>{tf("features.evm-workbench.gasPrice", "Gas price")}: {evmFeeLabel(evmPreview.chain.chain_id, evmPreview.gas_price_wei)}</p>
               <p title={`${evmPreview.estimated_fee_wei} wei`}>
                 {tf("features.evm-workbench.estimatedFee", "Estimated fee")}: {rawTokenAmountToUi(evmPreview.estimated_fee_wei, 18)} {evmPreview.chain.native_symbol}
               </p>
@@ -21275,7 +21281,7 @@ export default function Home() {
                   <p>{tf("features.evm-workbench.status", "Status")}: {evmTransactionStatus.status}</p>
                   <p>{tf("features.evm-workbench.block", "Block")}: {evmTransactionStatus.block_number ?? "-"}</p>
                   <p>{tf("features.evm-workbench.gasUsed", "Gas used")}: {evmTransactionStatus.gas_used ?? "-"}</p>
-                  <p>{tf("features.evm-workbench.effectiveGas", "Effective gas price")}: {evmTransactionStatus.effective_gas_price_wei ?? "-"}</p>
+                  <p>{tf("features.evm-workbench.effectiveGas", "Effective gas price")}: {evmFeeLabel(evmTransactionStatus.chain.chain_id, evmTransactionStatus.effective_gas_price_wei ?? "")}</p>
                 </div>
               )}
             </div>

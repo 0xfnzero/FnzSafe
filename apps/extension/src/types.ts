@@ -32,6 +32,7 @@ export interface ChainInfo {
   rpcUrl?: string;
   chainId?: number;
   transactionSupport: boolean;
+  testnet?: boolean;
 }
 
 export interface PortfolioAsset {

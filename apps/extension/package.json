@@ -14,6 +14,7 @@
     "build": "node build.mjs",
     "dev": "node build.mjs --watch",
     "test:e2e": "node test/extension.e2e.mjs",
+    "test:e2e:arc": "node test/arc.e2e.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/*.test.ts"
   },

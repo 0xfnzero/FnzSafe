@@ -16,7 +16,7 @@ import {
   TransactionRequest,
   Wallet,
 } from 'ethers';
-import { chains, evmChain } from './chains';
+import { chains, evmChain, isArcChain, requestedBuiltinChain } from './chains';
 import type {
   ApprovalView,
   EncryptedVault,
@@ -41,6 +41,7 @@ import {
 import {
   inspectTypedData,
   normalizeAndInspectTransaction,
+  prepareArcFees,
 } from './transaction-security';
 import {
   ApprovalRequestGuard,
@@ -214,13 +215,11 @@ async function approvalView(item: PendingRequest): Promise<ApprovalView> {
     summary = 'Review and submit this transaction';
     warnings.push('This action can transfer assets or approve contract access.');
   }
-  if (request.family === 'evm' && request.method === 'wallet_switchEthereumChain') {
+  if (request.family === 'evm' && ['wallet_switchEthereumChain', 'wallet_addEthereumChain'].includes(request.method)) {
     const state = await settings();
-    const raw = (request.params?.[0] as { chainId?: string } | undefined)?.chainId;
-    if (!/^0x[0-9a-fA-F]+$/.test(raw ?? '')) throw new Error('Requested chainId is invalid');
-    const nextChain = evmChain(Number.parseInt(raw!, 16));
+    const nextChain = requestedBuiltinChain(request.params);
     const currentChain = evmChain(state.evmChainId);
-    summary = 'Allow this site to switch networks?';
+    summary = request.method === 'wallet_addEthereumChain' ? 'This network is built into FnzSafe. Allow this site to use it?' : 'Allow this site to switch networks?';
     details.push(
       { label: 'Current network', value: `${currentChain.name} (${currentChain.chainId})` },
       { label: 'Requested network', value: `${nextChain.name} (${nextChain.chainId})` },
@@ -378,11 +377,12 @@ async function executeProviderRequest(request: ProviderRequest, origin: string):
 
   const account = await activeAccount(request.family);
   if (!(await hasPermission(origin, request.family, account.id))) throw new Error('Connect this site to the selected account before signing');
+  if (request.method === 'wallet_addEthereumChain') {
+    requestedBuiltinChain(request.params);
+    return null;
+  }
   if (request.method === 'wallet_switchEthereumChain') {
-    const raw = (request.params?.[0] as { chainId?: string } | undefined)?.chainId;
-    if (!/^0x[0-9a-fA-F]+$/.test(raw ?? '')) throw new Error('Requested chainId is invalid');
-    const chainId = Number.parseInt(raw!, 16);
-    evmChain(chainId);
+    const chainId = requestedBuiltinChain(request.params).chainId!;
     await updateSettings({ evmChainId: chainId });
     await grantPermission(origin, 'evm', account);
     return null;
@@ -425,13 +425,17 @@ async function executeEvm(request: ProviderRequest): Promise<unknown> {
     }
     case 'eth_signTransaction': {
       const inspection = normalizeAndInspectTransaction(params[0], chain.chainId!, account.address, chain.symbol);
+      inspection.transaction = await prepareArcFees(inspection.transaction, chain.chainId!, () => provider.getFeeData());
       const simulation = await simulateEvmTransaction(chain, account.address, inspection.transaction);
+      if (isArcChain(chain.chainId) && simulation.status !== 'Passed') throw new Error(simulation.warning ?? 'Arc simulation failed');
       if (simulation.blocking) throw new Error(simulation.warning ?? 'Transaction simulation failed');
       return wallet.signTransaction(inspection.transaction);
     }
     case 'eth_sendTransaction': {
       const inspection = normalizeAndInspectTransaction(params[0], chain.chainId!, account.address, chain.symbol);
+      inspection.transaction = await prepareArcFees(inspection.transaction, chain.chainId!, () => provider.getFeeData());
       const simulation = await simulateEvmTransaction(chain, account.address, inspection.transaction);
+      if (isArcChain(chain.chainId) && simulation.status !== 'Passed') throw new Error(simulation.warning ?? 'Arc simulation failed');
       if (simulation.blocking) throw new Error(simulation.warning ?? 'Transaction simulation failed');
       const connected = wallet.connect(provider);
       const response = await connected.sendTransaction(inspection.transaction);
@@ -642,6 +646,7 @@ function requiresApproval(method: string): boolean {
     'eth_signTransaction',
     'eth_sendTransaction',
     'wallet_switchEthereumChain',
+    'wallet_addEthereumChain',
     'solana_connect',
     'solana_signMessage',
     'solana_signTransaction',
@@ -840,6 +845,7 @@ async function handleUiMessage(message: Record<string, unknown>): Promise<unknow
           value,
           chainId: chain.chainId,
         }, chain.chainId!, account.address, chain.symbol);
+        inspection.transaction = await prepareArcFees(inspection.transaction, chain.chainId!, () => provider.getFeeData());
         const simulation = await simulateEvmTransaction(chain, account.address, inspection.transaction);
         if (simulation.status !== 'Passed') throw new Error(simulation.warning ?? 'Transaction simulation failed');
         const response = await new Wallet(

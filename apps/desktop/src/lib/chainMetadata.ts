@@ -7,6 +7,8 @@ const CHAIN_LOGO_BY_ID: Readonly<Record<number, string>> = {
   250: "/chain-icons/fantom.svg",
   324: "/chain-icons/zksync.svg",
   4663: "/chain-icons/robinhood.svg",
+  5042: "/chain-icons/arc.svg",
+  5042002: "/chain-icons/arc.svg",
   8453: "/chain-icons/base.svg",
   42161: "/chain-icons/arbitrum-one.svg",
   43114: "/chain-icons/avalanche.svg",

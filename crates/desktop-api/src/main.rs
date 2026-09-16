@@ -5466,7 +5466,7 @@ mod multichain_api_tests {
         }
 
         let catalog = multichain_chains().await.unwrap().0;
-        assert_eq!(catalog.len(), 24);
+        assert_eq!(catalog.len(), 26);
         for family in ["solana", "evm", "bitcoin", "tron"] {
             assert!(catalog.iter().any(|chain| chain.family.as_str() == family));
         }

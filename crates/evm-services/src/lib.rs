@@ -55,6 +55,35 @@ const ERC20_DECIMALS_SELECTOR: [u8; 4] = [0x31, 0x3c, 0xe5, 0x67];
 const ERC20_SYMBOL_SELECTOR: [u8; 4] = [0x95, 0xd8, 0x9b, 0x41];
 const ERC20_NAME_SELECTOR: [u8; 4] = [0x06, 0xfd, 0xde, 0x03];
 const DEFAULT_PRIORITY_FEE_WEI: &str = "1500000000";
+const ARC_MIN_FEE_WEI: &str = "20000000000";
+const ARC_USDC_CONTRACT: &str = "0x3600000000000000000000000000000000000000";
+
+fn is_arc(chain_id: u64) -> bool {
+    matches!(chain_id, 5_042 | 5_042_002)
+}
+
+fn is_native_token_alias(chain_id: u64, address: &str) -> bool {
+    is_arc(chain_id) && address.eq_ignore_ascii_case(ARC_USDC_CONTRACT)
+}
+
+fn validate_arc_recipient(chain_id: u64, recipient: &str, amount: &str) -> EvmResult<()> {
+    if is_arc(chain_id)
+        && address_eq(recipient, "0x0000000000000000000000000000000000000000")
+        && decimal_cmp(amount, "0")? == std::cmp::Ordering::Greater
+    {
+        return Err(EvmServiceError::InvalidInput(
+            "Arc does not allow USDC transfers to the zero address".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn arc_fee_floor(chain_id: u64, fee: String) -> EvmResult<String> {
+    if is_arc(chain_id) && decimal_cmp(&fee, ARC_MIN_FEE_WEI)? == std::cmp::Ordering::Less {
+        return Ok(ARC_MIN_FEE_WEI.to_string());
+    }
+    Ok(fee)
+}
 const ETHERSCAN_API_KEY_ENV: &str = "FNZERO_SAFE_ETHERSCAN_API_KEY";
 const MAX_ETHERSCAN_RESPONSE_BYTES: usize = 1024 * 1024;
 const MAX_TOKEN_METADATA_RESPONSE_BYTES: usize = 1024 * 1024;
@@ -599,6 +628,22 @@ pub fn builtin_chains() -> Vec<EvmChainConfig> {
             false,
         ),
         chain(
+            5042,
+            "Arc",
+            "USDC",
+            "https://rpc.mainnet.arc.io",
+            Some("https://explorer.arc.io"),
+            false,
+        ),
+        chain(
+            5042002,
+            "Arc Testnet",
+            "USDC",
+            "https://rpc.testnet.arc.io",
+            Some("https://explorer.testnet.arc.io"),
+            true,
+        ),
+        chain(
             11155111,
             "Ethereum Sepolia",
             "ETH",
@@ -775,6 +820,9 @@ fn load_asset_snapshot_with_history(
 
     let mut tokens = Vec::new();
     for query in req.tokens {
+        if is_native_token_alias(req.chain.chain_id, query.contract_address.trim()) {
+            continue;
+        }
         tokens.push(load_token_asset(
             &req.chain,
             &wallet_address,
@@ -812,6 +860,13 @@ pub fn preview_payment(req: EvmPaymentPreviewRequest) -> EvmResult<EvmPaymentPre
         .as_deref()
         .map(|value| normalize_address(value, "token contract"))
         .transpose()?;
+
+    if token_contract
+        .as_deref()
+        .is_none_or(|contract| is_native_token_alias(req.chain.chain_id, contract))
+    {
+        validate_arc_recipient(req.chain.chain_id, &recipient, &amount)?;
+    }
 
     let data = token_contract
         .as_deref()
@@ -915,6 +970,12 @@ where
         .as_deref()
         .map(|value| normalize_address(value, "token contract"))
         .transpose()?;
+    if token_contract
+        .as_deref()
+        .is_none_or(|contract| is_native_token_alias(req.chain.chain_id, contract))
+    {
+        validate_arc_recipient(req.chain.chain_id, &recipient, &amount)?;
+    }
     let data = token_contract
         .as_deref()
         .map(|_| erc20_transfer_calldata(&recipient, &amount))
@@ -1783,6 +1844,14 @@ fn builtin_rpc_fallbacks(chain_id: u64) -> &'static [&'static str] {
             "https://robinhood-rpc.publicnode.com",
             "https://rpc.ordofi.network",
         ],
+        5_042 => &[
+            "https://rpc.drpc.mainnet.arc.io",
+            "https://rpc.quicknode.mainnet.arc.io",
+        ],
+        5_042_002 => &[
+            "https://rpc.drpc.testnet.arc.io",
+            "https://rpc.quicknode.testnet.arc.io",
+        ],
         8_453 => &[
             "https://base-rpc.publicnode.com",
             "https://developer-access-mainnet.base.org",
@@ -2102,6 +2171,11 @@ fn estimate_gas(
             }
             Err(_) => break,
         }
+    }
+
+    // Arc can reject EOA transfers through runtime USDC restrictions.
+    if is_arc(chain.chain_id) {
+        return Err(EvmServiceError::GasEstimateFailed);
     }
 
     // A plain transfer to an account with no bytecode always consumes the
@@ -2615,6 +2689,7 @@ fn load_fee_quote(chain: &EvmChainConfig) -> EvmResult<EvmFeeQuote> {
     let gas_price_wei = rpc_call(chain, "eth_gasPrice", serde_json::json!([]))
         .and_then(rpc_hex_quantity_to_decimal)
         .map_err(|_| EvmServiceError::RpcUnavailable)?;
+    let gas_price_wei = arc_fee_floor(chain.chain_id, gas_price_wei)?;
     let latest_block = rpc_call(
         chain,
         "eth_getBlockByNumber",
@@ -2643,6 +2718,7 @@ fn load_fee_quote(chain: &EvmChainConfig) -> EvmResult<EvmFeeQuote> {
     if decimal_cmp(&max_fee_per_gas_wei, &gas_price_wei)? == std::cmp::Ordering::Less {
         max_fee_per_gas_wei = gas_price_wei.clone();
     }
+    let max_fee_per_gas_wei = arc_fee_floor(chain.chain_id, max_fee_per_gas_wei)?;
 
     Ok(EvmFeeQuote {
         fee_model: "eip1559".to_string(),
@@ -2706,6 +2782,20 @@ fn raw_transaction_hash(raw_tx: &str) -> EvmResult<String> {
 }
 
 fn sign_evm_transaction(input: &EvmTxSigningInput<'_>) -> EvmResult<String> {
+    validate_arc_recipient(input.chain_id, input.to, input.value)?;
+    if is_arc(input.chain_id)
+        && input.max_fee_per_gas_wei.is_some() != input.max_priority_fee_per_gas_wei.is_some()
+    {
+        return Err(EvmServiceError::InvalidInput(
+            "Arc EIP-1559 fee fields must be supplied together".to_string(),
+        ));
+    }
+    let fee = input.max_fee_per_gas_wei.unwrap_or(input.gas_price_wei);
+    if is_arc(input.chain_id) && decimal_cmp(fee, ARC_MIN_FEE_WEI)? == std::cmp::Ordering::Less {
+        return Err(EvmServiceError::InvalidInput(
+            "Arc requires a fee cap of at least 20 Gwei (in native USDC units)".to_string(),
+        ));
+    }
     match (
         input.max_fee_per_gas_wei,
         input.max_priority_fee_per_gas_wei,
@@ -2935,6 +3025,7 @@ fn parse_dapp_transaction(
         .and_then(|value| normalize_address(value, "transaction to"))?;
     let value = evm_quantity_field(tx.get("value"), "transaction value")?
         .unwrap_or_else(|| "0".to_string());
+    validate_arc_recipient(chain.chain_id, &to, &value)?;
     let data = evm_data_field(
         tx.get("data")
             .or_else(|| tx.get("input"))
@@ -3762,6 +3853,143 @@ mod tests {
                 chain.name
             );
             assert!(candidates.iter().all(|url| url.starts_with("https://")));
+        }
+    }
+
+    fn arc_test_rpc(expected_requests: usize) -> (EvmChainConfig, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let rpc_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            for _ in 0..expected_requests {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0u8; 4096];
+                let length = stream.read(&mut request).unwrap();
+                let request = String::from_utf8_lossy(&request[..length]);
+                let body = if request.contains("eth_estimateGas") {
+                    serde_json::json!({"jsonrpc": "2.0", "id": 1, "error": {"code": -32000, "message": "gas estimation failed"}})
+                } else {
+                    let result = if request.contains("eth_chainId") {
+                        serde_json::json!("0x13b2")
+                    } else if request.contains("eth_getBalance") {
+                        serde_json::json!("0xde0b6b3a7640000")
+                    } else if request.contains("eth_getBlockByNumber") {
+                        serde_json::json!({"baseFeePerGas": "0x1"})
+                    } else {
+                        serde_json::json!("0x1")
+                    };
+                    serde_json::json!({"jsonrpc": "2.0", "id": 1, "result": result})
+                }.to_string();
+                let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body);
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        (
+            chain(
+                5042,
+                "Arc",
+                "USDC",
+                &rpc_url,
+                Some("https://explorer.arc.io"),
+                false,
+            ),
+            server,
+        )
+    }
+
+    #[test]
+    fn arc_networks_use_native_usdc_and_share_evm_accounts() {
+        let ethereum_address = address_from_mnemonic(DEV_MNEMONIC, None).unwrap();
+        for (id, testnet) in [(5042, false), (5042002, true)] {
+            let config = builtin_chains()
+                .into_iter()
+                .find(|chain| chain.chain_id == id)
+                .unwrap();
+            assert_eq!(config.testnet, testnet);
+            let adapter =
+                EvmChainAdapter::new_with_history_api_key(config, Some("test-api-key")).unwrap();
+            assert_eq!(adapter.descriptor().native_asset.symbol, "USDC");
+            assert_eq!(adapter.descriptor().native_asset.decimals, 18);
+            assert!(adapter.descriptor().supports(capabilities::TRANSFER));
+            assert!(!adapter.descriptor().supports(capabilities::HISTORY));
+            assert_eq!(
+                adapter.derive_account(DEV_MNEMONIC, None).unwrap().address,
+                ethereum_address
+            );
+            assert_eq!(arc_fee_floor(id, "1".to_string()).unwrap(), ARC_MIN_FEE_WEI);
+            assert_eq!(
+                arc_fee_floor(id, "30000000000".to_string()).unwrap(),
+                "30000000000"
+            );
+        }
+        assert_eq!(arc_fee_floor(1, "1".to_string()).unwrap(), "1");
+        assert!(!is_native_token_alias(1, ARC_USDC_CONTRACT));
+    }
+
+    #[test]
+    fn arc_asset_snapshot_keeps_one_native_usdc_balance() {
+        let (chain, server) = arc_test_rpc(3);
+        let snapshot = load_asset_snapshot_without_history(EvmAssetQueryRequest {
+            chain,
+            wallet_address: "0x1111111111111111111111111111111111111111".to_string(),
+            tokens: vec![EvmTokenQuery {
+                contract_address: ARC_USDC_CONTRACT.to_string(),
+            }],
+        })
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(snapshot.native_balance_wei, "1000000000000000000");
+        assert!(snapshot.tokens.is_empty());
+    }
+
+    #[test]
+    fn arc_fee_quotes_enforce_the_mempool_floor() {
+        let (chain, server) = arc_test_rpc(6);
+        let quote = load_fee_quote(&chain).unwrap();
+        server.join().unwrap();
+        assert_eq!(quote.fee_model, "eip1559");
+        assert_eq!(quote.max_fee_per_gas_wei.as_deref(), Some(ARC_MIN_FEE_WEI));
+    }
+
+    #[test]
+    fn arc_failed_estimation_never_uses_eoa_intrinsic_gas() {
+        let (chain, server) = arc_test_rpc(6);
+        let result = estimate_gas(
+            &chain,
+            "0x1111111111111111111111111111111111111111",
+            "0x2222222222222222222222222222222222222222",
+            "1",
+            "0x",
+        );
+        server.join().unwrap();
+        assert!(matches!(result, Err(EvmServiceError::GasEstimateFailed)));
+    }
+
+    #[test]
+    fn arc_signing_rejects_low_fees_and_nonzero_value_to_zero_address() {
+        let key = signing_key_from_hex(DEV_PRIVATE_KEY).unwrap();
+        for id in [5042, 5042002] {
+            let mut input = EvmTxSigningInput {
+                signing_key: &key,
+                chain_id: id,
+                nonce: "0",
+                gas_limit: "21000",
+                to: "0x1111111111111111111111111111111111111111",
+                value: "1",
+                data: "0x",
+                gas_price_wei: "1",
+                max_fee_per_gas_wei: Some("1"),
+                max_priority_fee_per_gas_wei: Some("0"),
+            };
+            assert!(sign_evm_transaction(&input).is_err());
+            input.max_fee_per_gas_wei = Some(ARC_MIN_FEE_WEI);
+            assert!(sign_evm_transaction(&input).unwrap().starts_with("0x02"));
+            input.to = "0x0000000000000000000000000000000000000000";
+            assert!(sign_evm_transaction(&input).is_err());
+            input.value = "0";
+            assert!(sign_evm_transaction(&input).is_ok());
+            input.max_fee_per_gas_wei = None;
+            input.max_priority_fee_per_gas_wei = None;
+            assert!(sign_evm_transaction(&input).is_err());
         }
     }
 

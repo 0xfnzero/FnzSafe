@@ -39,6 +39,12 @@ class EvmChainConfig {
   final bool testnet;
 
   String get label => '$name ($chainId)';
+  bool get isArc => chainId == 5042 || chainId == 5042002;
+
+  bool isNativeTokenAlias(String contract) =>
+      isArc &&
+      contract.trim().toLowerCase() ==
+          '0x3600000000000000000000000000000000000000';
 
   Map<String, Object?> toJson() => {
         'chainId': chainId,

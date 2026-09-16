@@ -1,5 +1,6 @@
 import { formatUnits } from 'ethers';
 import type { ChainInfo, PortfolioAsset } from './types';
+import { isNativeTokenAlias } from './chains';
 
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_DISCOVERED_TOKENS = 500;
@@ -43,6 +44,7 @@ const nativePriceIds: Record<string, string> = {
   'evm:59144': 'coingecko:ethereum',
   'evm:534352': 'coingecko:ethereum',
   'evm:4663': 'coingecko:ethereum',
+  'evm:5042': 'coingecko:usd-coin',
   'solana:mainnet-beta': 'coingecko:solana',
   'bitcoin:mainnet': 'coingecko:bitcoin',
   'tron:mainnet': 'coingecko:tron',
@@ -113,6 +115,7 @@ export function parseBlockscoutTokenBalances(
       decimals > 255
     ) continue;
     const normalizedAddress = address.toLowerCase();
+    if (isNativeTokenAlias(chain.chainId, normalizedAddress)) continue;
     if (seen.has(normalizedAddress)) continue;
     seen.add(normalizedAddress);
     const symbol = boundedText(token.symbol, 'Token', 32);

@@ -874,6 +874,7 @@
       "invalidAmount": "请输入有效金额，且小数位数不能超过该资产精度",
       "selectChainWallet": "请先选择 EVM 网络和钱包",
       "invalidContract": "ERC-20 合约必须是 0x 开头的 20 字节地址",
+      "nativeUsdcAlreadyShown": "Arc 的 USDC 已显示为原生资产，无需重复添加",
       "transferTitle": "发送资产",
       "sendSelectedAsset": "发送 {symbol}",
       "recipient": "接收地址",

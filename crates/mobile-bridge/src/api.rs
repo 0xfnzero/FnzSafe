@@ -2056,7 +2056,9 @@ mod tests {
     fn bridge_exposes_all_registered_chain_families() {
         let catalog = multichain_catalog_bridge().unwrap();
 
-        assert_eq!(catalog.len(), 24);
+        assert_eq!(catalog.len(), 26);
+        assert!(catalog.iter().any(|chain| chain.chain_id == "eip155:5042"));
+        assert!(catalog.iter().any(|chain| chain.chain_id == "eip155:5042002" && chain.testnet));
         for family in ["solana", "evm", "bitcoin", "tron"] {
             assert!(catalog.iter().any(|chain| chain.family == family));
         }

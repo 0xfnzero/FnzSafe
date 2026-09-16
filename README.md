@@ -71,6 +71,8 @@ make dev
 
 Set `FNZERO_SAFE_ETHERSCAN_API_KEY` before startup to enable Etherscan V2 history on matching built-in EVM networks. Without a valid key, those chain descriptors do not advertise `transactions:history`.
 
+Arc Mainnet (5042) and Arc Testnet (5042002) are built in, sharing Ethereum accounts. Native balances and gas use USDC with 18 decimals; the ERC-20 USDC interface is not counted twice. Arc history indexing, bridging, and swaps are not yet integrated. See the [support matrix](docs/multichain-architecture.md#arc).
+
 Mobile:
 
 ```bash

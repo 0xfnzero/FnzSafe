@@ -3215,7 +3215,13 @@ mod tests {
         let registry = multichain_registry().unwrap();
         assert!(std::ptr::eq(registry, multichain_registry().unwrap()));
         let catalog = registry.descriptors();
-        assert_eq!(catalog.len(), 24);
+        assert_eq!(catalog.len(), 26);
+        for (id, testnet) in [("eip155:5042", false), ("eip155:5042002", true)] {
+            let arc = catalog.iter().find(|chain| chain.chain_id.as_str() == id).unwrap();
+            assert_eq!(arc.native_asset.symbol, "USDC");
+            assert_eq!(arc.native_asset.decimals, 18);
+            assert_eq!(arc.testnet, testnet);
+        }
         for family in ["solana", "evm", "bitcoin", "tron"] {
             assert!(catalog.iter().any(|chain| chain.family.as_str() == family));
         }

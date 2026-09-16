@@ -13,6 +13,8 @@ export const chains: ChainInfo[] = [
   { key: 'evm:534352', family: 'evm', name: 'Scroll', symbol: 'ETH', icon: 'scroll.svg', rpcUrl: 'https://rpc.scroll.io', chainId: 534352, transactionSupport: true },
   { key: 'evm:324', family: 'evm', name: 'zkSync Era', symbol: 'ETH', icon: 'zksync.svg', rpcUrl: 'https://mainnet.era.zksync.io', chainId: 324, transactionSupport: true },
   { key: 'evm:4663', family: 'evm', name: 'Robinhood Chain', symbol: 'ETH', icon: 'robinhood.svg', rpcUrl: 'https://rpc.mainnet.chain.robinhood.com', chainId: 4663, transactionSupport: true },
+  { key: 'evm:5042', family: 'evm', name: 'Arc', symbol: 'USDC', icon: 'arc.svg', rpcUrl: 'https://rpc.mainnet.arc.io', chainId: 5042, transactionSupport: true },
+  { key: 'evm:5042002', family: 'evm', name: 'Arc Testnet', symbol: 'USDC', icon: 'arc.svg', rpcUrl: 'https://rpc.testnet.arc.io', chainId: 5042002, testnet: true, transactionSupport: true },
   { key: 'solana:mainnet-beta', family: 'solana', name: 'Solana', symbol: 'SOL', icon: 'solana.svg', rpcUrl: 'https://api.mainnet-beta.solana.com', transactionSupport: true },
   { key: 'solana:devnet', family: 'solana', name: 'Solana Devnet', symbol: 'SOL', icon: 'solana.svg', rpcUrl: 'https://api.devnet.solana.com', transactionSupport: true },
   { key: 'bitcoin:mainnet', family: 'bitcoin', name: 'Bitcoin', symbol: 'BTC', icon: 'bitcoin.svg', transactionSupport: false },
@@ -23,6 +25,22 @@ export function evmChain(chainId: number): ChainInfo {
   const chain = chains.find((item) => item.family === 'evm' && item.chainId === chainId);
   if (!chain) throw new Error(`Unsupported EVM chain ${chainId}`);
   return chain;
+}
+
+export function requestedBuiltinChain(params: unknown): ChainInfo {
+  const raw = Array.isArray(params) ? params[0]?.chainId : undefined;
+  if (typeof raw !== 'string' || !/^0x[0-9a-fA-F]+$/.test(raw)) throw new Error('Requested chainId is invalid');
+  const id = Number(BigInt(raw));
+  if (!Number.isSafeInteger(id)) throw new Error('Requested chainId is invalid');
+  return evmChain(id);
+}
+
+export function isArcChain(chainId: number | undefined): boolean {
+  return chainId === 5042 || chainId === 5042002;
+}
+
+export function isNativeTokenAlias(chainId: number | undefined, address: string): boolean {
+  return isArcChain(chainId) && address.toLowerCase() === '0x3600000000000000000000000000000000000000';
 }
 
 export const socialRecoveryConfig = Object.freeze({

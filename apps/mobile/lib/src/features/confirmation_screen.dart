@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../bridge/mobile_bridge_provider.dart';
 import '../bridge/mobile_models.dart';
+import '../ui/wallet_ui.dart';
 
 class ConfirmationScreen extends ConsumerStatefulWidget {
   const ConfirmationScreen({super.key});
@@ -92,20 +93,23 @@ class _ConfirmationScreenState extends ConsumerState<ConfirmationScreen> {
                 label: 'Fee model', value: evmPaymentDraft.preview.feeModel),
             _Detail(
                 label: 'Gas price',
-                value: '${evmPaymentDraft.preview.gasPriceWei} wei'),
+                value: evmFeeLabel(evmPaymentDraft.preview.chain,
+                    evmPaymentDraft.preview.gasPriceWei)),
             if (evmPaymentDraft.preview.maxFeePerGasWei != null)
               _Detail(
                   label: 'Max fee',
-                  value: '${evmPaymentDraft.preview.maxFeePerGasWei} wei'),
+                  value: evmFeeLabel(evmPaymentDraft.preview.chain,
+                      evmPaymentDraft.preview.maxFeePerGasWei!)),
             if (evmPaymentDraft.preview.maxPriorityFeePerGasWei != null)
               _Detail(
                   label: 'Priority fee',
-                  value:
-                      '${evmPaymentDraft.preview.maxPriorityFeePerGasWei} wei'),
+                  value: evmFeeLabel(evmPaymentDraft.preview.chain,
+                      evmPaymentDraft.preview.maxPriorityFeePerGasWei!)),
             _Detail(label: 'Nonce', value: evmPaymentDraft.preview.nonce),
             _Detail(
                 label: 'Estimated fee',
-                value: '${evmPaymentDraft.preview.estimatedFeeWei} wei'),
+                value: evmFeeLabel(evmPaymentDraft.preview.chain,
+                    evmPaymentDraft.preview.estimatedFeeWei)),
           ],
           if (dappDraft != null) ...[
             _Detail(label: 'dApp', value: dappDraft.appName),

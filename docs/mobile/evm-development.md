@@ -6,6 +6,15 @@ FnzSafe treats EVM support as one generic wallet flow driven by `chain_id`,
 `rpc_url`, `explorer_url`, and `native_symbol`. Built-in chains and user-defined
 chains use the same Rust services and Flutter UI.
 
+Arc Mainnet (5042) and Arc Testnet (5042002) reuse Ethereum accounts. Native
+USDC and fees use 18 decimals. Its 6-decimal ERC-20 interface at
+`0x3600000000000000000000000000000000000000` shares the native balance and is
+excluded from duplicate asset rows. Rust applies Arc's 20 Gwei fee floor and
+does not fall back to intrinsic gas after failed estimation. Arc history is
+unsupported until a system-emitter-aware indexer is integrated; receipt status
+and explorer links remain available. Development fallback lists Arc but does
+not sign real on-chain transactions.
+
 Mobile EVM v1 supports EOA wallets, native transfers, ERC-20 transfers, asset
 refresh, transaction status, and EIP-1193 dApp signing. It does not include
 Safe{Wallet} multisig, swaps, bridges, staking, NFT-specific UI, contract

@@ -874,6 +874,7 @@
       "invalidAmount": "Enter a valid amount with no more than the asset's supported decimal places",
       "selectChainWallet": "Select an EVM network and wallet first",
       "invalidContract": "The ERC-20 contract must be a 20-byte 0x address",
+      "nativeUsdcAlreadyShown": "Arc USDC is already shown as the native balance",
       "transferTitle": "Send asset",
       "sendSelectedAsset": "Send {symbol}",
       "recipient": "Recipient",

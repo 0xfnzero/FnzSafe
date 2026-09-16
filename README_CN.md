@@ -71,6 +71,8 @@ make dev
 
 启动前设置 `FNZERO_SAFE_ETHERSCAN_API_KEY`，可在 explorer 与 chain ID 匹配的内置 EVM 网络上启用 Etherscan V2 历史记录。未配置有效 Key 时，对应链描述不会声明 `transactions:history`。
 
+已内置 Arc 主网（5042）和 Arc Testnet（5042002），与 Ethereum 共用账户。原生余额与 Gas 使用 18 位精度的 USDC，ERC-20 USDC 接口不会重复计入资产。Arc 专用历史索引、桥接与兑换尚未接入，详见[支持矩阵](docs/multichain-architecture.md#arc)。
+
 移动端：
 
 ```bash

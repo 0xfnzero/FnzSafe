@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { inspectTypedData, normalizeAndInspectTransaction, securityConstants } from '../src/transaction-security';
+import { inspectTypedData, normalizeAndInspectTransaction, prepareArcFees, ARC_MIN_FEE_PER_GAS, securityConstants } from '../src/transaction-security';
 
 const wallet = '0x1111111111111111111111111111111111111111';
 const token = '0x2222222222222222222222222222222222222222';
@@ -77,4 +77,27 @@ test('rejects ambiguous fee models and oversized nonce values', () => {
     () => normalizeAndInspectTransaction({ from: wallet, to: token, value: (securityConstants.MAX_UINT256 + 1n).toString() }, 1, wallet),
     /uint256/,
   );
+});
+
+test('Arc transaction inspection uses USDC and rejects low fee caps and zero-address sends', () => {
+  for (const id of [5042, 5042002]) {
+    const inspect = (input: Record<string, unknown>) => normalizeAndInspectTransaction({ from: wallet, to: token, ...input }, id, wallet, 'USDC');
+    assert.throws(() => inspect({ maxFeePerGas: ARC_MIN_FEE_PER_GAS - 1n }), /at least 20 Gwei/);
+    assert.throws(() => inspect({ gasPrice: 1n }), /at least 20 Gwei/);
+    assert.throws(() => inspect({ to: '0x0000000000000000000000000000000000000000', value: 1n }), /zero address/);
+    const result = inspect({ value: 10n ** 18n, maxFeePerGas: ARC_MIN_FEE_PER_GAS });
+    assert.equal(result.details.find((detail) => detail.label === 'Value')?.value, '1.0 USDC');
+    assert.match(result.warnings.join(' '), /native USDC/);
+  }
+  assert.doesNotThrow(() => normalizeAndInspectTransaction({ to: token, gasPrice: 1n }, 1, wallet));
+});
+
+test('Arc automatic fees preserve higher quotes and explicit caps', async () => {
+  const low = () => Promise.resolve({ maxFeePerGas: 1n, maxPriorityFeePerGas: 0n });
+  const transaction = { to: token, value: 1n };
+  assert.equal((await prepareArcFees(transaction, 5042, low)).maxFeePerGas, ARC_MIN_FEE_PER_GAS);
+  assert.equal((await prepareArcFees(transaction, 5042002, () => Promise.resolve({ maxFeePerGas: 30_000_000_000n, maxPriorityFeePerGas: 1n }))).maxFeePerGas, 30_000_000_000n);
+  const explicit = { ...transaction, maxFeePerGas: 40_000_000_000n };
+  assert.equal(await prepareArcFees(explicit, 5042, low), explicit);
+  assert.equal(await prepareArcFees(transaction, 1, low), transaction);
 });

@@ -1,4 +1,20 @@
 import { formatUnits, getAddress, isAddress, type TransactionRequest } from 'ethers';
+import { isArcChain } from './chains';
+
+export const ARC_MIN_FEE_PER_GAS = 20_000_000_000n;
+
+export async function prepareArcFees(
+  transaction: TransactionRequest,
+  chainId: number,
+  loadFees: () => Promise<{ maxFeePerGas: bigint | null; maxPriorityFeePerGas: bigint | null }>,
+): Promise<TransactionRequest> {
+  if (!isArcChain(chainId) || transaction.gasPrice != null || transaction.maxFeePerGas != null) return transaction;
+  const fees = await loadFees();
+  const priority = BigInt(transaction.maxPriorityFeePerGas ?? fees.maxPriorityFeePerGas ?? 0n);
+  const quoted = fees.maxFeePerGas ?? ARC_MIN_FEE_PER_GAS;
+  const maxFeePerGas = [quoted, priority, ARC_MIN_FEE_PER_GAS].reduce((a, b) => a > b ? a : b);
+  return { ...transaction, maxFeePerGas, maxPriorityFeePerGas: priority };
+}
 
 const MAX_CALLDATA_BYTES = 256 * 1024;
 const MAX_UINT256 = (1n << 256n) - 1n;
@@ -136,6 +152,9 @@ export function normalizeAndInspectTransaction(
   }
   const to = parseAddress(input.to, 'Transaction recipient');
   const valueWei = parseQuantity(input.value, 'Transaction value') ?? 0n;
+  if (isArcChain(expectedChainId) && valueWei > 0n && to === '0x0000000000000000000000000000000000000000') {
+    throw new Error('Arc does not allow USDC transfers to the zero address');
+  }
   const data = parseData(input.data ?? input.input);
   const details: TransactionInspection['details'] = [
     { label: 'From', value: normalizedExpectedFrom ?? from ?? 'Selected FnzSafe account' },
@@ -143,6 +162,7 @@ export function normalizeAndInspectTransaction(
     { label: 'Value', value: `${formatUnits(valueWei, 18)} ${nativeSymbol}` },
   ];
   const warnings: string[] = [];
+  if (isArcChain(expectedChainId)) warnings.push('Arc transaction fees are paid in native USDC. USDC runtime restrictions may cause transfers to revert.');
   let danger = inspectCalldata(data, to, details, warnings);
   if (!to) {
     danger = true;
@@ -156,6 +176,13 @@ export function normalizeAndInspectTransaction(
   const maxPriorityFeePerGas = parseQuantity(input.maxPriorityFeePerGas, 'Maximum priority fee per gas');
   if (gasPrice !== undefined && (maxFeePerGas !== undefined || maxPriorityFeePerGas !== undefined)) {
     throw new Error('Transaction cannot mix legacy gasPrice with EIP-1559 fee fields');
+  }
+  if (isArcChain(expectedChainId)) {
+    const fee = gasPrice ?? maxFeePerGas;
+    if (fee !== undefined && fee < ARC_MIN_FEE_PER_GAS) throw new Error('Arc requires a fee cap of at least 20 Gwei in native USDC units');
+    if (maxFeePerGas !== undefined && maxPriorityFeePerGas !== undefined && maxPriorityFeePerGas > maxFeePerGas) {
+      throw new Error('Maximum priority fee exceeds the maximum fee');
+    }
   }
   const transaction: TransactionRequest = {
     chainId: expectedChainId,

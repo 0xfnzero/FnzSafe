@@ -369,6 +369,14 @@ class _AssetsScreenState extends ConsumerState<AssetsScreen> {
       ),
     );
     if (contract == null || contract.isEmpty) return;
+    if (chain.isNativeTokenAlias(contract)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Arc USDC is already shown as the native balance')),
+      );
+      return;
+    }
     if (!_evmAddressPattern.hasMatch(contract)) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

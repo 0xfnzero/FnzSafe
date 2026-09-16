@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { ChainInfo, PortfolioAsset } from '../src/types';
+import { evmChain } from '../src/chains';
 import {
   attachUsdPrices,
+  discoverEvmTokens,
   nativeAsset,
   parseBlockscoutTokenBalances,
   visiblePortfolioAssets,
@@ -82,4 +84,48 @@ test('stale prices do not become portfolio values', async (context) => {
   const [asset] = await attachUsdPrices([nativeAsset(ethereum, '1000000000000000000', 18)]);
   assert.equal(asset.priceUsd, undefined);
   assert.equal(asset.valueUsd, undefined);
+});
+
+test('Arc displays native USDC once with 18 decimals, without removing other-chain tokens', () => {
+  const payload = [
+    { value: '1000000', token: { address_hash: '0x3600000000000000000000000000000000000000', decimals: '6', symbol: 'USDC', name: 'USDC', type: 'ERC-20' } },
+    { value: '2000000', token: { address_hash: '0x1111111111111111111111111111111111111111', decimals: '6', symbol: 'EURC', name: 'EURC', type: 'ERC-20' } },
+  ];
+  for (const id of [5042, 5042002]) {
+    const chain = evmChain(id);
+    assert.equal(chain.symbol, 'USDC');
+    const native = nativeAsset(chain, '1000000000000000001', 18);
+    assert.equal(native.balance, '1.000000000000000001');
+    const tokens = parseBlockscoutTokenBalances(payload, chain);
+    assert.deepEqual(tokens.map((token) => token.symbol), ['EURC']);
+    assert.equal(visiblePortfolioAssets([native, ...tokens]).length, 2);
+  }
+  assert.equal(evmChain(5042002).testnet, true);
+  assert.equal(parseBlockscoutTokenBalances(payload, ethereum).length, 2);
+});
+
+test('Arc mainnet USDC uses its own price and testnet has no real USD valuation', async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async (url) => {
+    assert.match(String(url), /coingecko%3Ausd-coin/);
+    return new Response(JSON.stringify({ coins: {
+      'coingecko:usd-coin': { price: 0.999, timestamp: Math.floor(Date.now() / 1000) },
+    } }));
+  };
+  const [mainnet, testnet] = await attachUsdPrices([
+    nativeAsset(evmChain(5042), '2000000000000000000', 18),
+    nativeAsset(evmChain(5042002), '2000000000000000000', 18),
+  ]);
+  assert.equal(mainnet.valueUsd, 1.998);
+  assert.equal(testnet.priceUsd, undefined);
+});
+
+test('Arc automatic discovery is explicitly unsupported rather than querying an authenticated explorer', async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async () => { throw new Error('Unexpected explorer request'); };
+  for (const id of [5042, 5042002]) {
+    await assert.rejects(discoverEvmTokens(evmChain(id), '0x1111111111111111111111111111111111111111'), /Automatic token discovery is unavailable/);
+  }
 });
