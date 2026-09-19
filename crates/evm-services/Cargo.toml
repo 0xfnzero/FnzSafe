@@ -1,11 +1,16 @@
 [package]
 name = "fnzero-safe-evm-services"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-publish = false
+description = "EVM keystore unlock, signing helpers, and chain services for FnzSafe"
+homepage = "https://github.com/0xfnzero/FnzSafe"
+documentation = "https://docs.rs/fnzero-safe-evm-services"
+readme = "README.md"
+keywords = ["ethereum", "wallet", "keystore", "evm", "fnzsafe"]
+categories = ["cryptography", "finance"]
 
 [dependencies]
 aes-gcm = { version = "0.10", features = ["zeroize"] }

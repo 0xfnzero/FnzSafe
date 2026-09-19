@@ -9,13 +9,36 @@
     <a href="https://discord.gg/ckf5UHxz">Discord</a>
   </p>
   <p>
-    <a href="https://crates.io/crates/fnzero-safe-core"><img src="https://img.shields.io/crates/v/fnzero-safe-core.svg" alt="Crates.io"></a>
+    <a href="https://crates.io/crates/fnzero-safe-core"><img src="https://img.shields.io/crates/v/fnzero-safe-core.svg" alt="fnzero-safe-core"></a>
+    <a href="https://crates.io/crates/fnzero-safe-evm-services"><img src="https://img.shields.io/crates/v/fnzero-safe-evm-services.svg" alt="fnzero-safe-evm-services"></a>
+    <a href="https://crates.io/crates/fnzero-safe-chain-core"><img src="https://img.shields.io/crates/v/fnzero-safe-chain-core.svg" alt="fnzero-safe-chain-core"></a>
     <a href="https://docs.rs/fnzero-safe-core"><img src="https://img.shields.io/docs.rs/fnzero-safe-core/badge.svg" alt="Documentation"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
   </p>
 </div>
 
 FnzSafe is an open-source multi-chain wallet for Solana and EVM-compatible networks, with experimental Bitcoin and TRON account adapters. Bitcoin and TRON currently support account derivation and address validation, not transfers or broadcasting. It combines a Tauri desktop wallet, a Flutter mobile wallet, and a Rust wallet SDK/CLI. Private keys remain in encrypted local keystores while wallet operations, dApps, crypto signals, and market research share one working surface.
+
+## Rust SDK crates
+
+| Crate | Version | Role |
+|---|---|---|
+| [`fnzero-safe-core`](https://crates.io/crates/fnzero-safe-core) | **0.1.8** | Solana keystore / CLI / bot helper |
+| [`fnzero-safe-chain-core`](https://crates.io/crates/fnzero-safe-chain-core) | **0.1.0** | Shared chain adapter traits |
+| [`fnzero-safe-evm-services`](https://crates.io/crates/fnzero-safe-evm-services) | **0.1.1** | EVM keystore unlock (universal + EVM JSON) |
+
+```toml
+fnzero-safe-core = "0.1.8"
+fnzero-safe-chain-core = "0.1.0"
+fnzero-safe-evm-services = "0.1.1"
+```
+
+Universal mnemonic exports that embed `metadata.evm_keystore_json` unlock via:
+
+```rust
+use fnzero_safe_evm_services::unlock_private_key_from_document;
+let (wallet, sk) = unlock_private_key_from_document(&std::fs::read_to_string("wallet.json")?, "password")?;
+```
 
 ## Wallet Capabilities
 

@@ -23,7 +23,7 @@ fnzero-safe-core = { path = "crates/core", version = "0.1.8" }
 fnzero-safe-chain-core = { path = "crates/chain-core", version = "0.1.0" }
 fnzero-safe-bitcoin-services = { path = "crates/bitcoin-services", version = "0.1.0" }
 fnzero-safe-tron-services = { path = "crates/tron-services", version = "0.1.0" }
-fnzero-safe-evm-services = { path = "crates/evm-services", version = "0.1.0" }
+fnzero-safe-evm-services = { path = "crates/evm-services", version = "0.1.1" }
 fnzero-safe-app-services = { path = "crates/app-services", version = "0.1.0" }
 
 # CEF support is currently shipped from Tauri's pinned preview tag. Keep every

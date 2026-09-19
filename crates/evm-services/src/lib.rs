@@ -769,6 +769,63 @@ pub fn unlock_private_key(
     Ok((wallet, private_key))
 }
 
+/// Resolve a standalone EVM keystore **or** a FnzSafe universal mnemonic
+/// keystore that embeds `metadata.evm_keystore_json`.
+///
+/// Bot / deploy tooling can pass the exported `.json` file contents directly.
+pub fn resolve_evm_keystore_json(document_json: &str) -> EvmResult<String> {
+    if document_json.len() > MAX_KEYSTORE_JSON_BYTES {
+        return Err(EvmServiceError::InvalidInput(
+            "Keystore JSON is too large".to_string(),
+        ));
+    }
+    require_non_empty(document_json, "keystore json")?;
+    let doc: serde_json::Value = serde_json::from_str(document_json)
+        .map_err(|_| EvmServiceError::InvalidInput("Invalid keystore JSON".to_string()))?;
+    if doc
+        .get("wallet_family")
+        .and_then(serde_json::Value::as_str)
+        == Some("evm")
+    {
+        return Ok(document_json.to_string());
+    }
+    if let Some(nested) = doc
+        .pointer("/metadata/evm_keystore_json")
+        .and_then(serde_json::Value::as_str)
+    {
+        // Validate nested document parses before returning.
+        let nested_doc: serde_json::Value = serde_json::from_str(nested).map_err(|_| {
+            EvmServiceError::InvalidInput("Invalid nested EVM keystore JSON".to_string())
+        })?;
+        if nested_doc
+            .get("wallet_family")
+            .and_then(serde_json::Value::as_str)
+            != Some("evm")
+        {
+            return Err(EvmServiceError::InvalidInput(
+                "Nested metadata.evm_keystore_json is not an EVM keystore".to_string(),
+            ));
+        }
+        return Ok(nested.to_string());
+    }
+    Err(EvmServiceError::InvalidInput(
+        "Document is neither an EVM keystore nor a universal keystore with metadata.evm_keystore_json"
+            .to_string(),
+    ))
+}
+
+/// Unlock from a universal or EVM keystore document (file contents).
+pub fn unlock_private_key_from_document(
+    document_json: &str,
+    password: &str,
+) -> EvmResult<(EvmWalletSummary, Zeroizing<Vec<u8>>)> {
+    let keystore_json = resolve_evm_keystore_json(document_json)?;
+    unlock_private_key(EvmUnlockWalletRequest {
+        keystore_json,
+        password: password.to_string(),
+    })
+}
+
 fn unlock_signing_key(req: &EvmUnlockWalletRequest) -> EvmResult<(EvmWalletSummary, SigningKey)> {
     let DecryptedEvmKeystore {
         signing_key,
@@ -4395,6 +4452,29 @@ mod tests {
             unlocked.address,
             "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf"
         );
+    }
+
+    #[test]
+    fn unlocks_nested_evm_keystore_from_universal_document() {
+        let created = import_private_key(EvmImportPrivateKeyRequest {
+            name: "EVM".to_string(),
+            private_key_hex: DEV_PRIVATE_KEY.to_string(),
+            password: "strong-password".to_string(),
+        })
+        .unwrap();
+        let universal = serde_json::json!({
+            "version": 3,
+            "secret_type": "mnemonic",
+            "encryption_type": "password_only",
+            "metadata": {
+                "evm_keystore_json": created.keystore_json,
+                "evm_address": created.wallet.address,
+            }
+        });
+        let (wallet, sk) =
+            unlock_private_key_from_document(&universal.to_string(), "strong-password").unwrap();
+        assert_eq!(wallet.address, created.wallet.address);
+        assert_eq!(sk.len(), 32);
     }
 
     #[test]

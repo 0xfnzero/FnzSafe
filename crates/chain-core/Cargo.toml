@@ -5,7 +5,12 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-publish = false
+description = "Shared chain adapter traits and types for FnzSafe"
+homepage = "https://github.com/0xfnzero/FnzSafe"
+documentation = "https://docs.rs/fnzero-safe-chain-core"
+readme = "README.md"
+keywords = ["wallet", "blockchain", "fnzsafe"]
+categories = ["cryptography"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

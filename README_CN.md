@@ -9,13 +9,36 @@
     <a href="https://discord.gg/ckf5UHxz">Discord</a>
   </p>
   <p>
-    <a href="https://crates.io/crates/fnzero-safe-core"><img src="https://img.shields.io/crates/v/fnzero-safe-core.svg" alt="Crates.io"></a>
+    <a href="https://crates.io/crates/fnzero-safe-core"><img src="https://img.shields.io/crates/v/fnzero-safe-core.svg" alt="fnzero-safe-core"></a>
+    <a href="https://crates.io/crates/fnzero-safe-evm-services"><img src="https://img.shields.io/crates/v/fnzero-safe-evm-services.svg" alt="fnzero-safe-evm-services"></a>
+    <a href="https://crates.io/crates/fnzero-safe-chain-core"><img src="https://img.shields.io/crates/v/fnzero-safe-chain-core.svg" alt="fnzero-safe-chain-core"></a>
     <a href="https://docs.rs/fnzero-safe-core"><img src="https://img.shields.io/docs.rs/fnzero-safe-core/badge.svg" alt="文档"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT 许可证"></a>
   </p>
 </div>
 
 FnzSafe 是一个开源多链钱包，支持 Solana 和 EVM 兼容网络，并提供实验性的 Bitcoin 与 TRON 账户适配器。Bitcoin 和 TRON 当前只支持账户派生与地址校验，尚不支持转账和广播。项目由 Tauri 桌面钱包、Flutter 移动钱包和 Rust 钱包 SDK/CLI 组成；私钥保存在本地加密 Keystore 中，钱包操作、DApp、加密货币信号和市场研究集中在同一个工作界面内。
+
+## Rust SDK crates
+
+| Crate | 版本 | 用途 |
+|---|---|---|
+| [`fnzero-safe-core`](https://crates.io/crates/fnzero-safe-core) | **0.1.8** | Solana Keystore / CLI / Bot |
+| [`fnzero-safe-chain-core`](https://crates.io/crates/fnzero-safe-chain-core) | **0.1.0** | 链适配公共类型 |
+| [`fnzero-safe-evm-services`](https://crates.io/crates/fnzero-safe-evm-services) | **0.1.1** | EVM Keystore 解密（通用钱包 / EVM JSON） |
+
+```toml
+fnzero-safe-core = "0.1.8"
+fnzero-safe-chain-core = "0.1.0"
+fnzero-safe-evm-services = "0.1.1"
+```
+
+通用助记词导出（含 `metadata.evm_keystore_json`）可直接：
+
+```rust
+use fnzero_safe_evm_services::unlock_private_key_from_document;
+let (wallet, sk) = unlock_private_key_from_document(&std::fs::read_to_string("wallet.json")?, "password")?;
+```
 
 ## 钱包能力
 
