@@ -125,7 +125,7 @@ make package-android
 
 `make package` 会构建当前主机支持的全部平台。签名 iOS 包需要 Apple Developer 配置；Android 正式签名需要 `apps/mobile/android/key.properties`；Windows 安装包建议在 Windows 上构建。
 
-macOS 公网发行包必须使用 `Developer ID Application` 证书签名并提交 Apple 公证；`Apple Development` 或 ad-hoc 签名会被 Gatekeeper 拦截。配置 `APPLE_SIGNING_IDENTITY`，并使用 `APPLE_ID`、`APPLE_PASSWORD`、`APPLE_TEAM_ID`，或 `APPLE_API_KEY`、`APPLE_API_ISSUER`、`APPLE_API_KEY_PATH` 提供公证凭据后，再运行 `make package-macos`。构建命令会在打包前检查配置，并在完成后验证签名、公证票据和 Gatekeeper 状态。仅供本机开发的未签名构建可直接运行 `cd apps/desktop && npm run desktop:build`，不要将其作为下载包发布。
+macOS 公网发行包必须使用 `Developer ID Application` 证书签名并提交 Apple 公证；`Apple Development` 或 ad-hoc 签名会被 Gatekeeper 拦截。配置 `APPLE_SIGNING_IDENTITY`，并使用 `APPLE_ID`、`APPLE_PASSWORD`、`APPLE_TEAM_ID`，或 `APPLE_API_KEY`、`APPLE_API_ISSUER`、`APPLE_API_KEY_PATH` 提供公证凭据后，再运行 `make package-macos`。构建命令会在打包前检查配置，并在完成后验证签名、公证票据和 Gatekeeper 状态。仅供本机开发的未签名构建可直接运行 `make build-macos`，不要将其作为下载包发布。
 
 ## 验证
 

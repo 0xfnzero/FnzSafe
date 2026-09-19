@@ -3,12 +3,20 @@ export const FNZSAFE_DEEP_LINK_SCHEME = "fnzsafe";
 export const FNZSAFE_SIGN_DEEP_LINK_HOST = "sign";
 export const FNZSAFE_CONNECT_DEEP_LINK_HOST = "connect";
 
+export type FnzSafeWalletFamily = "solana" | "evm";
+
 export type FnzSafeSignMethod =
   | "signMessage"
   | "signTransaction"
   | "signAllTransactions"
   | "signAndSendTransaction"
-  | "sendTransaction";
+  | "sendTransaction"
+  | "personal_sign"
+  | "eth_sign"
+  | "eth_signTypedData"
+  | "eth_signTypedData_v4"
+  | "eth_sendTransaction"
+  | "eth_signTransaction";
 
 export interface FnzSafeSignDeepLinkRequest {
   method: FnzSafeSignMethod;
@@ -17,10 +25,12 @@ export interface FnzSafeSignDeepLinkRequest {
   appName?: string;
   requestPurpose?: string;
   network?: string;
+  walletFamily?: FnzSafeWalletFamily;
   requestId?: string;
   transactionBase64?: string;
   transactionFormat?: "legacy" | "versioned" | "v0" | "auto";
   messageBase64?: string;
+  payloadJson?: string;
   callbackUrl?: string;
   knownPrograms?: FnzSafeKnownProgram[];
 }
@@ -29,6 +39,8 @@ export interface FnzSafeConnectDeepLinkRequest {
   appUrl: string;
   appName?: string;
   network?: string;
+  walletFamily?: FnzSafeWalletFamily;
+  walletPublicKey?: string;
   requestId?: string;
   callbackUrl: string;
 }
@@ -190,6 +202,10 @@ function relatedCallbackHost(appHost: string, callbackHost: string): boolean {
 
 export function buildFnzSafeSignDeepLink(request: FnzSafeSignDeepLinkRequest): string {
   const method = requireCleanText(request.method, "method", 40) as FnzSafeSignMethod;
+  const walletFamily = (request.walletFamily || "solana") as FnzSafeWalletFamily;
+  if (walletFamily !== "solana" && walletFamily !== "evm") {
+    throw new Error("Invalid walletFamily");
+  }
   const appUrl = requireAppUrl(request.appUrl, "appUrl");
   const callbackUrl = request.callbackUrl ? requireCallbackUrl(request.callbackUrl, "callbackUrl") : undefined;
   if (callbackUrl) {
@@ -201,9 +217,17 @@ export function buildFnzSafeSignDeepLink(request: FnzSafeSignDeepLinkRequest): s
   }
   const params = new URLSearchParams();
   params.set("method", method);
+  params.set("wallet_family", walletFamily);
   params.set("wallet_public_key", requireCleanText(request.walletPublicKey, "walletPublicKey", 64));
   params.set("app_url", appUrl);
-  params.set("network", requireCleanText(request.network || "mainnet", "network", 256));
+  params.set(
+    "network",
+    requireCleanText(
+      request.network || (walletFamily === "evm" ? "eip155:1" : "mainnet"),
+      "network",
+      256,
+    ),
+  );
   if (request.appName) params.set("app_name", requireCleanText(request.appName, "appName", 80));
   if (request.requestPurpose) {
     params.set("request_purpose", requireCleanText(request.requestPurpose, "requestPurpose", 80));
@@ -211,7 +235,9 @@ export function buildFnzSafeSignDeepLink(request: FnzSafeSignDeepLinkRequest): s
   if (request.requestId) params.set("request_id", requireCleanText(request.requestId, "requestId", 128));
   if (callbackUrl) params.set("callback_url", callbackUrl);
 
-  if (method === "signMessage") {
+  if (walletFamily === "evm") {
+    params.set("payload_json", requireCleanText(request.payloadJson || "", "payloadJson", 24 * 1024));
+  } else if (method === "signMessage") {
     params.set("message_base64", requireCleanText(request.messageBase64 || "", "messageBase64", 24 * 1024));
   } else {
     params.set(
@@ -239,11 +265,26 @@ export function buildFnzSafeConnectDeepLink(request: FnzSafeConnectDeepLinkReque
   if (!relatedCallbackHost(appHost, callbackHost)) {
     throw new Error("callbackUrl must belong to the same site as appUrl");
   }
+  const walletFamily = (request.walletFamily || "solana") as FnzSafeWalletFamily;
+  if (walletFamily !== "solana" && walletFamily !== "evm") {
+    throw new Error("Invalid walletFamily");
+  }
   const params = new URLSearchParams();
   params.set("app_url", appUrl);
   params.set("callback_url", callbackUrl);
-  params.set("network", requireCleanText(request.network || "mainnet", "network", 256));
+  params.set("wallet_family", walletFamily);
+  params.set(
+    "network",
+    requireCleanText(
+      request.network || (walletFamily === "evm" ? "eip155:1" : "mainnet"),
+      "network",
+      256,
+    ),
+  );
   if (request.appName) params.set("app_name", requireCleanText(request.appName, "appName", 80));
+  if (request.walletPublicKey) {
+    params.set("wallet_public_key", requireCleanText(request.walletPublicKey, "walletPublicKey", 64));
+  }
   if (request.requestId) params.set("request_id", requireCleanText(request.requestId, "requestId", 128));
   return `${FNZSAFE_DEEP_LINK_SCHEME}://${FNZSAFE_CONNECT_DEEP_LINK_HOST}?${params.toString()}`;
 }

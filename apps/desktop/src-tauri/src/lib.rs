@@ -2125,15 +2125,48 @@ fn is_connect_deep_link(url: &tauri::Url) -> bool {
     host_is_connect || path_is_connect
 }
 
+fn validate_deep_link_wallet_family(value: Option<&str>) -> Result<String, String> {
+    validate_dapp_wallet_family(value.or(Some("solana")), false)
+}
+
+fn validate_deep_link_evm_network(network: &str) -> Result<String, String> {
+    let network = validate_dapp_network(network)?;
+    let chain_id = network
+        .strip_prefix("eip155:")
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .ok_or_else(|| "EVM deep link network must use eip155:<chainId>".to_string())?;
+    Ok(format!("eip155:{chain_id}"))
+}
+
+fn validate_deep_link_payload_json(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.len() > 24 * 1024 {
+        return Err("invalid EVM deep link payload".to_string());
+    }
+    validate_evm_payload_json(trimmed)
+}
+
 fn parse_connect_deep_link(url: &tauri::Url) -> Result<DappConnectRequestEvent, String> {
     if !is_connect_deep_link(url) {
         return Err("unsupported fnzsafe connect deep link".to_string());
     }
-    let network = validate_dapp_network(
-        deep_link_query_param(url, "network")
-            .as_deref()
-            .unwrap_or("mainnet"),
-    )?;
+    let wallet_family_param = deep_link_query_param(url, "wallet_family")
+        .or_else(|| deep_link_query_param(url, "family"));
+    let wallet_family = validate_deep_link_wallet_family(wallet_family_param.as_deref())?;
+    let network = if wallet_family == "evm" {
+        validate_deep_link_evm_network(
+            deep_link_query_param(url, "network")
+                .as_deref()
+                .unwrap_or("eip155:1"),
+        )?
+    } else {
+        validate_dapp_network(
+            deep_link_query_param(url, "network")
+                .as_deref()
+                .unwrap_or("mainnet"),
+        )?
+    };
     let app_url = validate_deep_link_app_url(
         deep_link_query_param(url, "app_url")
             .as_deref()
@@ -2161,14 +2194,27 @@ fn parse_connect_deep_link(url: &tauri::Url) -> Result<DappConnectRequestEvent, 
         &app_url,
     )?
     .ok_or_else(|| "callback_url is required".to_string())?;
+    let wallet_public_key = deep_link_query_param(url, "wallet_public_key")
+        .map(|value| {
+            let address = validate_short_deep_link_text(&value, "wallet_public_key", 64)?;
+            if wallet_family == "evm" {
+                if !is_likely_evm_address(&address) {
+                    return Err("invalid EVM wallet address".to_string());
+                }
+            } else if !is_likely_solana_pubkey(&address) {
+                return Err("invalid wallet public key".to_string());
+            }
+            Ok(address)
+        })
+        .transpose()?;
 
     Ok(DappConnectRequestEvent {
         request_id,
         app_id: "fnzsafe-deep-link".to_string(),
         app_name,
         app_url: app_url_string,
-        wallet_family: "solana".to_string(),
-        wallet_public_key: None,
+        wallet_family,
+        wallet_public_key,
         network,
         callback_url: Some(callback_url),
         created_at_ms: now_ms(),
@@ -2180,25 +2226,17 @@ fn parse_sign_deep_link(url: &tauri::Url) -> Result<DappSignRequestEvent, String
         return Err("unsupported fnzsafe deep link".to_string());
     }
 
-    let method = validate_dapp_method(
-        deep_link_query_param(url, "method")
-            .as_deref()
-            .ok_or_else(|| "method is required".to_string())?,
-    )?;
+    let wallet_family_param = deep_link_query_param(url, "wallet_family")
+        .or_else(|| deep_link_query_param(url, "family"));
+    let wallet_family = validate_deep_link_wallet_family(wallet_family_param.as_deref())?;
+    let method_raw = deep_link_query_param(url, "method")
+        .ok_or_else(|| "method is required".to_string())?;
     let wallet_public_key = validate_short_deep_link_text(
         deep_link_query_param(url, "wallet_public_key")
             .as_deref()
             .ok_or_else(|| "wallet_public_key is required".to_string())?,
         "wallet_public_key",
         64,
-    )?;
-    if !is_likely_solana_pubkey(&wallet_public_key) {
-        return Err("invalid wallet public key".to_string());
-    }
-    let network = validate_dapp_network(
-        deep_link_query_param(url, "network")
-            .as_deref()
-            .unwrap_or("mainnet"),
     )?;
     let app_url = validate_deep_link_app_url(
         deep_link_query_param(url, "app_url")
@@ -2225,6 +2263,50 @@ fn parse_sign_deep_link(url: &tauri::Url) -> Result<DappSignRequestEvent, String
     let callback_url =
         validate_deep_link_callback_url(deep_link_query_param(url, "callback_url"), &app_url)?;
 
+    if wallet_family == "evm" {
+        if !is_likely_evm_address(&wallet_public_key) {
+            return Err("invalid EVM wallet address".to_string());
+        }
+        let method = validate_evm_dapp_method(&method_raw)?;
+        let network = validate_deep_link_evm_network(
+            deep_link_query_param(url, "network")
+                .as_deref()
+                .unwrap_or("eip155:1"),
+        )?;
+        let payload_json = validate_deep_link_payload_json(
+            deep_link_query_param(url, "payload_json")
+                .as_deref()
+                .ok_or_else(|| "EVM deep link payload is required".to_string())?,
+        )?;
+        return Ok(DappSignRequestEvent {
+            request_id,
+            app_id: "fnzsafe-deep-link".to_string(),
+            app_name,
+            app_url: app_url_string,
+            request_purpose,
+            method,
+            wallet_family,
+            wallet_public_key,
+            network,
+            transaction_base64: String::new(),
+            transaction_format: "evm-json".to_string(),
+            message_base64: None,
+            payload_json: Some(payload_json),
+            callback_url,
+            known_programs: Vec::new(),
+            created_at_ms: now_ms(),
+        });
+    }
+
+    if !is_likely_solana_pubkey(&wallet_public_key) {
+        return Err("invalid wallet public key".to_string());
+    }
+    let method = validate_dapp_method(&method_raw)?;
+    let network = validate_dapp_network(
+        deep_link_query_param(url, "network")
+            .as_deref()
+            .unwrap_or("mainnet"),
+    )?;
     let (transaction_base64, transaction_format, message_base64) = if method == "signMessage" {
         let message_base64 = validate_dapp_message_base64(
             deep_link_query_param(url, "message_base64")
@@ -2253,7 +2335,7 @@ fn parse_sign_deep_link(url: &tauri::Url) -> Result<DappSignRequestEvent, String
         app_url: app_url_string,
         request_purpose,
         method,
-        wallet_family: "solana".to_string(),
+        wallet_family,
         wallet_public_key,
         network,
         transaction_base64,
@@ -7858,10 +7940,53 @@ mod tests {
         assert_eq!(request.request_id, "req-1");
         assert_eq!(request.app_name, "Example DApp");
         assert_eq!(request.network, "devnet");
+        assert_eq!(request.wallet_family, "solana");
         assert_eq!(
             request.callback_url.as_deref(),
             Some("http://localhost:5174/wallet/callback")
         );
+    }
+
+    #[test]
+    fn connect_deep_link_parses_evm_family_and_network() {
+        let url = "fnzsafe://connect?wallet_family=evm&network=eip155:56&app_name=CoinBest&app_url=https%3A%2F%2Fcoinbest.example%2F&callback_url=https%3A%2F%2Fcoinbest.example%2Fwallet%2Fcallback&request_id=req-evm"
+            .parse::<tauri::Url>()
+            .unwrap();
+
+        let request = parse_connect_deep_link(&url).unwrap();
+        assert_eq!(request.wallet_family, "evm");
+        assert_eq!(request.network, "eip155:56");
+        assert_eq!(request.request_id, "req-evm");
+    }
+
+    #[test]
+    fn sign_deep_link_parses_evm_personal_sign() {
+        let payload = "%7B%22method%22%3A%22personal_sign%22%2C%22params%22%3A%5B%220x68656c6c6f%22%2C%220x1111111111111111111111111111111111111111%22%5D%7D";
+        let url = format!(
+            "fnzsafe://sign?wallet_family=evm&method=personal_sign&wallet_public_key=0x1111111111111111111111111111111111111111&network=eip155:1&payload_json={payload}&app_url=https%3A%2F%2Fexample.com%2F&callback_url=https%3A%2F%2Fexample.com%2Fwallet%2Fcallback"
+        )
+        .parse::<tauri::Url>()
+        .unwrap();
+
+        let request = parse_sign_deep_link(&url).unwrap();
+        assert_eq!(request.wallet_family, "evm");
+        assert_eq!(request.method, "personal_sign");
+        assert_eq!(request.network, "eip155:1");
+        assert_eq!(request.transaction_format, "evm-json");
+        assert!(request
+            .payload_json
+            .as_deref()
+            .unwrap_or_default()
+            .contains("personal_sign"));
+    }
+
+    #[test]
+    fn sign_deep_link_rejects_solana_method_for_evm_family() {
+        let url = "fnzsafe://sign?wallet_family=evm&method=signMessage&wallet_public_key=0x1111111111111111111111111111111111111111&network=eip155:1&payload_json=%5B%5D&app_url=https%3A%2F%2Fexample.com%2F"
+            .parse::<tauri::Url>()
+            .unwrap();
+        let error = parse_sign_deep_link(&url).unwrap_err();
+        assert!(error.contains("unsupported EVM"));
     }
 
     #[test]

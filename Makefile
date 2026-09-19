@@ -16,16 +16,17 @@ TAURI_WINDOWS_TARGET ?= x86_64-pc-windows-msvc
 ANDROID_JAVA_HOME ?= $(shell if [[ -d /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home ]]; then echo /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home; fi)
 ANDROID_ENV := $(if $(ANDROID_JAVA_HOME),JAVA_HOME="$(ANDROID_JAVA_HOME)" PATH="$(ANDROID_JAVA_HOME)/bin:$$PATH",)
 
-.PHONY: help dev stop package package-android package-ios package-macos package-windows prepare-release-dir
+.PHONY: help dev stop build-macos package package-android package-ios package-macos package-windows prepare-release-dir
 
 help:
 	@echo "FnzSafe commands"
 	@echo "  make dev              Start the desktop dev app; old local dev processes are stopped first"
 	@echo "  make stop             Stop all local FnzSafe development processes"
+	@echo "  make build-macos      Local unsigned macOS desktop build (no Developer ID / notarization)"
 	@echo "  make package          Build Android, iOS, macOS, and Windows packages into ./release"
 	@echo "  make package-android  Build Android APK/AAB into ./release/android"
 	@echo "  make package-ios      Build iOS app/IPA into ./release/ios"
-	@echo "  make package-macos    Build the macOS desktop package into ./release/macos"
+	@echo "  make package-macos    Signed+notarized macOS release into ./release/macos"
 	@echo "  make package-windows  Build the Windows desktop package into ./release/windows"
 	@echo ""
 	@echo "Options:"
@@ -39,6 +40,9 @@ dev:
 
 stop:
 	cd "$(DESKTOP_DIR)" && npm run stop
+
+build-macos:
+	cd "$(DESKTOP_DIR)" && npm run desktop:build
 
 package: package-android package-ios package-macos package-windows
 

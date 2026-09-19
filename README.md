@@ -125,7 +125,7 @@ make package-android
 
 Use `make package` to build every platform supported by the current host. Signed iOS packages require an Apple developer configuration; Android release signing requires `apps/mobile/android/key.properties`; Windows packages should be built on Windows.
 
-Public macOS packages must be signed with a `Developer ID Application` certificate and notarized by Apple; `Apple Development` and ad-hoc signatures are rejected by Gatekeeper. Set `APPLE_SIGNING_IDENTITY` and provide notarization credentials through either `APPLE_ID`, `APPLE_PASSWORD`, and `APPLE_TEAM_ID`, or `APPLE_API_KEY`, `APPLE_API_ISSUER`, and `APPLE_API_KEY_PATH`, before running `make package-macos`. The command checks the configuration before packaging and verifies the signature, stapled ticket, and Gatekeeper assessment afterwards. For a local-only unsigned build, run `cd apps/desktop && npm run desktop:build`; do not publish that artifact as a download.
+Public macOS packages must be signed with a `Developer ID Application` certificate and notarized by Apple; `Apple Development` and ad-hoc signatures are rejected by Gatekeeper. Set `APPLE_SIGNING_IDENTITY` and provide notarization credentials through either `APPLE_ID`, `APPLE_PASSWORD`, and `APPLE_TEAM_ID`, or `APPLE_API_KEY`, `APPLE_API_ISSUER`, and `APPLE_API_KEY_PATH`, before running `make package-macos`. The command checks the configuration before packaging and verifies the signature, stapled ticket, and Gatekeeper assessment afterwards. For a local-only unsigned build, run `make build-macos`; do not publish that artifact as a download.
 
 ## Verify
 
