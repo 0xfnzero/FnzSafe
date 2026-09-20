@@ -5017,13 +5017,19 @@ export default function Home() {
           tf("features.settings.unlockInconsistent", "部分历史钱包尚未使用统一密码，请先完成密码迁移"),
         ));
       }
-      if (isTauriWebview()) {
-        await enqueueDappConnectionOperation(() => invoke("dapp_resume_connections"));
+      // Clear the lock gate before resume so deferred connect/sign events are shown.
+      applicationLockedRef.current = false;
+      try {
+        if (isTauriWebview()) {
+          await enqueueDappConnectionOperation(() => invoke("dapp_resume_connections"));
+        }
+      } catch (error) {
+        applicationLockedRef.current = true;
+        throw error;
       }
       setUnlockPassword("");
       setUnlockPasswordVisible(false);
       setUnlockError(null);
-      applicationLockedRef.current = false;
       setApplicationLocked(false);
       autoLockDeadlineRef.current = nextAutoLockDeadline(Date.now(), appPreferences.autoLockMinutes);
     } catch (error) {
@@ -5395,12 +5401,18 @@ export default function Home() {
           tf("features.settings.unlockInconsistent", "部分历史钱包尚未使用统一密码，请先完成密码迁移"),
         ));
       }
-      if (isTauriWebview()) {
-        await enqueueDappConnectionOperation(() => invoke("dapp_resume_connections"));
+      // Clear the lock gate before resume so deferred connect/sign events are shown.
+      applicationLockedRef.current = false;
+      try {
+        if (isTauriWebview()) {
+          await enqueueDappConnectionOperation(() => invoke("dapp_resume_connections"));
+        }
+      } catch (error) {
+        applicationLockedRef.current = true;
+        throw error;
       }
       setApplicationLocked(false);
       setUnlockError(null);
-      applicationLockedRef.current = false;
       autoLockDeadlineRef.current = nextAutoLockDeadline(Date.now(), appPreferences.autoLockMinutes);
     } catch (error) {
       const message = errorMessage(error, tf("features.settings.unlockFailed", "Touch ID 解锁失败"));

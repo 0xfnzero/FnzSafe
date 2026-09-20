@@ -2372,12 +2372,11 @@ fn enqueue_dapp_sign_request(
     webview_label: String,
     event: DappSignRequestEvent,
 ) -> Result<(), String> {
-    ensure_dapp_connections_active(state)?;
+    let was_paused = state.paused.load(Ordering::Acquire);
     let mut requests = state
         .requests
         .lock()
         .map_err(|_| "dapp request lock poisoned".to_string())?;
-    ensure_dapp_connections_active(state)?;
     prune_expired_dapp_sign_requests(&mut requests, now_ms());
     if requests
         .values()
@@ -2401,6 +2400,13 @@ fn enqueue_dapp_sign_request(
     drop(requests);
 
     let request_id = event.request_id.clone();
+    if was_paused {
+        // Keep the request for after unlock instead of discarding the deep link.
+        log::info!(
+            "queued dapp signing request {request_id} while locked; will present after unlock"
+        );
+        return Ok(());
+    }
     if let Err(error) = app.emit_to("main", DAPP_SIGN_REQUEST_EVENT, event) {
         log::warn!("failed to notify main window about dapp signing request {request_id}: {error}");
         state
@@ -2420,12 +2426,11 @@ fn enqueue_dapp_connect_request(
     webview_label: Option<String>,
     event: DappConnectRequestEvent,
 ) -> Result<(), String> {
-    ensure_dapp_connections_active(state)?;
+    let was_paused = state.paused.load(Ordering::Acquire);
     let mut requests = state
         .connect_requests
         .lock()
         .map_err(|_| "dapp connect request lock poisoned".to_string())?;
-    ensure_dapp_connections_active(state)?;
     prune_expired_dapp_connect_requests(&mut requests, now_ms());
     if requests
         .values()
@@ -2449,6 +2454,13 @@ fn enqueue_dapp_connect_request(
     drop(requests);
 
     let request_id = event.request_id.clone();
+    if was_paused {
+        // Keep the request for after unlock instead of discarding the deep link.
+        log::info!(
+            "queued dapp connect request {request_id} while locked; will present after unlock"
+        );
+        return Ok(());
+    }
     if let Err(error) = app.emit_to("main", DAPP_CONNECT_REQUEST_EVENT, event) {
         log::warn!("failed to notify main window about dapp connect request {request_id}: {error}");
         state
@@ -2462,6 +2474,62 @@ fn enqueue_dapp_connect_request(
     }
     log::info!("queued dapp connect request {request_id} and notified the main window");
     Ok(())
+}
+
+fn oldest_pending_dapp_sign_event(
+    state: &DappBridgeState,
+) -> Result<Option<DappSignRequestEvent>, String> {
+    let mut requests = state
+        .requests
+        .lock()
+        .map_err(|_| "dapp request lock poisoned".to_string())?;
+    prune_expired_dapp_sign_requests(&mut requests, now_ms());
+    Ok(requests
+        .values()
+        .filter(|pending| pending.result.is_none())
+        .map(|pending| pending.event.clone())
+        .min_by_key(|event| event.created_at_ms))
+}
+
+fn oldest_pending_dapp_connect_event(
+    state: &DappBridgeState,
+) -> Result<Option<DappConnectRequestEvent>, String> {
+    let mut requests = state
+        .connect_requests
+        .lock()
+        .map_err(|_| "dapp connect request lock poisoned".to_string())?;
+    prune_expired_dapp_connect_requests(&mut requests, now_ms());
+    Ok(requests
+        .values()
+        .filter(|pending| pending.result.is_none())
+        .map(|pending| pending.event.clone())
+        .min_by_key(|event| event.created_at_ms))
+}
+
+fn notify_pending_dapp_requests_after_unlock(
+    app: &DesktopAppHandle,
+    state: &DappBridgeState,
+) {
+    if let Ok(Some(event)) = oldest_pending_dapp_connect_event(state) {
+        let request_id = event.request_id.clone();
+        if let Err(error) = app.emit_to("main", DAPP_CONNECT_REQUEST_EVENT, event) {
+            log::warn!(
+                "failed to present deferred dapp connect request {request_id} after unlock: {error}"
+            );
+        } else {
+            log::info!("presented deferred dapp connect request {request_id} after unlock");
+        }
+    }
+    if let Ok(Some(event)) = oldest_pending_dapp_sign_event(state) {
+        let request_id = event.request_id.clone();
+        if let Err(error) = app.emit_to("main", DAPP_SIGN_REQUEST_EVENT, event) {
+            log::warn!(
+                "failed to present deferred dapp signing request {request_id} after unlock: {error}"
+            );
+        } else {
+            log::info!("presented deferred dapp signing request {request_id} after unlock");
+        }
+    }
 }
 
 fn focus_main_window(app: &DesktopAppHandle) {
@@ -5874,16 +5942,7 @@ fn dapp_pending_sign_request(
     if state.paused.load(Ordering::Acquire) {
         return Ok(None);
     }
-    let mut requests = state
-        .requests
-        .lock()
-        .map_err(|_| "dapp request lock poisoned".to_string())?;
-    prune_expired_dapp_sign_requests(&mut requests, now_ms());
-    Ok(requests
-        .values()
-        .filter(|pending| pending.result.is_none())
-        .map(|pending| pending.event.clone())
-        .min_by_key(|event| event.created_at_ms))
+    oldest_pending_dapp_sign_event(state.inner())
 }
 
 #[tauri::command]
@@ -5893,16 +5952,7 @@ fn dapp_pending_connect_request(
     if state.paused.load(Ordering::Acquire) {
         return Ok(None);
     }
-    let mut requests = state
-        .connect_requests
-        .lock()
-        .map_err(|_| "dapp connect request lock poisoned".to_string())?;
-    prune_expired_dapp_connect_requests(&mut requests, now_ms());
-    Ok(requests
-        .values()
-        .filter(|pending| pending.result.is_none())
-        .map(|pending| pending.event.clone())
-        .min_by_key(|event| event.created_at_ms))
+    oldest_pending_dapp_connect_event(state.inner())
 }
 
 #[tauri::command]
@@ -6086,6 +6136,7 @@ fn dapp_resume_connections(
         raise_embedded_webview(&webview)?;
     }
     state.paused.store(false, Ordering::Release);
+    notify_pending_dapp_requests_after_unlock(&app, state.inner());
     Ok(())
 }
 
@@ -7780,6 +7831,103 @@ mod tests {
         state.paused.store(false, Ordering::Release);
         assert!(ensure_dapp_connections_active(&state).is_ok());
         assert!(state.sessions.lock().unwrap().contains_key("existing-tab"));
+    }
+
+    #[test]
+    fn locked_bridge_keeps_connect_requests_until_unlock() {
+        let state = DappBridgeState::default();
+        assert!(state.paused.load(Ordering::Acquire));
+        let event = DappConnectRequestEvent {
+            request_id: "fnzsafe-connect-while-locked".to_string(),
+            app_id: "coinbest".to_string(),
+            app_name: "CoinBest".to_string(),
+            app_url: "https://coinbest.exchange".to_string(),
+            wallet_family: "solana".to_string(),
+            wallet_public_key: None,
+            network: "mainnet-beta".to_string(),
+            callback_url: Some("https://coinbest.exchange/wallet/callback".to_string()),
+            created_at_ms: now_ms(),
+        };
+        state.connect_requests.lock().unwrap().insert(
+            event.request_id.clone(),
+            DappPendingConnectRequest {
+                webview_label: None,
+                event: event.clone(),
+                result: None,
+            },
+        );
+
+        // Pending APIs stay quiet while locked so the unlock UI is not interrupted.
+        assert!(state.paused.load(Ordering::Acquire));
+        assert!(oldest_pending_dapp_connect_event(&state).unwrap().is_some());
+
+        pause_dapp_connections(&state).unwrap();
+        assert!(state.connect_requests.lock().unwrap().is_empty());
+
+        // Simulate a deep link that arrives after lock: it must survive until unlock.
+        state.connect_requests.lock().unwrap().insert(
+            event.request_id.clone(),
+            DappPendingConnectRequest {
+                webview_label: None,
+                event: event.clone(),
+                result: None,
+            },
+        );
+        state.paused.store(false, Ordering::Release);
+        let pending = oldest_pending_dapp_connect_event(&state).unwrap();
+        assert_eq!(
+            pending.map(|item| item.request_id),
+            Some("fnzsafe-connect-while-locked".to_string())
+        );
+    }
+
+    #[test]
+    fn locked_bridge_keeps_sign_requests_until_unlock() {
+        let state = DappBridgeState::default();
+        let event = DappSignRequestEvent {
+            request_id: "fnzsafe-sign-while-locked".to_string(),
+            app_id: "coinbest".to_string(),
+            app_name: "CoinBest".to_string(),
+            app_url: "https://coinbest.exchange".to_string(),
+            request_purpose: None,
+            method: "signMessage".to_string(),
+            wallet_family: "solana".to_string(),
+            wallet_public_key: "11111111111111111111111111111111".to_string(),
+            network: "mainnet-beta".to_string(),
+            transaction_base64: String::new(),
+            transaction_format: "legacy".to_string(),
+            message_base64: Some("Y29pbmJlc3Q=".to_string()),
+            payload_json: None,
+            callback_url: Some("https://coinbest.exchange/wallet/callback".to_string()),
+            known_programs: Vec::new(),
+            created_at_ms: now_ms(),
+        };
+        state.requests.lock().unwrap().insert(
+            event.request_id.clone(),
+            DappPendingRequest {
+                webview_label: "deep-link".to_string(),
+                event: event.clone(),
+                result: None,
+            },
+        );
+        assert!(oldest_pending_dapp_sign_event(&state).unwrap().is_some());
+        pause_dapp_connections(&state).unwrap();
+        assert!(state.requests.lock().unwrap().is_empty());
+
+        state.requests.lock().unwrap().insert(
+            event.request_id.clone(),
+            DappPendingRequest {
+                webview_label: "deep-link".to_string(),
+                event: event.clone(),
+                result: None,
+            },
+        );
+        state.paused.store(false, Ordering::Release);
+        let pending = oldest_pending_dapp_sign_event(&state).unwrap();
+        assert_eq!(
+            pending.map(|item| item.request_id),
+            Some("fnzsafe-sign-while-locked".to_string())
+        );
     }
 
     #[test]
