@@ -4135,6 +4135,7 @@ export default function Home() {
   const dappConnectResolutionInFlightRef = useRef<string | null>(null);
   const presentedDappConnectRequestIdRef = useRef<string | null>(null);
   const presentedDappSignRequestIdRef = useRef<string | null>(null);
+  const presentPendingDappRequestsAfterUnlockRef = useRef<(() => Promise<void>) | null>(null);
   selectedFormRef.current = selectedForm;
   const [walletAssets, setWalletAssets] = useState<WalletAssetsState | null>(null);
   const [walletSolBalanceCache, setWalletSolBalanceCache] = useState<Record<string, string>>({});
@@ -4918,6 +4919,8 @@ export default function Home() {
     setTwitterAiApiKey("");
     autoApprovedDappRequestIdRef.current = null;
     dappConnectResolutionInFlightRef.current = null;
+    presentedDappConnectRequestIdRef.current = null;
+    presentedDappSignRequestIdRef.current = null;
     programKeypairBytesRef.current?.fill(0);
     programKeypairBytesRef.current = null;
     setFormData((previous) => stripSensitiveFormFields(previous) as FormState);
@@ -5032,6 +5035,8 @@ export default function Home() {
       setUnlockError(null);
       setApplicationLocked(false);
       autoLockDeadlineRef.current = nextAutoLockDeadline(Date.now(), appPreferences.autoLockMinutes);
+      // Unlock completed — explicitly present any deep-link connect/sign queued while locked.
+      await presentPendingDappRequestsAfterUnlockRef.current?.();
     } catch (error) {
       const message = errorMessage(error, tf("features.settings.unlockFailed", "钱包密码错误"));
       setUnlockError(message);
@@ -5414,6 +5419,8 @@ export default function Home() {
       setApplicationLocked(false);
       setUnlockError(null);
       autoLockDeadlineRef.current = nextAutoLockDeadline(Date.now(), appPreferences.autoLockMinutes);
+      // Unlock completed — explicitly present any deep-link connect/sign queued while locked.
+      await presentPendingDappRequestsAfterUnlockRef.current?.();
     } catch (error) {
       const message = errorMessage(error, tf("features.settings.unlockFailed", "Touch ID 解锁失败"));
       setUnlockError(message);
@@ -5550,6 +5557,20 @@ export default function Home() {
         reconciliationInFlight = false;
       }
     };
+    presentPendingDappRequestsAfterUnlockRef.current = async () => {
+      // Force a fresh present after unlock even if the same request_id was seen while locked.
+      // Bypass the interval gate so unlock always waits for this poll to finish.
+      presentedDappConnectRequestIdRef.current = null;
+      presentedDappSignRequestIdRef.current = null;
+      if (cancelled || applicationLockedRef.current) return;
+      const [connectRequest, signRequest] = await Promise.all([
+        invoke<DappConnectRequestEvent | null>("dapp_pending_connect_request").catch(() => null),
+        invoke<DappSignRequestEvent | null>("dapp_pending_sign_request").catch(() => null),
+      ]);
+      if (cancelled || applicationLockedRef.current) return;
+      if (connectRequest) showConnectRequest(connectRequest);
+      if (signRequest) showSignRequest(signRequest);
+    };
     void reconcilePendingRequests();
     const reconciliationTimer = window.setInterval(
       () => void reconcilePendingRequests(),
@@ -5557,6 +5578,7 @@ export default function Home() {
     );
     return () => {
       cancelled = true;
+      presentPendingDappRequestsAfterUnlockRef.current = null;
       window.clearInterval(reconciliationTimer);
       unlisten?.();
       unlistenConnect?.();

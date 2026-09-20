@@ -6075,21 +6075,13 @@ fn dapp_pause_connections(
 
 fn pause_dapp_connections(state: &DappBridgeState) -> Result<(), String> {
     state.paused.store(true, Ordering::Release);
-    let sessions = state
+    // Keep unresolved connect/sign requests. Deep links that arrive while locked
+    // must survive repeated pause calls (e.g. walletsLoading flips) and be shown
+    // after unlock. TTL pruning still drops stale requests.
+    let _sessions = state
         .sessions
         .lock()
         .map_err(|_| "dapp session lock poisoned".to_string())?;
-    drop(sessions);
-    state
-        .requests
-        .lock()
-        .map_err(|_| "dapp request lock poisoned".to_string())?
-        .clear();
-    state
-        .connect_requests
-        .lock()
-        .map_err(|_| "dapp connect request lock poisoned".to_string())?
-        .clear();
     Ok(())
 }
 
@@ -7857,22 +7849,12 @@ mod tests {
             },
         );
 
-        // Pending APIs stay quiet while locked so the unlock UI is not interrupted.
-        assert!(state.paused.load(Ordering::Acquire));
-        assert!(oldest_pending_dapp_connect_event(&state).unwrap().is_some());
-
+        // Repeated pause must not wipe deferred deep links.
         pause_dapp_connections(&state).unwrap();
-        assert!(state.connect_requests.lock().unwrap().is_empty());
+        pause_dapp_connections(&state).unwrap();
+        assert!(state.paused.load(Ordering::Acquire));
+        assert_eq!(state.connect_requests.lock().unwrap().len(), 1);
 
-        // Simulate a deep link that arrives after lock: it must survive until unlock.
-        state.connect_requests.lock().unwrap().insert(
-            event.request_id.clone(),
-            DappPendingConnectRequest {
-                webview_label: None,
-                event: event.clone(),
-                result: None,
-            },
-        );
         state.paused.store(false, Ordering::Release);
         let pending = oldest_pending_dapp_connect_event(&state).unwrap();
         assert_eq!(
@@ -7910,18 +7892,10 @@ mod tests {
                 result: None,
             },
         );
-        assert!(oldest_pending_dapp_sign_event(&state).unwrap().is_some());
         pause_dapp_connections(&state).unwrap();
-        assert!(state.requests.lock().unwrap().is_empty());
+        pause_dapp_connections(&state).unwrap();
+        assert_eq!(state.requests.lock().unwrap().len(), 1);
 
-        state.requests.lock().unwrap().insert(
-            event.request_id.clone(),
-            DappPendingRequest {
-                webview_label: "deep-link".to_string(),
-                event: event.clone(),
-                result: None,
-            },
-        );
         state.paused.store(false, Ordering::Release);
         let pending = oldest_pending_dapp_sign_event(&state).unwrap();
         assert_eq!(
