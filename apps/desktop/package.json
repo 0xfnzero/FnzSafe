@@ -10,7 +10,7 @@
     "prepare:ai-runtime": "npm run install:ai-runtime && node scripts/prepare-ai-runtime.cjs",
     "test:ai-runtime": "npm test --prefix ai-runtime",
     "test:ai-runtime-live": "npm run test:live --prefix ai-runtime",
-    "test:unit": "node --test src/lib/appStorage.test.mjs src/lib/browserStorage.test.mjs src/lib/chainMetadata.test.mjs src/lib/dappVisibility.test.mjs src/lib/evmAssetSend.test.mjs src/lib/evmChainRules.test.mjs src/lib/evmPaymentPreview.test.mjs src/lib/multichain.test.mjs src/lib/defillamaStats.test.mjs src/lib/fomoSignals.test.mjs src/lib/hydratedStorage.test.mjs src/lib/requestIntent.test.mjs src/lib/researchAiProviders.test.mjs src/lib/settingsCenter.test.mjs src/lib/tokenMarketTable.test.mjs src/lib/twitterChainDetection.test.mjs src/lib/twitterKols.test.mjs src/lib/twitterSignals.test.mjs src/lib/walletExport.test.mjs",
+    "test:unit": "node --experimental-strip-types --test src/lib/appStorage.test.mjs src/lib/browserStorage.test.mjs src/lib/chainMetadata.test.mjs src/lib/dappVisibility.test.mjs src/lib/evmAbi.test.ts src/lib/evmAbiProjects.test.ts src/lib/evmAssetSend.test.mjs src/lib/evmChainRules.test.mjs src/lib/evmPaymentPreview.test.mjs src/lib/multichain.test.mjs src/lib/defillamaStats.test.mjs src/lib/fomoSignals.test.mjs src/lib/hydratedStorage.test.mjs src/lib/requestIntent.test.mjs src/lib/researchAiProviders.test.mjs src/lib/settingsCenter.test.mjs src/lib/tokenMarketTable.test.mjs src/lib/twitterChainDetection.test.mjs src/lib/twitterKols.test.mjs src/lib/twitterSignals.test.mjs src/lib/walletExport.test.mjs",
     "dev": "next dev -H 127.0.0.1 -p 3840",
     "predev:stack": "node scripts/kill-dev-processes.cjs && node scripts/ensure-out.cjs",
     "dev:stack": "node scripts/dev-stack.cjs",
@@ -31,6 +31,7 @@
   },
   "dependencies": {
     "@base-ui/react": "^1.3.0",
+    "@noble/hashes": "^1.8.0",
     "@tauri-apps/api": "^2.11.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

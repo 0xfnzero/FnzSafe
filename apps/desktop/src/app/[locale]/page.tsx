@@ -59,6 +59,7 @@ import {
   QrCode,
   Clock,
   FileText,
+  FileJson2,
   Radio,
   Bell,
   Users,
@@ -100,6 +101,7 @@ import {
 } from "@/components/UnifiedWallet";
 import { BrowserMenu } from "@/components/BrowserMenu";
 import { ChainDirectory } from "@/components/ChainDirectory";
+import { EvmContractInvokePanel } from "@/components/EvmContractInvokePanel";
 import { DEFAULT_API_PORT } from "@/lib/api";
 import { apiFetch } from "@/lib/apiFetch";
 import { shouldShowNativeDappWebview } from "@/lib/dappVisibility";
@@ -3402,6 +3404,7 @@ function defaultBackTarget(formId: string): string | null {
     case "program-info":
       return "program-workbench";
     case "program-invoke-standalone":
+    case "evm-contract-invoke":
     case "external-sign":
       return "contract-tools";
     case "dapp-store":
@@ -3781,6 +3784,12 @@ export default function Home() {
           id: "program-invoke-standalone",
           label: t("features.program-invoke.title"),
           icon: <Send className="w-4 h-4" />,
+          network: true,
+        },
+        {
+          id: "evm-contract-invoke",
+          label: tf("features.evm-contract-invoke.title", "ABI 调用"),
+          icon: <FileJson2 className="w-4 h-4" />,
           network: true,
         },
         {
@@ -23910,6 +23919,12 @@ export default function Home() {
                 preset: { wallet_id: effectiveWalletId, network: effectiveNetwork },
               },
               {
+                id: "evm-contract-invoke",
+                title: tf("features.evm-contract-invoke.title", "ABI 调用"),
+                icon: <FileJson2 className="w-4 h-4" />,
+                preset: { wallet_id: effectiveWalletId },
+              },
+              {
                 id: "external-sign",
                 title: t("features.external-sign.title"),
                 icon: <ShieldCheck className="w-4 h-4" />,
@@ -26607,6 +26622,26 @@ export default function Home() {
           </div>
         );
       }
+
+      case "evm-contract-invoke":
+        return (
+          <EvmContractInvokePanel
+            chain={activeEvmChain || null}
+            walletAddress={evmWallet?.address || effectiveWallet?.evm_address || null}
+            walletId={
+              wallets.find((wallet) =>
+                wallet.evm_address &&
+                evmWallet?.address &&
+                wallet.evm_address.toLowerCase() === evmWallet.address.toLowerCase(),
+              )?.id
+              || (effectiveWallet?.evm_address ? effectiveWallet.id : null)
+              || null
+            }
+            wallets={wallets}
+            t={t}
+            tf={tf}
+          />
+        );
 
       case "program-invoke":
       case "program-invoke-standalone": {
@@ -29453,6 +29488,7 @@ export default function Home() {
         "program-upgrade": t("features.program-upgrade.title"),
         "program-invoke": t("features.program-invoke.title"),
         "program-invoke-standalone": t("features.program-invoke.title"),
+        "evm-contract-invoke": tf("features.evm-contract-invoke.title", "ABI 调用"),
         "external-sign": t("features.external-sign.title"),
         "program-info": t("features.program-info.title"),
         "squads-workspace": t("features.workspace.title"),
@@ -29473,7 +29509,9 @@ export default function Home() {
     selectedForm === "twitter-signals" ||
     selectedForm === "defillama-stats";
   const isProgramInvokeWorkspace =
-    selectedForm === "program-invoke" || selectedForm === "program-invoke-standalone";
+    selectedForm === "program-invoke" ||
+    selectedForm === "program-invoke-standalone" ||
+    selectedForm === "evm-contract-invoke";
   const showFormHeader = selectedForm !== "wallet-list" && !isBrowserWorkspaceForm;
   const isWideWorkspaceForm = [
     "contract-tools",
@@ -29482,6 +29520,7 @@ export default function Home() {
     "program-upgrade",
     "program-invoke",
     "program-invoke-standalone",
+    "evm-contract-invoke",
     "external-sign",
     "dapp-store",
     "twitter-signals",

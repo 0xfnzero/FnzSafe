@@ -843,6 +843,27 @@ pub struct EvmDappSignSubmitRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmContractInvokeRequest {
+    pub chain: EvmChainConfig,
+    pub wallet_address: String,
+    pub contract_address: String,
+    pub data: String,
+    pub value_wei: Option<String>,
+    pub mode: Option<String>,
+    pub keystore_json: String,
+    pub password: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmContractInvokeResult {
+    pub status: String,
+    pub result_hex: Option<String>,
+    pub transaction_hash: Option<String>,
+    pub gas_limit: Option<String>,
+    pub chain: EvmChainConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EvmDappSignSubmitResult {
     pub signature: Option<String>,
     pub signed_transaction: Option<String>,
@@ -1411,6 +1432,18 @@ impl From<evm::EvmDappSignSubmitResult> for EvmDappSignSubmitResult {
             signed_transaction: value.signed_transaction,
             transaction: value.transaction.map(Into::into),
             status: value.status,
+        }
+    }
+}
+
+impl From<evm::EvmContractInvokeResult> for EvmContractInvokeResult {
+    fn from(value: evm::EvmContractInvokeResult) -> Self {
+        Self {
+            status: value.status,
+            result_hex: value.result_hex,
+            transaction_hash: value.transaction_hash,
+            gas_limit: value.gas_limit,
+            chain: value.chain.into(),
         }
     }
 }
@@ -2772,6 +2805,48 @@ fn evm_dapp_submit_request(req: EvmDappSignSubmitRequest) -> evm::EvmDappSignSub
         password: req.password,
         method: req.method,
         payload_json: req.payload_json,
+    }
+}
+
+pub fn evm_contract_invoke(
+    req: EvmContractInvokeRequest,
+) -> AppServiceResult<EvmContractInvokeResult> {
+    evm::invoke_contract(evm_contract_invoke_request(req))
+        .map(Into::into)
+        .map_err(map_evm_error)
+}
+
+pub fn evm_contract_invoke_with_private_key(
+    req: EvmContractInvokeRequest,
+    private_key: &[u8],
+) -> AppServiceResult<EvmContractInvokeResult> {
+    evm::invoke_contract_with_private_key(evm_contract_invoke_request(req), private_key)
+        .map(Into::into)
+        .map_err(map_evm_error)
+}
+
+pub fn evm_contract_invoke_with_private_key_loader<F>(
+    req: EvmContractInvokeRequest,
+    load_private_key: F,
+) -> AppServiceResult<EvmContractInvokeResult>
+where
+    F: FnOnce() -> Result<Zeroizing<Vec<u8>>, String>,
+{
+    evm::invoke_contract_with_private_key_loader(evm_contract_invoke_request(req), load_private_key)
+        .map(Into::into)
+        .map_err(map_evm_error)
+}
+
+fn evm_contract_invoke_request(req: EvmContractInvokeRequest) -> evm::EvmContractInvokeRequest {
+    evm::EvmContractInvokeRequest {
+        chain: req.chain.into(),
+        wallet_address: req.wallet_address,
+        contract_address: req.contract_address,
+        data: req.data,
+        value_wei: req.value_wei,
+        mode: req.mode,
+        keystore_json: req.keystore_json,
+        password: req.password,
     }
 }
 

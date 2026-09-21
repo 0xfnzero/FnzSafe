@@ -1322,6 +1322,152 @@ pub fn erc20_transfer_calldata(recipient: &str, amount_units: &str) -> EvmResult
     Ok(format!("0x{}", hex::encode(bytes)))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmContractInvokeRequest {
+    pub chain: EvmChainConfig,
+    pub wallet_address: String,
+    pub contract_address: String,
+    pub data: String,
+    #[serde(default)]
+    pub value_wei: Option<String>,
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub keystore_json: String,
+    #[serde(default)]
+    pub password: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvmContractInvokeResult {
+    pub status: String,
+    pub result_hex: Option<String>,
+    pub transaction_hash: Option<String>,
+    pub gas_limit: Option<String>,
+    pub chain: EvmChainConfig,
+}
+
+pub fn invoke_contract(req: EvmContractInvokeRequest) -> EvmResult<EvmContractInvokeResult> {
+    invoke_contract_with_key_loader(&req, || {
+        decrypt_keystore(&req.keystore_json, &req.password).map(|decrypted| decrypted.signing_key)
+    })
+}
+
+pub fn invoke_contract_with_private_key(
+    req: EvmContractInvokeRequest,
+    private_key: &[u8],
+) -> EvmResult<EvmContractInvokeResult> {
+    invoke_contract_with_key_loader(&req, || signing_key_from_bytes(private_key))
+}
+
+pub fn invoke_contract_with_private_key_loader<F>(
+    req: EvmContractInvokeRequest,
+    load_private_key: F,
+) -> EvmResult<EvmContractInvokeResult>
+where
+    F: FnOnce() -> Result<Zeroizing<Vec<u8>>, String>,
+{
+    invoke_contract_with_key_loader(&req, || {
+        let private_key = load_private_key().map_err(EvmServiceError::InvalidInput)?;
+        signing_key_from_bytes(private_key.as_slice())
+    })
+}
+
+fn invoke_contract_with_key_loader<F>(
+    req: &EvmContractInvokeRequest,
+    load_signing_key: F,
+) -> EvmResult<EvmContractInvokeResult>
+where
+    F: FnOnce() -> EvmResult<SigningKey>,
+{
+    validate_chain(&req.chain)?;
+    validate_rpc_chain_id(&req.chain)?;
+    let wallet_address = normalize_address(&req.wallet_address, "wallet address")?;
+    let contract_address = normalize_address(&req.contract_address, "contract address")?;
+    let data = evm_data_field(Some(req.data.as_str()))?;
+    if data == "0x" || data.len() < 10 {
+        return Err(EvmServiceError::InvalidInput(
+            "contract calldata is required".to_string(),
+        ));
+    }
+    let value = req
+        .value_wei
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| normalize_decimal(value, "value"))
+        .transpose()?
+        .unwrap_or_else(|| "0".to_string());
+    validate_arc_recipient(req.chain.chain_id, &contract_address, &value)?;
+    let mode = req
+        .mode
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("call");
+
+    match mode {
+        "call" => {
+            let result_hex = eth_call_tx(
+                &req.chain,
+                Some(&wallet_address),
+                &contract_address,
+                &value,
+                &data,
+            )?;
+            Ok(EvmContractInvokeResult {
+                status: "called".to_string(),
+                result_hex: Some(result_hex),
+                transaction_hash: None,
+                gas_limit: None,
+                chain: req.chain.clone(),
+            })
+        }
+        "send" => {
+            let signing_key = load_signing_key()?;
+            let signing_address = address_from_signing_key(&signing_key);
+            if !address_eq(&signing_address, &wallet_address) {
+                return Err(EvmServiceError::InvalidInput(
+                    "EVM signing key does not match wallet address".to_string(),
+                ));
+            }
+            let nonce = rpc_call(
+                &req.chain,
+                "eth_getTransactionCount",
+                serde_json::json!([wallet_address, "pending"]),
+            )
+            .and_then(rpc_hex_quantity_to_decimal)
+            .map_err(|_| EvmServiceError::RpcUnavailable)?;
+            let fee_quote = load_fee_quote(&req.chain)?;
+            let gas_limit =
+                estimate_gas(&req.chain, &wallet_address, &contract_address, &value, &data)?;
+            let raw_tx = sign_evm_transaction(&EvmTxSigningInput {
+                signing_key: &signing_key,
+                chain_id: req.chain.chain_id,
+                nonce: &nonce,
+                gas_limit: &gas_limit,
+                to: &contract_address,
+                value: &value,
+                data: &data,
+                gas_price_wei: &fee_quote.gas_price_wei,
+                max_fee_per_gas_wei: fee_quote.max_fee_per_gas_wei.as_deref(),
+                max_priority_fee_per_gas_wei: fee_quote.max_priority_fee_per_gas_wei.as_deref(),
+            })?;
+            let tx_hash = send_raw_transaction(&req.chain, &raw_tx)?;
+            Ok(EvmContractInvokeResult {
+                status: "success".to_string(),
+                result_hex: None,
+                transaction_hash: Some(tx_hash),
+                gas_limit: Some(gas_limit),
+                chain: req.chain.clone(),
+            })
+        }
+        _ => Err(EvmServiceError::InvalidInput(
+            "contract invoke mode must be call or send".to_string(),
+        )),
+    }
+}
+
 pub fn sign_personal_message(signing_key: &SigningKey, message: &[u8]) -> EvmResult<String> {
     let prefix = format!("\x19Ethereum Signed Message:\n{}", message.len());
     let mut hasher = Keccak256::new();
@@ -2579,12 +2725,27 @@ fn validate_token_logo_uri(value: &str) -> Option<String> {
 }
 
 fn eth_call(chain: &EvmChainConfig, to: &str, data: &str) -> EvmResult<String> {
-    rpc_call(
-        chain,
-        "eth_call",
-        serde_json::json!([{"to": to, "data": data}, "latest"]),
-    )
-    .and_then(|value| {
+    eth_call_tx(chain, None, to, "0", data)
+}
+
+fn eth_call_tx(
+    chain: &EvmChainConfig,
+    from: Option<&str>,
+    to: &str,
+    value_decimal: &str,
+    data: &str,
+) -> EvmResult<String> {
+    let value = decimal_to_hex_quantity(value_decimal)?;
+    let data = if data.is_empty() { "0x" } else { data };
+    let mut tx = serde_json::json!({
+        "to": to,
+        "data": data,
+        "value": value,
+    });
+    if let Some(from) = from {
+        tx["from"] = serde_json::Value::String(from.to_string());
+    }
+    rpc_call(chain, "eth_call", serde_json::json!([tx, "latest"])).and_then(|value| {
         value
             .as_str()
             .map(str::to_string)

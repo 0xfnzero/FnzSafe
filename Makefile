@@ -16,7 +16,7 @@ TAURI_WINDOWS_TARGET ?= x86_64-pc-windows-msvc
 ANDROID_JAVA_HOME ?= $(shell if [[ -d /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home ]]; then echo /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home; fi)
 ANDROID_ENV := $(if $(ANDROID_JAVA_HOME),JAVA_HOME="$(ANDROID_JAVA_HOME)" PATH="$(ANDROID_JAVA_HOME)/bin:$$PATH",)
 
-.PHONY: help dev stop build-macos package package-android package-ios package-macos package-windows prepare-release-dir
+.PHONY: help dev stop build-macos package package-android package-ios package-macos package-windows prepare-release-dir cleanup-macos-dmg-mounts
 
 help:
 	@echo "FnzSafe commands"
@@ -41,7 +41,20 @@ dev:
 stop:
 	cd "$(DESKTOP_DIR)" && npm run stop
 
-build-macos:
+# Detach leftover FnzSafe DMG mounts from failed/interrupted bundle_dmg.sh runs.
+cleanup-macos-dmg-mounts:
+	@if [[ "$(shell uname -s)" != "Darwin" ]]; then exit 0; fi; \
+	for vol in /Volumes/FnzSafe /Volumes/FnzSafe\ *; do \
+		if [[ -e "$$vol" ]]; then hdiutil detach "$$vol" -force >/dev/null 2>&1 || true; fi; \
+	done; \
+	while IFS= read -r vol; do \
+		hdiutil detach "$$vol" -force >/dev/null 2>&1 || true; \
+	done < <(ls -d /Volumes/dmg.* 2>/dev/null || true); \
+	rm -f "$(ROOT_DIR)/build-cache-fnzsafe/release/bundle/macos/rw."*.dmg \
+		"$(ROOT_DIR)/build-cache/release/bundle/macos/rw."*.dmg \
+		"$(DESKTOP_DIR)/src-tauri/target/release/bundle/macos/rw."*.dmg
+
+build-macos: cleanup-macos-dmg-mounts
 	cd "$(DESKTOP_DIR)" && npm run desktop:build
 
 package: package-android package-ios package-macos package-windows
@@ -92,7 +105,7 @@ package-ios: prepare-release-dir
 		exit 1; \
 	fi
 
-package-macos:
+package-macos: cleanup-macos-dmg-mounts
 	mkdir -p "$(MACOS_RELEASE_DIR)"
 	cd "$(DESKTOP_DIR)" && node scripts/macos-release.cjs preflight
 	cd "$(DESKTOP_DIR)" && npm run desktop:build

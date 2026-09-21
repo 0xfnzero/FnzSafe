@@ -4201,6 +4201,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/evm/dapp/preview/", post(evm_dapp_preview))
         .route("/api/evm/dapp/submit", post(evm_dapp_submit))
         .route("/api/evm/dapp/submit/", post(evm_dapp_submit))
+        .route("/api/evm/contract/invoke", post(evm_contract_invoke))
+        .route("/api/evm/contract/invoke/", post(evm_contract_invoke))
         .route("/api/secure/session", get(secure_session))
         .route("/api/secure/session/", get(secure_session))
         // Core Functions (1-3)
@@ -5964,6 +5966,48 @@ async fn evm_dapp_submit(
         .map(Json);
     }
     run_app_service_task(move || app_services::evm_dapp_sign_submit(req.request))
+        .await
+        .map(Json)
+}
+
+#[derive(Deserialize)]
+struct DesktopEvmContractInvokeRequest {
+    #[serde(default)]
+    wallet_id: Option<String>,
+    #[serde(flatten)]
+    request: app_services::EvmContractInvokeRequest,
+}
+
+async fn evm_contract_invoke(
+    Json(mut req): Json<DesktopEvmContractInvokeRequest>,
+) -> Result<Json<app_services::EvmContractInvokeResult>, ApiError> {
+    let mode = req
+        .request
+        .mode
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("call");
+    let wallet_id = req
+        .wallet_id
+        .take()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if mode == "send" {
+        if let Some(wallet_id) = wallet_id {
+            let expected_evm_address = req.request.wallet_address.clone();
+            req.request.keystore_json.zeroize();
+            req.request.password.zeroize();
+            return run_app_service_task(move || {
+                app_services::evm_contract_invoke_with_private_key_loader(req.request, move || {
+                    evm_private_key_from_saved_wallet_session(&wallet_id, &expected_evm_address)
+                        .map_err(|error| error.message)
+                })
+            })
+            .await
+            .map(Json);
+        }
+    }
+    run_app_service_task(move || app_services::evm_contract_invoke(req.request))
         .await
         .map(Json)
 }
