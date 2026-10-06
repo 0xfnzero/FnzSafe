@@ -31,7 +31,9 @@ const COPY = {
     title: "Binance Agent OS",
     hint: "让 AI 查询 Binance 现货账户，并在短时预览、逐笔确认和单笔限额内执行下单或撤单。",
     mcp: "官方 Agentic MCP",
-    mcpHint: "OAuth 连接使用隔离的 Agentic 子账户，不需要在 FnzSafe 保存 API Key；当前可按 Binance 官方文档连接到受支持的 Agent 客户端。",
+    mcpHint: "通过 Binance OAuth 连接隔离的 Agentic 子账户，不需要向 FnzSafe 提供 API Key。首次向 AI 提问时会打开 Binance 授权页。写操作仍会先生成预览，并要求下一条消息精确输入 CONFIRM。",
+    mcpEnable: "启用官方 Agentic MCP",
+    mcpEnableHint: "OAuth 令牌保存在本机应用数据目录；关闭后不会再连接官方 MCP。",
     docs: "连接文档",
     api: "Exchange API",
     apiHint: "FnzSafe 仅支持 HMAC-SHA256 类型的现货 API Key，启用行情、账户、下单和撤单，不提供提现或任意签名能力。请关闭提现权限并限制 IP。",
@@ -57,7 +59,9 @@ const COPY = {
     title: "Binance Agent OS",
     hint: "Let AI inspect Binance Spot accounts and place or cancel orders behind short-lived previews, per-action confirmation, and a per-order limit.",
     mcp: "Official Agentic MCP",
-    mcpHint: "The OAuth connection uses an isolated Agentic sub-account and does not require FnzSafe to store an API key. Follow Binance's official guide to connect a supported agent client.",
+    mcpHint: "Connect an isolated Agentic sub-account through Binance OAuth without giving FnzSafe an API key. The first AI request opens Binance authorization. Mutating tools still produce a preview and require a later message exactly equal to CONFIRM.",
+    mcpEnable: "Enable official Agentic MCP",
+    mcpEnableHint: "OAuth tokens stay in the local app-data directory. Turning this off stops connecting to the official MCP.",
     docs: "Connection guide",
     api: "Exchange API",
     apiHint: "FnzSafe supports HMAC-SHA256 Spot API keys only, exposing market data, account reads, orders, and cancellation without withdrawals or arbitrary signing. Disable withdrawals and restrict the key's IPs.",
@@ -101,6 +105,10 @@ export function BinanceAgentConfiguration(props: BinanceAgentConfigurationProps)
           <button type="button" onClick={props.onOpenDocs} className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-md border border-white/10 px-3 text-xs text-gray-200 hover:bg-white/[0.07]"><ExternalLink className="h-3.5 w-3.5" />{copy.docs}</button>
         </div>
         <code className="block break-all rounded-md bg-black/25 px-3 py-2 text-[11px] text-gray-400">https://agent.binance.com/mcp/agentic</code>
+        <label className="flex items-start justify-between gap-4 rounded-md border border-white/10 bg-black/20 p-3">
+          <span><span className="block text-sm text-gray-200">{copy.mcpEnable}</span><span className="mt-1 block text-xs leading-5 text-gray-500">{copy.mcpEnableHint}</span></span>
+          <input type="checkbox" checked={props.preferences.officialMcpEnabled} onChange={(event) => props.onPreferencesChange({ ...props.preferences, officialMcpEnabled: event.target.checked })} disabled={!props.desktop || props.busy} className="mt-0.5 h-4 w-4 shrink-0 accent-amber-400 disabled:opacity-50" />
+        </label>
       </section>
 
       <section className="space-y-4">

@@ -1,0 +1,16 @@
+{
+  "client_id": "https://raw.githubusercontent.com/0xfnzero/FnzSafe/main/.well-known/oauth-client/fnzsafe.json",
+  "client_name": "FnzSafe",
+  "client_uri": "https://github.com/0xfnzero/FnzSafe",
+  "redirect_uris": [
+    "http://127.0.0.1:19842/oauth/callback"
+  ],
+  "grant_types": [
+    "authorization_code",
+    "refresh_token"
+  ],
+  "response_types": [
+    "code"
+  ],
+  "token_endpoint_auth_method": "none"
+}

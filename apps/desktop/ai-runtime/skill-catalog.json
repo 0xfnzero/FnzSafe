@@ -18,9 +18,9 @@
       "category": "market",
       "icon": "bot",
       "name": { "zh": "Binance Agent OS 交易", "en": "Binance Agent OS Trading" },
-      "description": { "zh": "通过安全保存的 Binance API 凭据查询现货账户，并以预览、逐笔确认和单笔限额执行现货下单或撤单。", "en": "Use securely stored Binance API credentials to inspect Spot accounts and place or cancel orders with previews, per-action confirmation, and a per-order limit." },
-      "useCases": { "zh": ["AI 查询 Binance 余额与挂单", "确认后执行现货交易"], "en": ["AI-assisted Binance balances and open orders", "Confirmed Spot order execution"] },
-      "sources": ["Binance Agent OS", "Binance Spot API"],
+      "description": { "zh": "通过官方 OAuth Agentic MCP 或安全保存的 Binance API 凭据查询账户，并以防篡改预览和逐笔确认执行交易。", "en": "Use the official OAuth Agentic MCP or securely stored Binance API credentials for account reads and trades protected by integrity-bound previews and per-action confirmation." },
+      "useCases": { "zh": ["连接隔离的 Agentic 子账户", "AI 查询 Binance 余额与挂单", "确认后执行交易"], "en": ["Connect an isolated Agentic sub-account", "AI-assisted Binance balances and open orders", "Confirmed trade execution"] },
+      "sources": ["Binance Agentic MCP", "Binance Agent OS", "Binance Spot API"],
       "tools": ["binance_spot_market", "binance_spot_account", "binance_spot_open_orders", "binance_spot_order_status", "binance_spot_order_preview", "binance_spot_order_execute", "binance_spot_cancel_preview", "binance_spot_cancel_execute"]
     },
     {

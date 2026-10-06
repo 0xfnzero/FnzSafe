@@ -2,6 +2,7 @@ export type BinanceAgentEnvironment = "testnet" | "production";
 
 export interface BinanceAgentPreferences {
   environment: BinanceAgentEnvironment;
+  officialMcpEnabled: boolean;
   tradingEnabled: boolean;
   maxOrderQuote: number;
 }
@@ -13,6 +14,7 @@ interface StorageReader {
 export const BINANCE_AGENT_STORAGE_KEY = "fnzero-safe.binance-agent.v1";
 export const DEFAULT_BINANCE_AGENT_PREFERENCES: BinanceAgentPreferences = {
   environment: "testnet",
+  officialMcpEnabled: false,
   tradingEnabled: false,
   maxOrderQuote: 100,
 };
@@ -28,6 +30,7 @@ export function normalizeBinanceAgentPreferences(value: unknown): BinanceAgentPr
     : DEFAULT_BINANCE_AGENT_PREFERENCES.maxOrderQuote;
   return {
     environment,
+    officialMcpEnabled: candidate.officialMcpEnabled === true,
     tradingEnabled: candidate.tradingEnabled === true,
     maxOrderQuote,
   };

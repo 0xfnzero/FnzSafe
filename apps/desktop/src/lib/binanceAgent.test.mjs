@@ -13,6 +13,7 @@ const agent = await import(moduleUrl);
 test("Binance Agent defaults to testnet with trading disabled", () => {
   assert.deepEqual(agent.readBinanceAgentPreferences({ getItem: () => null }), {
     environment: "testnet",
+    officialMcpEnabled: false,
     tradingEnabled: false,
     maxOrderQuote: 100,
   });
@@ -21,14 +22,17 @@ test("Binance Agent defaults to testnet with trading disabled", () => {
 test("Binance Agent preferences reject unsafe values and clamp limits", () => {
   assert.deepEqual(agent.normalizeBinanceAgentPreferences({
     environment: "other",
+    officialMcpEnabled: "yes",
     tradingEnabled: "yes",
     maxOrderQuote: 2_000_000,
   }), {
     environment: "testnet",
+    officialMcpEnabled: false,
     tradingEnabled: false,
     maxOrderQuote: 1_000_000,
   });
   assert.equal(agent.normalizeBinanceAgentPreferences({ environment: "production", tradingEnabled: true, maxOrderQuote: 0 }).maxOrderQuote, 1);
+  assert.equal(agent.normalizeBinanceAgentPreferences({ officialMcpEnabled: true }).officialMcpEnabled, true);
 });
 
 test("Binance Agent preferences recover from corrupt storage", () => {

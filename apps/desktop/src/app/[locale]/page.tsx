@@ -10095,6 +10095,7 @@ export default function Home() {
             model: twitterAiModel.trim() || providerPreset.model,
             api_key: twitterAiApiKey,
           },
+          binance_agentic_mcp_enabled: binanceAgentPreferences.officialMcpEnabled,
           binance_environment: binanceAgentPreferences.environment,
           binance_trading_enabled: binanceAgentPreferences.tradingEnabled,
           binance_max_order_quote: binanceAgentPreferences.maxOrderQuote,
@@ -23268,9 +23269,17 @@ export default function Home() {
       case "settings": {
         let binanceConfigurationLabel: string;
         if (aiSkillLocale === "zh") {
-          binanceConfigurationLabel = binanceAgentCredentialStatus?.ready ? "已配置" : "未配置";
+          if (binanceAgentPreferences.officialMcpEnabled) {
+            binanceConfigurationLabel = binanceAgentCredentialStatus?.ready ? "MCP + API 已配置" : "MCP 已启用";
+          } else {
+            binanceConfigurationLabel = binanceAgentCredentialStatus?.ready ? "API 已配置" : "未配置";
+          }
         } else {
-          binanceConfigurationLabel = binanceAgentCredentialStatus?.ready ? "Configured" : "Not configured";
+          if (binanceAgentPreferences.officialMcpEnabled) {
+            binanceConfigurationLabel = binanceAgentCredentialStatus?.ready ? "MCP + API configured" : "MCP enabled";
+          } else {
+            binanceConfigurationLabel = binanceAgentCredentialStatus?.ready ? "API configured" : "Not configured";
+          }
         }
         const binanceEnvironmentLabel = binanceAgentPreferences.environment === "testnet" ? "Testnet" : "Production";
         const settingsItems: SettingsNavigationItem[] = [
