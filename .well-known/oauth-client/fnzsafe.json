@@ -1,5 +1,5 @@
 {
-  "client_id": "https://cdn.jsdelivr.net/gh/0xfnzero/FnzSafe@main/.well-known/oauth-client/fnzsafe.json",
+  "client_id": "https://raw.githack.com/0xfnzero/FnzSafe/main/.well-known/oauth-client/fnzsafe.json",
   "client_name": "FnzSafe",
   "client_uri": "https://github.com/0xfnzero/FnzSafe",
   "redirect_uris": [
