@@ -12,7 +12,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
 const AGENTIC_MCP_URL = 'https://agent.binance.com/mcp/agentic';
-const CLIENT_METADATA_URL = 'https://raw.githack.com/0xfnzero/FnzSafe/main/.well-known/oauth-client/fnzsafe.json';
+const CLIENT_METADATA_URL = 'https://raw.githack.com/0xfnzero/FnzSafe/oauth-client-v1/.well-known/oauth-client/fnzsafe.json';
 const CALLBACK_PORT = '19842';
 const PREVIEW_TTL_MS = 5 * 60 * 1000;
 const EXECUTE_TOOL_NAME = 'fnzsafe_execute_confirmed_action';
