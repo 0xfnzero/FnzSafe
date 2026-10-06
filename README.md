@@ -60,6 +60,7 @@ let (wallet, sk) = unlock_private_key_from_document(&std::fs::read_to_string("wa
 - **Token intelligence:** chain, contract, price, market cap, liquidity, interval performance, mention counts, KOL counts, and direct Fomo/Swap actions.
 - **DeFi analytics:** cached DefiLlama chain/protocol volume and revenue rankings with stale-while-revalidate loading.
 - **AI research:** local evidence retrieval with configurable AI providers for signal and DeFi analysis; API keys stay in secure system storage.
+- **Binance Agent OS:** AI-assisted Spot account and order workflows with secure API credential storage, Testnet-first defaults, exchange-rule validation, short-lived previews, explicit per-order confirmation, and no withdrawal capability.
 - **Platforms:** macOS and Windows desktop packages, iOS and Android apps, and an interactive Rust CLI.
 
 ## Screenshots

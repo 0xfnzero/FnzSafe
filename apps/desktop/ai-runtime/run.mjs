@@ -67,6 +67,12 @@ function runtimeEnvironment(input, workspaceRoot, dshHome, model) {
     FNZSAFE_AI_WORKSPACE: workspaceRoot,
     ...(process.env.FNZSAFE_WALLET_API_URL ? { FNZSAFE_WALLET_API_URL: process.env.FNZSAFE_WALLET_API_URL } : {}),
     ...(process.env.FNZSAFE_WALLET_API_TOKEN ? { FNZSAFE_WALLET_API_TOKEN: process.env.FNZSAFE_WALLET_API_TOKEN } : {}),
+    ...(text(input.binanceApiKey) ? { FNZSAFE_BINANCE_API_KEY: text(input.binanceApiKey) } : {}),
+    ...(text(input.binanceSecretKey) ? { FNZSAFE_BINANCE_SECRET_KEY: text(input.binanceSecretKey) } : {}),
+    FNZSAFE_BINANCE_ENVIRONMENT: text(input.binanceEnvironment) || 'testnet',
+    FNZSAFE_BINANCE_TRADING_ENABLED: input.binanceTradingEnabled === true ? '1' : '0',
+    FNZSAFE_BINANCE_MAX_ORDER_QUOTE: String(input.binanceMaxOrderQuote ?? 100),
+    FNZSAFE_BINANCE_USER_CONFIRMED: input.binanceUserConfirmed === true ? '1' : '0',
   };
 }
 

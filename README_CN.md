@@ -60,6 +60,7 @@ let (wallet, sk) = unlock_private_key_from_document(&std::fs::read_to_string("wa
 - **代币情报：** 聚合链、合约、价格、市值、流动性、各周期涨跌、提及次数和 KOL 提及，并可直接打开 Fomo/Swap。
 - **DeFi 数据：** 缓存 DefiLlama 链/协议交易量和收入排名，进入页面先显示历史数据，再后台异步刷新。
 - **AI 研究：** 基于本地证据检索分析信号和 DeFi，支持配置 AI 提供商，API Key 保存在系统安全存储中。
+- **Binance Agent OS：** 支持 AI 查询现货账户与订单，并通过系统安全存储 API 凭据、默认测试网、交易所规则校验、短时预览和逐笔确认执行交易；不提供提现能力。
 - **多平台：** macOS、Windows 桌面端，iOS、Android 移动端，以及交互式 Rust CLI。
 
 ## 产品截图

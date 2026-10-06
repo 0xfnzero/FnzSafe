@@ -68,6 +68,15 @@
         command: !!js process.execPath
         args:
           - !!js process.env.FNZSAFE_WEB3_MCP_SERVER_PATH
+        env:
+          FNZSAFE_WALLET_API_URL: !!js process.env.FNZSAFE_WALLET_API_URL
+          FNZSAFE_WALLET_API_TOKEN: !!js process.env.FNZSAFE_WALLET_API_TOKEN
+          FNZSAFE_BINANCE_API_KEY: !!js process.env.FNZSAFE_BINANCE_API_KEY
+          FNZSAFE_BINANCE_SECRET_KEY: !!js process.env.FNZSAFE_BINANCE_SECRET_KEY
+          FNZSAFE_BINANCE_ENVIRONMENT: !!js process.env.FNZSAFE_BINANCE_ENVIRONMENT
+          FNZSAFE_BINANCE_TRADING_ENABLED: !!js process.env.FNZSAFE_BINANCE_TRADING_ENABLED
+          FNZSAFE_BINANCE_MAX_ORDER_QUOTE: !!js process.env.FNZSAFE_BINANCE_MAX_ORDER_QUOTE
+          FNZSAFE_BINANCE_USER_CONFIRMED: !!js process.env.FNZSAFE_BINANCE_USER_CONFIRMED
         cwd: !!js process.cwd()
         toolCallTimeoutMs: 30000
         failOnStartupError: true

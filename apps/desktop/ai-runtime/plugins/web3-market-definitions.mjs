@@ -2,6 +2,113 @@ import { integerProperty } from './lib/web3-utils.mjs';
 
 export const web3MarketTools = [
   {
+    name: 'binance_spot_market',
+    description: 'Read the current Binance Spot price, assets, trading status, order types, and exchange filters for one symbol.',
+    inputSchema: {
+      type: 'object',
+      properties: { symbol: { type: 'string', pattern: '^[A-Za-z0-9]{4,20}$' } },
+      required: ['symbol'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'binance_spot_account',
+    description: 'Read non-zero Binance Spot balances and account trading permissions using credentials stored by FnzSafe. Never returns credentials.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'binance_spot_open_orders',
+    description: 'Read current Binance Spot open orders, optionally for one exact symbol.',
+    inputSchema: {
+      type: 'object',
+      properties: { symbol: { type: 'string', pattern: '^[A-Za-z0-9]{4,20}$' } },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'binance_spot_order_status',
+    description: 'Read one Binance Spot order by numeric order ID or client order ID.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        symbol: { type: 'string', pattern: '^[A-Za-z0-9]{4,20}$' },
+        orderId: { type: 'string', pattern: '^[0-9]{1,24}$' },
+        clientOrderId: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,36}$' },
+      },
+      required: ['symbol'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'binance_spot_order_preview',
+    description: 'Create a short-lived, integrity-protected preview for a Binance Spot MARKET or LIMIT order. This never places an order.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        symbol: { type: 'string', pattern: '^[A-Za-z0-9]{4,20}$' },
+        side: { type: 'string', enum: ['BUY', 'SELL'] },
+        type: { type: 'string', enum: ['MARKET', 'LIMIT'] },
+        quantity: { type: 'string', maxLength: 40, pattern: '^(?:0|[1-9][0-9]*)(?:\\.[0-9]{1,18})?$' },
+        quoteOrderQty: { type: 'string', maxLength: 40, pattern: '^(?:0|[1-9][0-9]*)(?:\\.[0-9]{1,18})?$' },
+        price: { type: 'string', maxLength: 40, pattern: '^(?:0|[1-9][0-9]*)(?:\\.[0-9]{1,18})?$' },
+      },
+      required: ['symbol', 'side', 'type'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'binance_spot_order_execute',
+    description: 'Execute the exact Binance Spot order in a valid preview token. Requires confirmation exactly equal to CONFIRM and trading enabled in FnzSafe.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        previewToken: { type: 'string', minLength: 40, maxLength: 4096 },
+        confirmation: { type: 'string', enum: ['CONFIRM'] },
+      },
+      required: ['previewToken', 'confirmation'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'binance_spot_cancel_preview',
+    description: 'Create a short-lived preview for cancelling one open Binance Spot order. This never changes the order.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        symbol: { type: 'string', pattern: '^[A-Za-z0-9]{4,20}$' },
+        orderId: { type: 'string', pattern: '^[0-9]{1,24}$' },
+      },
+      required: ['symbol', 'orderId'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'binance_spot_cancel_execute',
+    description: 'Cancel the exact open Binance Spot order in a valid preview token. Requires confirmation exactly equal to CONFIRM and trading enabled in FnzSafe.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        previewToken: { type: 'string', minLength: 40, maxLength: 4096 },
+        confirmation: { type: 'string', enum: ['CONFIRM'] },
+      },
+      required: ['previewToken', 'confirmation'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'binance_token_audit',
+    description: 'Run the public Binance Web3 point-in-time token security audit for Ethereum, BSC, Base, or Solana before a trade.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        chainId: { type: 'string', enum: ['1', '56', '8453', 'CT_501'] },
+        contractAddress: { type: 'string', minLength: 32, maxLength: 44 },
+      },
+      required: ['chainId', 'contractAddress'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'wallet_session_status',
     description: 'Check whether one saved wallet has an active in-memory signing session. This never exposes secret material.',
     inputSchema: {

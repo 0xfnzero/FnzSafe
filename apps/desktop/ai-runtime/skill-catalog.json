@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "entries": [
     {
       "id": "automated-wallet-trading",
@@ -11,6 +11,28 @@
       "useCases": { "zh": ["明确授权后的代币减仓", "无需重复输入密码的受控签名"], "en": ["Explicitly authorized token exits", "Controlled signing without repeated password entry"] },
       "sources": ["FnzSafe in-memory wallet session", "Pump.fun", "PumpSwap"],
       "tools": ["wallet_session_status", "automated_token_sell"]
+    },
+    {
+      "id": "binance-agent-os-trading",
+      "kind": "skill",
+      "category": "market",
+      "icon": "bot",
+      "name": { "zh": "Binance Agent OS 交易", "en": "Binance Agent OS Trading" },
+      "description": { "zh": "通过安全保存的 Binance API 凭据查询现货账户，并以预览、逐笔确认和单笔限额执行现货下单或撤单。", "en": "Use securely stored Binance API credentials to inspect Spot accounts and place or cancel orders with previews, per-action confirmation, and a per-order limit." },
+      "useCases": { "zh": ["AI 查询 Binance 余额与挂单", "确认后执行现货交易"], "en": ["AI-assisted Binance balances and open orders", "Confirmed Spot order execution"] },
+      "sources": ["Binance Agent OS", "Binance Spot API"],
+      "tools": ["binance_spot_market", "binance_spot_account", "binance_spot_open_orders", "binance_spot_order_status", "binance_spot_order_preview", "binance_spot_order_execute", "binance_spot_cancel_preview", "binance_spot_cancel_execute"]
+    },
+    {
+      "id": "binance-web3-token-audit",
+      "kind": "skill",
+      "category": "risk",
+      "icon": "shield",
+      "name": { "zh": "Binance Web3 代币审计", "en": "Binance Web3 Token Audit" },
+      "description": { "zh": "按精确合约地址查询 Binance Web3 安全快照，在支持的交易前检查蜜罐、恶意合约和异常税率。", "en": "Query Binance Web3 security snapshots by exact contract before supported trades to check honeypot, malicious-contract, and abnormal-tax indicators." },
+      "useCases": { "zh": ["交易前合约风险检查", "代币税率与风险项核验"], "en": ["Pre-trade contract risk checks", "Token tax and risk-flag review"] },
+      "sources": ["Binance Web3"],
+      "tools": ["binance_token_audit"]
     },
     {
       "id": "web3-market-research",

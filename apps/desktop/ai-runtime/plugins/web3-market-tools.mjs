@@ -3,12 +3,14 @@ import { defillamaHandlers } from './providers/defillama.mjs';
 import { dexSecurityHandlers } from './providers/dex-security.mjs';
 import { newsSentimentHandlers } from './providers/news-sentiment.mjs';
 import { automatedTradingHandlers } from './providers/automated-trading.mjs';
+import { binanceAgentHandlers } from './providers/binance-agent.mjs';
 import { web3MarketTools } from './web3-market-definitions.mjs';
 
 export { web3MarketTools };
 
 export const web3MarketHandlers = {
   ...automatedTradingHandlers,
+  ...binanceAgentHandlers,
   ...coingeckoHandlers,
   ...defillamaHandlers,
   ...dexSecurityHandlers,

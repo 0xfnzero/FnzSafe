@@ -10,6 +10,7 @@ export type SettingsSection =
   | "connections"
   | "browser-data"
   | "ai-models"
+  | "agent-os"
   | "skills"
   | "developer"
   | "about";

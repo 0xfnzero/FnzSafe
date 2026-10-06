@@ -84,6 +84,10 @@ import { SavedWalletPicker } from "@/components/SavedWalletPicker";
 import { TwitterTokenList, type ResearchTokenListItem } from "@/components/TwitterTokenList";
 import { DefiLlamaStatsPanel } from "@/components/DefiLlamaStatsPanel";
 import { ResearchAiConfiguration } from "@/components/ResearchAiConfiguration";
+import {
+  BinanceAgentConfiguration,
+  type BinanceAgentCredentialStatus,
+} from "@/components/BinanceAgentConfiguration";
 import { SettingsCenterLayout, type SettingsNavigationItem } from "@/components/SettingsCenterLayout";
 import { useSecureKeyboardInput } from "@/hooks/useSecureKeyboardInput";
 import {
@@ -109,6 +113,12 @@ import { persistJsonAfterHydration } from "@/lib/hydratedStorage";
 import { atomicToDecimalUnits } from "@/lib/multichain";
 import { resolveEvmAssetSendContext } from "@/lib/evmAssetSend";
 import { isMatchingEvmPaymentPreview } from "@/lib/evmPaymentPreview";
+import {
+  BINANCE_AGENT_STORAGE_KEY,
+  DEFAULT_BINANCE_AGENT_PREFERENCES,
+  readBinanceAgentPreferences,
+  type BinanceAgentPreferences,
+} from "@/lib/binanceAgent";
 import {
   renderableSensitiveExportValue,
   validateMnemonicExport,
@@ -3948,6 +3958,12 @@ export default function Home() {
   const [twitterAiKeySaved, setTwitterAiKeySaved] = useState(false);
   const [twitterAiKeyBusy, setTwitterAiKeyBusy] = useState(false);
   const [twitterAiConfigOpen, setTwitterAiConfigOpen] = useState(false);
+  const [binanceAgentPreferences, setBinanceAgentPreferences] = useState<BinanceAgentPreferences>(DEFAULT_BINANCE_AGENT_PREFERENCES);
+  const [binanceAgentApiKey, setBinanceAgentApiKey] = useState("");
+  const [binanceAgentSecretKey, setBinanceAgentSecretKey] = useState("");
+  const [binanceAgentCredentialStatus, setBinanceAgentCredentialStatus] = useState<BinanceAgentCredentialStatus | null>(null);
+  const [binanceAgentBusy, setBinanceAgentBusy] = useState(false);
+  const [binanceAgentStorageHydrated, setBinanceAgentStorageHydrated] = useState(false);
   const [twitterWatchedUsers, setTwitterWatchedUsers] = useState("");
   const [twitterSignals, setTwitterSignals] = useState<TweetTokenSignal[]>([]);
   const [signalTranslations, setSignalTranslations] = useState<Record<string, SignalTranslationState>>({});
@@ -4115,6 +4131,7 @@ export default function Home() {
   const twitterAiRequestIdRef = useRef(0);
   const twitterAiBusyRef = useRef(false);
   const twitterAiKeyRequestIdRef = useRef(0);
+  const binanceAgentCredentialRequestIdRef = useRef(0);
   const programDeploymentWatchdogTrippedRef = useRef(false);
   lastProgramDeploymentIntentRef.current = lastProgramDeploymentIntent;
   programDeploymentJournalRef.current = programDeploymentJournal;
@@ -10078,6 +10095,9 @@ export default function Home() {
             model: twitterAiModel.trim() || providerPreset.model,
             api_key: twitterAiApiKey,
           },
+          binance_environment: binanceAgentPreferences.environment,
+          binance_trading_enabled: binanceAgentPreferences.tradingEnabled,
+          binance_max_order_quote: binanceAgentPreferences.maxOrderQuote,
         },
       });
       if (twitterAiRequestIdRef.current !== requestId) return;
@@ -10154,6 +10174,79 @@ export default function Home() {
     } finally {
       if (twitterAiKeyRequestIdRef.current === requestId) setTwitterAiKeyBusy(false);
     }
+  };
+
+  const refreshBinanceAgentCredentialStatus = useCallback(async () => {
+    const requestId = binanceAgentCredentialRequestIdRef.current + 1;
+    binanceAgentCredentialRequestIdRef.current = requestId;
+    if (!isTauriWebview()) {
+      setBinanceAgentCredentialStatus(null);
+      return;
+    }
+    try {
+      const status = await invoke<BinanceAgentCredentialStatus>("binance_agent_credentials_status", {
+        environment: binanceAgentPreferences.environment,
+      });
+      if (binanceAgentCredentialRequestIdRef.current === requestId) {
+        setBinanceAgentCredentialStatus(status);
+      }
+    } catch {
+      if (binanceAgentCredentialRequestIdRef.current === requestId) {
+        setBinanceAgentCredentialStatus(null);
+      }
+    }
+  }, [binanceAgentPreferences.environment]);
+
+  const saveBinanceAgentCredentials = async () => {
+    if (!binanceAgentApiKey.trim() || !binanceAgentSecretKey.trim() || !isTauriWebview()) return;
+    const requestId = binanceAgentCredentialRequestIdRef.current + 1;
+    binanceAgentCredentialRequestIdRef.current = requestId;
+    setBinanceAgentBusy(true);
+    try {
+      const status = await invoke<BinanceAgentCredentialStatus>("binance_agent_credentials_store", {
+        environment: binanceAgentPreferences.environment,
+        apiKey: binanceAgentApiKey,
+        secretKey: binanceAgentSecretKey,
+      });
+      if (binanceAgentCredentialRequestIdRef.current !== requestId) return;
+      setBinanceAgentCredentialStatus(status);
+      toast.success(aiSkillLocale === "zh" ? "Binance 凭据已安全保存" : "Binance credentials saved securely");
+    } catch (error) {
+      if (binanceAgentCredentialRequestIdRef.current !== requestId) return;
+      toast.error(errorMessage(error, aiSkillLocale === "zh" ? "保存 Binance 凭据失败" : "Failed to save Binance credentials"));
+    } finally {
+      setBinanceAgentApiKey("");
+      setBinanceAgentSecretKey("");
+      if (binanceAgentCredentialRequestIdRef.current === requestId) setBinanceAgentBusy(false);
+    }
+  };
+
+  const deleteBinanceAgentCredentials = async () => {
+    if (!isTauriWebview()) return;
+    const requestId = binanceAgentCredentialRequestIdRef.current + 1;
+    binanceAgentCredentialRequestIdRef.current = requestId;
+    setBinanceAgentBusy(true);
+    try {
+      const status = await invoke<BinanceAgentCredentialStatus>("binance_agent_credentials_delete", {
+        environment: binanceAgentPreferences.environment,
+      });
+      if (binanceAgentCredentialRequestIdRef.current !== requestId) return;
+      setBinanceAgentCredentialStatus(status);
+      toast.success(aiSkillLocale === "zh" ? "已移除 Binance 凭据" : "Binance credentials removed");
+    } catch (error) {
+      if (binanceAgentCredentialRequestIdRef.current !== requestId) return;
+      toast.error(errorMessage(error, aiSkillLocale === "zh" ? "移除 Binance 凭据失败" : "Failed to remove Binance credentials"));
+    } finally {
+      setBinanceAgentApiKey("");
+      setBinanceAgentSecretKey("");
+      if (binanceAgentCredentialRequestIdRef.current === requestId) setBinanceAgentBusy(false);
+    }
+  };
+
+  const openBinanceAgentDocs = () => {
+    void openExternalUrl("https://developers.binance.com/en/docs/agent-native/mcp-server/agentic").catch((error) => {
+      toast.error(errorMessage(error, aiSkillLocale === "zh" ? "无法打开 Binance 文档" : "Unable to open Binance documentation"));
+    });
   };
 
   const resetResearchAiConversation = () => {
@@ -10385,6 +10478,26 @@ export default function Home() {
       model: twitterAiModel,
     }, twitterResearchAiStorageHydrated);
   }, [twitterAiEndpoint, twitterAiModel, twitterAiProviderKind, twitterResearchAiStorageHydrated]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setBinanceAgentPreferences(readBinanceAgentPreferences(window.localStorage));
+    setBinanceAgentStorageHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    persistJsonAfterHydration(
+      window.localStorage,
+      BINANCE_AGENT_STORAGE_KEY,
+      binanceAgentPreferences,
+      binanceAgentStorageHydrated,
+    );
+  }, [binanceAgentPreferences, binanceAgentStorageHydrated]);
+
+  useEffect(() => {
+    void refreshBinanceAgentCredentialStatus();
+  }, [refreshBinanceAgentCredentialStatus]);
 
   useEffect(() => {
     void refreshTwitterAiKeyStatus();
@@ -23153,6 +23266,13 @@ export default function Home() {
         );
 
       case "settings": {
+        let binanceConfigurationLabel: string;
+        if (aiSkillLocale === "zh") {
+          binanceConfigurationLabel = binanceAgentCredentialStatus?.ready ? "已配置" : "未配置";
+        } else {
+          binanceConfigurationLabel = binanceAgentCredentialStatus?.ready ? "Configured" : "Not configured";
+        }
+        const binanceEnvironmentLabel = binanceAgentPreferences.environment === "testnet" ? "Testnet" : "Production";
         const settingsItems: SettingsNavigationItem[] = [
           {
             id: "accounts",
@@ -23241,6 +23361,15 @@ export default function Home() {
             summary: aiSkillLocale === "zh" ? `${AI_SKILL_CATALOG.length} 个可用` : `${AI_SKILL_CATALOG.length} available`,
             keywords: ["AI", "skill", "skills", "role", "market", "Web3", "技能", "角色卡", "市场", "内置"],
             icon: <Sparkles className="h-4 w-4" />,
+          },
+          {
+            id: "agent-os",
+            group: "ai",
+            title: "Binance Agent OS",
+            description: aiSkillLocale === "zh" ? "配置 AI 现货交易、凭据和逐笔风控" : "Configure AI Spot trading, credentials, and per-order controls",
+            summary: `${binanceConfigurationLabel} · ${binanceEnvironmentLabel}`,
+            keywords: ["Binance", "Agent OS", "MCP", "API Key", "AI trading", "现货", "交易", "凭据"],
+            icon: <Bot className="h-4 w-4" />,
           },
           {
             id: "developer",
@@ -23449,6 +23578,24 @@ export default function Home() {
 
                 {settingsSection === "skills" && (
                   <AiSkillMarket locale={aiSkillLocale} />
+                )}
+
+                {settingsSection === "agent-os" && (
+                  <BinanceAgentConfiguration
+                    locale={aiSkillLocale}
+                    preferences={binanceAgentPreferences}
+                    apiKey={binanceAgentApiKey}
+                    secretKey={binanceAgentSecretKey}
+                    status={binanceAgentCredentialStatus}
+                    busy={binanceAgentBusy}
+                    desktop={isTauriWebview()}
+                    onPreferencesChange={setBinanceAgentPreferences}
+                    onApiKeyChange={setBinanceAgentApiKey}
+                    onSecretKeyChange={setBinanceAgentSecretKey}
+                    onSave={() => void saveBinanceAgentCredentials()}
+                    onDelete={() => void deleteBinanceAgentCredentials()}
+                    onOpenDocs={openBinanceAgentDocs}
+                  />
                 )}
 
                 {settingsSection === "developer" && (

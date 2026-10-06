@@ -22,18 +22,22 @@ FnzSafe 参考 OneAI 的 DeepSeek Harness 集成，采用“钱包是宿主，AI
 
 ## 已内置能力
 
-设置中的“内置技能市场”展示 12 个技能与 4 个角色卡。它们不是静态宣传项：运行时自检要求每个目录项都存在对应 `SKILL.md`，目录引用的每个工具都必须由 MCP 注册并实现。
+设置中的“内置技能市场”展示 15 个技能与 4 个角色卡。它们不是静态宣传项：运行时自检要求每个目录项都存在对应 `SKILL.md`，目录引用的每个工具都必须由 MCP 注册并实现。
 
 - 市场：Web3 综合研究、CoinGecko 市场情报、DEX 流动性、市场情绪。
 - DeFi：协议、收益池、稳定币流动性、协议费用与收入分析。
-- 风险与情报：代币风险、KOL 信号、加密新闻、来源验证。
+- 风险与情报：代币风险、Binance Web3 代币审计、KOL 信号、加密新闻、来源验证。
+- Agent 交易：Binance Spot 行情、账户与订单查询，以及带短时预览、逐笔确认和单笔限额的 MARKET/LIMIT 下单与撤单。
 - 角色卡：Web3 加密研究员、区块链安全审计师、DeFi 风险分析师、Web3 情报分析师。
-- `fnzsafe_web3` MCP：17 个只读工具，覆盖 CoinGecko、DeFiLlama、DexScreener、GoPlus、Rugcheck、Alternative.me，以及 CoinDesk、Cointelegraph、Decrypt 的公开 RSS。
+- `fnzsafe_web3` MCP：28 个工具，覆盖 CoinGecko、DeFiLlama、DexScreener、GoPlus、Rugcheck、Alternative.me、Binance Spot/Binance Web3，以及 CoinDesk、Cointelegraph、Decrypt 的公开 RSS；其中交易工具受独立策略约束。
+
+Binance 官方 Agentic MCP 端点是 `https://agent.binance.com/mcp/agentic`，使用 OAuth、隔离的 Agentic 子账户且不提供提现能力。Binance 未提供动态客户端注册，FnzSafe 在取得 Binance 分配的 OAuth Client ID 前不会冒用其它客户端身份；设置页提供官方连接文档，同时用用户自己的最小权限 Binance Spot API Key 提供钱包内可用的 Agent 交易能力。
 
 ## 安全边界
 
-- AI 运行时固定为只读，文件、Shell、后台任务、子 Agent 和编辑工具均在 Cordis patch 中禁用。
-- AI 不持有钱包解锁密码、私钥、助记词或签名材料，也不能发起、批准或广播交易。
+- AI 运行时禁止文件、Shell、后台任务、子 Agent 和编辑工具；默认只读，仅显式注册的受控交易工具可以改变外部状态。
+- AI 不持有钱包解锁密码、私钥、助记词或签名材料。Binance API Key/Secret 由 Keychain 或 DPAPI 保存，只在单次 sidecar 进程环境中注入，不进入前端持久化或模型上下文。
+- Binance 集成不暴露提现、任意签名、杠杆、合约、Convert 或 Pay。真实下单与撤单要求短时防篡改预览、宿主验证用户后续一条消息精确为 `CONFIRM`、当前交易开关和单笔限额，并且执行失败或超时不会自动重试。
 - 推文和网页内容均是不可信数据，不能覆盖系统策略或作为工具指令执行。
 - “10 倍潜力”等问题只能返回有证据的情景分析、风险和失效条件，不能承诺收益。
 - DSH 遥测在钱包运行时中关闭。
