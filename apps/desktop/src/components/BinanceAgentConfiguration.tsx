@@ -73,8 +73,12 @@ const COPY = {
     disconnect: "断开连接",
     refresh: "刷新连接状态",
     mcpVerified: "已验证 {tools} 个官方工具（{reads} 个只读，{writes} 个写操作）",
+    scopes: "授权范围：行情（公开）、账户（只读）、交易、子账户内部划转。请只授予需要的权限；官方 MCP 永远没有提现权限。修改权限需要先断开再重新授权。",
+    fundAccount: "首次入金",
+    manageAccount: "权限与急停",
+    fundingHint: "Agentic 子账户首次入金必须在 Binance 网页手工完成，AI 无法从主账户拉取资产。急停会断开全部 Agent，并取消该子账户的现货、杠杆和合约订单/仓位。",
     wallet: "Agentic Wallet",
-    walletHint: "使用 Binance App 扫码连接隔离的 Agentic Wallet。链上查询可直接使用；Swap、转账、撤销授权和交易加速/取消仍需预览及后续 CONFIRM。",
+    walletHint: "使用 Binance App 扫码连接隔离的 Agentic Wallet。支持链上行情、信号、钱包追踪、排行榜、Swap、限价单、Prediction、DeFi、合约调用与 x402；所有写操作仍需预览及后续 CONFIRM。",
     walletConnected: "钱包已连接",
     walletDisconnected: "钱包未连接",
     walletConnect: "获取登录二维码",
@@ -122,8 +126,12 @@ const COPY = {
     disconnect: "Disconnect",
     refresh: "Refresh connection status",
     mcpVerified: "Verified {tools} official tools ({reads} read-only, {writes} state-changing)",
+    scopes: "Scopes: Market Data (public), Account (read-only), Trade, and internal wallet movement. Grant only what is needed; the official MCP never has withdrawal access. Disconnect and reauthorize to change scopes.",
+    fundAccount: "Fund account",
+    manageAccount: "Permissions & emergency stop",
+    fundingHint: "The first Agentic sub-account deposit must be completed manually on Binance Web; AI cannot pull funds from the main account. Emergency stop disconnects every agent and cancels this sub-account's Spot, Margin, and Futures orders/positions.",
     wallet: "Agentic Wallet",
-    walletHint: "Connect an isolated Agentic Wallet by scanning with the Binance App. Reads are immediate; swaps, transfers, approval revocation, and transaction replacement still require a preview and later CONFIRM.",
+    walletHint: "Connect an isolated Agentic Wallet with the Binance App. Supports on-chain markets, signals, wallet tracking, leaderboards, swaps, limit orders, Prediction, DeFi, contract calls, and x402; every write still requires a preview and later CONFIRM.",
     walletConnected: "Wallet connected",
     walletDisconnected: "Wallet not connected",
     walletConnect: "Get sign-in QR code",
@@ -311,6 +319,7 @@ export function BinanceAgentConfiguration(props: BinanceAgentConfigurationProps)
           <button type="button" onClick={props.onOpenDocs} className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-md border border-white/10 px-3 text-xs text-gray-200 hover:bg-white/[0.07]"><ExternalLink className="h-3.5 w-3.5" />{copy.docs}</button>
         </div>
         <code className="block break-all rounded-md bg-black/25 px-3 py-2 text-[11px] text-gray-400">https://agent.binance.com/mcp/agentic</code>
+        <p className="text-xs leading-5 text-gray-500">{copy.scopes}</p>
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <span className={`inline-flex items-center gap-1.5 ${mcpStatus?.connected ? "text-emerald-300" : "text-gray-500"}`}>
             {mcpStatus?.connected ? <CircleCheck className="h-3.5 w-3.5" /> : <Link2Off className="h-3.5 w-3.5" />}
@@ -330,6 +339,13 @@ export function BinanceAgentConfiguration(props: BinanceAgentConfigurationProps)
           {mcpStatus?.connected && <button type="button" onClick={() => void runMcpAction("mcp-reauthorize")} disabled={busy} className="inline-flex h-9 items-center gap-2 rounded-md border border-white/10 px-3 text-xs text-gray-200 hover:bg-white/[0.07] disabled:opacity-40">{connectionBusy === "mcp-reauthorize" ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}{copy.reconnect}</button>}
           {mcpStatus?.connected && <button type="button" onClick={() => void runMcpAction("mcp-disconnect")} disabled={busy} className="inline-flex h-9 items-center gap-2 rounded-md border border-red-300/20 px-3 text-xs text-red-200 hover:bg-red-500/10 disabled:opacity-40"><Link2Off className="h-3.5 w-3.5" />{copy.disconnect}</button>}
           <button type="button" onClick={() => void refreshConnections()} disabled={!props.desktop || busy} aria-label={copy.refresh} title={copy.refresh} className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-white/10 text-gray-400 hover:bg-white/[0.07] disabled:opacity-40"><RefreshCw className={`h-3.5 w-3.5 ${connectionBusy === "refresh" ? "animate-spin" : ""}`} /></button>
+        </div>
+        <div className="flex flex-col gap-2 border-l-2 border-amber-300/30 pl-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="max-w-3xl text-xs leading-5 text-gray-500">{copy.fundingHint}</p>
+          <div className="flex shrink-0 flex-wrap gap-2">
+            <button type="button" onClick={() => props.onOpenUrl("https://www.binance.com/en/my/sub-account/account-management")} className="inline-flex h-9 items-center gap-2 rounded-md border border-white/10 px-3 text-xs text-gray-200 hover:bg-white/[0.07]"><ExternalLink className="h-3.5 w-3.5" />{copy.fundAccount}</button>
+            <button type="button" onClick={() => props.onOpenUrl("https://www.binance.com/en/my/sub-account/account-management")} className="inline-flex h-9 items-center gap-2 rounded-md border border-red-300/20 px-3 text-xs text-red-200 hover:bg-red-500/10"><ShieldCheck className="h-3.5 w-3.5" />{copy.manageAccount}</button>
+          </div>
         </div>
         <label className="flex items-start justify-between gap-4 rounded-md border border-white/10 bg-black/20 p-3">
           <span><span className="block text-sm text-gray-200">{copy.mcpEnable}</span><span className="mt-1 block text-xs leading-5 text-gray-500">{copy.mcpEnableHint}</span></span>

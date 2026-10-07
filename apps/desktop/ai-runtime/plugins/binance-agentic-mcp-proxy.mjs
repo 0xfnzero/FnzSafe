@@ -178,7 +178,7 @@ async function runProxy() {
     { name: 'fnzsafe-binance-agentic-gateway', version: '0.1.0' },
     {
       capabilities: { tools: {} },
-      instructions: 'Binance Agentic MCP through FnzSafe. State-changing tools return a signed preview and require a later user message exactly equal to CONFIRM.',
+      instructions: 'Binance Agentic MCP through FnzSafe. State-changing tools return a signed preview and require a later user message exactly equal to CONFIRM. Execution confirms submission only; verify the resulting order, position, transfer, and balances with read-only tools before claiming final success.',
     },
   );
 
@@ -190,7 +190,7 @@ async function runProxy() {
       }),
       {
         name: EXECUTE_TOOL_NAME,
-        description: 'Execute one exact, unexpired Binance Agentic MCP preview. Use only after the user sends a new message exactly equal to CONFIRM. Never change the previewed arguments and never retry automatically.',
+        description: 'Execute one exact, unexpired Binance Agentic MCP preview. Use only after the user sends a new message exactly equal to CONFIRM. Never change or retry it. A successful response confirms submission only; query order status and updated balances before claiming fill or final settlement.',
         inputSchema: {
           type: 'object',
           properties: { previewToken: { type: 'string', minLength: 64 } },
@@ -211,7 +211,20 @@ async function runProxy() {
         const tool = toolsByName.get(payload.tool);
         if (!tool || isReadOnlyTool(tool)) throw new Error('previewed Binance Agentic tool is unavailable or no longer state-changing');
         await consumePreview(payload);
-        return await remote.callTool({ name: payload.tool, arguments: payload.arguments });
+        const execution = await remote.callTool({ name: payload.tool, arguments: payload.arguments });
+        return {
+          ...execution,
+          content: [
+            ...(Array.isArray(execution?.content) ? execution.content : []),
+            {
+              type: 'text',
+              text: JSON.stringify({
+                fnzsafeVerificationRequired: true,
+                message: 'Submission is not final settlement. Use Binance read-only tools to verify order/position status and updated balances before reporting completion.',
+              }),
+            },
+          ],
+        };
       } catch (error) {
         return jsonResult({ error: error instanceof Error ? error.message : String(error) }, true);
       }

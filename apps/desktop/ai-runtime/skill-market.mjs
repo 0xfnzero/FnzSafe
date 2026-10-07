@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { randomBytes } from 'node:crypto';
+import { createRequire } from 'node:module';
 
 const SOURCE = 'binance/binance-skills-hub';
 const SOURCE_URL = `https://github.com/${SOURCE}`;
@@ -19,6 +20,8 @@ const MAX_SKILL_FILES = 64;
 const SKILL_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
 const COMMIT_SHA = /^[a-f0-9]{40}$/u;
 const SKILL_SOURCE_PATH = /^skills\/(binance-web3|binance)\/([a-z0-9]+(?:-[a-z0-9]+)*)\/SKILL\.md$/u;
+const require = createRequire(import.meta.url);
+const AGENTIC_WALLET_VERSION = require('@binance/agentic-wallet/package.json').version;
 
 const text = (value) => String(value ?? '').trim();
 
@@ -94,11 +97,29 @@ function parseFrontmatter(source, fallbackId) {
     description = collected.join(' ');
   }
   const version = unquote(frontmatter.match(/^\s+version:\s*(.*?)\s*$/mu)?.[1] || 'unversioned');
+  const requiredCliVersion = unquote(frontmatter.match(/^\s+requiredCliVersion:\s*(.*?)\s*$/mu)?.[1] || '');
   return {
     name: name.slice(0, 120),
     description: description.replace(/\s+/gu, ' ').slice(0, 600),
     version: version.slice(0, 40),
+    requiredCliVersion: requiredCliVersion.slice(0, 40),
   };
+}
+
+function versionParts(value) {
+  const match = text(value).match(/^(\d+)\.(\d+)\.(\d+)/u);
+  return match ? match.slice(1).map(Number) : null;
+}
+
+function versionAtLeast(current, required) {
+  if (!required) return true;
+  const currentParts = versionParts(current);
+  const requiredParts = versionParts(required);
+  if (!currentParts || !requiredParts) return false;
+  for (let index = 0; index < 3; index += 1) {
+    if (currentParts[index] !== requiredParts[index]) return currentParts[index] > requiredParts[index];
+  }
+  return true;
 }
 
 async function readJson(file) {
@@ -136,6 +157,8 @@ async function withInstallationState(catalog) {
       return {
         ...skill,
         ...state,
+        cliVersion: AGENTIC_WALLET_VERSION,
+        cliCompatible: versionAtLeast(AGENTIC_WALLET_VERSION, text(skill.requiredCliVersion)),
         updateAvailable: state.installed && state.installedCommit !== catalog.commit,
       };
     })),
@@ -256,6 +279,9 @@ async function installSkill(idValue, commitValue, sourcePathValue) {
     if (downloadedBytes > MAX_SKILL_TOTAL_BYTES) throw new Error('Binance skill documentation exceeds the size limit');
     if (relative === 'SKILL.md') {
       metadata = parseFrontmatter(source, id);
+      if (!versionAtLeast(AGENTIC_WALLET_VERSION, metadata.requiredCliVersion)) {
+        throw new Error(`Binance skill requires baw ${metadata.requiredCliVersion}; FnzSafe includes ${AGENTIC_WALLET_VERSION}`);
+      }
     }
     await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
     await fs.writeFile(destination, source, { encoding: 'utf8', mode: 0o600 });
@@ -280,7 +306,7 @@ async function installSkill(idValue, commitValue, sourcePathValue) {
   return {
     ok: true,
     source: SOURCE,
-    skill: { id, ...metadata, installed: true, installedVersion: metadata?.version || 'unversioned', installedCommit: commit, updateAvailable: false },
+    skill: { id, ...metadata, cliVersion: AGENTIC_WALLET_VERSION, cliCompatible: true, installed: true, installedVersion: metadata?.version || 'unversioned', installedCommit: commit, updateAvailable: false },
   };
 }
 
@@ -289,6 +315,7 @@ async function selfTest() {
   if (parsed.name !== 'binance-test' || parsed.version !== '1.2.3' || parsed.description !== 'Test Binance skill.') {
     throw new Error('Binance skill metadata parser self-test failed');
   }
+  if (!versionAtLeast('1.10.0', '1.9.1') || versionAtLeast('1.8.0', '1.9.1')) throw new Error('Binance CLI compatibility self-test failed');
   const files = installableFiles([
     { type: 'blob', path: 'skills/binance-web3/binance-test/SKILL.md', size: 100 },
     { type: 'blob', path: 'skills/binance-web3/binance-test/README.md', size: 100 },

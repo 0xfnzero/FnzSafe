@@ -2,7 +2,10 @@
 
 import { execFile } from 'node:child_process';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { lookup } from 'node:dns/promises';
 import fs from 'node:fs/promises';
+import { request as httpsRequest } from 'node:https';
+import { isIP } from 'node:net';
 import path from 'node:path';
 import process from 'node:process';
 import { promisify } from 'node:util';
@@ -16,9 +19,13 @@ const PREVIEW_TTL_MS = 5 * 60 * 1000;
 const MAX_PREVIEW_TOKEN_LENGTH = 1024 * 1024;
 const READ_TIMEOUT_MS = 30_000;
 const WRITE_TIMEOUT_MS = 120_000;
+const MAX_RESOURCE_RESPONSE_BYTES = 1024 * 1024;
 const CHAIN_IDS = ['56', '1', '8453', 'CT_501'];
 const EVM_CHAIN_IDS = ['56', '1', '8453'];
 const LIMIT_CHAIN_IDS = ['56', 'CT_501'];
+const SIGNAL_CHAIN_IDS = ['56', '1', '8453', 'CT_501', '4663'];
+const TRACKER_CHAIN_IDS = ['56', '1', '8453', 'CT_501', '4663'];
+const LEADERBOARD_CHAIN_IDS = ['56', '1', '8453', 'CT_501'];
 const PREDICTION_CHAIN_IDS = ['56', '137'];
 const GAS_LEVELS = ['LOW', 'MEDIUM', 'HIGH'];
 const EVM_ADDRESS = /^0x[0-9a-fA-F]{40}$/u;
@@ -29,7 +36,7 @@ const IDENTIFIER = /^[A-Za-z0-9._:-]+$/u;
 const INTEGER = /^-?(?:0|[1-9][0-9]*)$/u;
 const HEX_DATA = /^0x(?:[0-9a-fA-F]{2})*$/u;
 const WEI_VALUE = /^(?:0|[1-9][0-9]*|0x[0-9a-fA-F]+)$/u;
-const SENSITIVE_KEY = /^(?:accessToken|apiKey|authorization|clientId|cookie|idToken|mnemonic|password|privateKey|refreshToken|secret|secretKey|seed|sessionId|signature)$/iu;
+const SENSITIVE_KEY = /^(?:accessToken|apiKey|authorization|clientId|cookie|idToken|mnemonic|password|paymentHeaderValue|privateKey|refreshToken|secret|secretKey|seed|sessionId|signature)$/iu;
 
 const text = (value) => String(value ?? '').trim();
 
@@ -42,6 +49,11 @@ function jsonResult(value, isError = false) {
     content: [{ type: 'text', text: JSON.stringify(redact(value)) }],
     ...(isError ? { isError: true } : {}),
   };
+}
+
+function resultFailed(value) {
+  return value?.success === false || value?.execution?.success === false || value?.signing?.success === false
+    || value?.endedWithError === true;
 }
 
 function redact(value) {
@@ -133,6 +145,18 @@ function optionalIdentifier(args, name, maxLength = 128) {
   return value;
 }
 
+function optionalNumericId(args, name, maxLength = 20) {
+  const value = optionalString(args, name, maxLength);
+  if (value && !/^(?:0|[1-9][0-9]*)$/u.test(value)) throw new Error(`${name} must be a non-negative integer ID`);
+  return value;
+}
+
+function numericId(args, name, maxLength = 20) {
+  const value = requiredString(args, name, maxLength);
+  if (!/^(?:0|[1-9][0-9]*)$/u.test(value)) throw new Error(`${name} must be a non-negative integer ID`);
+  return value;
+}
+
 function identifierList(args, name, maxItems = 20) {
   const raw = requiredString(args, name, maxItems * 129);
   const values = raw.split(',').map((value) => value.trim()).filter(Boolean);
@@ -200,6 +224,43 @@ function canonicalJson(raw, name, maxBytes = 65_536) {
   return JSON.stringify(parsed);
 }
 
+function canonicalJsonArray(raw, name, maxBytes = 65_536, maxItems = 100) {
+  const source = requiredString({ [name]: raw }, name, maxBytes);
+  if (Buffer.byteLength(source, 'utf8') > maxBytes) throw new Error(`${name} is too large`);
+  let parsed;
+  try {
+    parsed = JSON.parse(source);
+  } catch {
+    throw new Error(`${name} must be valid JSON`);
+  }
+  if (!Array.isArray(parsed) || parsed.length > maxItems) throw new Error(`${name} must be a JSON array with at most ${maxItems} items`);
+  jsonDepth(parsed);
+  return JSON.stringify(parsed);
+}
+
+function optionalDisplayText(args, name, maxLength = 120) {
+  const value = optionalString(args, name, maxLength);
+  if (/[\u0000-\u001f\u007f]/u.test(value)) throw new Error(`${name} contains control characters`);
+  return value;
+}
+
+function addressList(args, name = 'addresses', maxItems = 100) {
+  const chain = choice(requiredString(args, 'chainId', 16), 'chainId', TRACKER_CHAIN_IDS);
+  const raw = requiredString(args, name, maxItems * 130);
+  let values;
+  if (raw.trimStart().startsWith('[')) {
+    const parsed = JSON.parse(canonicalJsonArray(raw, name, maxItems * 130, maxItems));
+    values = parsed.map((entry) => (isRecord(entry) ? entry.address : entry));
+  } else {
+    values = raw.split(',');
+  }
+  const normalized = values.map((value) => addressForKnownChain(value, chain, name));
+  if (normalized.length === 0 || normalized.length > maxItems || new Set(normalized).size !== normalized.length) {
+    throw new Error(`${name} must contain 1 to ${maxItems} unique addresses`);
+  }
+  return normalized.join(',');
+}
+
 function paymentRequirements(args) {
   const source = requiredString(args, 'paymentRequirements', 131_072);
   let decoded = source;
@@ -212,6 +273,156 @@ function paymentRequirements(args) {
     }
   }
   return canonicalJson(decoded, 'paymentRequirements');
+}
+
+function isPrivateAddress(address) {
+  if (isIP(address) === 4) {
+    const octets = address.split('.').map(Number);
+    return octets[0] === 10 || octets[0] === 127 || octets[0] === 0
+      || (octets[0] === 169 && octets[1] === 254)
+      || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)
+      || (octets[0] === 192 && octets[1] === 168)
+      || (octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127)
+      || (octets[0] === 192 && octets[1] === 0 && octets[2] === 0)
+      || (octets[0] === 198 && (octets[1] === 18 || octets[1] === 19))
+      || (octets[0] === 192 && octets[1] === 0 && octets[2] === 2)
+      || (octets[0] === 198 && octets[1] === 51 && octets[2] === 100)
+      || (octets[0] === 203 && octets[1] === 0 && octets[2] === 113)
+      || (octets[0] >= 224);
+  }
+  if (isIP(address) !== 6) return true;
+  const [firstText = '', secondText = '0'] = address.toLowerCase().split(':');
+  const first = Number.parseInt(firstText, 16);
+  const second = Number.parseInt(secondText || '0', 16);
+  // Only globally routable unicast is eligible. Exclude IETF special-use, documentation,
+  // and 6to4 ranges because they can encode or relay non-public destinations.
+  return first < 0x2000 || first > 0x3fff
+    || (first === 0x2001 && (second <= 0x01ff || second === 0x0db8))
+    || first === 0x2002;
+}
+
+async function publicHttpsTarget(value) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error('resourceUrl must be a valid URL');
+  }
+  if (url.protocol !== 'https:' || url.username || url.password || url.hash || (url.port && url.port !== '443')) {
+    throw new Error('x402 resources must use public HTTPS without embedded credentials or a custom port');
+  }
+  if (url.hostname === 'localhost' || url.hostname.endsWith('.local')) throw new Error('local x402 resources are not allowed');
+  const addresses = await lookup(url.hostname, { all: true, verbatim: true });
+  if (addresses.length === 0 || addresses.some((entry) => isPrivateAddress(entry.address))) {
+    throw new Error('x402 resource resolved to a private or reserved address');
+  }
+  return { url: url.toString(), addresses };
+}
+
+async function publicHttpsUrl(value) {
+  return (await publicHttpsTarget(value)).url;
+}
+
+function x402RequestParameters(args) {
+  const method = choice(text(args?.method || 'GET').toUpperCase(), 'method', ['GET', 'POST']);
+  const body = optionalString(args, 'body', 65_536);
+  if (method === 'GET' && body) throw new Error('GET x402 requests cannot include a body');
+  const parameters = { resourceUrl: requiredString(args, 'resourceUrl', 2048), method };
+  if (body) parameters.body = body;
+  const contentType = optionalDisplayText(args, 'contentType', 128);
+  const accept = optionalDisplayText(args, 'accept', 128);
+  if (contentType) parameters.contentType = contentType;
+  if (accept) parameters.accept = accept;
+  return parameters;
+}
+
+async function boundedResponse(response) {
+  const header = (name) => {
+    const value = response.headers[name];
+    return Array.isArray(value) ? value.join(', ') : text(value);
+  };
+  const declared = Number(header('content-length') || 0);
+  if (declared > MAX_RESOURCE_RESPONSE_BYTES) throw new Error('x402 resource response exceeds 1 MiB');
+  const chunks = [];
+  let size = 0;
+  if (response) {
+    for await (const chunk of response) {
+      size += chunk.length;
+      if (size > MAX_RESOURCE_RESPONSE_BYTES) throw new Error('x402 resource response exceeds 1 MiB');
+      chunks.push(chunk);
+    }
+  }
+  const body = Buffer.concat(chunks).toString('utf8');
+  return {
+    status: response.statusCode || 0,
+    contentType: header('content-type'),
+    paymentRequired: header('payment-required'),
+    paymentResponse: header('payment-response'),
+    body,
+  };
+}
+
+async function requestX402Resource(parameters, payment = null) {
+  const target = await publicHttpsTarget(parameters.resourceUrl);
+  const headers = { Accept: parameters.accept || 'application/json, text/plain;q=0.9, */*;q=0.1', 'User-Agent': 'FnzSafe-x402/1' };
+  if (parameters.contentType) headers['Content-Type'] = parameters.contentType;
+  if (payment) headers[payment.name] = payment.value;
+  const response = await new Promise((resolve, reject) => {
+    const request = httpsRequest(target.url, {
+      method: parameters.method,
+      headers,
+      signal: AbortSignal.timeout(30_000),
+      lookup: (_hostname, options, callback) => {
+        const requestedFamily = typeof options === 'number' ? options : options?.family;
+        const candidates = requestedFamily ? target.addresses.filter((entry) => entry.family === requestedFamily) : target.addresses;
+        if (candidates.length === 0) return callback(new Error('x402 resource has no address for the requested IP family'));
+        if (typeof options === 'object' && options?.all) return callback(null, candidates);
+        return callback(null, candidates[0].address, candidates[0].family);
+      },
+    }, resolve);
+    request.once('error', reject);
+    if (parameters.body) request.write(parameters.body);
+    request.end();
+  });
+  if (response.statusCode >= 300 && response.statusCode < 400) {
+    response.resume();
+    throw new Error('x402 resource redirects are not followed');
+  }
+  return boundedResponse(response);
+}
+
+function paymentPayloadFromResponse(response) {
+  if (response.paymentRequired) return response.paymentRequired;
+  try {
+    const parsed = JSON.parse(response.body);
+    if (isRecord(parsed?.paymentRequirements)) return JSON.stringify(parsed.paymentRequirements);
+    if (isRecord(parsed) && parsed.x402Version !== undefined && Array.isArray(parsed.accepts)) return JSON.stringify(parsed);
+  } catch {
+    // The 402 body may be plain text while the protocol payload is absent.
+  }
+  throw new Error('HTTP 402 response did not include a valid PaymentRequired payload');
+}
+
+function x402Data(result) {
+  return isRecord(result?.data) ? result.data : result;
+}
+
+function transactionStatus(result) {
+  return text(result?.status || result?.data?.status).toUpperCase();
+}
+
+async function waitForApproval(txHash) {
+  const deadline = Date.now() + 60_000;
+  let latest;
+  do {
+    latest = await runBaw(['wallet', 'tx-history', '--tx', txHash]);
+    if (resultFailed(latest)) throw new Error(`x402 approval status query failed: ${text(latest?.error?.message) || 'unknown error'}`);
+    const status = transactionStatus(latest);
+    if (['CONFIRMED', 'SUCCESS', 'SUCCEEDED', 'FINALIZED'].includes(status)) return latest;
+    if (['FAILED', 'REVERTED', 'DROPPED'].includes(status)) throw new Error('x402 approval transaction failed');
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+  } while (Date.now() < deadline);
+  throw new Error('x402 approval transaction is still pending; the paid request was not replayed');
 }
 
 function eip712Message(args) {
@@ -279,6 +490,40 @@ async function runBaw(args, timeout = READ_TIMEOUT_MS) {
     if (text(error?.stdout)) return parseCliJson(error.stdout);
     if (error?.killed || error?.code === 'ETIMEDOUT') throw new Error('Binance Agentic Wallet request timed out');
     throw new Error(`Binance Agentic Wallet command failed: ${text(error?.message) || 'unknown error'}`);
+  }
+}
+
+async function runBawEvents(args, durationSeconds) {
+  const directory = walletDirectory();
+  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+  const options = {
+    cwd: directory,
+    env: {
+      ...(process.env.HOME ? { HOME: process.env.HOME } : {}),
+      ...(process.env.USERPROFILE ? { USERPROFILE: process.env.USERPROFILE } : {}),
+      ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
+      BINANCE_BAW_DIR: directory,
+      BINANCE_INSTANCE_ID: createHash('sha256').update(directory).digest('hex'),
+      NO_COLOR: '1',
+    },
+    timeout: (durationSeconds + 15) * 1000,
+    maxBuffer: 2 * 1024 * 1024,
+  };
+  try {
+    const { stdout } = await execFileAsync(process.execPath, ['--no-addons', bawEntryPath(), ...args, '--duration', String(durationSeconds), '--json'], options);
+    const events = stdout.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean).map((line) => {
+      try { return JSON.parse(line); } catch { return null; }
+    }).filter(Boolean);
+    return { durationSeconds, eventCount: events.length, events };
+  } catch (error) {
+    if (text(error?.stdout)) {
+      const events = error.stdout.split(/\r?\n/u).map((line) => {
+        try { return JSON.parse(line); } catch { return null; }
+      }).filter(Boolean);
+      if (events.length > 0) return { durationSeconds, eventCount: events.length, events, endedWithError: true };
+    }
+    if (error?.killed || error?.code === 'ETIMEDOUT') throw new Error('Binance tracker stream timed out');
+    throw new Error(`Binance tracker stream failed: ${text(error?.message) || 'unknown error'}`);
   }
 }
 
@@ -661,6 +906,181 @@ function approvalArgs(operation, parameters) {
   ];
 }
 
+function signalChainId(args) {
+  return choice(requiredString(args, 'chainId', 16), 'chainId', SIGNAL_CHAIN_IDS);
+}
+
+function trackerChainId(args) {
+  return choice(requiredString(args, 'chainId', 16), 'chainId', TRACKER_CHAIN_IDS);
+}
+
+function leaderboardChainId(args) {
+  return choice(requiredString(args, 'chainId', 16), 'chainId', LEADERBOARD_CHAIN_IDS);
+}
+
+function signalMutationParameters(args) {
+  const action = choice(requiredString(args, 'action', 32), 'action', [
+    'create', 'update', 'delete', 'follow', 'unfollow', 'backtest-retry', 'schedule',
+  ]);
+  const parameters = { action, chainId: signalChainId(args) };
+  const strategyType = optionalString(args, 'strategyType', 20);
+  if (strategyType) parameters.strategyType = choice(strategyType, 'strategyType', ['meme-rush', 'fomo-call']);
+  const jobId = optionalIdentifier(args, 'jobId');
+  const strategyId = optionalIdentifier(args, 'strategyId');
+  const name = optionalDisplayText(args, 'name', 20);
+  const walletGroupId = optionalNumericId(args, 'walletGroupId');
+  const config = optionalString(args, 'config', 65_536);
+  if (jobId) parameters.jobId = jobId;
+  if (strategyId) parameters.strategyId = strategyId;
+  if (name) parameters.name = name;
+  if (walletGroupId) parameters.walletGroupId = walletGroupId;
+  if (config) parameters.config = canonicalJson(config, 'config');
+  if (args?.runBacktest !== undefined && typeof args.runBacktest !== 'boolean') throw new Error('runBacktest must be a boolean');
+  if (args?.runBacktest === true) parameters.runBacktest = true;
+  if (args?.taskId !== undefined) parameters.taskId = boundedInteger(args, 'taskId', { min: 1, max: 1_000_000 });
+  const interval = optionalString(args, 'interval', 4);
+  if (interval) parameters.interval = choice(interval.toUpperCase(), 'interval', ['4H', '6H', '12H', '24H', 'OFF']);
+
+  if (['create', 'update', 'delete', 'follow', 'unfollow', 'backtest-retry'].includes(action) && !parameters.strategyType) {
+    throw new Error('strategyType is required for this action');
+  }
+  if (action === 'create' && (!parameters.name || !parameters.config)) throw new Error('create requires name and config');
+  if (action === 'update' && (!parameters.jobId || (!parameters.name && !parameters.config))) throw new Error('update requires jobId and name or config');
+  if (['delete', 'follow', 'backtest-retry'].includes(action) && !parameters.jobId) throw new Error(`${action} requires jobId`);
+  if (action === 'unfollow' && !parameters.strategyId) throw new Error('unfollow requires strategyId');
+  if (action === 'schedule' && (!parameters.jobId || !parameters.interval)) throw new Error('schedule requires jobId and interval');
+  return parameters;
+}
+
+function signalMutationArgs(parameters) {
+  const base = ['signal'];
+  if (parameters.action === 'backtest-retry') {
+    return [...base, 'backtest', 'retry', '-c', parameters.chainId, '-t', parameters.strategyType, '--job-id', parameters.jobId];
+  }
+  if (parameters.action === 'schedule') {
+    return [...base, 'backtest', 'schedule', '-c', parameters.chainId, '--job-id', parameters.jobId, '--interval', parameters.interval];
+  }
+  const command = [...base, 'strategy', parameters.action, '-c', parameters.chainId];
+  appendOption(command, '-t', parameters.strategyType);
+  appendOption(command, '--job-id', parameters.jobId);
+  appendOption(command, '--strategy-id', parameters.strategyId);
+  appendOption(command, '--task-id', parameters.taskId);
+  appendOption(command, '-n', parameters.name);
+  appendOption(command, '--config', parameters.config);
+  appendOption(command, '--wallet-group-id', parameters.walletGroupId);
+  if (parameters.runBacktest) command.push('--run-backtest');
+  if (['update', 'delete', 'follow', 'unfollow'].includes(parameters.action)) command.push('-y');
+  return command;
+}
+
+function trackerMutationParameters(args) {
+  const action = choice(requiredString(args, 'action', 32), 'action', [
+    'group-create', 'group-update', 'address-add', 'address-batch', 'address-update',
+    'address-link', 'address-delete', 'address-follow', 'address-unfollow',
+  ]);
+  const parameters = { action, chainId: trackerChainId(args) };
+  const groupId = optionalNumericId(args, 'groupId');
+  const name = optionalDisplayText(args, 'name', 40);
+  const address = optionalString(args, 'address', 44);
+  const label = optionalDisplayText(args, 'label', 120);
+  if (groupId) parameters.groupId = groupId;
+  if (name) parameters.name = name;
+  if (address) parameters.address = addressForKnownChain(address, parameters.chainId, 'address');
+  if (label) parameters.label = label;
+  if (args?.overwrite !== undefined && typeof args.overwrite !== 'boolean') throw new Error('overwrite must be a boolean');
+  parameters.overwrite = args?.overwrite !== false;
+  if (action === 'address-batch') {
+    const raw = requiredString(args, 'addresses', 13_000);
+    if (raw.trimStart().startsWith('[')) {
+      const parsed = JSON.parse(canonicalJsonArray(raw, 'addresses', 13_000, 100));
+      if (parsed.length === 0 || parsed.some((entry) => !isRecord(entry))) throw new Error('addresses must contain address objects');
+      const normalizedEntries = parsed.map((entry) => {
+        const normalized = { address: addressForKnownChain(entry.address, parameters.chainId, 'addresses') };
+        const entryLabel = text(entry.label);
+        if (entryLabel) {
+          if (entryLabel.length > 120 || /[\u0000-\u001f\u007f]/u.test(entryLabel)) throw new Error('address label is invalid');
+          normalized.label = entryLabel;
+        }
+        return normalized;
+      });
+      if (new Set(normalizedEntries.map((entry) => entry.address)).size !== normalizedEntries.length) throw new Error('addresses contains duplicates');
+      parameters.addresses = JSON.stringify(normalizedEntries);
+    } else {
+      parameters.addresses = addressList(args);
+    }
+  } else if (action === 'address-delete') parameters.addresses = addressList(args);
+  if (action === 'group-create' && !parameters.name) throw new Error('group-create requires name');
+  if (action === 'group-update' && (!parameters.groupId || !parameters.name)) throw new Error('group-update requires groupId and name');
+  if (['address-add', 'address-update', 'address-link', 'address-follow', 'address-unfollow'].includes(action) && !parameters.address) {
+    throw new Error(`${action} requires address`);
+  }
+  if (action === 'address-update' && !parameters.label) throw new Error('address-update requires label');
+  if (action === 'address-delete' && !parameters.groupId) throw new Error('address-delete requires groupId');
+  if (['address-add', 'address-batch', 'address-update', 'address-link', 'address-follow'].includes(action) && !parameters.groupId) {
+    throw new Error(`${action} requires an explicit groupId so FnzSafe can verify the write`);
+  }
+  return parameters;
+}
+
+function trackerMutationArgs(parameters) {
+  const [area, operation] = parameters.action.split('-');
+  const command = ['tracker', area, operation, '-c', parameters.chainId];
+  if (parameters.action !== 'address-update') appendOption(command, '-g', parameters.groupId);
+  appendOption(command, '-n', parameters.name);
+  appendOption(command, '-a', parameters.addresses || parameters.address);
+  appendOption(command, '-l', parameters.label);
+  if (!parameters.overwrite && ['address-add', 'address-batch'].includes(parameters.action)) command.push('--no-overwrite');
+  if (['address-link', 'address-delete'].includes(parameters.action)) command.push('-y');
+  return command;
+}
+
+function leaderboardConfigParameters(args) {
+  const action = choice(requiredString(args, 'action', 32), 'action', ['preset-save', 'alpha-radar-config-save']);
+  const parameters = { action, config: canonicalJsonArray(requiredString(args, 'config', 65_536), 'config', 65_536, 100) };
+  if (action === 'alpha-radar-config-save') parameters.chainId = leaderboardChainId(args);
+  return parameters;
+}
+
+function leaderboardConfigArgs(parameters) {
+  return parameters.action === 'preset-save'
+    ? ['leaderboard', 'preset', 'save', '--config', parameters.config]
+    : ['leaderboard', 'alpha-radar-config', 'save', '-c', parameters.chainId, '--config', parameters.config];
+}
+
+function findResultIdentifier(value, keys) {
+  if (!value || typeof value !== 'object') return '';
+  if (!Array.isArray(value)) {
+    for (const key of keys) {
+      const candidate = text(value[key]);
+      if (candidate && candidate.length <= 256) return candidate;
+    }
+  }
+  for (const nested of Array.isArray(value) ? value : Object.values(value)) {
+    const candidate = findResultIdentifier(nested, keys);
+    if (candidate) return candidate;
+  }
+  return '';
+}
+
+async function withExecutionVerification(operation, execution, parameters) {
+  if (execution?.success === false) return execution;
+  try {
+    let verification;
+    const txHash = findResultIdentifier(execution, ['txHash', 'transactionHash', 'approveTxHash']);
+    const orderId = findResultIdentifier(execution, ['orderId']);
+    const strategyId = findResultIdentifier(execution, ['strategyId']);
+    if (operation === 'swap' && orderId) verification = await runBaw(['market-order', 'list', '--orderId', orderId]);
+    else if (operation === 'limit-order' && strategyId) verification = await runBaw(['limit-order', 'list', '--strategyId', strategyId]);
+    else if (operation === 'limit-cancel') verification = await runBaw(['limit-order', 'list', '--strategyId', parameters.strategyId]);
+    else if (operation === 'sign-message' && orderId) verification = await runBaw(['sign-message', 'result', '--order-id', orderId]);
+    else if (operation.startsWith('prediction-')) verification = await runBaw(['prediction', 'order', 'history', '--offset', '0', '--limit', '20']);
+    else if (txHash) verification = await runBaw(['wallet', 'tx-history', '--tx', txHash]);
+    return { execution, ...(verification ? { verification } : {}), verificationPending: !verification };
+  } catch (error) {
+    return { execution, verificationPending: true, verificationError: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 function confirmation(args) {
   if (args?.confirmation !== 'CONFIRM' || process.env.FNZSAFE_BINANCE_USER_CONFIRMED !== '1') {
     throw new Error('A real Binance Web3 action requires a new user message containing exactly CONFIRM.');
@@ -690,6 +1110,11 @@ const decimalProperty = { type: 'string', minLength: 1, maxLength: 40 };
 const identifierProperty = { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9._:-]+$' };
 const offsetProperty = { type: 'integer', minimum: 0, maximum: 1_000_000 };
 const pageLimitProperty = { type: 'integer', minimum: 1, maximum: 100 };
+const signalChainProperty = { type: 'string', enum: SIGNAL_CHAIN_IDS };
+const trackerChainProperty = { type: 'string', enum: TRACKER_CHAIN_IDS };
+const leaderboardChainProperty = { type: 'string', enum: LEADERBOARD_CHAIN_IDS };
+const strategyTypeProperty = { type: 'string', enum: ['meme-rush', 'fomo-call'] };
+const numericIdProperty = { type: 'string', pattern: '^(?:0|[1-9][0-9]*)$', maxLength: 20 };
 const executionProperties = {
   previewToken: { type: 'string', minLength: 64, maxLength: MAX_PREVIEW_TOKEN_LENGTH },
   confirmation: { type: 'string', enum: ['CONFIRM'] },
@@ -769,8 +1194,33 @@ const tools = [
   { name: 'binance_sign_message_execute', description: 'Sign one exact EIP-712 preview after a later user message exactly equal to CONFIRM.', inputSchema: { type: 'object', properties: executionProperties, required: ['previewToken', 'confirmation'], additionalProperties: false }, annotations: { destructiveHint: true, idempotentHint: false, readOnlyHint: false } },
   { name: 'binance_sign_message_result', description: 'Read the result of one Binance Agentic Wallet message-signature order.', inputSchema: { type: 'object', properties: { orderId: identifierProperty }, required: ['orderId'], additionalProperties: false }, annotations: { readOnlyHint: true } },
   { name: 'binance_sign_message_history', description: 'List Binance Agentic Wallet message-signature history.', inputSchema: { type: 'object', properties: { chainId: evmChainProperty, limit: pageLimitProperty, nextToken: { type: 'string', minLength: 1, maxLength: 512 }, startTime: { type: 'integer', minimum: 0 }, endTime: { type: 'integer', minimum: 0 }, sortType: { type: 'string', enum: ['ASC', 'DESC'] } }, additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_signal_feed', description: 'Read Binance Web3 on-chain signal feeds from smart money, official strategies, or user strategies.', inputSchema: { type: 'object', properties: { chainId: signalChainProperty, source: { type: 'string', enum: ['all', 'user', 'meme', 'smart-money'], default: 'all' }, strategyId: identifierProperty, strategyType: strategyTypeProperty, sortBy: { type: 'string', enum: ['time', 'maxGain'], default: 'time' }, timeRange: { type: 'string', enum: ['5m', '1h', '24h'] }, pageSize: pageLimitProperty }, required: ['chainId'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_signal_strategies', description: 'List the connected user\'s Binance Web3 signal strategies.', inputSchema: { type: 'object', properties: { chainId: signalChainProperty, followed: { type: 'boolean' }, strategyType: strategyTypeProperty }, required: ['chainId'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_signal_explore', description: 'Explore Binance Web3 official signal strategies and their backtest periods.', inputSchema: { type: 'object', properties: { chainId: signalChainProperty, backtestDays: { type: 'integer', minimum: 1, maximum: 365 } }, required: ['chainId'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_signal_backtests', description: 'List Binance Web3 signal backtests, with bounded pagination or all pages.', inputSchema: { type: 'object', properties: { chainId: signalChainProperty, page: { type: 'integer', minimum: 1, maximum: 10_000 }, size: pageLimitProperty, backtestDays: { type: 'integer', minimum: 1, maximum: 365 }, all: { type: 'boolean' } }, required: ['chainId'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_signal_backtest_detail', description: 'Read one Binance Web3 signal strategy backtest and token results.', inputSchema: { type: 'object', properties: { chainId: signalChainProperty, strategyId: identifierProperty }, required: ['chainId', 'strategyId'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_signal_credits', description: 'Read the connected user\'s Binance Web3 backtest credits.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_signal_wallet_groups', description: 'List Binance Web3 wallet groups usable by fomo-call signal strategies.', inputSchema: { type: 'object', properties: { chainId: signalChainProperty }, required: ['chainId'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_signal_strategy_change_preview', description: 'Create a five-minute FnzSafe preview for an exact signal strategy create/update/delete/follow/unfollow, retry, or schedule change.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['create', 'update', 'delete', 'follow', 'unfollow', 'backtest-retry', 'schedule'] }, chainId: signalChainProperty, strategyType: strategyTypeProperty, jobId: identifierProperty, strategyId: identifierProperty, name: { type: 'string', minLength: 1, maxLength: 20 }, config: { type: 'string', minLength: 2, maxLength: 65_536 }, walletGroupId: numericIdProperty, runBacktest: { type: 'boolean' }, taskId: { type: 'integer', minimum: 1, maximum: 1_000_000 }, interval: { type: 'string', enum: ['4H', '6H', '12H', '24H', 'OFF'] } }, required: ['action', 'chainId'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_signal_strategy_change_execute', description: 'Execute one exact signal-strategy change preview after a later user message exactly equal to CONFIRM.', inputSchema: { type: 'object', properties: executionProperties, required: ['previewToken', 'confirmation'], additionalProperties: false }, annotations: { destructiveHint: true, idempotentHint: false, readOnlyHint: false } },
+  { name: 'binance_tracker_tokens', description: 'Read Binance Web3 wallet-tracker token activity for a private group or public Smart Money/KOL feed.', inputSchema: { type: 'object', properties: { chainId: trackerChainProperty, groupId: numericIdProperty, tagType: { type: 'string', enum: ['kol', 'smy'] }, tokenSize: { type: 'integer', minimum: 1, maximum: 100 }, period: { type: 'string', enum: ['1m', '5m', '1h', '4h', '24h'], default: '24h' }, filterRisk: { type: 'boolean' } }, required: ['chainId'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_tracker_transactions', description: 'Read Binance Web3 wallet-tracker transactions with side, value, and risk filters.', inputSchema: { type: 'object', properties: { chainId: trackerChainProperty, groupId: numericIdProperty, tagType: { type: 'string', enum: ['kol', 'smy'] }, tradeSides: { type: 'string', pattern: '^(?:19|11|29|21)(?:,(?:19|11|29|21))*$' }, minValue: decimalProperty, maxValue: decimalProperty, filterRisk: { type: 'boolean' } }, required: ['chainId'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_tracker_realtime', description: 'Collect a bounded 5-30 second Binance Web3 real-time event snapshot for Smart Money, KOL, chain wallets, current followings, or one validated address.', inputSchema: { type: 'object', properties: { mode: { type: 'string', enum: ['smart-money', 'kol', 'wallet', 'following', 'address'] }, chainId: trackerChainProperty, walletChains: { type: 'string', pattern: '^(?:BSC|SOL|BASE|ETH|ROBINHOOD)(?:,(?:BSC|SOL|BASE|ETH|ROBINHOOD))*$' }, address: tokenProperty, durationSeconds: { type: 'integer', minimum: 5, maximum: 30 } }, required: ['mode'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_tracker_followings', description: 'List wallet addresses followed by the connected Binance Web3 user.', inputSchema: { type: 'object', properties: { chainId: trackerChainProperty }, required: ['chainId'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_tracker_groups', description: 'List Binance Web3 wallet-tracker address groups.', inputSchema: { type: 'object', properties: { chainId: trackerChainProperty, includeAllGroup: { type: 'boolean', default: true } }, required: ['chainId'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_tracker_addresses', description: 'List or search validated addresses within a Binance Web3 tracker group.', inputSchema: { type: 'object', properties: { chainId: trackerChainProperty, groupId: numericIdProperty, address: tokenProperty, label: { type: 'string', minLength: 1, maxLength: 120 }, page: { type: 'integer', minimum: 1, maximum: 10_000 }, size: pageLimitProperty }, required: ['chainId', 'groupId'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_tracker_change_preview', description: 'Create a five-minute FnzSafe preview for an exact tracker group/address/follow-list change.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['group-create', 'group-update', 'address-add', 'address-batch', 'address-update', 'address-link', 'address-delete', 'address-follow', 'address-unfollow'] }, chainId: trackerChainProperty, groupId: numericIdProperty, name: { type: 'string', minLength: 1, maxLength: 40 }, address: tokenProperty, addresses: { type: 'string', minLength: 1, maxLength: 13_000 }, label: { type: 'string', minLength: 1, maxLength: 120 }, overwrite: { type: 'boolean', default: true } }, required: ['action', 'chainId'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_tracker_change_execute', description: 'Execute one exact Binance Web3 tracker change preview after a later user message exactly equal to CONFIRM.', inputSchema: { type: 'object', properties: executionProperties, required: ['previewToken', 'confirmation'], additionalProperties: false }, annotations: { destructiveHint: true, idempotentHint: false, readOnlyHint: false } },
+  { name: 'binance_leaderboard_query', description: 'Rank Binance Web3 traders by PnL, win rate, volume, activity, or token count.', inputSchema: { type: 'object', properties: { chainId: leaderboardChainProperty, period: { type: 'string', enum: ['7d', '30d', '90d'], default: '30d' }, tag: { type: 'string', enum: ['ALL', 'KOL', 'MPC'], default: 'ALL' }, sortBy: { type: 'integer', enum: [0, 20, 30, 50, 60, 70, 80] }, orderBy: { type: 'integer', enum: [0, 1, 2] }, page: { type: 'integer', minimum: 0, maximum: 10_000 }, size: { type: 'integer', minimum: 1, maximum: 20 } }, required: ['chainId'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_leaderboard_analyze', description: 'Analyze one on-chain address with Binance Web3 six-dimension scoring and AI archetype.', inputSchema: { type: 'object', properties: { chainId: leaderboardChainProperty, address: tokenProperty, period: { type: 'string', enum: ['7d', '30d', '90d'], default: '30d' }, topN: { type: 'integer', minimum: 1, maximum: 5000 } }, required: ['chainId', 'address'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_leaderboard_alpha_radar', description: 'Find ranked Binance Web3 wallets holding one or more target tokens.', inputSchema: { type: 'object', properties: { chainId: leaderboardChainProperty, tokens: { type: 'string', minLength: 32, maxLength: 4500 }, matchCount: { type: 'integer', minimum: 1, maximum: 100 }, period: { type: 'string', enum: ['7d', '30d', '90d'], default: '30d' }, page: { type: 'integer', minimum: 0, maximum: 10_000 }, size: { type: 'integer', minimum: 1, maximum: 20 } }, required: ['chainId', 'tokens', 'matchCount'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_leaderboard_configs', description: 'List saved Binance Web3 leaderboard presets or alpha-radar configs.', inputSchema: { type: 'object', properties: { type: { type: 'string', enum: ['preset', 'alpha-radar'] }, chainId: leaderboardChainProperty }, required: ['type'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_leaderboard_config_preview', description: 'Create a five-minute FnzSafe preview for replacing leaderboard presets or alpha-radar configs.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['preset-save', 'alpha-radar-config-save'] }, chainId: leaderboardChainProperty, config: { type: 'string', minLength: 2, maxLength: 65_536 } }, required: ['action', 'config'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_leaderboard_config_execute', description: 'Execute one exact leaderboard configuration preview after a later user message exactly equal to CONFIRM.', inputSchema: { type: 'object', properties: executionProperties, required: ['previewToken', 'confirmation'], additionalProperties: false }, annotations: { destructiveHint: true, idempotentHint: false, readOnlyHint: false } },
+  { name: 'binance_x402_resource_payment_preview', description: 'Request one exact public HTTPS resource, parse its HTTP 402 challenge, validate the selected Binance payment option, and create a five-minute FnzSafe preview. This does not sign or pay.', inputSchema: { type: 'object', properties: { resourceUrl: { type: 'string', pattern: '^https://', maxLength: 2048 }, method: { type: 'string', enum: ['GET', 'POST'], default: 'GET' }, body: { type: 'string', maxLength: 65_536 }, contentType: { type: 'string', maxLength: 128 }, accept: { type: 'string', maxLength: 128 }, selectedIndex: { type: 'integer', minimum: 1, maximum: 1000 } }, required: ['resourceUrl', 'selectedIndex'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_x402_resource_payment_execute', description: 'Sign and pay the exact x402 option in a preview, wait for any required approval, then replay the bound resource request once. Requires a later exact CONFIRM.', inputSchema: { type: 'object', properties: executionProperties, required: ['previewToken', 'confirmation'], additionalProperties: false }, annotations: { destructiveHint: true, idempotentHint: false, readOnlyHint: false } },
   { name: 'binance_x402_payment_options', description: 'Validate an x402 PaymentRequired JSON payload and list Binance payment options without signing.', inputSchema: { type: 'object', properties: { paymentRequirements: { type: 'string', minLength: 2, maxLength: 131_072 } }, required: ['paymentRequirements'], additionalProperties: false }, annotations: { readOnlyHint: true } },
-  { name: 'binance_x402_payment_sign_preview', description: 'Create a five-minute FnzSafe preview for signing one exact x402 payment option. This does not sign or pay.', inputSchema: { type: 'object', properties: { paymentId: identifierProperty, selectedIndex: { type: 'integer', minimum: 0, maximum: 1000 } }, required: ['paymentId', 'selectedIndex'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_x402_payment_sign_preview', description: 'Create a five-minute FnzSafe preview for signing one exact x402 payment option. This does not sign or pay.', inputSchema: { type: 'object', properties: { paymentId: identifierProperty, selectedIndex: { type: 'integer', minimum: 1, maximum: 1000 } }, required: ['paymentId', 'selectedIndex'], additionalProperties: false }, annotations: { readOnlyHint: true } },
   { name: 'binance_x402_payment_sign_execute', description: 'Sign one exact x402 payment option after a later user message exactly equal to CONFIRM. The result may include an approval transaction.', inputSchema: { type: 'object', properties: executionProperties, required: ['previewToken', 'confirmation'], additionalProperties: false }, annotations: { destructiveHint: true, idempotentHint: false, readOnlyHint: false } },
 ];
 
@@ -1066,11 +1516,172 @@ async function handleTool(name, args) {
       if (sortType) appendOption(command, '--sortType', choice(sortType, 'sortType', ['ASC', 'DESC']));
       return runBaw(command);
     }
+    case 'binance_signal_feed': {
+      const command = ['signal', 'list', '-c', signalChainId(args)];
+      appendOption(command, '-n', positiveInteger(args, 'pageSize', 100, 100));
+      appendOption(command, '-s', choice(text(args?.source || 'all'), 'source', ['all', 'user', 'meme', 'smart-money']));
+      appendOption(command, '--strategy-id', optionalIdentifier(args, 'strategyId'));
+      const strategyType = optionalString(args, 'strategyType', 20);
+      if (strategyType) appendOption(command, '--strategy-type', choice(strategyType, 'strategyType', ['meme-rush', 'fomo-call']));
+      appendOption(command, '--sort-by', choice(text(args?.sortBy || 'time'), 'sortBy', ['time', 'maxGain']));
+      const timeRange = optionalString(args, 'timeRange', 8);
+      if (timeRange) appendOption(command, '--time-range', choice(timeRange, 'timeRange', ['5m', '1h', '24h']));
+      return runBaw(command);
+    }
+    case 'binance_signal_strategies': {
+      const command = ['signal', 'strategy', 'list', '-c', signalChainId(args)];
+      if (args?.followed === true) command.push('--followed');
+      else if (args?.followed !== undefined && typeof args.followed !== 'boolean') throw new Error('followed must be a boolean');
+      const strategyType = optionalString(args, 'strategyType', 20);
+      if (strategyType) appendOption(command, '--type', choice(strategyType, 'strategyType', ['meme-rush', 'fomo-call']));
+      return runBaw(command);
+    }
+    case 'binance_signal_explore': {
+      const command = ['signal', 'explore', '-c', signalChainId(args)];
+      if (args?.backtestDays !== undefined) appendOption(command, '--backtest-days', boundedInteger(args, 'backtestDays', { min: 1, max: 365 }));
+      return runBaw(command);
+    }
+    case 'binance_signal_backtests': {
+      const command = ['signal', 'backtest', 'list', '-c', signalChainId(args)];
+      if (args?.all === true) command.push('--all');
+      else if (args?.all !== undefined && typeof args.all !== 'boolean') throw new Error('all must be a boolean');
+      if (args?.all !== true) {
+        appendOption(command, '-p', positiveInteger(args, 'page', 1, 10_000));
+        appendOption(command, '-s', positiveInteger(args, 'size', 20, 100));
+      }
+      if (args?.backtestDays !== undefined) appendOption(command, '--backtest-days', boundedInteger(args, 'backtestDays', { min: 1, max: 365 }));
+      return runBaw(command);
+    }
+    case 'binance_signal_backtest_detail': return runBaw(['signal', 'backtest', 'detail', '-c', signalChainId(args), '--strategy-id', identifier(args, 'strategyId')]);
+    case 'binance_signal_credits': return runBaw(['signal', 'credits']);
+    case 'binance_signal_wallet_groups': return runBaw(['signal', 'wallet-group', '-c', signalChainId(args)]);
+    case 'binance_signal_strategy_change_preview': return previewResult('signal-change', signalMutationParameters(args));
+    case 'binance_tracker_tokens': {
+      const command = ['tracker', 'token', '-c', trackerChainId(args)];
+      appendOption(command, '-g', optionalNumericId(args, 'groupId'));
+      const tagType = optionalString(args, 'tagType', 8);
+      if (tagType) appendOption(command, '--tag-type', choice(tagType, 'tagType', ['kol', 'smy']));
+      if (!args?.groupId && !tagType) throw new Error('groupId or tagType is required');
+      if (args?.groupId && tagType) throw new Error('groupId and tagType are mutually exclusive');
+      appendOption(command, '--token-size', positiveInteger(args, 'tokenSize', 70, 100));
+      appendOption(command, '--period', choice(text(args?.period || '24h'), 'period', ['1m', '5m', '1h', '4h', '24h']));
+      if (args?.filterRisk === true) command.push('--filter-risk');
+      else if (args?.filterRisk !== undefined && typeof args.filterRisk !== 'boolean') throw new Error('filterRisk must be a boolean');
+      return runBaw(command);
+    }
+    case 'binance_tracker_transactions': {
+      const command = ['tracker', 'tx', '-c', trackerChainId(args)];
+      appendOption(command, '-g', optionalNumericId(args, 'groupId'));
+      const tagType = optionalString(args, 'tagType', 8);
+      if (tagType) appendOption(command, '--tag-type', choice(tagType, 'tagType', ['kol', 'smy']));
+      if (!args?.groupId && !tagType) throw new Error('groupId or tagType is required');
+      if (args?.groupId && tagType) throw new Error('groupId and tagType are mutually exclusive');
+      const tradeSides = optionalString(args, 'tradeSides', 32);
+      if (tradeSides && !/^(?:19|11|29|21)(?:,(?:19|11|29|21))*$/u.test(tradeSides)) throw new Error('tradeSides is invalid');
+      appendOption(command, '--trade-side', tradeSides);
+      const minValue = optionalString(args, 'minValue', 40);
+      const maxValue = optionalString(args, 'maxValue', 40);
+      if (minValue) appendOption(command, '--min-value', decimal({ minValue }, 'minValue'));
+      if (maxValue) appendOption(command, '--max-value', decimal({ maxValue }, 'maxValue'));
+      if (minValue && maxValue && Number(minValue) > Number(maxValue)) throw new Error('minValue must not exceed maxValue');
+      if (args?.filterRisk === true) command.push('--filter-risk');
+      else if (args?.filterRisk !== undefined && typeof args.filterRisk !== 'boolean') throw new Error('filterRisk must be a boolean');
+      return runBaw(command);
+    }
+    case 'binance_tracker_realtime': {
+      const mode = choice(requiredString(args, 'mode', 20), 'mode', ['smart-money', 'kol', 'wallet', 'following', 'address']);
+      const duration = boundedInteger(args, 'durationSeconds', { defaultValue: 10, min: 5, max: 30 });
+      const command = ['tracker', 'ws'];
+      if (mode === 'smart-money') command.push('--smy');
+      else if (mode === 'wallet') {
+        const walletChains = requiredString(args, 'walletChains', 64).toUpperCase();
+        if (!/^(?:BSC|SOL|BASE|ETH|ROBINHOOD)(?:,(?:BSC|SOL|BASE|ETH|ROBINHOOD))*$/u.test(walletChains)) throw new Error('walletChains is invalid');
+        command.push('--wallet', walletChains);
+      } else {
+        const chain = trackerChainId(args);
+        command.push('-c', chain);
+        if (mode === 'kol') command.push('--kol');
+        else if (mode === 'following') command.push('--following');
+        else command.push('--address', addressForKnownChain(requiredString(args, 'address', 44), chain, 'address'));
+      }
+      return runBawEvents(command, duration);
+    }
+    case 'binance_tracker_followings': return runBaw(['tracker', 'follow', '-c', trackerChainId(args)]);
+    case 'binance_tracker_groups': {
+      const command = ['tracker', 'group', 'list', '-c', trackerChainId(args)];
+      if (args?.includeAllGroup === false) command.push('--no-all-group');
+      else if (args?.includeAllGroup !== undefined && typeof args.includeAllGroup !== 'boolean') throw new Error('includeAllGroup must be a boolean');
+      return runBaw(command);
+    }
+    case 'binance_tracker_addresses': {
+      const chain = trackerChainId(args);
+      const groupId = numericId(args, 'groupId');
+      const address = optionalString(args, 'address', 44);
+      const label = optionalDisplayText(args, 'label', 120);
+      if (address || label) {
+        const command = ['tracker', 'address', 'search', '-c', chain, '-g', groupId];
+        if (address) appendOption(command, '-a', addressForKnownChain(address, chain, 'address'));
+        appendOption(command, '-l', label);
+        return runBaw(command);
+      }
+      return runBaw(['tracker', 'address', 'list', '-c', chain, '-g', groupId, '--page', String(positiveInteger(args, 'page', 1, 10_000)), '--size', String(positiveInteger(args, 'size', 20, 100))]);
+    }
+    case 'binance_tracker_change_preview': return previewResult('tracker-change', trackerMutationParameters(args));
+    case 'binance_leaderboard_query': {
+      const command = ['leaderboard', 'query', '-c', leaderboardChainId(args)];
+      appendOption(command, '-p', choice(text(args?.period || '30d'), 'period', ['7d', '30d', '90d']));
+      appendOption(command, '-t', choice(text(args?.tag || 'ALL'), 'tag', ['ALL', 'KOL', 'MPC']));
+      appendOption(command, '--sort-by', choice(String(args?.sortBy ?? 0), 'sortBy', ['0', '20', '30', '50', '60', '70', '80']));
+      appendOption(command, '--order-by', choice(String(args?.orderBy ?? 0), 'orderBy', ['0', '1', '2']));
+      appendOption(command, '--page', boundedInteger(args, 'page', { defaultValue: 0, max: 10_000 }));
+      appendOption(command, '--size', positiveInteger(args, 'size', 20, 20));
+      return runBaw(command);
+    }
+    case 'binance_leaderboard_analyze': {
+      const chain = leaderboardChainId(args);
+      return runBaw(['leaderboard', 'analyze', '-c', chain, '-a', addressForKnownChain(requiredString(args, 'address', 44), chain, 'address'), '-p', choice(text(args?.period || '30d'), 'period', ['7d', '30d', '90d']), '--top-n', String(positiveInteger(args, 'topN', 1000, 5000))]);
+    }
+    case 'binance_leaderboard_alpha_radar': {
+      const chain = leaderboardChainId(args);
+      const tokens = addressList({ ...args, chainId: chain, addresses: requiredString(args, 'tokens', 4500) });
+      const matchCount = positiveInteger(args, 'matchCount', 1, 100);
+      if (matchCount > tokens.split(',').length) throw new Error('matchCount must not exceed the number of tokens');
+      return runBaw(['leaderboard', 'alpha-radar', '-c', chain, '-t', tokens, '-m', String(matchCount), '-p', choice(text(args?.period || '30d'), 'period', ['7d', '30d', '90d']), '--page', String(boundedInteger(args, 'page', { defaultValue: 0, max: 10_000 })), '--size', String(positiveInteger(args, 'size', 20, 20))]);
+    }
+    case 'binance_leaderboard_configs': {
+      const type = choice(requiredString(args, 'type', 20), 'type', ['preset', 'alpha-radar']);
+      if (type === 'preset') return runBaw(['leaderboard', 'preset', 'list']);
+      return runBaw(['leaderboard', 'alpha-radar-config', 'list', '-c', leaderboardChainId(args)]);
+    }
+    case 'binance_leaderboard_config_preview': return previewResult('leaderboard-config', leaderboardConfigParameters(args));
+    case 'binance_x402_resource_payment_preview': {
+      const request = x402RequestParameters(args);
+      request.resourceUrl = await publicHttpsUrl(request.resourceUrl);
+      const initialResponse = await requestX402Resource(request);
+      if (initialResponse.status !== 402) {
+        if (initialResponse.status >= 200 && initialResponse.status < 300) return { resourceAlreadyAvailable: true, response: initialResponse };
+        throw new Error(`x402 resource returned HTTP ${initialResponse.status} instead of a payment challenge`);
+      }
+      const requirements = paymentRequirements({ paymentRequirements: paymentPayloadFromResponse(initialResponse) });
+      const requirementsResource = text(JSON.parse(requirements)?.resource?.url);
+      if (requirementsResource && new URL(requirementsResource).toString() !== request.resourceUrl) {
+        throw new Error('x402 PaymentRequired resource URL does not match the requested resource');
+      }
+      const optionsResult = await runBaw(['x402-payment', 'preview', '--paymentRequirements', requirements]);
+      if (optionsResult?.success === false) return optionsResult;
+      const data = x402Data(optionsResult);
+      const paymentId = identifier(data, 'paymentId', 256);
+      const selectedIndex = boundedInteger(args, 'selectedIndex', { min: 1, max: 1000 });
+      const option = Array.isArray(data?.options) ? data.options.find((entry) => Number(entry?.index) === selectedIndex) : null;
+      if (!option) throw new Error('selectedIndex is not present in the x402 payment options');
+      if (option.status !== 'READY_TO_SIGN') throw new Error(`x402 option is not ready to sign: ${text(option.status) || 'unknown status'}`);
+      return previewResult('x402-resource', { request, paymentId, selectedIndex }, { option, initialStatus: initialResponse.status });
+    }
     case 'binance_x402_payment_options': return runBaw(['x402-payment', 'preview', '--paymentRequirements', paymentRequirements(args)]);
     case 'binance_x402_payment_sign_preview': {
       const parameters = {
         paymentId: identifier(args, 'paymentId', 256),
-        selectedIndex: boundedInteger(args, 'selectedIndex', { min: 0, max: 1000 }),
+        selectedIndex: boundedInteger(args, 'selectedIndex', { min: 1, max: 1000 }),
       };
       return previewResult('x402-sign', parameters);
     }
@@ -1088,6 +1699,10 @@ async function handleTool(name, args) {
     case 'binance_defi_action_execute':
     case 'binance_contract_call_execute':
     case 'binance_sign_message_execute':
+    case 'binance_signal_strategy_change_execute':
+    case 'binance_tracker_change_execute':
+    case 'binance_leaderboard_config_execute':
+    case 'binance_x402_resource_payment_execute':
     case 'binance_x402_payment_sign_execute': {
       confirmation(args);
       const preview = decodePreview(requiredString(args, 'previewToken', MAX_PREVIEW_TOKEN_LENGTH));
@@ -1105,24 +1720,71 @@ async function handleTool(name, args) {
       else if (name === 'binance_defi_action_execute') expected = preview.operation.startsWith('defi-') ? preview.operation : '';
       else if (name === 'binance_contract_call_execute') expected = 'contract-call';
       else if (name === 'binance_sign_message_execute') expected = 'sign-message';
+      else if (name === 'binance_signal_strategy_change_execute') expected = 'signal-change';
+      else if (name === 'binance_tracker_change_execute') expected = 'tracker-change';
+      else if (name === 'binance_leaderboard_config_execute') expected = 'leaderboard-config';
+      else if (name === 'binance_x402_resource_payment_execute') expected = 'x402-resource';
       else if (name === 'binance_x402_payment_sign_execute') expected = 'x402-sign';
       if (preview.operation !== expected) throw new Error(`preview operation must be ${expected}`);
       await consumePreview(preview);
-      if (expected === 'swap') return runBaw(swapArgs(preview.parameters), WRITE_TIMEOUT_MS);
-      if (expected === 'limit-order') return runBaw(limitArgs(preview.parameters), WRITE_TIMEOUT_MS);
-      if (expected === 'transfer') return runBaw(sendArgs(preview.parameters), WRITE_TIMEOUT_MS);
-      if (expected === 'transaction-cancel') return runBaw(pendingTransactionArgs('cancel', preview.parameters), WRITE_TIMEOUT_MS);
-      if (expected === 'transaction-speedup') return runBaw(pendingTransactionArgs('speed-up', preview.parameters), WRITE_TIMEOUT_MS);
-      if (expected === 'approval-revoke') return runBaw(approvalArgs('revoke', preview.parameters), WRITE_TIMEOUT_MS);
+      if (expected === 'signal-change') {
+        const execution = await runBaw(signalMutationArgs(preview.parameters), WRITE_TIMEOUT_MS);
+        let verificationCommand = ['signal', 'strategy', 'list', '-c', preview.parameters.chainId];
+        if (preview.parameters.action === 'schedule') verificationCommand = ['signal', 'backtest', 'schedule', '-c', preview.parameters.chainId, '--job-id', preview.parameters.jobId];
+        else if (preview.parameters.action === 'backtest-retry') verificationCommand = ['signal', 'backtest', 'list', '-c', preview.parameters.chainId, '--all'];
+        const verification = await runBaw(verificationCommand).catch((error) => ({ error: error instanceof Error ? error.message : String(error) }));
+        return { execution, verification };
+      }
+      if (expected === 'tracker-change') {
+        const execution = await runBaw(trackerMutationArgs(preview.parameters), WRITE_TIMEOUT_MS);
+        let verificationCommand = ['tracker', 'group', 'list', '-c', preview.parameters.chainId];
+        if (['address-follow', 'address-unfollow'].includes(preview.parameters.action)) verificationCommand = ['tracker', 'follow', '-c', preview.parameters.chainId];
+        else if (preview.parameters.action.startsWith('address-')) verificationCommand = ['tracker', 'address', 'list', '-c', preview.parameters.chainId, '-g', preview.parameters.groupId, '--page', '1', '--size', '100'];
+        const verification = await runBaw(verificationCommand).catch((error) => ({ error: error instanceof Error ? error.message : String(error) }));
+        return { execution, verification };
+      }
+      if (expected === 'leaderboard-config') {
+        const execution = await runBaw(leaderboardConfigArgs(preview.parameters), WRITE_TIMEOUT_MS);
+        const verification = preview.parameters.action === 'preset-save'
+          ? await runBaw(['leaderboard', 'preset', 'list']).catch((error) => ({ error: error instanceof Error ? error.message : String(error) }))
+          : await runBaw(['leaderboard', 'alpha-radar-config', 'list', '-c', preview.parameters.chainId]).catch((error) => ({ error: error instanceof Error ? error.message : String(error) }));
+        return { execution, verification };
+      }
+      if (expected === 'x402-resource') {
+        const signing = await runBaw(['x402-payment', 'sign', '--paymentId', preview.parameters.paymentId, '--selectedIndex', String(preview.parameters.selectedIndex)], WRITE_TIMEOUT_MS);
+        if (signing?.success === false) return signing;
+        const signed = x402Data(signing);
+        const headerName = requiredString(signed, 'paymentHeaderName', 64).toUpperCase();
+        if (headerName !== 'PAYMENT-SIGNATURE') throw new Error('Binance returned an unsupported x402 payment header');
+        const headerValue = requiredString(signed, 'paymentHeaderValue', 131_072);
+        let approvalVerification;
+        const approveTxHash = optionalString(signed, 'approveTxHash', 128);
+        if (approveTxHash) approvalVerification = await waitForApproval(approveTxHash);
+        const response = await requestX402Resource(preview.parameters.request, { name: headerName, value: headerValue });
+        const success = response.status >= 200 && response.status < 300;
+        return {
+          success,
+          signing,
+          ...(approvalVerification ? { approvalVerification } : {}),
+          response,
+          ...(!success ? { error: `Paid x402 resource replay returned HTTP ${response.status}; FnzSafe did not retry it` } : {}),
+        };
+      }
+      if (expected === 'swap') return withExecutionVerification(expected, await runBaw(swapArgs(preview.parameters), WRITE_TIMEOUT_MS), preview.parameters);
+      if (expected === 'limit-order') return withExecutionVerification(expected, await runBaw(limitArgs(preview.parameters), WRITE_TIMEOUT_MS), preview.parameters);
+      if (expected === 'transfer') return withExecutionVerification(expected, await runBaw(sendArgs(preview.parameters), WRITE_TIMEOUT_MS), preview.parameters);
+      if (expected === 'transaction-cancel') return withExecutionVerification(expected, await runBaw(pendingTransactionArgs('cancel', preview.parameters), WRITE_TIMEOUT_MS), preview.parameters);
+      if (expected === 'transaction-speedup') return withExecutionVerification(expected, await runBaw(pendingTransactionArgs('speed-up', preview.parameters), WRITE_TIMEOUT_MS), preview.parameters);
+      if (expected === 'approval-revoke') return withExecutionVerification(expected, await runBaw(approvalArgs('revoke', preview.parameters), WRITE_TIMEOUT_MS), preview.parameters);
       if (expected === 'signout') return runBaw(['auth', 'signout'], WRITE_TIMEOUT_MS);
-      if (expected === 'prediction-place') return runBaw(predictionPlaceArgs(preview.parameters), WRITE_TIMEOUT_MS);
-      if (expected === 'prediction-cancel') return runBaw(['prediction', 'trade', 'cancel', '--orderIds', preview.parameters.orderIds], WRITE_TIMEOUT_MS);
-      if (expected === 'prediction-redeem') return runBaw(['prediction', 'trade', 'redeem', '--tokenIds', preview.parameters.tokenIds, '--binanceChainId', preview.parameters.chainId], WRITE_TIMEOUT_MS);
-      if (expected.startsWith('defi-')) return runBaw(defiArgs(preview.parameters), WRITE_TIMEOUT_MS);
-      if (expected === 'contract-call') return runBaw(['contract-call', 'execute', '--requestId', preview.parameters.requestId], WRITE_TIMEOUT_MS);
-      if (expected === 'sign-message') return runBaw(['sign-message', 'execute', '--requestId', preview.parameters.requestId], WRITE_TIMEOUT_MS);
+      if (expected === 'prediction-place') return withExecutionVerification(expected, await runBaw(predictionPlaceArgs(preview.parameters), WRITE_TIMEOUT_MS), preview.parameters);
+      if (expected === 'prediction-cancel') return withExecutionVerification(expected, await runBaw(['prediction', 'trade', 'cancel', '--orderIds', preview.parameters.orderIds], WRITE_TIMEOUT_MS), preview.parameters);
+      if (expected === 'prediction-redeem') return withExecutionVerification(expected, await runBaw(['prediction', 'trade', 'redeem', '--tokenIds', preview.parameters.tokenIds, '--binanceChainId', preview.parameters.chainId], WRITE_TIMEOUT_MS), preview.parameters);
+      if (expected.startsWith('defi-')) return withExecutionVerification(expected, await runBaw(defiArgs(preview.parameters), WRITE_TIMEOUT_MS), preview.parameters);
+      if (expected === 'contract-call') return withExecutionVerification(expected, await runBaw(['contract-call', 'execute', '--requestId', preview.parameters.requestId], WRITE_TIMEOUT_MS), preview.parameters);
+      if (expected === 'sign-message') return withExecutionVerification(expected, await runBaw(['sign-message', 'execute', '--requestId', preview.parameters.requestId], WRITE_TIMEOUT_MS), preview.parameters);
       if (expected === 'x402-sign') return runBaw(['x402-payment', 'sign', '--paymentId', preview.parameters.paymentId, '--selectedIndex', String(preview.parameters.selectedIndex)], WRITE_TIMEOUT_MS);
-      return runBaw(['limit-order', 'cancel', '--strategyId', requiredString(preview.parameters, 'strategyId', 64)], WRITE_TIMEOUT_MS);
+      return withExecutionVerification('limit-cancel', await runBaw(['limit-order', 'cancel', '--strategyId', requiredString(preview.parameters, 'strategyId', 64)], WRITE_TIMEOUT_MS), preview.parameters);
     }
     default: throw new Error(`Unknown Binance Web3 tool: ${name}`);
   }
@@ -1131,13 +1793,13 @@ async function handleTool(name, args) {
 async function runServer() {
   const server = new Server(
     { name: 'fnzsafe-binance-web3-wallet', version: '0.1.0' },
-    { capabilities: { tools: {} }, instructions: 'Binance Agentic Wallet, Prediction, DeFi, contract calls, EIP-712, and x402 through FnzSafe. Every write or signature requires a signed preview and a later user message exactly equal to CONFIRM. Never retry a write automatically.' },
+    { capabilities: { tools: {} }, instructions: 'Binance Agentic Wallet trading, signals, tracker, leaderboard, Prediction, DeFi, contract calls, EIP-712, and x402 through FnzSafe. Every write or signature requires a signed preview and a later user message exactly equal to CONFIRM. Verify order or transaction state after execution and never retry a write automatically.' },
   );
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     try {
       const result = await handleTool(request.params.name, request.params.arguments || {});
-      return jsonResult(result, result?.success === false);
+      return jsonResult(result, resultFailed(result));
     } catch (error) {
       return jsonResult({ error: error instanceof Error ? error.message : String(error) }, true);
     }
@@ -1189,9 +1851,34 @@ async function selfTest() {
     'binance_defi_action_execute',
     'binance_contract_call_execute',
     'binance_sign_message_execute',
+    'binance_signal_strategy_change_execute',
+    'binance_tracker_change_execute',
+    'binance_leaderboard_config_execute',
+    'binance_x402_resource_payment_execute',
     'binance_x402_payment_sign_execute',
   ];
   if (requiredTools.some((name) => !tools.some((tool) => tool.name === name))) throw new Error('Binance Web3 extended tools are missing');
+  const signalChange = signalMutationParameters({ action: 'schedule', chainId: '56', jobId: 'job-1', interval: '4H' });
+  if (!signalMutationArgs(signalChange).includes('--interval')) throw new Error('Binance signal command construction failed');
+  const trackerChange = trackerMutationParameters({ action: 'group-create', chainId: 'CT_501', name: 'Research' });
+  if (!trackerMutationArgs(trackerChange).includes('create')) throw new Error('Binance tracker command construction failed');
+  const trackerUpdate = trackerMutationParameters({ action: 'address-update', chainId: '56', groupId: '1', address: `0x${'a'.repeat(40)}`, label: 'Research' });
+  if (trackerMutationArgs(trackerUpdate).includes('-g')) throw new Error('Binance tracker address update used an unsupported group option');
+  if (!isPrivateAddress('127.0.0.1') || !isPrivateAddress('100.64.0.1') || !isPrivateAddress('2001:db8::1')
+    || !isPrivateAddress('2002:7f00:1::') || isPrivateAddress('8.8.8.8') || isPrivateAddress('2606:4700:4700::1111')) {
+    throw new Error('x402 private-address filter self-test failed');
+  }
+  if (trackerChainId({ chainId: '4663' }) !== '4663' || leaderboardChainId({ chainId: 'CT_501' }) !== 'CT_501') {
+    throw new Error('Binance tracker or leaderboard chain validation failed');
+  }
+  rejects(() => trackerMutationParameters({ action: 'group-update', chainId: '56', groupId: '1abc', name: 'Research' }), 'ambiguous tracker group ID');
+  rejects(() => leaderboardChainId({ chainId: '4663' }), 'unsupported leaderboard chain');
+  rejects(() => x402RequestParameters({ resourceUrl: 'https://example.com', accept: 'text/plain\r\nx-test: value', selectedIndex: 1 }), 'x402 header injection');
+  rejects(() => boundedInteger({ selectedIndex: 0 }, 'selectedIndex', { min: 1, max: 1000 }), 'zero x402 selectedIndex');
+  if (transactionStatus({ success: true, data: { status: 'pending' } }) !== 'PENDING'
+    || transactionStatus({ success: false, error: { message: 'SUCCESS is only a field name' } }) !== '') {
+    throw new Error('x402 approval status parsing failed');
+  }
   const prediction = predictionQuoteParameters({ chainId: '137', tokenId: 'outcome_1', marketTopicId: 'topic_1', side: 'buy', amount: '10', orderType: 'MARKET' });
   if (!predictionQuoteArgs(prediction).includes('137')) throw new Error('Prediction quote command construction failed');
   const defi = defiActionParameters({

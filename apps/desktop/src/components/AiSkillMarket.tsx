@@ -40,6 +40,9 @@ type BinanceSkill = {
   name: string;
   description: string;
   version: string;
+  requiredCliVersion: string;
+  cliVersion: string;
+  cliCompatible: boolean;
   sourcePath: string;
   collection: "binance-web3" | "binance";
   runtimeMode: "knowledge";
@@ -94,7 +97,7 @@ const COPY = {
     installing: "安装中", refreshing: "正在同步币安技能", refresh: "刷新币安技能", unavailable: "仅桌面版支持同步和安装",
     syncFailed: "币安技能同步失败", installFailed: "技能安装失败", installComplete: "技能安装完成", updated: "技能更新完成",
     version: "版本", synced: "同步于", commit: "提交", remoteEmpty: "币安官方技能列表为空",
-    knowledge: "知识型", noRemoteCode: "仅安装文档，不执行远程脚本", exchange: "Binance", web3: "Binance Web3",
+    knowledge: "知识型", noRemoteCode: "仅安装文档，不执行远程脚本", exchange: "Binance", web3: "Binance Web3", cliReady: "CLI 兼容", cliRequired: "需要 CLI",
   },
   en: {
     all: "All", market: "Market", defi: "DeFi", risk: "Risk", intelligence: "Intelligence", research: "Research", role: "Roles",
@@ -105,7 +108,7 @@ const COPY = {
     installing: "Installing", refreshing: "Syncing Binance skills", refresh: "Refresh Binance skills", unavailable: "Sync and installation require the desktop app",
     syncFailed: "Binance skill sync failed", installFailed: "Skill installation failed", installComplete: "Skill installed", updated: "Skill updated",
     version: "Version", synced: "Synced", commit: "Commit", remoteEmpty: "No official Binance skills are available",
-    knowledge: "Knowledge", noRemoteCode: "Documentation only; remote scripts are never executed", exchange: "Binance", web3: "Binance Web3",
+    knowledge: "Knowledge", noRemoteCode: "Documentation only; remote scripts are never executed", exchange: "Binance", web3: "Binance Web3", cliReady: "CLI compatible", cliRequired: "Requires CLI",
   },
 } as const;
 
@@ -124,6 +127,7 @@ export function AiSkillMarket({ locale, desktop }: { locale: AiSkillLocale; desk
   const [installing, setInstalling] = useState<string | null>(null);
   const [syncError, setSyncError] = useState("");
   const initialized = useRef(false);
+  const syncInFlight = useRef(false);
   const copy = COPY[locale];
   const categories: Array<{ id: "all" | AiSkillCategory; label: string }> = [
     { id: "all", label: copy.all },
@@ -148,7 +152,8 @@ export function AiSkillMarket({ locale, desktop }: { locale: AiSkillLocale; desk
   const installedCount = catalog?.skills.filter((skill) => skill.installed).length ?? 0;
 
   const syncCatalog = useCallback(async (force: boolean) => {
-    if (!desktop) return;
+    if (!desktop || syncInFlight.current) return;
+    syncInFlight.current = true;
     setLoading(true);
     setSyncError("");
     try {
@@ -158,6 +163,7 @@ export function AiSkillMarket({ locale, desktop }: { locale: AiSkillLocale; desk
       setSyncError(message);
       if (force) toast.error(`${COPY[locale].syncFailed}: ${message}`);
     } finally {
+      syncInFlight.current = false;
       setLoading(false);
     }
   }, [desktop, locale]);
@@ -166,6 +172,17 @@ export function AiSkillMarket({ locale, desktop }: { locale: AiSkillLocale; desk
     if (!desktop || initialized.current) return;
     initialized.current = true;
     void syncCatalog(false);
+  }, [desktop, syncCatalog]);
+
+  useEffect(() => {
+    if (!desktop) return;
+    const refresh = () => void syncCatalog(false);
+    const timer = window.setInterval(refresh, 60 * 60 * 1000);
+    window.addEventListener("focus", refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+    };
   }, [desktop, syncCatalog]);
 
   const installSkill = useCallback(async (skill: BinanceSkill) => {
@@ -264,6 +281,7 @@ export function AiSkillMarket({ locale, desktop }: { locale: AiSkillLocale; desk
                     <div className="mt-auto flex flex-wrap items-end justify-between gap-3 border-t border-white/[0.08] pt-3">
                       <div className="text-[11px] text-gray-500">
                         <span>{skill.collection === "binance-web3" ? copy.web3 : copy.exchange} · {copy.version} {skill.version}</span>
+                        {skill.requiredCliVersion && <span className={`ml-2 ${skill.cliCompatible ? "text-emerald-300" : "text-red-300"}`}>{skill.cliCompatible ? copy.cliReady : copy.cliRequired} baw ≥ {skill.requiredCliVersion} ({skill.cliVersion})</span>}
                         {skill.installed && <span className="ml-2 inline-flex items-center gap-1 text-emerald-300"><PackageCheck className="h-3.5 w-3.5" />{copy.installed}</span>}
                         {skill.hasRemoteCode && <span className="mt-1 block text-amber-200/70">{copy.noRemoteCode}</span>}
                       </div>

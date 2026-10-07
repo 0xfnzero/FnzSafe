@@ -1,11 +1,11 @@
 ---
 name: binance-web3-wallet-trading
-description: Use Binance Agentic Wallet for QR sign-in, on-chain trading, Prediction, DeFi, contract calls, EIP-712 signatures, and x402 payments.
+description: Use Binance Agentic Wallet for QR sign-in, on-chain trading, signals, wallet tracking, leaderboards, Prediction, DeFi, contract calls, EIP-712 signatures, and x402 payments.
 ---
 
 # Binance Web3 Wallet Trading
 
-Use the `binance_web3_*`, `binance_prediction_*`, `binance_defi_*`, `binance_contract_*`, `binance_sign_*`, and `binance_x402_*` tools for Binance Agentic Wallet operations. The wallet uses Binance MPC Keyless security and QR sign-in through the Binance App. Never request an API key, API secret, private key, seed phrase, password, session ID, or raw signature for these tools.
+Use the `binance_web3_*`, `binance_signal_*`, `binance_tracker_*`, `binance_leaderboard_*`, `binance_prediction_*`, `binance_defi_*`, `binance_contract_*`, `binance_sign_*`, and `binance_x402_*` tools for Binance Agentic Wallet operations. The wallet uses Binance MPC Keyless security and QR sign-in through the Binance App. Never request an API key, API secret, private key, seed phrase, password, session ID, or raw signature for these tools.
 
 Before a wallet operation, call `binance_web3_wallet_status`. If disconnected, call `binance_web3_wallet_signin`, show the official sign-in URL and pairing code, then call `binance_web3_wallet_verify` only after the user approves in the Binance App. Security rules are configured only in the Binance App; use `binance_web3_wallet_settings` and `binance_web3_wallet_quota` to read them.
 
@@ -16,6 +16,16 @@ Every state-changing action or signature has two FnzSafe steps. First call the m
 For a swap, require the exact chain, full source and destination token addresses, source amount, slippage, MEV setting, and gas level. Supported wallet chains are BSC `56`, Ethereum `1`, Base `8453`, and Solana `CT_501`. Resolve unknown token addresses from a reliable source and never infer an address from a symbol. Run `binance_token_audit` for non-native trade tokens before previewing. If the audit is unavailable or reports material risk, stop and explain the result.
 
 Use `binance_web3_swap_quote` for quote-only requests. A real market swap uses `binance_web3_swap_preview` and `binance_web3_swap_execute`. Limit orders are supported only on BSC and Solana. Conditional instructions must use the limit-order tools and must never fall back to an immediate swap. Transfers, limit-order cancellations, EVM pending-transaction cancel/speed-up, token approval revocations, and wallet sign-out follow the same preview and later-confirmation rule.
+
+After an execution, inspect the returned `verification` block. If it is absent or `verificationPending` is true, query the matching order or transaction-history tool by the returned identifier. Never claim a fill or final settlement from submission success alone.
+
+## Signals, tracker, and leaderboard
+
+Use `binance_signal_feed` for Smart Money, platform, and user-strategy signals. Treat every signal as a fallible observation, not a recommendation. State the chain, source, trigger time, direction, freshness/status, max gain, exit rate, and Smart Money count when available. Before proposing a trade, resolve the exact contract, query current market data, run the token audit, and obtain a fresh quote.
+
+Use `binance_tracker_*` for group, followed-wallet, token, and transaction monitoring. `binance_tracker_realtime` collects only a bounded 5-30 second event window; present it as a snapshot, not a continuously running daemon. Use `binance_leaderboard_query` to find candidates, `binance_leaderboard_analyze` for the six-dimension address score, and `binance_leaderboard_alpha_radar` for token-holder reverse lookup. Rankings and wallet behavior are historical evidence, not guarantees of future performance.
+
+Creating or changing a signal strategy, tracker group/address/follow state, backtest schedule, or leaderboard configuration requires the matching `*_preview` tool and a later exact `CONFIRM` before the matching `*_execute` tool. A copied strategy can count against Binance limits; explain the copy when a followed strategy is not owned by the user. Copy-trading automation is not autonomous by default: each resulting order must still use the wallet quote, preview, and later-confirmation flow unless the user has separately configured and authorized a bounded automation policy.
 
 ## Prediction
 
@@ -37,6 +47,6 @@ Only EIP-712 typed-data signatures are supported. Explain the domain, chain ID, 
 
 ## x402
 
-Use `binance_x402_payment_options` only with a PaymentRequired JSON or base64 JSON payload obtained from the user's requested service. Show the selected chain, asset, amount, payee, approval requirement, and expiry. Signing an x402 option can authorize payment and may dispatch a Permit2 approval, so it requires `binance_x402_payment_sign_preview` and a later exact `CONFIRM` before `binance_x402_payment_sign_execute`.
+Prefer `binance_x402_resource_payment_preview` for a user-named public HTTPS resource. It binds the original request, HTTP 402 challenge, selected option, and replay target into one preview. Show the selected chain, asset, amount, payee, approval requirement, and expiry. After a later exact `CONFIRM`, `binance_x402_resource_payment_execute` signs once, waits for any required approval, and replays the exact bound request once; never retry it automatically. Use the lower-level options/sign tools only when the user already supplied a PaymentRequired payload and resource replay is intentionally handled elsewhere.
 
 Return success only when the Binance tool reports success, and include the order, strategy, request, or transaction identifier. Never broaden a request into a different chain, token, protocol action, contract call, or signature.

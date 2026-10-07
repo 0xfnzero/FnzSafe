@@ -29,8 +29,8 @@
       "category": "market",
       "icon": "coins",
       "name": { "zh": "Binance Web3 链上交易", "en": "Binance Web3 On-chain Trading" },
-      "description": { "zh": "通过 Binance Agentic Wallet 的 MPC 钱包完成多链交易、Prediction、DeFi、合约调用、EIP-712 签名与 x402 支付，所有写操作均需逐笔确认。", "en": "Use Binance Agentic Wallet MPC security for multichain trading, Prediction, DeFi, contract calls, EIP-712 signatures, and x402 payments with per-action confirmation." },
-      "useCases": { "zh": ["扫码连接 Agentic Wallet", "多链 DEX 与 Prediction 交易", "DeFi 仓位管理", "受控合约调用与 x402 支付"], "en": ["QR-connect Agentic Wallet", "Multichain DEX and Prediction trading", "DeFi position management", "Controlled contract calls and x402 payments"] },
+      "description": { "zh": "通过 Binance Agentic Wallet 完成多链交易、链上信号、钱包追踪、排行榜、Prediction、DeFi、合约调用与 x402 支付，所有写操作均需逐笔确认。", "en": "Use Binance Agentic Wallet for multichain trading, on-chain signals, wallet tracking, leaderboards, Prediction, DeFi, contract calls, and x402 payments with per-action confirmation." },
+      "useCases": { "zh": ["扫码连接 Agentic Wallet", "多链 DEX 与 Prediction 交易", "信号、聪明钱与钱包追踪", "DeFi、合约调用与 x402 支付"], "en": ["QR-connect Agentic Wallet", "Multichain DEX and Prediction trading", "Signals, smart money, and wallet tracking", "DeFi, contract calls, and x402 payments"] },
       "sources": ["Binance Agentic Wallet", "Binance Web3 Wallet", "Binance Skills Hub"],
       "tools": [
         "binance_web3_wallet_status", "binance_web3_wallet_signin", "binance_web3_wallet_verify", "binance_web3_wallet_signout_preview", "binance_web3_wallet_signout_execute",
@@ -44,7 +44,10 @@
         "binance_prediction_trade_quote", "binance_prediction_trade_place_preview", "binance_prediction_trade_place_execute", "binance_prediction_trade_cancel_preview", "binance_prediction_trade_cancel_execute", "binance_prediction_trade_redeem_preview", "binance_prediction_trade_redeem_execute",
         "binance_defi_protocols", "binance_defi_protocol", "binance_defi_investments", "binance_defi_investment", "binance_defi_positions", "binance_defi_action_preview", "binance_defi_action_execute",
         "binance_contract_call_preview", "binance_contract_call_execute", "binance_sign_message_preview", "binance_sign_message_execute", "binance_sign_message_result", "binance_sign_message_history",
-        "binance_x402_payment_options", "binance_x402_payment_sign_preview", "binance_x402_payment_sign_execute"
+        "binance_signal_feed", "binance_signal_strategies", "binance_signal_explore", "binance_signal_backtests", "binance_signal_backtest_detail", "binance_signal_credits", "binance_signal_wallet_groups", "binance_signal_strategy_change_preview", "binance_signal_strategy_change_execute",
+        "binance_tracker_tokens", "binance_tracker_transactions", "binance_tracker_realtime", "binance_tracker_followings", "binance_tracker_groups", "binance_tracker_addresses", "binance_tracker_change_preview", "binance_tracker_change_execute",
+        "binance_leaderboard_query", "binance_leaderboard_analyze", "binance_leaderboard_alpha_radar", "binance_leaderboard_configs", "binance_leaderboard_config_preview", "binance_leaderboard_config_execute",
+        "binance_x402_resource_payment_preview", "binance_x402_resource_payment_execute", "binance_x402_payment_options", "binance_x402_payment_sign_preview", "binance_x402_payment_sign_execute"
       ]
     },
     {

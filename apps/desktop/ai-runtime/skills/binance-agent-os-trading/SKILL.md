@@ -24,4 +24,6 @@ For every new order:
 
 For cancellation, use the same two-turn sequence with `binance_spot_cancel_preview` and `binance_spot_cancel_execute`.
 
+After any official MCP or Spot API execution, treat the response as submission rather than final settlement. Query the exact order, transfer, position, and updated balances using read-only tools before claiming that it filled or finalized. If the execution response does not include a usable identifier, report that verification is incomplete instead of guessing.
+
 Never retry an execution timeout or error automatically. The order may already exist; query it by the returned or previewed client order ID first. Never split an order to evade the configured single-order limit. FnzSafe's Exchange API integration deliberately exposes no withdrawal endpoint, arbitrary signed request, margin, futures, Convert, or Pay capability.
