@@ -10271,6 +10271,12 @@ export default function Home() {
     });
   };
 
+  const openBinanceUrl = (url: string) => {
+    void openExternalUrl(url).catch((error) => {
+      toast.error(errorMessage(error, aiSkillLocale === "zh" ? "无法打开 Binance 页面" : "Unable to open Binance page"));
+    });
+  };
+
   const resetResearchAiConversation = () => {
     twitterAiRequestIdRef.current += 1;
     twitterAiBusyRef.current = false;
@@ -23627,6 +23633,7 @@ export default function Home() {
                     onDelete={() => void deleteBinanceAgentCredentials()}
                     onTest={() => void testBinanceAgentCredentials()}
                     onOpenDocs={openBinanceAgentDocs}
+                    onOpenUrl={openBinanceUrl}
                   />
                 )}
 

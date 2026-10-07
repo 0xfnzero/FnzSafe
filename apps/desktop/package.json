@@ -53,10 +53,11 @@
     "@types/react-dom": "^19",
     "autoprefixer": "^10.4.27",
     "brace-expansion": "file:vendor/brace-expansion-compat",
-    "brace-expansion-upstream": "npm:brace-expansion@5.0.9",
+    "brace-expansion-upstream": "npm:brace-expansion@5.0.12",
     "eslint": "^9",
     "eslint-config-next": "^15.5.21",
     "postcss": "^8.5.23",
+    "source-map-js": "^1.2.2",
     "tailwindcss": "^3.4.19",
     "tailwindcss-animate": "^1.0.7",
     "typescript": "^5"
@@ -65,7 +66,7 @@
     "brace-expansion": "$brace-expansion",
     "postcss": "$postcss",
     "next": {
-      "sharp": "0.35.4"
+      "sharp": "0.35.5"
     }
   }
 }

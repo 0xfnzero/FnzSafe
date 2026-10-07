@@ -16,9 +16,11 @@ const PREVIEW_TTL_MS = 5 * 60 * 1000;
 const READ_TIMEOUT_MS = 30_000;
 const WRITE_TIMEOUT_MS = 120_000;
 const CHAIN_IDS = ['56', '1', '8453', 'CT_501'];
+const EVM_CHAIN_IDS = ['56', '1', '8453'];
 const LIMIT_CHAIN_IDS = ['56', 'CT_501'];
 const GAS_LEVELS = ['LOW', 'MEDIUM', 'HIGH'];
 const EVM_ADDRESS = /^0x[0-9a-fA-F]{40}$/u;
+const EVM_TX_HASH = /^0x[0-9a-fA-F]{64}$/u;
 const SOLANA_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/u;
 const DECIMAL = /^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,18})?$/u;
 const SENSITIVE_KEY = /^(?:accessToken|apiKey|authorization|clientId|cookie|idToken|mnemonic|password|privateKey|refreshToken|secret|secretKey|seed|sessionId|signature)$/iu;
@@ -265,6 +267,28 @@ function sendParameters(args) {
   };
 }
 
+function pendingTransactionParameters(args, { speedUp = false } = {}) {
+  const txHash = requiredString(args, 'txHash', 66);
+  if (!EVM_TX_HASH.test(txHash)) throw new Error('txHash must be a 32-byte EVM transaction hash');
+  const requestedChain = optionalString(args, 'chainId', 16);
+  const parameters = {
+    txHash,
+    ...(requestedChain ? { chainId: choice(requestedChain, 'chainId', EVM_CHAIN_IDS) } : {}),
+  };
+  if (speedUp) parameters.level = choice(text(args?.level || 'HIGH').toUpperCase(), 'level', ['LOW', 'HIGH']);
+  return parameters;
+}
+
+function approvalParameters(args) {
+  const chain = choice(requiredString(args, 'chainId', 16), 'chainId', EVM_CHAIN_IDS);
+  return {
+    chainId: chain,
+    tokenContract: tokenAddress(args?.tokenContract, chain, 'tokenContract'),
+    spender: tokenAddress(args?.spender, chain, 'spender'),
+    type: choice(requiredString(args, 'type', 16).toLowerCase(), 'type', ['approve', 'permit2']),
+  };
+}
+
 function swapArgs(parameters, command = 'swap') {
   return [
     'market-order', command,
@@ -302,6 +326,24 @@ function sendArgs(parameters) {
   ];
 }
 
+function pendingTransactionArgs(operation, parameters) {
+  return [
+    'wallet', operation, parameters.txHash,
+    ...(operation === 'speed-up' ? ['--level', parameters.level] : []),
+    ...(parameters.chainId ? ['--binanceChainId', parameters.chainId] : []),
+  ];
+}
+
+function approvalArgs(operation, parameters) {
+  return [
+    'approvals', operation,
+    '--binanceChainId', parameters.chainId,
+    '--tokenContract', parameters.tokenContract,
+    '--spender', parameters.spender,
+    '--type', parameters.type,
+  ];
+}
+
 function confirmation(args) {
   if (args?.confirmation !== 'CONFIRM' || process.env.FNZSAFE_BINANCE_USER_CONFIRMED !== '1') {
     throw new Error('A real Binance Web3 action requires a new user message containing exactly CONFIRM.');
@@ -309,7 +351,10 @@ function confirmation(args) {
 }
 
 const chainProperty = { type: 'string', enum: CHAIN_IDS };
+const evmChainProperty = { type: 'string', enum: EVM_CHAIN_IDS };
 const tokenProperty = { type: 'string', minLength: 32, maxLength: 44 };
+const evmAddressProperty = { type: 'string', pattern: '^0x[0-9a-fA-F]{40}$' };
+const evmTxHashProperty = { type: 'string', pattern: '^0x[0-9a-fA-F]{64}$' };
 const decimalProperty = { type: 'string', minLength: 1, maxLength: 40 };
 const tradingProperties = {
   chainId: chainProperty,
@@ -335,6 +380,14 @@ const tools = [
   { name: 'binance_web3_wallet_history', description: 'Read Binance Agentic Wallet on-chain transaction history.', inputSchema: { type: 'object', properties: { chainId: chainProperty, type: { type: 'string', enum: ['all', 'pending', 'confirmed'] }, size: { type: 'integer', minimum: 1, maximum: 100 }, txHash: { type: 'string', minLength: 16, maxLength: 128 } }, additionalProperties: false }, annotations: { readOnlyHint: true } },
   { name: 'binance_web3_wallet_gas', description: 'Read current low, medium, and high gas-price estimates for one chain.', inputSchema: { type: 'object', properties: { chainId: chainProperty }, required: ['chainId'], additionalProperties: false }, annotations: { readOnlyHint: true } },
   { name: 'binance_web3_wallet_transaction_lock', description: 'Read the Binance Agentic Wallet transaction-lock state for one chain before submitting another transaction.', inputSchema: { type: 'object', properties: { chainId: chainProperty }, required: ['chainId'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_web3_transaction_cancel_preview', description: 'Preview replacing one pending EVM transaction with a higher-gas cancellation. This does not broadcast a transaction.', inputSchema: { type: 'object', properties: { txHash: evmTxHashProperty, chainId: evmChainProperty }, required: ['txHash'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_web3_transaction_cancel_execute', description: 'Broadcast one exact pending-transaction cancellation preview. Use only after the user sends a new message exactly equal to CONFIRM.', inputSchema: { type: 'object', properties: { previewToken: { type: 'string', minLength: 64 }, confirmation: { type: 'string', enum: ['CONFIRM'] } }, required: ['previewToken', 'confirmation'], additionalProperties: false }, annotations: { destructiveHint: true, idempotentHint: false, readOnlyHint: false } },
+  { name: 'binance_web3_transaction_speedup_preview', description: 'Preview replacing one pending EVM transaction with a higher-gas copy. This does not broadcast a transaction.', inputSchema: { type: 'object', properties: { txHash: evmTxHashProperty, chainId: evmChainProperty, level: { type: 'string', enum: ['LOW', 'HIGH'], default: 'HIGH' } }, required: ['txHash'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_web3_transaction_speedup_execute', description: 'Broadcast one exact pending-transaction speed-up preview. Use only after the user sends a new message exactly equal to CONFIRM.', inputSchema: { type: 'object', properties: { previewToken: { type: 'string', minLength: 64 }, confirmation: { type: 'string', enum: ['CONFIRM'] } }, required: ['previewToken', 'confirmation'], additionalProperties: false }, annotations: { destructiveHint: true, idempotentHint: false, readOnlyHint: false } },
+  { name: 'binance_web3_approvals', description: 'List token approvals for the connected Binance Agentic Wallet, optionally filtered by spender or risk type.', inputSchema: { type: 'object', properties: { spender: evmAddressProperty, filterType: { type: 'string', enum: ['high_risk', 'medium_risk', 'non_interactive', 'others'] }, limit: { type: 'integer', minimum: 1, maximum: 100 }, offset: { type: 'string', minLength: 1, maxLength: 512 } }, additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_web3_approval_detail', description: 'Read one EVM token approval and its recent operation records.', inputSchema: { type: 'object', properties: { chainId: evmChainProperty, tokenContract: evmAddressProperty, spender: evmAddressProperty, type: { type: 'string', enum: ['approve', 'permit2'] } }, required: ['chainId', 'tokenContract', 'spender', 'type'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_web3_approval_revoke_preview', description: 'Preview revoking one exact EVM token approval. This does not broadcast a transaction.', inputSchema: { type: 'object', properties: { chainId: evmChainProperty, tokenContract: evmAddressProperty, spender: evmAddressProperty, type: { type: 'string', enum: ['approve', 'permit2'] } }, required: ['chainId', 'tokenContract', 'spender', 'type'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_web3_approval_revoke_execute', description: 'Broadcast one exact token-approval revocation preview. Use only after the user sends a new message exactly equal to CONFIRM.', inputSchema: { type: 'object', properties: { previewToken: { type: 'string', minLength: 64 }, confirmation: { type: 'string', enum: ['CONFIRM'] } }, required: ['previewToken', 'confirmation'], additionalProperties: false }, annotations: { destructiveHint: true, idempotentHint: false, readOnlyHint: false } },
   { name: 'binance_web3_transfer_preview', description: 'Create a five-minute, integrity-bound preview for an exact Binance Agentic Wallet token transfer. This does not send tokens.', inputSchema: { type: 'object', properties: { chainId: chainProperty, amount: decimalProperty, max: { type: 'boolean', default: false }, tokenAddress: tokenProperty, recipient: tokenProperty, gasLevel: { type: 'string', enum: GAS_LEVELS, default: 'MEDIUM' } }, required: ['chainId', 'tokenAddress', 'recipient'], additionalProperties: false }, annotations: { readOnlyHint: true } },
   { name: 'binance_web3_transfer_execute', description: 'Execute one exact Binance Agentic Wallet token-transfer preview. Use only after the user sends a new message exactly equal to CONFIRM.', inputSchema: { type: 'object', properties: { previewToken: { type: 'string', minLength: 64 }, confirmation: { type: 'string', enum: ['CONFIRM'] } }, required: ['previewToken', 'confirmation'], additionalProperties: false }, annotations: { destructiveHint: true, idempotentHint: false, readOnlyHint: false } },
   { name: 'binance_web3_swap_quote', description: 'Get a Binance Agentic Wallet DEX swap quote without trading.', inputSchema: { type: 'object', properties: tradingProperties, required: ['chainId', 'fromTokenQty', 'fromToken', 'toToken'], additionalProperties: false }, annotations: { readOnlyHint: true } },
@@ -369,6 +422,41 @@ async function handleTool(name, args) {
     case 'binance_web3_wallet_quota': return runBaw(['wallet', 'left-quota']);
     case 'binance_web3_wallet_gas': return runBaw(['wallet', 'gas-price', '--binanceChainId', chainId(args)]);
     case 'binance_web3_wallet_transaction_lock': return runBaw(['wallet', 'tx-lock', '--binanceChainId', chainId(args)]);
+    case 'binance_web3_transaction_cancel_preview': {
+      const parameters = pendingTransactionParameters(args);
+      const transaction = await runBaw(['wallet', 'tx-history', '--tx', parameters.txHash]);
+      if (transaction?.success === false) return transaction;
+      const previewToken = createPreview('transaction-cancel', parameters);
+      const preview = decodePreview(previewToken);
+      return { action: 'preview', operation: 'transaction-cancel', parameters, transaction, expiresAt: new Date(preview.expiresAt).toISOString(), previewToken, confirmationRequired: 'CONFIRM' };
+    }
+    case 'binance_web3_transaction_speedup_preview': {
+      const parameters = pendingTransactionParameters(args, { speedUp: true });
+      const transaction = await runBaw(['wallet', 'tx-history', '--tx', parameters.txHash]);
+      if (transaction?.success === false) return transaction;
+      const previewToken = createPreview('transaction-speedup', parameters);
+      const preview = decodePreview(previewToken);
+      return { action: 'preview', operation: 'transaction-speedup', parameters, transaction, expiresAt: new Date(preview.expiresAt).toISOString(), previewToken, confirmationRequired: 'CONFIRM' };
+    }
+    case 'binance_web3_approvals': {
+      const command = ['approvals', 'list'];
+      const spender = optionalString(args, 'spender', 42);
+      if (spender) appendOption(command, '--spender', tokenAddress(spender, '1', 'spender'));
+      const filterType = optionalString(args, 'filterType', 32);
+      if (filterType) appendOption(command, '--filterTypes', choice(filterType, 'filterType', ['high_risk', 'medium_risk', 'non_interactive', 'others']));
+      if (args?.limit !== undefined) appendOption(command, '--limit', positiveInteger(args, 'limit', 20, 100));
+      appendOption(command, '--offset', optionalString(args, 'offset', 512));
+      return runBaw(command);
+    }
+    case 'binance_web3_approval_detail': return runBaw(approvalArgs('detail', approvalParameters(args)));
+    case 'binance_web3_approval_revoke_preview': {
+      const parameters = approvalParameters(args);
+      const approval = await runBaw(approvalArgs('detail', parameters));
+      if (approval?.success === false) return approval;
+      const previewToken = createPreview('approval-revoke', parameters);
+      const preview = decodePreview(previewToken);
+      return { action: 'preview', operation: 'approval-revoke', parameters, approval, expiresAt: new Date(preview.expiresAt).toISOString(), previewToken, confirmationRequired: 'CONFIRM' };
+    }
     case 'binance_web3_wallet_balance': {
       const command = ['wallet', 'balance'];
       const chain = optionalString(args, 'chainId', 16);
@@ -455,6 +543,9 @@ async function handleTool(name, args) {
     case 'binance_web3_limit_order_execute':
     case 'binance_web3_limit_cancel_execute':
     case 'binance_web3_transfer_execute':
+    case 'binance_web3_transaction_cancel_execute':
+    case 'binance_web3_transaction_speedup_execute':
+    case 'binance_web3_approval_revoke_execute':
     case 'binance_web3_wallet_signout_execute': {
       confirmation(args);
       const preview = decodePreview(requiredString(args, 'previewToken', 16_384));
@@ -462,12 +553,18 @@ async function handleTool(name, args) {
       if (name === 'binance_web3_swap_execute') expected = 'swap';
       else if (name === 'binance_web3_limit_order_execute') expected = 'limit-order';
       else if (name === 'binance_web3_transfer_execute') expected = 'transfer';
+      else if (name === 'binance_web3_transaction_cancel_execute') expected = 'transaction-cancel';
+      else if (name === 'binance_web3_transaction_speedup_execute') expected = 'transaction-speedup';
+      else if (name === 'binance_web3_approval_revoke_execute') expected = 'approval-revoke';
       else if (name === 'binance_web3_wallet_signout_execute') expected = 'signout';
       if (preview.operation !== expected) throw new Error(`preview operation must be ${expected}`);
       await consumePreview(preview);
       if (expected === 'swap') return runBaw(swapArgs(preview.parameters), WRITE_TIMEOUT_MS);
       if (expected === 'limit-order') return runBaw(limitArgs(preview.parameters), WRITE_TIMEOUT_MS);
       if (expected === 'transfer') return runBaw(sendArgs(preview.parameters), WRITE_TIMEOUT_MS);
+      if (expected === 'transaction-cancel') return runBaw(pendingTransactionArgs('cancel', preview.parameters), WRITE_TIMEOUT_MS);
+      if (expected === 'transaction-speedup') return runBaw(pendingTransactionArgs('speed-up', preview.parameters), WRITE_TIMEOUT_MS);
+      if (expected === 'approval-revoke') return runBaw(approvalArgs('revoke', preview.parameters), WRITE_TIMEOUT_MS);
       if (expected === 'signout') return runBaw(['auth', 'signout'], WRITE_TIMEOUT_MS);
       return runBaw(['limit-order', 'cancel', '--strategyId', requiredString(preview.parameters, 'strategyId', 64)], WRITE_TIMEOUT_MS);
     }
@@ -514,6 +611,17 @@ async function selfTest() {
     recipient: '0x0000000000000000000000000000000000000001', gasLevel: 'LOW',
   });
   if (!sendArgs(transfer).includes('--recipient')) throw new Error('Binance Web3 transfer command construction failed');
+  const replacement = pendingTransactionParameters({ txHash: `0x${'1'.repeat(64)}`, chainId: '1', level: 'low' }, { speedUp: true });
+  if (!pendingTransactionArgs('speed-up', replacement).includes('LOW')) throw new Error('Binance Web3 speed-up command construction failed');
+  const approval = approvalParameters({ chainId: '56', tokenContract: `0x${'2'.repeat(40)}`, spender: `0x${'3'.repeat(40)}`, type: 'permit2' });
+  if (!approvalArgs('revoke', approval).includes('permit2')) throw new Error('Binance Web3 approval command construction failed');
+  if (!tools.some((tool) => tool.name === 'binance_web3_approval_revoke_execute')) throw new Error('Binance Web3 approval tools are missing');
+  try {
+    pendingTransactionParameters({ txHash: `0x${'1'.repeat(64)}`, chainId: 'CT_501' });
+    throw new Error('Solana replacement transaction was accepted');
+  } catch (error) {
+    if (error?.message === 'Solana replacement transaction was accepted') throw error;
+  }
   try {
     swapParameters({ ...parameters, slippage: 6 });
     throw new Error('unsafe Binance Web3 slippage was accepted');
