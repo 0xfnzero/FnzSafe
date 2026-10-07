@@ -13,16 +13,22 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 
 const execFileAsync = promisify(execFile);
 const PREVIEW_TTL_MS = 5 * 60 * 1000;
+const MAX_PREVIEW_TOKEN_LENGTH = 1024 * 1024;
 const READ_TIMEOUT_MS = 30_000;
 const WRITE_TIMEOUT_MS = 120_000;
 const CHAIN_IDS = ['56', '1', '8453', 'CT_501'];
 const EVM_CHAIN_IDS = ['56', '1', '8453'];
 const LIMIT_CHAIN_IDS = ['56', 'CT_501'];
+const PREDICTION_CHAIN_IDS = ['56', '137'];
 const GAS_LEVELS = ['LOW', 'MEDIUM', 'HIGH'];
 const EVM_ADDRESS = /^0x[0-9a-fA-F]{40}$/u;
 const EVM_TX_HASH = /^0x[0-9a-fA-F]{64}$/u;
 const SOLANA_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/u;
 const DECIMAL = /^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,18})?$/u;
+const IDENTIFIER = /^[A-Za-z0-9._:-]+$/u;
+const INTEGER = /^-?(?:0|[1-9][0-9]*)$/u;
+const HEX_DATA = /^0x(?:[0-9a-fA-F]{2})*$/u;
+const WEI_VALUE = /^(?:0|[1-9][0-9]*|0x[0-9a-fA-F]+)$/u;
 const SENSITIVE_KEY = /^(?:accessToken|apiKey|authorization|clientId|cookie|idToken|mnemonic|password|privateKey|refreshToken|secret|secretKey|seed|sessionId|signature)$/iu;
 
 const text = (value) => String(value ?? '').trim();
@@ -105,6 +111,123 @@ function positiveInteger(args, name, defaultValue, max) {
   const value = args?.[name] ?? defaultValue;
   if (!Number.isInteger(value) || value < 1 || value > max) throw new Error(`${name} must be an integer from 1 to ${max}`);
   return value;
+}
+
+function boundedInteger(args, name, { defaultValue, min = 0, max = Number.MAX_SAFE_INTEGER } = {}) {
+  const value = args?.[name] ?? defaultValue;
+  if (!Number.isInteger(value) || value < min || value > max) {
+    throw new Error(`${name} must be an integer from ${min} to ${max}`);
+  }
+  return value;
+}
+
+function identifier(args, name, maxLength = 128) {
+  const value = requiredString(args, name, maxLength);
+  if (!IDENTIFIER.test(value)) throw new Error(`${name} contains unsupported characters`);
+  return value;
+}
+
+function optionalIdentifier(args, name, maxLength = 128) {
+  const value = optionalString(args, name, maxLength);
+  if (value && !IDENTIFIER.test(value)) throw new Error(`${name} contains unsupported characters`);
+  return value;
+}
+
+function identifierList(args, name, maxItems = 20) {
+  const raw = requiredString(args, name, maxItems * 129);
+  const values = raw.split(',').map((value) => value.trim()).filter(Boolean);
+  if (values.length === 0 || values.length > maxItems || new Set(values).size !== values.length) {
+    throw new Error(`${name} must contain 1 to ${maxItems} unique IDs`);
+  }
+  for (const value of values) {
+    if (value.length > 128 || !IDENTIFIER.test(value)) throw new Error(`${name} contains an invalid ID`);
+  }
+  return values.join(',');
+}
+
+function ratio(args, name = 'ratio') {
+  const value = decimal(args, name);
+  if (Number(value) > 1) throw new Error(`${name} must be greater than 0 and at most 1`);
+  return value;
+}
+
+function slippageBps(args, { optional = false } = {}) {
+  const value = text(args?.slippageBps);
+  if (!value && optional) return '';
+  if (!value || !/^[0-9]+$/u.test(value) || Number(value) < 1 || Number(value) > 4999) {
+    throw new Error('slippageBps must be an integer from 1 to 4999');
+  }
+  return String(Number(value));
+}
+
+function defiSlippageBps(args) {
+  const value = text(args?.slippageBps || 'auto');
+  return value === 'auto' ? value : slippageBps({ slippageBps: value });
+}
+
+function optionalChainId(args, allowed = CHAIN_IDS) {
+  const value = optionalString(args, 'chainId', 16);
+  return value ? choice(value, 'chainId', allowed) : '';
+}
+
+function addressForKnownChain(value, chain, name) {
+  const address = text(value);
+  if (chain) return tokenAddress(address, chain, name);
+  if (!EVM_ADDRESS.test(address) && !SOLANA_ADDRESS.test(address)) throw new Error(`${name} is invalid`);
+  return address;
+}
+
+function jsonDepth(value, depth = 0) {
+  if (depth > 24) throw new Error('JSON payload is too deeply nested');
+  if (Array.isArray(value)) {
+    for (const entry of value) jsonDepth(entry, depth + 1);
+  } else if (isRecord(value)) {
+    for (const entry of Object.values(value)) jsonDepth(entry, depth + 1);
+  }
+}
+
+function canonicalJson(raw, name, maxBytes = 65_536) {
+  const source = requiredString({ [name]: raw }, name, maxBytes);
+  if (Buffer.byteLength(source, 'utf8') > maxBytes) throw new Error(`${name} is too large`);
+  let parsed;
+  try {
+    parsed = JSON.parse(source);
+  } catch {
+    throw new Error(`${name} must be valid JSON`);
+  }
+  if (!isRecord(parsed)) throw new Error(`${name} must be a JSON object`);
+  jsonDepth(parsed);
+  return JSON.stringify(parsed);
+}
+
+function paymentRequirements(args) {
+  const source = requiredString(args, 'paymentRequirements', 131_072);
+  let decoded = source;
+  if (!source.trimStart().startsWith('{')) {
+    if (!/^[A-Za-z0-9+/=_-]+$/u.test(source)) throw new Error('paymentRequirements must be JSON or base64 JSON');
+    try {
+      decoded = Buffer.from(source, 'base64').toString('utf8');
+    } catch {
+      throw new Error('paymentRequirements must be JSON or base64 JSON');
+    }
+  }
+  return canonicalJson(decoded, 'paymentRequirements');
+}
+
+function eip712Message(args) {
+  const message = canonicalJson(requiredString(args, 'message', 65_536), 'message');
+  const parsed = JSON.parse(message);
+  if (parsed.method !== 'eth_signTypedData_v4' || !Array.isArray(parsed.params) || parsed.params.length !== 2) {
+    throw new Error('message must be an eth_signTypedData_v4 JSON-RPC wrapper with two params');
+  }
+  const typedData = typeof parsed.params[1] === 'string' ? (() => {
+    try { return JSON.parse(parsed.params[1]); } catch { return null; }
+  })() : parsed.params[1];
+  if (!isRecord(typedData) || !isRecord(typedData.types) || !isRecord(typedData.domain) || !text(typedData.primaryType)) {
+    throw new Error('message contains invalid EIP-712 typed data');
+  }
+  jsonDepth(typedData);
+  return message;
 }
 
 function bawEntryPath() {
@@ -289,6 +412,200 @@ function approvalParameters(args) {
   };
 }
 
+function predictionQuoteParameters(args) {
+  const orderType = choice(requiredString(args, 'orderType', 16).toUpperCase(), 'orderType', ['MARKET', 'LIMIT']);
+  const priceLimit = optionalString(args, 'priceLimit', 40);
+  if ((orderType === 'LIMIT') !== Boolean(priceLimit)) throw new Error('priceLimit is required only for LIMIT orders');
+  return {
+    chainId: choice(requiredString(args, 'chainId', 16), 'chainId', PREDICTION_CHAIN_IDS),
+    tokenId: identifier(args, 'tokenId'),
+    marketTopicId: identifier(args, 'marketTopicId'),
+    side: choice(requiredString(args, 'side', 8).toUpperCase(), 'side', ['BUY', 'SELL']),
+    amount: decimal(args, 'amount'),
+    orderType,
+    slippageBps: slippageBps(args, { optional: true }),
+    priceLimit: priceLimit ? decimal({ priceLimit }, 'priceLimit') : '',
+  };
+}
+
+function predictionPlaceParameters(args) {
+  const orderType = choice(text(args?.orderType || 'MARKET').toUpperCase(), 'orderType', ['MARKET', 'LIMIT']);
+  const priceLimit = optionalString(args, 'priceLimit', 40);
+  if ((orderType === 'LIMIT') !== Boolean(priceLimit)) throw new Error('priceLimit is required only for LIMIT orders');
+  return {
+    quoteId: identifier(args, 'quoteId'),
+    orderType,
+    slippageBps: slippageBps(args),
+    priceLimit: priceLimit ? decimal({ priceLimit }, 'priceLimit') : '',
+  };
+}
+
+function predictionQuoteArgs(parameters) {
+  const command = [
+    'prediction', 'trade', 'quote',
+    '--binanceChainId', parameters.chainId,
+    '--tokenId', parameters.tokenId,
+    '--marketTopicId', parameters.marketTopicId,
+    '--side', parameters.side,
+    '--amount', parameters.amount,
+    '--orderType', parameters.orderType,
+  ];
+  appendOption(command, '--slippageBps', parameters.slippageBps);
+  appendOption(command, '--priceLimit', parameters.priceLimit);
+  return command;
+}
+
+function predictionPlaceArgs(parameters) {
+  const command = [
+    'prediction', 'trade', 'place-order',
+    '--quoteId', parameters.quoteId,
+    '--orderType', parameters.orderType,
+    '--slippageBps', parameters.slippageBps,
+  ];
+  appendOption(command, '--priceLimit', parameters.priceLimit);
+  return command;
+}
+
+function defiChain(args) {
+  return choice(text(args?.chainId || '56'), 'chainId', CHAIN_IDS);
+}
+
+function defiActionParameters(args, forcedAction = '') {
+  const action = forcedAction || choice(requiredString(args, 'action', 16), 'action', ['deposit', 'redeem', 'lp-add', 'lp-remove', 'claim']);
+  const chain = defiChain(args);
+  const parameters = { action, chainId: chain, gasLevel: gasLevel(args) };
+  if (action !== 'claim' || text(args?.investmentId)) parameters.investmentId = identifier(args, 'investmentId');
+  const rawTokenAddress = optionalString(args, 'tokenAddress', 44);
+  if (rawTokenAddress) parameters.tokenAddress = tokenAddress(rawTokenAddress, chain, 'tokenAddress');
+
+  if (action === 'deposit') {
+    if (!parameters.tokenAddress) throw new Error('tokenAddress is required');
+    parameters.amount = decimal(args, 'amount');
+  } else if (action === 'redeem') {
+    if (!parameters.tokenAddress) throw new Error('tokenAddress is required');
+    const amount = optionalString(args, 'amount', 40);
+    const rawRatio = optionalString(args, 'ratio', 40);
+    if (Boolean(amount) === Boolean(rawRatio)) throw new Error('provide exactly one of amount or ratio');
+    if (amount) parameters.amount = decimal({ amount }, 'amount');
+    else parameters.ratio = ratio({ ratio: rawRatio });
+  } else if (action === 'lp-add') {
+    if (!parameters.tokenAddress) throw new Error('tokenAddress is required');
+    parameters.amount = decimal(args, 'amount');
+    parameters.slippageBps = defiSlippageBps(args);
+    const nftId = optionalIdentifier(args, 'nftId');
+    const priceRange = optionalString(args, 'priceRange', 40);
+    const tickLower = optionalString(args, 'tickLower', 16);
+    const tickUpper = optionalString(args, 'tickUpper', 16);
+    const hasTicks = Boolean(tickLower || tickUpper);
+    if (hasTicks && (!tickLower || !tickUpper)) throw new Error('tickLower and tickUpper must be provided together');
+    if ([Boolean(nftId), Boolean(priceRange), hasTicks].filter(Boolean).length !== 1) {
+      throw new Error('provide exactly one LP source: nftId, priceRange, or tickLower with tickUpper');
+    }
+    if (nftId) parameters.nftId = nftId;
+    if (priceRange) {
+      parameters.priceRange = decimal({ priceRange }, 'priceRange');
+      if (Number(parameters.priceRange) > 50) throw new Error('priceRange must be greater than 0 and at most 50');
+    }
+    if (hasTicks) {
+      if (!INTEGER.test(tickLower) || !INTEGER.test(tickUpper)) throw new Error('ticks must be integers');
+      const lower = Number(tickLower);
+      const upper = Number(tickUpper);
+      if (lower < -887272 || upper > 887272 || lower >= upper) throw new Error('ticks must be ordered int24 values within the supported range');
+      parameters.tickLower = tickLower;
+      parameters.tickUpper = tickUpper;
+    }
+  } else if (action === 'lp-remove') {
+    parameters.nftId = identifier(args, 'nftId');
+    parameters.ratio = ratio(args);
+    parameters.slippageBps = defiSlippageBps(args);
+  } else {
+    parameters.claimType = choice(requiredString(args, 'claimType', 32), 'claimType', ['REWARD_PROTOCOL', 'REWARD_INVESTMENT', 'LP_FEE', 'REDEMPTION']);
+    if (parameters.claimType === 'REWARD_PROTOCOL') parameters.defiProtocolId = identifier(args, 'defiProtocolId');
+    if (parameters.claimType === 'REWARD_INVESTMENT' && !parameters.investmentId) throw new Error('investmentId is required');
+    if (parameters.claimType === 'LP_FEE') {
+      if (!parameters.investmentId) throw new Error('investmentId is required');
+      parameters.nftId = identifier(args, 'nftId');
+    }
+    if (parameters.claimType === 'REDEMPTION') {
+      if (!parameters.investmentId) throw new Error('investmentId is required');
+      parameters.redemptionId = identifier(args, 'redemptionId');
+    }
+  }
+  return parameters;
+}
+
+function defiArgs(parameters, preview = false) {
+  const command = ['defi', preview ? 'preview' : parameters.action];
+  if (preview) command.push('--action', parameters.action);
+  for (const [key, value] of Object.entries(parameters)) {
+    if (key === 'action') continue;
+    const option = key === 'chainId' ? '--binanceChainId' : `--${key}`;
+    appendOption(command, option, value);
+  }
+  return command;
+}
+
+function base64Transaction(args) {
+  const value = requiredString(args, 'unsignedTx', 350_000);
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value)) {
+    throw new Error('unsignedTx must be canonical base64');
+  }
+  const bytes = Buffer.from(value, 'base64');
+  if (bytes.length === 0 || bytes.length > 256 * 1024) throw new Error('unsignedTx must decode to 1-262144 bytes');
+  return value;
+}
+
+function contractCallParameters(args) {
+  const chain = chainId(args);
+  const from = tokenAddress(args?.from, chain, 'from');
+  if (chain === 'CT_501') {
+    if (text(args?.to) || text(args?.value) || text(args?.inputData) || args?.gasLimit !== undefined) {
+      throw new Error('Solana contract calls accept only from and unsignedTx');
+    }
+    return { chainId: chain, from, unsignedTx: base64Transaction(args) };
+  }
+  if (text(args?.unsignedTx)) throw new Error('EVM contract calls do not accept unsignedTx');
+  const value = optionalString(args, 'value', 80);
+  if (value && !WEI_VALUE.test(value)) throw new Error('value must be a non-negative integer or 0x-prefixed hex integer');
+  const inputData = optionalString(args, 'inputData', 524_290) || '0x';
+  if (!HEX_DATA.test(inputData)) throw new Error('inputData must be 0x-prefixed, even-length hexadecimal data');
+  const parameters = {
+    chainId: chain,
+    from,
+    to: tokenAddress(args?.to, chain, 'to'),
+    value,
+    inputData,
+  };
+  if (args?.gasLimit !== undefined) parameters.gasLimit = boundedInteger(args, 'gasLimit', { min: 21_000, max: 15_000_000 });
+  return parameters;
+}
+
+function contractCallArgs(parameters) {
+  const command = ['contract-call', 'preview', '--binanceChainId', parameters.chainId, '--from', parameters.from];
+  appendOption(command, '--to', parameters.to);
+  appendOption(command, '--value', parameters.value);
+  appendOption(command, '--inputData', parameters.inputData);
+  appendOption(command, '--unsignedTx', parameters.unsignedTx);
+  appendOption(command, '--gasLimit', parameters.gasLimit);
+  return command;
+}
+
+function signMessageParameters(args) {
+  const chain = choice(requiredString(args, 'chainId', 16), 'chainId', EVM_CHAIN_IDS);
+  const message = eip712Message(args);
+  const parsed = JSON.parse(message);
+  if (!EVM_ADDRESS.test(text(parsed.params[0]))) throw new Error('the first EIP-712 param must be an EVM signer address');
+  const typedData = typeof parsed.params[1] === 'string' ? JSON.parse(parsed.params[1]) : parsed.params[1];
+  const domainChain = typedData.domain.chainId;
+  if (domainChain !== undefined) {
+    const parsedChain = typeof domainChain === 'string' && domainChain.startsWith('0x')
+      ? Number.parseInt(domainChain, 16)
+      : Number(domainChain);
+    if (!Number.isSafeInteger(parsedChain) || String(parsedChain) !== chain) throw new Error('EIP-712 domain chainId must match chainId');
+  }
+  return { chainId: chain, message, signType: 'EIP712' };
+}
+
 function swapArgs(parameters, command = 'swap') {
   return [
     'market-order', command,
@@ -350,12 +667,33 @@ function confirmation(args) {
   }
 }
 
+function previewResult(operation, parameters, evidence = {}) {
+  const previewToken = createPreview(operation, parameters);
+  const preview = decodePreview(previewToken);
+  return {
+    action: 'preview',
+    operation,
+    parameters,
+    ...evidence,
+    expiresAt: new Date(preview.expiresAt).toISOString(),
+    previewToken,
+    confirmationRequired: 'CONFIRM',
+  };
+}
+
 const chainProperty = { type: 'string', enum: CHAIN_IDS };
 const evmChainProperty = { type: 'string', enum: EVM_CHAIN_IDS };
 const tokenProperty = { type: 'string', minLength: 32, maxLength: 44 };
 const evmAddressProperty = { type: 'string', pattern: '^0x[0-9a-fA-F]{40}$' };
 const evmTxHashProperty = { type: 'string', pattern: '^0x[0-9a-fA-F]{64}$' };
 const decimalProperty = { type: 'string', minLength: 1, maxLength: 40 };
+const identifierProperty = { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9._:-]+$' };
+const offsetProperty = { type: 'integer', minimum: 0, maximum: 1_000_000 };
+const pageLimitProperty = { type: 'integer', minimum: 1, maximum: 100 };
+const executionProperties = {
+  previewToken: { type: 'string', minLength: 64, maxLength: MAX_PREVIEW_TOKEN_LENGTH },
+  confirmation: { type: 'string', enum: ['CONFIRM'] },
+};
 const tradingProperties = {
   chainId: chainProperty,
   fromTokenQty: decimalProperty,
@@ -399,6 +737,41 @@ const tools = [
   { name: 'binance_web3_limit_orders', description: 'List or query Binance Agentic Wallet BSC or Solana limit orders.', inputSchema: { type: 'object', properties: { strategyId: { type: 'string', minLength: 1, maxLength: 64 }, chainId: { type: 'string', enum: LIMIT_CHAIN_IDS }, status: { type: 'string', enum: ['PENDING', 'WORKING', 'TRIGGERED', 'FINISHED', 'FAILED', 'EXPIRED', 'CANCELED'] }, page: { type: 'integer', minimum: 1, maximum: 10000 }, pageSize: { type: 'integer', minimum: 1, maximum: 100 } }, additionalProperties: false }, annotations: { readOnlyHint: true } },
   { name: 'binance_web3_limit_cancel_preview', description: 'Preview cancellation of one Binance Agentic Wallet limit order. This does not cancel it.', inputSchema: { type: 'object', properties: { strategyId: { type: 'string', minLength: 1, maxLength: 64 } }, required: ['strategyId'], additionalProperties: false }, annotations: { readOnlyHint: true } },
   { name: 'binance_web3_limit_cancel_execute', description: 'Cancel one exact Binance Agentic Wallet limit-order preview. Use only after the user sends a new message exactly equal to CONFIRM.', inputSchema: { type: 'object', properties: { previewToken: { type: 'string', minLength: 64 }, confirmation: { type: 'string', enum: ['CONFIRM'] } }, required: ['previewToken', 'confirmation'], additionalProperties: false }, annotations: { destructiveHint: true, idempotentHint: false, readOnlyHint: false } },
+  { name: 'binance_prediction_market_list', description: 'List Binance prediction markets with optional category and sort filters.', inputSchema: { type: 'object', properties: { l1Category: identifierProperty, l2Category: identifierProperty, sortBy: { type: 'string', enum: ['RECOMMENDED', 'VOLUME', 'PARTICIPANTS', 'CREATED_TIME', 'END_DATE'] }, orderBy: { type: 'string', enum: ['ASC', 'DESC'], default: 'DESC' }, offset: offsetProperty, limit: pageLimitProperty }, additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_prediction_market_detail', description: 'Read one Binance prediction market topic and its outcome market IDs.', inputSchema: { type: 'object', properties: { marketTopicId: identifierProperty }, required: ['marketTopicId'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_prediction_market_search', description: 'Search Binance prediction markets by keyword.', inputSchema: { type: 'object', properties: { query: { type: 'string', minLength: 1, maxLength: 200 }, limit: { type: 'integer', minimum: 1, maximum: 50 } }, required: ['query'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_prediction_order_book', description: 'Read the order book for one prediction outcome token.', inputSchema: { type: 'object', properties: { marketId: identifierProperty, tokenId: identifierProperty }, required: ['marketId', 'tokenId'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_prediction_last_trade_price', description: 'Read the last trade price for one prediction sub-market.', inputSchema: { type: 'object', properties: { marketId: identifierProperty }, required: ['marketId'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_prediction_categories', description: 'List Binance prediction market categories.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_prediction_positions', description: 'List current Binance prediction positions and PnL summaries.', inputSchema: { type: 'object', properties: { tab: { type: 'string', enum: ['ONGOING', 'ENDED', 'PENDING_CLAIM'], default: 'ONGOING' }, offset: offsetProperty, limit: pageLimitProperty }, additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_prediction_position', description: 'Read one Binance prediction position by outcome token ID.', inputSchema: { type: 'object', properties: { tokenId: identifierProperty }, required: ['tokenId'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_prediction_settled_history', description: 'List settled Binance prediction positions.', inputSchema: { type: 'object', properties: { l1Category: identifierProperty, filter: { type: 'string', enum: ['all', 'win', 'lose'], default: 'all' }, offset: offsetProperty, limit: pageLimitProperty }, additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_prediction_pnl', description: 'Query Binance prediction PnL records.', inputSchema: { type: 'object', properties: { tokenId: identifierProperty, l1Category: identifierProperty, offset: offsetProperty, limit: pageLimitProperty }, additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_prediction_portfolio', description: 'Read the connected Binance prediction portfolio summary.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_prediction_order_history', description: 'List Binance prediction orders with status and type filters.', inputSchema: { type: 'object', properties: { status: { type: 'string', enum: ['PENDING', 'SUBMITTED', 'FILLED', 'PARTIALLY_FILLED', 'CANCELLED', 'FAILED', 'EXPIRED'] }, l1Category: identifierProperty, orderType: { type: 'string', enum: ['MARKET', 'LIMIT'] }, offset: offsetProperty, limit: pageLimitProperty }, additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_prediction_trade_quote', description: 'Get a non-binding prediction trade quote on BSC or Polygon.', inputSchema: { type: 'object', properties: { chainId: { type: 'string', enum: PREDICTION_CHAIN_IDS }, tokenId: identifierProperty, marketTopicId: identifierProperty, side: { type: 'string', enum: ['BUY', 'SELL'] }, amount: decimalProperty, orderType: { type: 'string', enum: ['MARKET', 'LIMIT'] }, slippageBps: { type: 'integer', minimum: 1, maximum: 4999 }, priceLimit: decimalProperty }, required: ['chainId', 'tokenId', 'marketTopicId', 'side', 'amount', 'orderType'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_prediction_trade_place_preview', description: 'Create a five-minute FnzSafe preview for placing one exact prediction quote. This does not place the order.', inputSchema: { type: 'object', properties: { quoteId: identifierProperty, orderType: { type: 'string', enum: ['MARKET', 'LIMIT'], default: 'MARKET' }, slippageBps: { type: 'integer', minimum: 1, maximum: 4999 }, priceLimit: decimalProperty }, required: ['quoteId', 'slippageBps'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_prediction_trade_place_execute', description: 'Place one exact prediction order preview after a later user message exactly equal to CONFIRM.', inputSchema: { type: 'object', properties: executionProperties, required: ['previewToken', 'confirmation'], additionalProperties: false }, annotations: { destructiveHint: true, idempotentHint: false, readOnlyHint: false } },
+  { name: 'binance_prediction_trade_cancel_preview', description: 'Create a five-minute FnzSafe preview for cancelling up to 20 exact prediction order IDs.', inputSchema: { type: 'object', properties: { orderIds: { type: 'string', minLength: 1, maxLength: 2580 } }, required: ['orderIds'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_prediction_trade_cancel_execute', description: 'Cancel the exact prediction orders in a preview after a later user message exactly equal to CONFIRM.', inputSchema: { type: 'object', properties: executionProperties, required: ['previewToken', 'confirmation'], additionalProperties: false }, annotations: { destructiveHint: true, idempotentHint: false, readOnlyHint: false } },
+  { name: 'binance_prediction_trade_redeem_preview', description: 'Create a five-minute FnzSafe preview for redeeming up to 20 exact winning prediction tokens.', inputSchema: { type: 'object', properties: { tokenIds: { type: 'string', minLength: 1, maxLength: 2580 }, chainId: { type: 'string', enum: PREDICTION_CHAIN_IDS } }, required: ['tokenIds', 'chainId'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_prediction_trade_redeem_execute', description: 'Redeem the exact winning prediction tokens in a preview after a later user message exactly equal to CONFIRM.', inputSchema: { type: 'object', properties: executionProperties, required: ['previewToken', 'confirmation'], additionalProperties: false }, annotations: { destructiveHint: true, idempotentHint: false, readOnlyHint: false } },
+  { name: 'binance_defi_protocols', description: 'List Binance Web3 DeFi protocols with TVL and APY.', inputSchema: { type: 'object', properties: { chainId: chainProperty, investType: { type: 'string', enum: ['Earn', 'Loan', 'LiquidityPool'] }, sortField: { type: 'string', enum: ['tvl', 'apy'], default: 'tvl' }, sortDirection: { type: 'string', enum: ['ASC', 'DESC'], default: 'DESC' }, page: { type: 'integer', minimum: 1, maximum: 10_000 }, size: { type: 'integer', minimum: 1, maximum: 200 } }, additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_defi_protocol', description: 'Read details for one Binance Web3 DeFi protocol.', inputSchema: { type: 'object', properties: { defiProtocolId: identifierProperty }, required: ['defiProtocolId'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_defi_investments', description: 'List Binance Web3 DeFi investments with optional protocol and token filters.', inputSchema: { type: 'object', properties: { investType: { type: 'string', enum: ['Earn', 'Loan', 'LiquidityPool'] }, defiProtocolId: identifierProperty, contractAddresses: { type: 'string', minLength: 32, maxLength: 89 }, chainId: chainProperty, sortField: { type: 'string', enum: ['apy', 'tvl'], default: 'apy' }, sortDirection: { type: 'string', enum: ['ASC', 'DESC'], default: 'DESC' }, page: { type: 'integer', minimum: 1, maximum: 10_000 }, size: pageLimitProperty }, additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_defi_investment', description: 'Read details for one Binance Web3 DeFi investment product.', inputSchema: { type: 'object', properties: { investmentId: identifierProperty }, required: ['investmentId'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_defi_positions', description: 'Read Binance Web3 DeFi positions for the connected wallet or one validated address.', inputSchema: { type: 'object', properties: { address: tokenProperty, chainId: chainProperty, defiProtocolId: identifierProperty, refresh: { type: 'boolean', default: false } }, additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_defi_action_preview', description: 'Run the official Binance DeFi simulation and create a five-minute FnzSafe preview for deposit, redeem, LP add/remove, or claim. This does not broadcast.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['deposit', 'redeem', 'lp-add', 'lp-remove', 'claim'] }, investmentId: identifierProperty, tokenAddress: tokenProperty, amount: decimalProperty, ratio: decimalProperty, nftId: identifierProperty, tickLower: { type: 'string', pattern: '^-?[0-9]+$', maxLength: 16 }, tickUpper: { type: 'string', pattern: '^-?[0-9]+$', maxLength: 16 }, priceRange: decimalProperty, slippageBps: { oneOf: [{ type: 'string', enum: ['auto'] }, { type: 'integer', minimum: 1, maximum: 4999 }] }, claimType: { type: 'string', enum: ['REWARD_PROTOCOL', 'REWARD_INVESTMENT', 'LP_FEE', 'REDEMPTION'] }, defiProtocolId: identifierProperty, redemptionId: identifierProperty, gasLevel: { type: 'string', enum: GAS_LEVELS, default: 'MEDIUM' }, chainId: { ...chainProperty, default: '56' } }, required: ['action'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_defi_action_execute', description: 'Execute one exact simulated Binance DeFi preview after a later user message exactly equal to CONFIRM.', inputSchema: { type: 'object', properties: executionProperties, required: ['previewToken', 'confirmation'], additionalProperties: false }, annotations: { destructiveHint: true, idempotentHint: false, readOnlyHint: false } },
+  { name: 'binance_contract_call_preview', description: 'Run Binance simulation and create a five-minute FnzSafe preview for an exact EVM or Solana contract call. This does not execute it.', inputSchema: { type: 'object', properties: { chainId: chainProperty, from: tokenProperty, to: evmAddressProperty, value: { type: 'string', pattern: '^(?:0|[1-9][0-9]*|0x[0-9a-fA-F]+)$', maxLength: 80 }, inputData: { type: 'string', pattern: '^0x(?:[0-9a-fA-F]{2})*$', maxLength: 524_290 }, unsignedTx: { type: 'string', minLength: 4, maxLength: 350_000 }, gasLimit: { type: 'integer', minimum: 21_000, maximum: 15_000_000 } }, required: ['chainId', 'from'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_contract_call_execute', description: 'Execute one exact simulated contract call after a later user message exactly equal to CONFIRM.', inputSchema: { type: 'object', properties: executionProperties, required: ['previewToken', 'confirmation'], additionalProperties: false }, annotations: { destructiveHint: true, idempotentHint: false, readOnlyHint: false } },
+  { name: 'binance_sign_message_preview', description: 'Run Binance validation and create a five-minute FnzSafe preview for an exact EIP-712 signature. This does not sign.', inputSchema: { type: 'object', properties: { chainId: evmChainProperty, message: { type: 'string', minLength: 2, maxLength: 65_536 }, signType: { type: 'string', enum: ['EIP712'], default: 'EIP712' } }, required: ['chainId', 'message'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_sign_message_execute', description: 'Sign one exact EIP-712 preview after a later user message exactly equal to CONFIRM.', inputSchema: { type: 'object', properties: executionProperties, required: ['previewToken', 'confirmation'], additionalProperties: false }, annotations: { destructiveHint: true, idempotentHint: false, readOnlyHint: false } },
+  { name: 'binance_sign_message_result', description: 'Read the result of one Binance Agentic Wallet message-signature order.', inputSchema: { type: 'object', properties: { orderId: identifierProperty }, required: ['orderId'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_sign_message_history', description: 'List Binance Agentic Wallet message-signature history.', inputSchema: { type: 'object', properties: { chainId: evmChainProperty, limit: pageLimitProperty, nextToken: { type: 'string', minLength: 1, maxLength: 512 }, startTime: { type: 'integer', minimum: 0 }, endTime: { type: 'integer', minimum: 0 }, sortType: { type: 'string', enum: ['ASC', 'DESC'] } }, additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_x402_payment_options', description: 'Validate an x402 PaymentRequired JSON payload and list Binance payment options without signing.', inputSchema: { type: 'object', properties: { paymentRequirements: { type: 'string', minLength: 2, maxLength: 131_072 } }, required: ['paymentRequirements'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_x402_payment_sign_preview', description: 'Create a five-minute FnzSafe preview for signing one exact x402 payment option. This does not sign or pay.', inputSchema: { type: 'object', properties: { paymentId: identifierProperty, selectedIndex: { type: 'integer', minimum: 0, maximum: 1000 } }, required: ['paymentId', 'selectedIndex'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_x402_payment_sign_execute', description: 'Sign one exact x402 payment option after a later user message exactly equal to CONFIRM. The result may include an approval transaction.', inputSchema: { type: 'object', properties: executionProperties, required: ['previewToken', 'confirmation'], additionalProperties: false }, annotations: { destructiveHint: true, idempotentHint: false, readOnlyHint: false } },
 ];
 
 function appendOption(command, name, value) {
@@ -539,6 +912,168 @@ async function handleTool(name, args) {
       const preview = decodePreview(previewToken);
       return { action: 'preview', operation: 'limit-cancel', parameters, order, expiresAt: new Date(preview.expiresAt).toISOString(), previewToken, confirmationRequired: 'CONFIRM' };
     }
+    case 'binance_prediction_market_list': {
+      const command = ['prediction', 'market', 'list'];
+      appendOption(command, '--l1Category', optionalIdentifier(args, 'l1Category', 64));
+      appendOption(command, '--l2Category', optionalIdentifier(args, 'l2Category', 64));
+      const sortBy = optionalString(args, 'sortBy', 32);
+      if (sortBy) appendOption(command, '--sortBy', choice(sortBy, 'sortBy', ['RECOMMENDED', 'VOLUME', 'PARTICIPANTS', 'CREATED_TIME', 'END_DATE']));
+      appendOption(command, '--orderBy', choice(text(args?.orderBy || 'DESC'), 'orderBy', ['ASC', 'DESC']));
+      appendOption(command, '--offset', boundedInteger(args, 'offset', { defaultValue: 0, max: 1_000_000 }));
+      appendOption(command, '--limit', positiveInteger(args, 'limit', 20, 100));
+      return runBaw(command);
+    }
+    case 'binance_prediction_market_detail': return runBaw(['prediction', 'market', 'detail', '--marketTopicId', identifier(args, 'marketTopicId')]);
+    case 'binance_prediction_market_search': return runBaw(['prediction', 'market', 'search', '--query', requiredString(args, 'query', 200), '--limit', String(positiveInteger(args, 'limit', 10, 50))]);
+    case 'binance_prediction_order_book': return runBaw(['prediction', 'market', 'order-book', '--marketId', identifier(args, 'marketId'), '--tokenId', identifier(args, 'tokenId')]);
+    case 'binance_prediction_last_trade_price': return runBaw(['prediction', 'market', 'last-trade-price', '--marketId', identifier(args, 'marketId')]);
+    case 'binance_prediction_categories': return runBaw(['prediction', 'category', 'list']);
+    case 'binance_prediction_positions': return runBaw([
+      'prediction', 'position', 'list',
+      '--tab', choice(text(args?.tab || 'ONGOING'), 'tab', ['ONGOING', 'ENDED', 'PENDING_CLAIM']),
+      '--offset', String(boundedInteger(args, 'offset', { defaultValue: 0, max: 1_000_000 })),
+      '--limit', String(positiveInteger(args, 'limit', 20, 100)),
+    ]);
+    case 'binance_prediction_position': return runBaw(['prediction', 'position', 'token', '--tokenId', identifier(args, 'tokenId')]);
+    case 'binance_prediction_settled_history': {
+      const command = [
+        'prediction', 'position', 'settled-history',
+        '--filter', choice(text(args?.filter || 'all'), 'filter', ['all', 'win', 'lose']),
+        '--offset', String(boundedInteger(args, 'offset', { defaultValue: 0, max: 1_000_000 })),
+        '--limit', String(positiveInteger(args, 'limit', 20, 100)),
+      ];
+      appendOption(command, '--l1Category', optionalIdentifier(args, 'l1Category', 64));
+      return runBaw(command);
+    }
+    case 'binance_prediction_pnl': {
+      const command = [
+        'prediction', 'position', 'pnl',
+        '--offset', String(boundedInteger(args, 'offset', { defaultValue: 0, max: 1_000_000 })),
+        '--limit', String(positiveInteger(args, 'limit', 20, 100)),
+      ];
+      appendOption(command, '--tokenId', optionalIdentifier(args, 'tokenId'));
+      appendOption(command, '--l1Category', optionalIdentifier(args, 'l1Category', 64));
+      return runBaw(command);
+    }
+    case 'binance_prediction_portfolio': return runBaw(['prediction', 'position', 'portfolio']);
+    case 'binance_prediction_order_history': {
+      const command = [
+        'prediction', 'order', 'history',
+        '--offset', String(boundedInteger(args, 'offset', { defaultValue: 0, max: 1_000_000 })),
+        '--limit', String(positiveInteger(args, 'limit', 20, 100)),
+      ];
+      const status = optionalString(args, 'status', 32);
+      if (status) appendOption(command, '--status', choice(status, 'status', ['PENDING', 'SUBMITTED', 'FILLED', 'PARTIALLY_FILLED', 'CANCELLED', 'FAILED', 'EXPIRED']));
+      appendOption(command, '--l1Category', optionalIdentifier(args, 'l1Category', 64));
+      const orderType = optionalString(args, 'orderType', 16);
+      if (orderType) appendOption(command, '--orderType', choice(orderType, 'orderType', ['MARKET', 'LIMIT']));
+      return runBaw(command);
+    }
+    case 'binance_prediction_trade_quote': return runBaw(predictionQuoteArgs(predictionQuoteParameters(args)));
+    case 'binance_prediction_trade_place_preview': {
+      const parameters = predictionPlaceParameters(args);
+      const quota = await runBaw(['wallet', 'left-quota']);
+      if (quota?.success === false) return quota;
+      return previewResult('prediction-place', parameters, { quota });
+    }
+    case 'binance_prediction_trade_cancel_preview': {
+      const parameters = { orderIds: identifierList(args, 'orderIds') };
+      return previewResult('prediction-cancel', parameters);
+    }
+    case 'binance_prediction_trade_redeem_preview': {
+      const parameters = {
+        tokenIds: identifierList(args, 'tokenIds'),
+        chainId: choice(requiredString(args, 'chainId', 16), 'chainId', PREDICTION_CHAIN_IDS),
+      };
+      const positions = await runBaw(['prediction', 'position', 'list', '--tab', 'PENDING_CLAIM', '--offset', '0', '--limit', '100']);
+      if (positions?.success === false) return positions;
+      return previewResult('prediction-redeem', parameters, { positions });
+    }
+    case 'binance_defi_protocols': {
+      const command = ['defi', 'protocol-list'];
+      appendOption(command, '--binanceChainId', optionalChainId(args));
+      const investType = optionalString(args, 'investType', 32);
+      if (investType) appendOption(command, '--investType', choice(investType, 'investType', ['Earn', 'Loan', 'LiquidityPool']));
+      appendOption(command, '--sortField', choice(text(args?.sortField || 'tvl'), 'sortField', ['tvl', 'apy']));
+      appendOption(command, '--sortDirection', choice(text(args?.sortDirection || 'DESC'), 'sortDirection', ['ASC', 'DESC']));
+      appendOption(command, '--page', positiveInteger(args, 'page', 1, 10_000));
+      appendOption(command, '--size', positiveInteger(args, 'size', 200, 200));
+      return runBaw(command);
+    }
+    case 'binance_defi_protocol': return runBaw(['defi', 'protocol-info', '--defiProtocolId', identifier(args, 'defiProtocolId')]);
+    case 'binance_defi_investments': {
+      const command = ['defi', 'investment-list'];
+      const chain = optionalChainId(args);
+      const investType = optionalString(args, 'investType', 32);
+      if (investType) appendOption(command, '--investType', choice(investType, 'investType', ['Earn', 'Loan', 'LiquidityPool']));
+      appendOption(command, '--defiProtocolId', optionalIdentifier(args, 'defiProtocolId'));
+      const contractAddresses = optionalString(args, 'contractAddresses', 89);
+      if (contractAddresses) {
+        const values = contractAddresses.split(',').map((value) => value.trim()).filter(Boolean);
+        if (values.length === 0 || values.length > 2) throw new Error('contractAddresses must contain one or two addresses');
+        appendOption(command, '--contractAddresses', values.map((value) => addressForKnownChain(value, chain, 'contractAddresses')).join(','));
+      }
+      appendOption(command, '--binanceChainId', chain);
+      appendOption(command, '--sortField', choice(text(args?.sortField || 'apy'), 'sortField', ['apy', 'tvl']));
+      appendOption(command, '--sortDirection', choice(text(args?.sortDirection || 'DESC'), 'sortDirection', ['ASC', 'DESC']));
+      appendOption(command, '--page', positiveInteger(args, 'page', 1, 10_000));
+      appendOption(command, '--size', positiveInteger(args, 'size', 20, 100));
+      return runBaw(command);
+    }
+    case 'binance_defi_investment': return runBaw(['defi', 'investment-info', '--investmentId', identifier(args, 'investmentId')]);
+    case 'binance_defi_positions': {
+      const command = ['defi', 'position'];
+      const chain = optionalChainId(args);
+      const address = optionalString(args, 'address', 44);
+      if (address) appendOption(command, '--address', addressForKnownChain(address, chain, 'address'));
+      appendOption(command, '--binanceChainId', chain);
+      appendOption(command, '--defiProtocolId', optionalIdentifier(args, 'defiProtocolId'));
+      if (args?.refresh !== undefined && typeof args.refresh !== 'boolean') throw new Error('refresh must be a boolean');
+      if (args?.refresh === true) command.push('--refresh');
+      return runBaw(command);
+    }
+    case 'binance_defi_action_preview': {
+      const parameters = defiActionParameters(args);
+      const simulation = await runBaw(defiArgs(parameters, true));
+      if (simulation?.success === false) return simulation;
+      return previewResult(`defi-${parameters.action}`, parameters, { simulation });
+    }
+    case 'binance_contract_call_preview': {
+      const parameters = contractCallParameters(args);
+      const simulation = await runBaw(contractCallArgs(parameters));
+      if (simulation?.success === false) return simulation;
+      const requestId = identifier(simulation, 'requestId', 256);
+      return previewResult('contract-call', { ...parameters, requestId }, { simulation });
+    }
+    case 'binance_sign_message_preview': {
+      if (args?.signType !== undefined) choice(requiredString(args, 'signType', 16), 'signType', ['EIP712']);
+      const parameters = signMessageParameters(args);
+      const simulation = await runBaw(['sign-message', 'preview', '--binanceChainId', parameters.chainId, '--message', parameters.message, '--signType', parameters.signType]);
+      if (simulation?.success === false) return simulation;
+      const requestId = identifier(simulation, 'requestId', 256);
+      return previewResult('sign-message', { ...parameters, requestId }, { simulation });
+    }
+    case 'binance_sign_message_result': return runBaw(['sign-message', 'result', '--order-id', identifier(args, 'orderId', 256)]);
+    case 'binance_sign_message_history': {
+      const command = ['sign-message', 'history'];
+      appendOption(command, '--binanceChainId', optionalChainId(args, EVM_CHAIN_IDS));
+      appendOption(command, '--limit', positiveInteger(args, 'limit', 20, 100));
+      appendOption(command, '--nextToken', optionalString(args, 'nextToken', 512));
+      if (args?.startTime !== undefined) appendOption(command, '--startTime', boundedInteger(args, 'startTime', { max: Number.MAX_SAFE_INTEGER }));
+      if (args?.endTime !== undefined) appendOption(command, '--endTime', boundedInteger(args, 'endTime', { max: Number.MAX_SAFE_INTEGER }));
+      if (args?.startTime !== undefined && args?.endTime !== undefined && args.startTime > args.endTime) throw new Error('startTime must not be after endTime');
+      const sortType = optionalString(args, 'sortType', 8);
+      if (sortType) appendOption(command, '--sortType', choice(sortType, 'sortType', ['ASC', 'DESC']));
+      return runBaw(command);
+    }
+    case 'binance_x402_payment_options': return runBaw(['x402-payment', 'preview', '--paymentRequirements', paymentRequirements(args)]);
+    case 'binance_x402_payment_sign_preview': {
+      const parameters = {
+        paymentId: identifier(args, 'paymentId', 256),
+        selectedIndex: boundedInteger(args, 'selectedIndex', { min: 0, max: 1000 }),
+      };
+      return previewResult('x402-sign', parameters);
+    }
     case 'binance_web3_swap_execute':
     case 'binance_web3_limit_order_execute':
     case 'binance_web3_limit_cancel_execute':
@@ -546,9 +1081,16 @@ async function handleTool(name, args) {
     case 'binance_web3_transaction_cancel_execute':
     case 'binance_web3_transaction_speedup_execute':
     case 'binance_web3_approval_revoke_execute':
-    case 'binance_web3_wallet_signout_execute': {
+    case 'binance_web3_wallet_signout_execute':
+    case 'binance_prediction_trade_place_execute':
+    case 'binance_prediction_trade_cancel_execute':
+    case 'binance_prediction_trade_redeem_execute':
+    case 'binance_defi_action_execute':
+    case 'binance_contract_call_execute':
+    case 'binance_sign_message_execute':
+    case 'binance_x402_payment_sign_execute': {
       confirmation(args);
-      const preview = decodePreview(requiredString(args, 'previewToken', 16_384));
+      const preview = decodePreview(requiredString(args, 'previewToken', MAX_PREVIEW_TOKEN_LENGTH));
       let expected = 'limit-cancel';
       if (name === 'binance_web3_swap_execute') expected = 'swap';
       else if (name === 'binance_web3_limit_order_execute') expected = 'limit-order';
@@ -557,6 +1099,13 @@ async function handleTool(name, args) {
       else if (name === 'binance_web3_transaction_speedup_execute') expected = 'transaction-speedup';
       else if (name === 'binance_web3_approval_revoke_execute') expected = 'approval-revoke';
       else if (name === 'binance_web3_wallet_signout_execute') expected = 'signout';
+      else if (name === 'binance_prediction_trade_place_execute') expected = 'prediction-place';
+      else if (name === 'binance_prediction_trade_cancel_execute') expected = 'prediction-cancel';
+      else if (name === 'binance_prediction_trade_redeem_execute') expected = 'prediction-redeem';
+      else if (name === 'binance_defi_action_execute') expected = preview.operation.startsWith('defi-') ? preview.operation : '';
+      else if (name === 'binance_contract_call_execute') expected = 'contract-call';
+      else if (name === 'binance_sign_message_execute') expected = 'sign-message';
+      else if (name === 'binance_x402_payment_sign_execute') expected = 'x402-sign';
       if (preview.operation !== expected) throw new Error(`preview operation must be ${expected}`);
       await consumePreview(preview);
       if (expected === 'swap') return runBaw(swapArgs(preview.parameters), WRITE_TIMEOUT_MS);
@@ -566,6 +1115,13 @@ async function handleTool(name, args) {
       if (expected === 'transaction-speedup') return runBaw(pendingTransactionArgs('speed-up', preview.parameters), WRITE_TIMEOUT_MS);
       if (expected === 'approval-revoke') return runBaw(approvalArgs('revoke', preview.parameters), WRITE_TIMEOUT_MS);
       if (expected === 'signout') return runBaw(['auth', 'signout'], WRITE_TIMEOUT_MS);
+      if (expected === 'prediction-place') return runBaw(predictionPlaceArgs(preview.parameters), WRITE_TIMEOUT_MS);
+      if (expected === 'prediction-cancel') return runBaw(['prediction', 'trade', 'cancel', '--orderIds', preview.parameters.orderIds], WRITE_TIMEOUT_MS);
+      if (expected === 'prediction-redeem') return runBaw(['prediction', 'trade', 'redeem', '--tokenIds', preview.parameters.tokenIds, '--binanceChainId', preview.parameters.chainId], WRITE_TIMEOUT_MS);
+      if (expected.startsWith('defi-')) return runBaw(defiArgs(preview.parameters), WRITE_TIMEOUT_MS);
+      if (expected === 'contract-call') return runBaw(['contract-call', 'execute', '--requestId', preview.parameters.requestId], WRITE_TIMEOUT_MS);
+      if (expected === 'sign-message') return runBaw(['sign-message', 'execute', '--requestId', preview.parameters.requestId], WRITE_TIMEOUT_MS);
+      if (expected === 'x402-sign') return runBaw(['x402-payment', 'sign', '--paymentId', preview.parameters.paymentId, '--selectedIndex', String(preview.parameters.selectedIndex)], WRITE_TIMEOUT_MS);
       return runBaw(['limit-order', 'cancel', '--strategyId', requiredString(preview.parameters, 'strategyId', 64)], WRITE_TIMEOUT_MS);
     }
     default: throw new Error(`Unknown Binance Web3 tool: ${name}`);
@@ -575,7 +1131,7 @@ async function handleTool(name, args) {
 async function runServer() {
   const server = new Server(
     { name: 'fnzsafe-binance-web3-wallet', version: '0.1.0' },
-    { capabilities: { tools: {} }, instructions: 'Binance Agentic Wallet through FnzSafe. Every write requires a signed preview and a later user message exactly equal to CONFIRM.' },
+    { capabilities: { tools: {} }, instructions: 'Binance Agentic Wallet, Prediction, DeFi, contract calls, EIP-712, and x402 through FnzSafe. Every write or signature requires a signed preview and a later user message exactly equal to CONFIRM. Never retry a write automatically.' },
   );
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -590,6 +1146,14 @@ async function runServer() {
 }
 
 async function selfTest() {
+  const rejects = (callback, label) => {
+    try {
+      callback();
+    } catch {
+      return;
+    }
+    throw new Error(`${label} was accepted`);
+  };
   await fs.access(bawEntryPath());
   const { stdout } = await execFileAsync(process.execPath, ['--no-addons', bawEntryPath(), '--version'], { timeout: 10_000 });
   if (!/^1\.10\./u.test(text(stdout))) throw new Error(`unexpected Binance Agentic Wallet CLI version: ${text(stdout)}`);
@@ -598,6 +1162,10 @@ async function selfTest() {
   const token = createPreview('swap', { chainId: '56' }, secret, now);
   const preview = decodePreview(token, secret, now + 1);
   if (preview.operation !== 'swap' || preview.parameters.chainId !== '56') throw new Error('Binance Web3 preview round-trip failed');
+  const largeToken = createPreview('sign-message', { message: 'x'.repeat(65_536) }, secret, now);
+  if (largeToken.length > MAX_PREVIEW_TOKEN_LENGTH || decodePreview(largeToken, secret, now + 1).parameters.message.length !== 65_536) {
+    throw new Error('large Binance Web3 preview round-trip failed');
+  }
   const parameters = swapParameters({
     chainId: '56',
     fromTokenQty: '1.5',
@@ -615,19 +1183,45 @@ async function selfTest() {
   if (!pendingTransactionArgs('speed-up', replacement).includes('LOW')) throw new Error('Binance Web3 speed-up command construction failed');
   const approval = approvalParameters({ chainId: '56', tokenContract: `0x${'2'.repeat(40)}`, spender: `0x${'3'.repeat(40)}`, type: 'permit2' });
   if (!approvalArgs('revoke', approval).includes('permit2')) throw new Error('Binance Web3 approval command construction failed');
-  if (!tools.some((tool) => tool.name === 'binance_web3_approval_revoke_execute')) throw new Error('Binance Web3 approval tools are missing');
-  try {
-    pendingTransactionParameters({ txHash: `0x${'1'.repeat(64)}`, chainId: 'CT_501' });
-    throw new Error('Solana replacement transaction was accepted');
-  } catch (error) {
-    if (error?.message === 'Solana replacement transaction was accepted') throw error;
-  }
-  try {
-    swapParameters({ ...parameters, slippage: 6 });
-    throw new Error('unsafe Binance Web3 slippage was accepted');
-  } catch (error) {
-    if (error?.message === 'unsafe Binance Web3 slippage was accepted') throw error;
-  }
+  const requiredTools = [
+    'binance_web3_approval_revoke_execute',
+    'binance_prediction_trade_place_execute',
+    'binance_defi_action_execute',
+    'binance_contract_call_execute',
+    'binance_sign_message_execute',
+    'binance_x402_payment_sign_execute',
+  ];
+  if (requiredTools.some((name) => !tools.some((tool) => tool.name === name))) throw new Error('Binance Web3 extended tools are missing');
+  const prediction = predictionQuoteParameters({ chainId: '137', tokenId: 'outcome_1', marketTopicId: 'topic_1', side: 'buy', amount: '10', orderType: 'MARKET' });
+  if (!predictionQuoteArgs(prediction).includes('137')) throw new Error('Prediction quote command construction failed');
+  const defi = defiActionParameters({
+    action: 'lp-add', chainId: '56', investmentId: 'pancake_v3', tokenAddress: `0x${'4'.repeat(40)}`,
+    amount: '1', priceRange: '5', slippageBps: 100,
+  });
+  if (!defiArgs(defi, true).includes('--action')) throw new Error('DeFi preview command construction failed');
+  const contract = contractCallParameters({
+    chainId: '56', from: `0x${'5'.repeat(40)}`, to: `0x${'6'.repeat(40)}`, value: '0', inputData: '0x', gasLimit: 100_000,
+  });
+  if (!contractCallArgs(contract).includes('100000')) throw new Error('contract-call command construction failed');
+  const typedMessage = JSON.stringify({
+    method: 'eth_signTypedData_v4',
+    params: [`0x${'7'.repeat(40)}`, { types: { EIP712Domain: [], Permit: [] }, domain: { chainId: 56 }, primaryType: 'Permit', message: {} }],
+  });
+  if (signMessageParameters({ chainId: '56', message: typedMessage }).signType !== 'EIP712') throw new Error('EIP-712 validation failed');
+  const x402 = paymentRequirements({ paymentRequirements: Buffer.from('{"x402Version":2,"accepts":[]}').toString('base64') });
+  if (JSON.parse(x402).x402Version !== 2) throw new Error('x402 payload validation failed');
+  rejects(() => pendingTransactionParameters({ txHash: `0x${'1'.repeat(64)}`, chainId: 'CT_501' }), 'Solana replacement transaction');
+  rejects(() => swapParameters({ ...parameters, slippage: 6 }), 'unsafe Binance Web3 slippage');
+  rejects(() => predictionQuoteParameters({ ...prediction, chainId: '1' }), 'unsupported prediction chain');
+  rejects(() => identifierList({ orderIds: 'same,same' }, 'orderIds'), 'duplicate prediction IDs');
+  rejects(() => defiActionParameters({
+    action: 'lp-add', chainId: '56', investmentId: 'pool', tokenAddress: `0x${'8'.repeat(40)}`,
+    amount: '1', nftId: '1', priceRange: '5',
+  }), 'ambiguous LP source');
+  rejects(() => contractCallParameters({
+    chainId: 'CT_501', from: '11111111111111111111111111111111', unsignedTx: 'AQ==', to: `0x${'9'.repeat(40)}`,
+  }), 'mixed Solana contract-call fields');
+  rejects(() => signMessageParameters({ chainId: '1', message: typedMessage }), 'mismatched EIP-712 chain');
   const redacted = redact({ accessToken: 'secret', sessionId: 'secret', previewToken: 'keep' });
   if (redacted.accessToken !== '[REDACTED]' || redacted.sessionId !== '[REDACTED]' || redacted.previewToken !== 'keep') {
     throw new Error('Binance Web3 sensitive-field redaction failed');
