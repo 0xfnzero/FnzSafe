@@ -1,6 +1,6 @@
 "use client";
 
-import { Bot, ExternalLink, KeyRound, Save, ShieldCheck, Trash2 } from "lucide-react";
+import { Bot, CircleCheck, ExternalLink, KeyRound, PlugZap, Save, ShieldCheck, Trash2 } from "lucide-react";
 import type { BinanceAgentEnvironment, BinanceAgentPreferences } from "@/lib/binanceAgent";
 
 export interface BinanceAgentCredentialStatus {
@@ -10,12 +10,22 @@ export interface BinanceAgentCredentialStatus {
   ready: boolean;
 }
 
+export interface BinanceAgentCredentialTestResult {
+  environment: BinanceAgentEnvironment;
+  valid: boolean;
+  canTrade: boolean;
+  accountType: string;
+  permissions: string[];
+  verifiedAtMs: number;
+}
+
 interface BinanceAgentConfigurationProps {
   locale: "zh" | "en";
   preferences: BinanceAgentPreferences;
   apiKey: string;
   secretKey: string;
   status: BinanceAgentCredentialStatus | null;
+  testResult: BinanceAgentCredentialTestResult | null;
   busy: boolean;
   desktop: boolean;
   onPreferencesChange: (value: BinanceAgentPreferences) => void;
@@ -23,6 +33,7 @@ interface BinanceAgentConfigurationProps {
   onSecretKeyChange: (value: string) => void;
   onSave: () => void;
   onDelete: () => void;
+  onTest: () => void;
   onOpenDocs: () => void;
 }
 
@@ -54,6 +65,7 @@ const COPY = {
     limitHint: "按交易对的计价资产计算，例如 USDT。AI 不能拆单绕过此限制。",
     productionWarning: "生产环境会使用真实资金。建议先在 Spot Testnet 验证完整流程。",
     desktopOnly: "凭据只能在 FnzSafe 桌面客户端中配置。",
+    test: "验证连接", verified: "连接已验证", readOnly: "当前 Key 无现货交易权限", canTrade: "具备现货交易权限",
   },
   en: {
     title: "Binance Agent OS",
@@ -82,6 +94,7 @@ const COPY = {
     limitHint: "Measured in the pair's quote asset, such as USDT. The AI cannot split orders to bypass this limit.",
     productionWarning: "Production uses real funds. Validate the complete flow on Spot Testnet first.",
     desktopOnly: "Credentials can only be configured in the FnzSafe desktop app.",
+    test: "Verify connection", verified: "Connection verified", readOnly: "This key cannot trade Spot", canTrade: "Spot trading permission available",
   },
 } as const;
 
@@ -141,8 +154,17 @@ export function BinanceAgentConfiguration(props: BinanceAgentConfigurationProps)
 
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={props.onSave} disabled={!props.desktop || props.busy || props.apiKey.trim().length < 16 || props.secretKey.trim().length < 16} className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-amber-300 px-3 text-xs font-semibold text-black hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-40"><Save className="h-3.5 w-3.5" />{copy.save}</button>
+          {ready && <button type="button" onClick={props.onTest} disabled={!props.desktop || props.busy} className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-emerald-300/20 px-3 text-xs text-emerald-200 hover:bg-emerald-500/10 disabled:opacity-40"><PlugZap className="h-3.5 w-3.5" />{copy.test}</button>}
           {ready && <button type="button" onClick={props.onDelete} disabled={props.busy} className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-red-300/20 px-3 text-xs text-red-200 hover:bg-red-500/10 disabled:opacity-40"><Trash2 className="h-3.5 w-3.5" />{copy.remove}</button>}
         </div>
+        {props.testResult?.valid && props.testResult.environment === props.preferences.environment && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-emerald-300/20 bg-emerald-400/[0.06] px-3 py-2 text-xs text-emerald-200">
+            <span className="inline-flex items-center gap-1"><CircleCheck className="h-3.5 w-3.5" />{copy.verified}</span>
+            <span>{props.testResult.accountType}</span>
+            <span>{props.testResult.canTrade ? copy.canTrade : copy.readOnly}</span>
+            {props.testResult.permissions.length > 0 && <span>{props.testResult.permissions.join(" · ")}</span>}
+          </div>
+        )}
       </section>
     </div>
   );

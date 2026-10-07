@@ -6892,6 +6892,7 @@ pub fn run() {
             research_store::binance_agent_credentials_status,
             research_store::binance_agent_credentials_store,
             research_store::binance_agent_credentials_delete,
+            research_store::binance_agent_credentials_test,
             research_store::binance_skill_market_sync,
             research_store::binance_skill_install,
             dapp_submit_connect_request,

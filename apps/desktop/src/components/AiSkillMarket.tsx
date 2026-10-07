@@ -41,6 +41,9 @@ type BinanceSkill = {
   description: string;
   version: string;
   sourcePath: string;
+  collection: "binance-web3" | "binance";
+  runtimeMode: "knowledge";
+  hasRemoteCode: boolean;
   installed: boolean;
   installedVersion: string;
   installedCommit: string;
@@ -91,6 +94,7 @@ const COPY = {
     installing: "安装中", refreshing: "正在同步币安技能", refresh: "刷新币安技能", unavailable: "仅桌面版支持同步和安装",
     syncFailed: "币安技能同步失败", installFailed: "技能安装失败", installComplete: "技能安装完成", updated: "技能更新完成",
     version: "版本", synced: "同步于", commit: "提交", remoteEmpty: "币安官方技能列表为空",
+    knowledge: "知识型", noRemoteCode: "仅安装文档，不执行远程脚本", exchange: "Binance", web3: "Binance Web3",
   },
   en: {
     all: "All", market: "Market", defi: "DeFi", risk: "Risk", intelligence: "Intelligence", research: "Research", role: "Roles",
@@ -101,6 +105,7 @@ const COPY = {
     installing: "Installing", refreshing: "Syncing Binance skills", refresh: "Refresh Binance skills", unavailable: "Sync and installation require the desktop app",
     syncFailed: "Binance skill sync failed", installFailed: "Skill installation failed", installComplete: "Skill installed", updated: "Skill updated",
     version: "Version", synced: "Synced", commit: "Commit", remoteEmpty: "No official Binance skills are available",
+    knowledge: "Knowledge", noRemoteCode: "Documentation only; remote scripts are never executed", exchange: "Binance", web3: "Binance Web3",
   },
 } as const;
 
@@ -168,7 +173,7 @@ export function AiSkillMarket({ locale, desktop }: { locale: AiSkillLocale; desk
     setInstalling(skill.id);
     try {
       await invoke("binance_skill_install", {
-        request: { skillId: skill.id, commit: catalog.commit },
+        request: { skillId: skill.id, commit: catalog.commit, sourcePath: skill.sourcePath },
       });
       await syncCatalog(false);
       toast.success(skill.installed ? copy.updated : copy.installComplete);
@@ -251,15 +256,16 @@ export function AiSkillMarket({ locale, desktop }: { locale: AiSkillLocale; desk
                     <div className="flex items-start gap-3">
                       <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-amber-400/10 text-amber-200"><Sparkles className="h-5 w-5" /></span>
                       <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-1.5"><h4 className="min-w-0 break-words text-sm font-semibold leading-5 text-gray-100">{skill.name}</h4><span className="rounded border border-amber-300/20 px-1.5 py-0.5 text-[10px] font-medium text-amber-200">{copy.official}</span></div>
+                        <div className="flex flex-wrap items-center gap-1.5"><h4 className="min-w-0 break-words text-sm font-semibold leading-5 text-gray-100">{skill.name}</h4><span className="rounded border border-amber-300/20 px-1.5 py-0.5 text-[10px] font-medium text-amber-200">{copy.official}</span><span className="rounded border border-cyan-300/20 px-1.5 py-0.5 text-[10px] font-medium text-cyan-200">{copy.knowledge}</span></div>
                         <p className="mt-1 break-all font-mono text-[10px] text-gray-600">{skill.id}</p>
                       </div>
                     </div>
                     <p className="mt-3 text-xs leading-5 text-gray-400">{skill.description}</p>
                     <div className="mt-auto flex flex-wrap items-end justify-between gap-3 border-t border-white/[0.08] pt-3">
                       <div className="text-[11px] text-gray-500">
-                        <span>{copy.version} {skill.version}</span>
+                        <span>{skill.collection === "binance-web3" ? copy.web3 : copy.exchange} · {copy.version} {skill.version}</span>
                         {skill.installed && <span className="ml-2 inline-flex items-center gap-1 text-emerald-300"><PackageCheck className="h-3.5 w-3.5" />{copy.installed}</span>}
+                        {skill.hasRemoteCode && <span className="mt-1 block text-amber-200/70">{copy.noRemoteCode}</span>}
                       </div>
                       <button type="button" onClick={() => void installSkill(skill)} disabled={!desktop || Boolean(installing) || (skill.installed && !skill.updateAvailable)} className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-white px-3 text-xs font-semibold text-black hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-45">
                         <ActionIcon className={`h-3.5 w-3.5 ${busy ? "animate-spin" : ""}`} />

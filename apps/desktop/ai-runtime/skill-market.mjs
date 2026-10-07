@@ -9,7 +9,7 @@ const SOURCE = 'binance/binance-skills-hub';
 const SOURCE_URL = `https://github.com/${SOURCE}`;
 const API_ROOT = `https://api.github.com/repos/${SOURCE}`;
 const RAW_ROOT = `https://raw.githubusercontent.com/${SOURCE}`;
-const SKILL_PREFIX = 'skills/binance-web3/';
+const CATALOG_VERSION = 2;
 const CATALOG_TTL_MS = 60 * 60 * 1000;
 const MAX_INPUT_BYTES = 32 * 1024;
 const MAX_INDEX_BYTES = 5 * 1024 * 1024;
@@ -18,6 +18,7 @@ const MAX_SKILL_TOTAL_BYTES = 2 * 1024 * 1024;
 const MAX_SKILL_FILES = 64;
 const SKILL_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
 const COMMIT_SHA = /^[a-f0-9]{40}$/u;
+const SKILL_SOURCE_PATH = /^skills\/(binance-web3|binance)\/([a-z0-9]+(?:-[a-z0-9]+)*)\/SKILL\.md$/u;
 
 const text = (value) => String(value ?? '').trim();
 
@@ -151,7 +152,7 @@ async function syncCatalog(force = false) {
   const location = paths();
   await fs.mkdir(location.installed, { recursive: true, mode: 0o700 });
   const cached = await readJson(location.cache);
-  if (!force && cached?.source === SOURCE && COMMIT_SHA.test(text(cached?.commit))
+  if (!force && cached?.catalogVersion === CATALOG_VERSION && cached?.source === SOURCE && COMMIT_SHA.test(text(cached?.commit))
     && Date.now() - Number(cached?.fetchedAt || 0) < CATALOG_TTL_MS && Array.isArray(cached?.skills)) {
     return withInstallationState(cached);
   }
@@ -161,31 +162,57 @@ async function syncCatalog(force = false) {
   if (!COMMIT_SHA.test(commit)) throw new Error('Binance Skills Hub returned an invalid commit');
   const tree = await githubIndex(commit);
   const skillFiles = tree
-    .filter((entry) => entry?.type === 'blob' && /^skills\/binance-web3\/[a-z0-9-]+\/SKILL\.md$/u.test(text(entry?.path)))
+    .filter((entry) => entry?.type === 'blob' && SKILL_SOURCE_PATH.test(text(entry?.path)))
     .sort((left, right) => text(left.path).localeCompare(text(right.path)));
   if (skillFiles.length === 0 || skillFiles.length > 100) throw new Error('Binance Skills Hub skill count is invalid');
 
   const skills = await Promise.all(skillFiles.map(async (entry) => {
-    const id = text(entry.path).split('/')[2];
+    const sourcePath = text(entry.path);
+    const match = sourcePath.match(SKILL_SOURCE_PATH);
+    if (!match) throw new Error('Binance skill path is invalid');
+    const [, collection, id] = match;
     const source = await fetchText(`${RAW_ROOT}/${commit}/${entry.path}`, MAX_SKILL_FILE_BYTES);
     const metadata = parseFrontmatter(source, id);
-    if (metadata.name !== id) throw new Error(`Binance skill name mismatch for ${id}`);
-    return { id, ...metadata, sourcePath: entry.path };
+    const prefix = `${sourcePath.slice(0, -'SKILL.md'.length)}`;
+    const hasRemoteCode = tree.some((candidate) => {
+      const candidatePath = text(candidate?.path);
+      const relative = candidatePath.slice(prefix.length);
+      return candidate?.type === 'blob'
+        && candidatePath.startsWith(prefix)
+        && (/^scripts\//u.test(relative) || /\.(?:cjs|js|mjs|py|sh|ts)$/u.test(relative));
+    });
+    return {
+      id,
+      ...metadata,
+      collection,
+      sourcePath,
+      runtimeMode: 'knowledge',
+      hasRemoteCode,
+    };
   }));
-  const catalog = { source: SOURCE, sourceUrl: SOURCE_URL, commit, fetchedAt: Date.now(), skills };
+  if (new Set(skills.map((skill) => skill.id)).size !== skills.length) {
+    throw new Error('Binance Skills Hub contains duplicate skill IDs');
+  }
+  const catalog = { catalogVersion: CATALOG_VERSION, source: SOURCE, sourceUrl: SOURCE_URL, commit, fetchedAt: Date.now(), skills };
   await writeJsonAtomic(location.cache, catalog);
   return withInstallationState(catalog);
 }
 
-function installableFiles(tree, id) {
-  const prefix = `${SKILL_PREFIX}${id}/`;
+function isInstallableDocumentation(relative) {
+  return relative === 'SKILL.md'
+    || /^[A-Za-z0-9][A-Za-z0-9_-]*\.md$/u.test(relative)
+    || /^references\/[A-Za-z0-9][A-Za-z0-9_-]*\.md$/u.test(relative);
+}
+
+function installableFiles(tree, id, sourcePath) {
+  const match = text(sourcePath).match(SKILL_SOURCE_PATH);
+  if (!match || match[2] !== id) throw new Error('invalid Binance skill source path');
+  const prefix = sourcePath.slice(0, -'SKILL.md'.length);
   const files = tree.filter((entry) => {
     const relative = text(entry?.path).slice(prefix.length);
     return entry?.type === 'blob'
       && text(entry?.path).startsWith(prefix)
-      && (relative === 'SKILL.md'
-        || /^[a-z0-9-]+\.md$/u.test(relative)
-        || /^references\/[a-z0-9-]+\.md$/u.test(relative));
+      && isInstallableDocumentation(relative);
   });
   if (!files.some((entry) => text(entry.path) === `${prefix}SKILL.md`)) throw new Error('Binance skill is missing SKILL.md');
   if (files.length > MAX_SKILL_FILES) throw new Error('Binance skill contains too many documentation files');
@@ -196,13 +223,20 @@ function installableFiles(tree, id) {
   return files;
 }
 
-async function installSkill(idValue, commitValue) {
+async function installSkill(idValue, commitValue, sourcePathValue) {
   const id = text(idValue);
   const commit = text(commitValue);
+  const sourcePath = text(sourcePathValue);
   if (!SKILL_ID.test(id) || id.length > 100) throw new Error('invalid Binance skill ID');
   if (!COMMIT_SHA.test(commit)) throw new Error('invalid Binance skill commit');
+  if (!SKILL_SOURCE_PATH.test(sourcePath) || !sourcePath.endsWith(`/${id}/SKILL.md`)) {
+    throw new Error('invalid Binance skill source path');
+  }
   const tree = await githubIndex(commit);
-  const files = installableFiles(tree, id);
+  if (!tree.some((entry) => entry?.type === 'blob' && text(entry?.path) === sourcePath)) {
+    throw new Error('Binance skill source does not exist at this commit');
+  }
+  const files = installableFiles(tree, id, sourcePath);
   const location = paths();
   await Promise.all([
     fs.mkdir(location.installed, { recursive: true, mode: 0o700 }),
@@ -214,7 +248,7 @@ async function installSkill(idValue, commitValue) {
   let metadata;
   let downloadedBytes = 0;
   for (const entry of files) {
-    const relative = text(entry.path).slice(`${SKILL_PREFIX}${id}/`.length);
+    const relative = text(entry.path).slice(sourcePath.length - 'SKILL.md'.length);
     const destination = path.join(stage, ...relative.split('/'));
     if (!destination.startsWith(`${stage}${path.sep}`)) throw new Error('invalid Binance skill file path');
     const source = await fetchText(`${RAW_ROOT}/${commit}/${entry.path}`, MAX_SKILL_FILE_BYTES);
@@ -222,7 +256,6 @@ async function installSkill(idValue, commitValue) {
     if (downloadedBytes > MAX_SKILL_TOTAL_BYTES) throw new Error('Binance skill documentation exceeds the size limit');
     if (relative === 'SKILL.md') {
       metadata = parseFrontmatter(source, id);
-      if (metadata.name !== id) throw new Error('Binance skill name does not match its directory');
     }
     await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
     await fs.writeFile(destination, source, { encoding: 'utf8', mode: 0o600 });
@@ -231,6 +264,7 @@ async function installSkill(idValue, commitValue) {
   await writeJsonAtomic(path.join(stage, '.fnzsafe-source.json'), {
     source: SOURCE,
     sourceUrl: SOURCE_URL,
+    sourcePath,
     commit,
     version: metadata?.version || 'unversioned',
     installedAt,
@@ -257,11 +291,12 @@ async function selfTest() {
   }
   const files = installableFiles([
     { type: 'blob', path: 'skills/binance-web3/binance-test/SKILL.md', size: 100 },
+    { type: 'blob', path: 'skills/binance-web3/binance-test/README.md', size: 100 },
     { type: 'blob', path: 'skills/binance-web3/binance-test/knowledge.md', size: 100 },
     { type: 'blob', path: 'skills/binance-web3/binance-test/references/usage.md', size: 100 },
     { type: 'blob', path: 'skills/binance-web3/binance-test/scripts/install.mjs', size: 100 },
-  ], 'binance-test');
-  if (files.length !== 3 || files.some((file) => file.path.includes('/scripts/'))) {
+  ], 'binance-test', 'skills/binance-web3/binance-test/SKILL.md');
+  if (files.length !== 4 || files.some((file) => file.path.includes('/scripts/'))) {
     throw new Error('Binance skill path filter self-test failed');
   }
   process.stdout.write(`${JSON.stringify({ ok: true, source: SOURCE })}\n`);
@@ -270,7 +305,7 @@ async function selfTest() {
 async function main() {
   const input = await readInput();
   if (input.action === 'sync') return syncCatalog(input.force === true);
-  if (input.action === 'install') return installSkill(input.skillId, input.commit);
+  if (input.action === 'install') return installSkill(input.skillId, input.commit, input.sourcePath);
   throw new Error('unsupported Binance skill market action');
 }
 

@@ -20,7 +20,7 @@ import { binanceAgentInternals } from './plugins/providers/binance-agent.mjs';
 
 const registry = validateWeb3MarketRegistry();
 assert.deepEqual(registry, { ok: true, duplicates: [], missingHandlers: [], orphanHandlers: [] });
-assert.equal(web3MarketTools.length, 28);
+assert.equal(web3MarketTools.length, 32);
 
 const byName = new Map(web3MarketTools.map((tool) => [tool.name, tool]));
 const validate = (name, args) => validateToolArguments(byName.get(name).inputSchema, args);
@@ -40,6 +40,9 @@ assert.throws(
   () => validate('binance_spot_order_execute', { previewToken: 'x'.repeat(40), confirmation: 'yes' }),
   /confirmation must be one of/u,
 );
+assert.deepEqual(validate('binance_spot_order_book', { symbol: 'BTCUSDT', limit: 20 }), { symbol: 'BTCUSDT', limit: 20 });
+assert.throws(() => validate('binance_spot_order_book', { symbol: 'BTCUSDT', limit: 7 }), /limit must be one of/u);
+assert.deepEqual(validate('binance_spot_klines', { symbol: 'BTCUSDT', interval: '1h', limit: 10 }), { symbol: 'BTCUSDT', interval: '1h', limit: 10 });
 assert.throws(
   () => validate('binance_spot_order_preview', { symbol: 'BTCUSDT', side: 'BUY', type: 'MARKET', quoteOrderQty: '1'.repeat(41) }),
   /quoteOrderQty is too long/u,
@@ -359,4 +362,4 @@ try {
   await new Promise((resolve) => walletApiServer.close(resolve));
 }
 
-process.stdout.write(`${JSON.stringify({ ok: true, tools: web3MarketTools.length, checks: 44 })}\n`);
+process.stdout.write(`${JSON.stringify({ ok: true, tools: web3MarketTools.length, checks: 47 })}\n`);

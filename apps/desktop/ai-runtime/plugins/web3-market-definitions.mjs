@@ -12,6 +12,53 @@ export const web3MarketTools = [
     },
   },
   {
+    name: 'binance_spot_ticker_24h',
+    description: 'Read Binance Spot 24-hour price change, high, low, volume, quote volume, and trade count for one symbol. No API key is required.',
+    inputSchema: {
+      type: 'object',
+      properties: { symbol: { type: 'string', pattern: '^[A-Za-z0-9]{4,20}$' } },
+      required: ['symbol'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'binance_spot_order_book',
+    description: 'Read a current Binance Spot order-book snapshot for one symbol. No API key is required.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        symbol: { type: 'string', pattern: '^[A-Za-z0-9]{4,20}$' },
+        limit: { type: 'integer', enum: [5, 10, 20, 50, 100, 500, 1000, 5000], default: 20 },
+      },
+      required: ['symbol'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'binance_spot_klines',
+    description: 'Read recent Binance Spot candlesticks for one symbol and interval. No API key is required.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        symbol: { type: 'string', pattern: '^[A-Za-z0-9]{4,20}$' },
+        interval: { type: 'string', enum: ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M'] },
+        limit: integerProperty(1, 1000, 100),
+      },
+      required: ['symbol', 'interval'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'binance_futures_funding_rate',
+    description: 'Read the current Binance USD-M Futures mark price, index price, last funding rate, and next funding time for one perpetual symbol. No API key is required.',
+    inputSchema: {
+      type: 'object',
+      properties: { symbol: { type: 'string', pattern: '^[A-Za-z0-9]{4,20}$' } },
+      required: ['symbol'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'binance_spot_account',
     description: 'Read non-zero Binance Spot balances and account trading permissions using credentials stored by FnzSafe. Never returns credentials.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },

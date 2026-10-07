@@ -9,6 +9,12 @@ const ENVIRONMENTS = {
   production: 'https://api.binance.com',
   testnet: 'https://testnet.binance.vision',
 };
+const FUTURES_ENVIRONMENTS = {
+  production: 'https://fapi.binance.com',
+  testnet: 'https://testnet.binancefuture.com',
+};
+const KLINE_INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M'];
+const DEPTH_LIMITS = [5, 10, 20, 50, 100, 500, 1000, 5000];
 
 function text(value) {
   return String(value ?? '').trim();
@@ -172,6 +178,23 @@ async function publicRequest(path, params = {}) {
   });
 }
 
+async function futuresPublicRequest(path, params = {}) {
+  const { environment } = runtimeConfig({ requireCredentials: false });
+  const baseUrl = FUTURES_ENVIRONMENTS[environment];
+  const query = queryString(params);
+  return request(`${baseUrl}${path}${query ? `?${query}` : ''}`, {
+    headers: { Accept: 'application/json', 'User-Agent': 'FnzSafe-Binance-Agent/0.1' },
+  });
+}
+
+function integer(value, name, defaultValue, allowed) {
+  const candidate = value ?? defaultValue;
+  if (!Number.isInteger(candidate) || !allowed.includes(candidate)) {
+    throw new Error(`${name} must be one of: ${allowed.join(', ')}`);
+  }
+  return candidate;
+}
+
 async function signedRequest(method, path, params = {}) {
   const config = runtimeConfig();
   const signedParams = { ...params, recvWindow: 5_000, timestamp: Date.now() };
@@ -322,6 +345,49 @@ export const binanceAgentHandlers = {
   async binance_spot_market(args) {
     const snapshot = await symbolSnapshot(normalizedSymbol(requiredText(args, 'symbol')));
     return jsonContent({ source: 'Binance', environment: runtimeConfig({ requireCredentials: false }).environment, ...snapshot });
+  },
+
+  async binance_spot_ticker_24h(args) {
+    const symbol = normalizedSymbol(requiredText(args, 'symbol'));
+    const ticker = await publicRequest('/api/v3/ticker/24hr', { symbol });
+    return jsonContent({ source: 'Binance Spot', environment: runtimeConfig({ requireCredentials: false }).environment, ticker });
+  },
+
+  async binance_spot_order_book(args) {
+    const symbol = normalizedSymbol(requiredText(args, 'symbol'));
+    const limit = integer(args?.limit, 'limit', 20, DEPTH_LIMITS);
+    const orderBook = await publicRequest('/api/v3/depth', { symbol, limit });
+    return jsonContent({ source: 'Binance Spot', environment: runtimeConfig({ requireCredentials: false }).environment, symbol, limit, orderBook });
+  },
+
+  async binance_spot_klines(args) {
+    const symbol = normalizedSymbol(requiredText(args, 'symbol'));
+    const interval = text(args?.interval);
+    if (!KLINE_INTERVALS.includes(interval)) throw new Error(`interval must be one of: ${KLINE_INTERVALS.join(', ')}`);
+    const limit = Number(args?.limit ?? 100);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new Error('limit must be an integer from 1 to 1000');
+    const rows = await publicRequest('/api/v3/klines', { symbol, interval, limit });
+    const klines = (Array.isArray(rows) ? rows : []).map((row) => ({
+      openTime: row?.[0], open: row?.[1], high: row?.[2], low: row?.[3], close: row?.[4], volume: row?.[5],
+      closeTime: row?.[6], quoteVolume: row?.[7], trades: row?.[8], takerBuyBaseVolume: row?.[9], takerBuyQuoteVolume: row?.[10],
+    }));
+    return jsonContent({ source: 'Binance Spot', environment: runtimeConfig({ requireCredentials: false }).environment, symbol, interval, klines });
+  },
+
+  async binance_futures_funding_rate(args) {
+    const symbol = normalizedSymbol(requiredText(args, 'symbol'));
+    const premium = await futuresPublicRequest('/fapi/v1/premiumIndex', { symbol });
+    return jsonContent({
+      source: 'Binance USD-M Futures',
+      environment: runtimeConfig({ requireCredentials: false }).environment,
+      symbol,
+      markPrice: premium?.markPrice,
+      indexPrice: premium?.indexPrice,
+      lastFundingRate: premium?.lastFundingRate,
+      nextFundingTime: premium?.nextFundingTime,
+      interestRate: premium?.interestRate,
+      retrievedAt: new Date().toISOString(),
+    });
   },
 
   async binance_spot_account() {

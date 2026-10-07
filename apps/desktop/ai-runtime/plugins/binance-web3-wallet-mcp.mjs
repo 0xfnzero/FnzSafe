@@ -249,6 +249,22 @@ function limitOrderParameters(args) {
   };
 }
 
+function sendParameters(args) {
+  const chain = chainId(args);
+  const sendMaximum = args?.max === true;
+  if (args?.max !== undefined && typeof args.max !== 'boolean') throw new Error('max must be a boolean');
+  const amount = text(args?.amount) ? decimal(args, 'amount') : '';
+  if (sendMaximum === Boolean(amount)) throw new Error('provide exactly one of amount or max');
+  return {
+    chainId: chain,
+    amount,
+    max: sendMaximum,
+    tokenAddress: tokenAddress(args?.tokenAddress, chain, 'tokenAddress'),
+    recipient: tokenAddress(args?.recipient, chain, 'recipient'),
+    gasLevel: gasLevel(args),
+  };
+}
+
 function swapArgs(parameters, command = 'swap') {
   return [
     'market-order', command,
@@ -271,6 +287,17 @@ function limitArgs(parameters) {
     '--toToken', parameters.toToken,
     '--slippage', parameters.slippage,
     '--mev', parameters.mev,
+    '--gasLevel', parameters.gasLevel,
+  ];
+}
+
+function sendArgs(parameters) {
+  return [
+    'wallet', 'send',
+    '--binanceChainId', parameters.chainId,
+    ...(parameters.max ? ['--max'] : ['--amount', parameters.amount]),
+    '--tokenAddress', parameters.tokenAddress,
+    '--recipient', parameters.recipient,
     '--gasLevel', parameters.gasLevel,
   ];
 }
@@ -298,6 +325,8 @@ const tools = [
   { name: 'binance_web3_wallet_status', description: 'Check Binance Agentic Wallet sign-in and wallet creation status.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true } },
   { name: 'binance_web3_wallet_signin', description: 'Start Binance Agentic Wallet QR sign-in and return the official Binance URL and pairing details. This never asks for an API key or private key.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, annotations: { readOnlyHint: false } },
   { name: 'binance_web3_wallet_verify', description: 'Verify a Binance Agentic Wallet QR sign-in after the user approves it in the Binance App.', inputSchema: { type: 'object', properties: { qrCodeId: { type: 'string', minLength: 1, maxLength: 256 } }, required: ['qrCodeId'], additionalProperties: false }, annotations: { readOnlyHint: false } },
+  { name: 'binance_web3_wallet_signout_preview', description: 'Preview disconnecting the Binance Agentic Wallet session. This does not clear the session.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_web3_wallet_signout_execute', description: 'Disconnect the Binance Agentic Wallet and clear its isolated local session. Requires a later user message exactly equal to CONFIRM.', inputSchema: { type: 'object', properties: { previewToken: { type: 'string', minLength: 64 }, confirmation: { type: 'string', enum: ['CONFIRM'] } }, required: ['previewToken', 'confirmation'], additionalProperties: false }, annotations: { destructiveHint: true, idempotentHint: true, readOnlyHint: false } },
   { name: 'binance_web3_wallet_chains', description: 'List chains supported by the connected Binance Agentic Wallet.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true } },
   { name: 'binance_web3_wallet_addresses', description: 'Read the connected Binance Agentic Wallet addresses for supported chains.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true } },
   { name: 'binance_web3_wallet_balance', description: 'Read non-zero Binance Agentic Wallet token balances and USD values.', inputSchema: { type: 'object', properties: { chainId: chainProperty, symbol: { type: 'string', minLength: 1, maxLength: 32 }, tokenAddress: tokenProperty }, additionalProperties: false }, annotations: { readOnlyHint: true } },
@@ -305,6 +334,9 @@ const tools = [
   { name: 'binance_web3_wallet_quota', description: 'Read current Binance Agentic Wallet daily trading-limit usage and remaining quota.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true } },
   { name: 'binance_web3_wallet_history', description: 'Read Binance Agentic Wallet on-chain transaction history.', inputSchema: { type: 'object', properties: { chainId: chainProperty, type: { type: 'string', enum: ['all', 'pending', 'confirmed'] }, size: { type: 'integer', minimum: 1, maximum: 100 }, txHash: { type: 'string', minLength: 16, maxLength: 128 } }, additionalProperties: false }, annotations: { readOnlyHint: true } },
   { name: 'binance_web3_wallet_gas', description: 'Read current low, medium, and high gas-price estimates for one chain.', inputSchema: { type: 'object', properties: { chainId: chainProperty }, required: ['chainId'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_web3_wallet_transaction_lock', description: 'Read the Binance Agentic Wallet transaction-lock state for one chain before submitting another transaction.', inputSchema: { type: 'object', properties: { chainId: chainProperty }, required: ['chainId'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_web3_transfer_preview', description: 'Create a five-minute, integrity-bound preview for an exact Binance Agentic Wallet token transfer. This does not send tokens.', inputSchema: { type: 'object', properties: { chainId: chainProperty, amount: decimalProperty, max: { type: 'boolean', default: false }, tokenAddress: tokenProperty, recipient: tokenProperty, gasLevel: { type: 'string', enum: GAS_LEVELS, default: 'MEDIUM' } }, required: ['chainId', 'tokenAddress', 'recipient'], additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'binance_web3_transfer_execute', description: 'Execute one exact Binance Agentic Wallet token-transfer preview. Use only after the user sends a new message exactly equal to CONFIRM.', inputSchema: { type: 'object', properties: { previewToken: { type: 'string', minLength: 64 }, confirmation: { type: 'string', enum: ['CONFIRM'] } }, required: ['previewToken', 'confirmation'], additionalProperties: false }, annotations: { destructiveHint: true, idempotentHint: false, readOnlyHint: false } },
   { name: 'binance_web3_swap_quote', description: 'Get a Binance Agentic Wallet DEX swap quote without trading.', inputSchema: { type: 'object', properties: tradingProperties, required: ['chainId', 'fromTokenQty', 'fromToken', 'toToken'], additionalProperties: false }, annotations: { readOnlyHint: true } },
   { name: 'binance_web3_swap_preview', description: 'Create a five-minute, integrity-bound preview for an exact Binance Agentic Wallet market swap. This does not trade.', inputSchema: { type: 'object', properties: tradingProperties, required: ['chainId', 'fromTokenQty', 'fromToken', 'toToken'], additionalProperties: false }, annotations: { readOnlyHint: true } },
   { name: 'binance_web3_swap_execute', description: 'Execute one exact Binance Agentic Wallet swap preview. Use only after the user sends a new message exactly equal to CONFIRM.', inputSchema: { type: 'object', properties: { previewToken: { type: 'string', minLength: 64 }, confirmation: { type: 'string', enum: ['CONFIRM'] } }, required: ['previewToken', 'confirmation'], additionalProperties: false }, annotations: { destructiveHint: true, idempotentHint: false, readOnlyHint: false } },
@@ -325,11 +357,18 @@ async function handleTool(name, args) {
     case 'binance_web3_wallet_status': return runBaw(['wallet', 'status']);
     case 'binance_web3_wallet_signin': return runBaw(['auth', 'signin']);
     case 'binance_web3_wallet_verify': return runBaw(['auth', 'verify', '--qrCodeId', requiredString(args, 'qrCodeId', 256)], WRITE_TIMEOUT_MS);
+    case 'binance_web3_wallet_signout_preview': {
+      const status = await runBaw(['wallet', 'status']);
+      const previewToken = createPreview('signout', {});
+      const preview = decodePreview(previewToken);
+      return { action: 'preview', operation: 'signout', status, expiresAt: new Date(preview.expiresAt).toISOString(), previewToken, confirmationRequired: 'CONFIRM' };
+    }
     case 'binance_web3_wallet_chains': return runBaw(['wallet', 'chains']);
     case 'binance_web3_wallet_addresses': return runBaw(['wallet', 'address']);
     case 'binance_web3_wallet_settings': return runBaw(['wallet', 'settings']);
     case 'binance_web3_wallet_quota': return runBaw(['wallet', 'left-quota']);
     case 'binance_web3_wallet_gas': return runBaw(['wallet', 'gas-price', '--binanceChainId', chainId(args)]);
+    case 'binance_web3_wallet_transaction_lock': return runBaw(['wallet', 'tx-lock', '--binanceChainId', chainId(args)]);
     case 'binance_web3_wallet_balance': {
       const command = ['wallet', 'balance'];
       const chain = optionalString(args, 'chainId', 16);
@@ -352,6 +391,18 @@ async function handleTool(name, args) {
     case 'binance_web3_swap_quote': {
       const parameters = swapParameters(args);
       return runBaw(swapArgs(parameters, 'quote'));
+    }
+    case 'binance_web3_transfer_preview': {
+      const parameters = sendParameters(args);
+      const [balance, gas] = await Promise.all([
+        runBaw(['wallet', 'balance', '--binanceChainId', parameters.chainId, '--tokenAddress', parameters.tokenAddress]),
+        runBaw(['wallet', 'gas-price', '--binanceChainId', parameters.chainId]),
+      ]);
+      if (balance?.success === false) return balance;
+      if (gas?.success === false) return gas;
+      const previewToken = createPreview('transfer', parameters);
+      const preview = decodePreview(previewToken);
+      return { action: 'preview', operation: 'transfer', parameters, balance, gas, expiresAt: new Date(preview.expiresAt).toISOString(), previewToken, confirmationRequired: 'CONFIRM' };
     }
     case 'binance_web3_swap_preview': {
       const parameters = swapParameters(args);
@@ -402,16 +453,22 @@ async function handleTool(name, args) {
     }
     case 'binance_web3_swap_execute':
     case 'binance_web3_limit_order_execute':
-    case 'binance_web3_limit_cancel_execute': {
+    case 'binance_web3_limit_cancel_execute':
+    case 'binance_web3_transfer_execute':
+    case 'binance_web3_wallet_signout_execute': {
       confirmation(args);
       const preview = decodePreview(requiredString(args, 'previewToken', 16_384));
       let expected = 'limit-cancel';
       if (name === 'binance_web3_swap_execute') expected = 'swap';
       else if (name === 'binance_web3_limit_order_execute') expected = 'limit-order';
+      else if (name === 'binance_web3_transfer_execute') expected = 'transfer';
+      else if (name === 'binance_web3_wallet_signout_execute') expected = 'signout';
       if (preview.operation !== expected) throw new Error(`preview operation must be ${expected}`);
       await consumePreview(preview);
       if (expected === 'swap') return runBaw(swapArgs(preview.parameters), WRITE_TIMEOUT_MS);
       if (expected === 'limit-order') return runBaw(limitArgs(preview.parameters), WRITE_TIMEOUT_MS);
+      if (expected === 'transfer') return runBaw(sendArgs(preview.parameters), WRITE_TIMEOUT_MS);
+      if (expected === 'signout') return runBaw(['auth', 'signout'], WRITE_TIMEOUT_MS);
       return runBaw(['limit-order', 'cancel', '--strategyId', requiredString(preview.parameters, 'strategyId', 64)], WRITE_TIMEOUT_MS);
     }
     default: throw new Error(`Unknown Binance Web3 tool: ${name}`);
@@ -452,6 +509,11 @@ async function selfTest() {
     slippage: 1,
   });
   if (!swapArgs(parameters).includes('--gasLevel')) throw new Error('Binance Web3 command construction failed');
+  const transfer = sendParameters({
+    chainId: '56', amount: '2.5', tokenAddress: '0x55d398326f99059fF775485246999027B3197955',
+    recipient: '0x0000000000000000000000000000000000000001', gasLevel: 'LOW',
+  });
+  if (!sendArgs(transfer).includes('--recipient')) throw new Error('Binance Web3 transfer command construction failed');
   try {
     swapParameters({ ...parameters, slippage: 6 });
     throw new Error('unsafe Binance Web3 slippage was accepted');

@@ -87,6 +87,7 @@ import { ResearchAiConfiguration } from "@/components/ResearchAiConfiguration";
 import {
   BinanceAgentConfiguration,
   type BinanceAgentCredentialStatus,
+  type BinanceAgentCredentialTestResult,
 } from "@/components/BinanceAgentConfiguration";
 import { SettingsCenterLayout, type SettingsNavigationItem } from "@/components/SettingsCenterLayout";
 import { useSecureKeyboardInput } from "@/hooks/useSecureKeyboardInput";
@@ -3962,6 +3963,7 @@ export default function Home() {
   const [binanceAgentApiKey, setBinanceAgentApiKey] = useState("");
   const [binanceAgentSecretKey, setBinanceAgentSecretKey] = useState("");
   const [binanceAgentCredentialStatus, setBinanceAgentCredentialStatus] = useState<BinanceAgentCredentialStatus | null>(null);
+  const [binanceAgentCredentialTestResult, setBinanceAgentCredentialTestResult] = useState<BinanceAgentCredentialTestResult | null>(null);
   const [binanceAgentBusy, setBinanceAgentBusy] = useState(false);
   const [binanceAgentStorageHydrated, setBinanceAgentStorageHydrated] = useState(false);
   const [twitterWatchedUsers, setTwitterWatchedUsers] = useState("");
@@ -10211,6 +10213,7 @@ export default function Home() {
       });
       if (binanceAgentCredentialRequestIdRef.current !== requestId) return;
       setBinanceAgentCredentialStatus(status);
+      setBinanceAgentCredentialTestResult(null);
       toast.success(aiSkillLocale === "zh" ? "Binance 凭据已安全保存" : "Binance credentials saved securely");
     } catch (error) {
       if (binanceAgentCredentialRequestIdRef.current !== requestId) return;
@@ -10233,6 +10236,7 @@ export default function Home() {
       });
       if (binanceAgentCredentialRequestIdRef.current !== requestId) return;
       setBinanceAgentCredentialStatus(status);
+      setBinanceAgentCredentialTestResult(null);
       toast.success(aiSkillLocale === "zh" ? "已移除 Binance 凭据" : "Binance credentials removed");
     } catch (error) {
       if (binanceAgentCredentialRequestIdRef.current !== requestId) return;
@@ -10241,6 +10245,23 @@ export default function Home() {
       setBinanceAgentApiKey("");
       setBinanceAgentSecretKey("");
       if (binanceAgentCredentialRequestIdRef.current === requestId) setBinanceAgentBusy(false);
+    }
+  };
+
+  const testBinanceAgentCredentials = async () => {
+    if (!isTauriWebview()) return;
+    setBinanceAgentBusy(true);
+    try {
+      const result = await invoke<BinanceAgentCredentialTestResult>("binance_agent_credentials_test", {
+        environment: binanceAgentPreferences.environment,
+      });
+      setBinanceAgentCredentialTestResult(result);
+      toast.success(aiSkillLocale === "zh" ? "Binance API 连接验证成功" : "Binance API connection verified");
+    } catch (error) {
+      setBinanceAgentCredentialTestResult(null);
+      toast.error(errorMessage(error, aiSkillLocale === "zh" ? "Binance API 连接验证失败" : "Binance API connection verification failed"));
+    } finally {
+      setBinanceAgentBusy(false);
     }
   };
 
@@ -23596,6 +23617,7 @@ export default function Home() {
                     apiKey={binanceAgentApiKey}
                     secretKey={binanceAgentSecretKey}
                     status={binanceAgentCredentialStatus}
+                    testResult={binanceAgentCredentialTestResult}
                     busy={binanceAgentBusy}
                     desktop={isTauriWebview()}
                     onPreferencesChange={setBinanceAgentPreferences}
@@ -23603,6 +23625,7 @@ export default function Home() {
                     onSecretKeyChange={setBinanceAgentSecretKey}
                     onSave={() => void saveBinanceAgentCredentials()}
                     onDelete={() => void deleteBinanceAgentCredentials()}
+                    onTest={() => void testBinanceAgentCredentials()}
                     onOpenDocs={openBinanceAgentDocs}
                   />
                 )}
