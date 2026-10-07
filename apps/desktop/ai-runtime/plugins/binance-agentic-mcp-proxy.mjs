@@ -123,6 +123,11 @@ function jsonResult(value, isError = false) {
   };
 }
 
+function mcpRemoteProxyPath() {
+  const packageJsonUrl = import.meta.resolve('mcp-remote/package.json');
+  return fileURLToPath(new URL('./dist/proxy.js', packageJsonUrl));
+}
+
 async function listAllTools(client) {
   const tools = [];
   let cursor;
@@ -135,7 +140,7 @@ async function listAllTools(client) {
 }
 
 function remoteTransport() {
-  const proxyPath = fileURLToPath(import.meta.resolve('mcp-remote'));
+  const proxyPath = mcpRemoteProxyPath();
   const configDir = text(process.env.FNZSAFE_BINANCE_MCP_CONFIG_DIR);
   if (!configDir || !path.isAbsolute(configDir)) throw new Error('Binance Agentic OAuth storage directory is invalid');
   return new StdioClientTransport({
@@ -240,6 +245,7 @@ async function runProxy() {
 }
 
 async function selfTest() {
+  await fs.access(mcpRemoteProxyPath());
   const secret = 'a'.repeat(32);
   const now = 1_000_000;
   const token = createPreviewToken('place_order', { symbol: 'BTCUSDT', apiKey: 'hidden' }, secret, now);
