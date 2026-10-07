@@ -36,6 +36,7 @@
         includeDefaultRoots: false
         customSkillDirs:
           - !!js process.env.FNZSAFE_DSH_SKILL_ROOT
+          - !!js process.env.FNZSAFE_BINANCE_SKILL_ROOT
 
     - id: tool-skill
       name: '@deepseek-ai/dsh-tool-skill'
@@ -96,4 +97,23 @@
           FNZSAFE_BINANCE_USER_CONFIRMED: !!js process.env.FNZSAFE_BINANCE_USER_CONFIRMED
         cwd: !!js process.cwd()
         toolCallTimeoutMs: 120000
+        failOnStartupError: true
+
+    - id: fnzsafe-binance-web3-wallet-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: binance_web3_wallet
+        transport: stdio
+        command: !!js process.execPath
+        args:
+          - !!js process.env.FNZSAFE_BINANCE_WEB3_WALLET_MCP_PATH
+        env:
+          FNZSAFE_AGENTIC_PREVIEW_SECRET: !!js process.env.FNZSAFE_WALLET_API_TOKEN
+          FNZSAFE_BINANCE_WEB3_WALLET_DIR: !!js process.env.FNZSAFE_BINANCE_WEB3_WALLET_DIR
+          FNZSAFE_BINANCE_USER_CONFIRMED: !!js process.env.FNZSAFE_BINANCE_USER_CONFIRMED
+          HOME: !!js process.env.HOME
+          USERPROFILE: !!js process.env.USERPROFILE
+          PATH: !!js process.env.PATH
+        cwd: !!js process.cwd()
+        toolCallTimeoutMs: 130000
         failOnStartupError: true

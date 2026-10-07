@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "entries": [
     {
       "id": "automated-wallet-trading",
@@ -22,6 +22,17 @@
       "useCases": { "zh": ["连接隔离的 Agentic 子账户", "AI 查询 Binance 余额与挂单", "确认后执行交易"], "en": ["Connect an isolated Agentic sub-account", "AI-assisted Binance balances and open orders", "Confirmed trade execution"] },
       "sources": ["Binance Agentic MCP", "Binance Agent OS", "Binance Spot API"],
       "tools": ["binance_spot_market", "binance_spot_account", "binance_spot_open_orders", "binance_spot_order_status", "binance_spot_order_preview", "binance_spot_order_execute", "binance_spot_cancel_preview", "binance_spot_cancel_execute"]
+    },
+    {
+      "id": "binance-web3-wallet-trading",
+      "kind": "skill",
+      "category": "market",
+      "icon": "coins",
+      "name": { "zh": "Binance Web3 链上交易", "en": "Binance Web3 On-chain Trading" },
+      "description": { "zh": "通过 Binance Agentic Wallet 的 MPC 钱包执行多链余额查询、DEX 报价、逐笔确认的 Swap 和 BSC/Solana 限价单。", "en": "Use Binance Agentic Wallet MPC security for multichain balances, DEX quotes, confirmed swaps, and BSC/Solana limit orders." },
+      "useCases": { "zh": ["扫码连接 Agentic Wallet", "多链 DEX Swap", "BSC 与 Solana 限价单"], "en": ["QR-connect Agentic Wallet", "Multichain DEX swaps", "BSC and Solana limit orders"] },
+      "sources": ["Binance Agentic Wallet", "Binance Web3 Wallet", "Binance Skills Hub"],
+      "tools": ["binance_web3_wallet_status", "binance_web3_wallet_signin", "binance_web3_wallet_verify", "binance_web3_wallet_chains", "binance_web3_wallet_addresses", "binance_web3_wallet_balance", "binance_web3_wallet_settings", "binance_web3_wallet_quota", "binance_web3_wallet_history", "binance_web3_wallet_gas", "binance_web3_swap_quote", "binance_web3_swap_preview", "binance_web3_swap_execute", "binance_web3_market_orders", "binance_web3_limit_order_preview", "binance_web3_limit_order_execute", "binance_web3_limit_orders", "binance_web3_limit_cancel_preview", "binance_web3_limit_cancel_execute"]
     },
     {
       "id": "binance-web3-token-audit",

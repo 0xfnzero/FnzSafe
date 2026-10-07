@@ -23365,10 +23365,10 @@ export default function Home() {
           {
             id: "skills",
             group: "ai",
-            title: aiSkillLocale === "zh" ? "内置技能市场" : "Built-in Skill Market",
-            description: aiSkillLocale === "zh" ? "查看 AI 已内置的 Web3 技能和专业角色" : "Browse built-in Web3 skills and specialist roles",
-            summary: aiSkillLocale === "zh" ? `${AI_SKILL_CATALOG.length} 个可用` : `${AI_SKILL_CATALOG.length} available`,
-            keywords: ["AI", "skill", "skills", "role", "market", "Web3", "技能", "角色卡", "市场", "内置"],
+            title: aiSkillLocale === "zh" ? "技能市场" : "Skill Market",
+            description: aiSkillLocale === "zh" ? "同步并安装币安官方技能，浏览 FnzSafe 内置能力" : "Sync and install official Binance skills, or browse FnzSafe capabilities",
+            summary: aiSkillLocale === "zh" ? `${AI_SKILL_CATALOG.length} 个内置` : `${AI_SKILL_CATALOG.length} built in`,
+            keywords: ["AI", "skill", "skills", "role", "market", "Web3", "Binance", "install", "技能", "角色卡", "市场", "币安", "安装"],
             icon: <Sparkles className="h-4 w-4" />,
           },
           {
@@ -23586,7 +23586,7 @@ export default function Home() {
                 )}
 
                 {settingsSection === "skills" && (
-                  <AiSkillMarket locale={aiSkillLocale} />
+                  <AiSkillMarket locale={aiSkillLocale} desktop={isTauriWebview()} />
                 )}
 
                 {settingsSection === "agent-os" && (

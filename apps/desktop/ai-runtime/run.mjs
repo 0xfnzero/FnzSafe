@@ -14,6 +14,8 @@ const skillCatalogPath = path.join(runtimeRoot, 'skill-catalog.json');
 const patchPath = path.join(runtimeRoot, 'fnzsafe.patch.yml');
 const web3McpPath = path.join(runtimeRoot, 'plugins', 'web3-market-mcp.mjs');
 const binanceAgenticMcpProxyPath = path.join(runtimeRoot, 'plugins', 'binance-agentic-mcp-proxy.mjs');
+const binanceWeb3WalletMcpPath = path.join(runtimeRoot, 'plugins', 'binance-web3-wallet-mcp.mjs');
+const skillMarketPath = path.join(runtimeRoot, 'skill-market.mjs');
 const MAX_INPUT_BYTES = 512 * 1024;
 const RUN_TIMEOUT_MS = 180_000;
 const execFileAsync = promisify(execFile);
@@ -66,8 +68,11 @@ function runtimeEnvironment(input, workspaceRoot, dshHome, model) {
     FNZSAFE_DSH_SYSTEM_PROMPT: requiredString(input, 'systemPrompt', 80_000),
     FNZSAFE_WEB3_MCP_SERVER_PATH: web3McpPath,
     FNZSAFE_BINANCE_AGENTIC_MCP_PROXY_PATH: binanceAgenticMcpProxyPath,
+    FNZSAFE_BINANCE_WEB3_WALLET_MCP_PATH: binanceWeb3WalletMcpPath,
     FNZSAFE_BINANCE_AGENTIC_MCP_ENABLED: input.binanceAgenticMcpEnabled === true ? '1' : '0',
     FNZSAFE_BINANCE_MCP_CONFIG_DIR: path.join(dshHome, 'binance-agentic-oauth'),
+    FNZSAFE_BINANCE_WEB3_WALLET_DIR: path.join(dshHome, 'binance-web3-wallet'),
+    FNZSAFE_BINANCE_SKILL_ROOT: path.join(path.dirname(dshHome), 'binance-skills'),
     FNZSAFE_AI_WORKSPACE: workspaceRoot,
     ...(process.env.FNZSAFE_WALLET_API_URL ? { FNZSAFE_WALLET_API_URL: process.env.FNZSAFE_WALLET_API_URL } : {}),
     ...(process.env.FNZSAFE_WALLET_API_TOKEN ? { FNZSAFE_WALLET_API_TOKEN: process.env.FNZSAFE_WALLET_API_TOKEN } : {}),
@@ -87,6 +92,7 @@ async function runHarness(input) {
   const sessionId = optionalSessionId(input);
   await fs.mkdir(workspaceRoot, { recursive: true, mode: 0o700 });
   await fs.mkdir(dshHome, { recursive: true, mode: 0o700 });
+  await fs.mkdir(path.join(path.dirname(dshHome), 'binance-skills'), { recursive: true, mode: 0o700 });
 
   const harness = new DeepSeekHarness({
     cwd: workspaceRoot,
@@ -137,7 +143,7 @@ async function runHarness(input) {
 async function selfTest() {
   const skillEntries = await fs.readdir(skillRoot, { withFileTypes: true });
   const skills = skillEntries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
-  await Promise.all([patchPath, web3McpPath, binanceAgenticMcpProxyPath, skillCatalogPath, ...skills.map((name) => path.join(skillRoot, name, 'SKILL.md'))].map((file) => fs.access(file)));
+  await Promise.all([patchPath, web3McpPath, binanceAgenticMcpProxyPath, binanceWeb3WalletMcpPath, skillMarketPath, skillCatalogPath, ...skills.map((name) => path.join(skillRoot, name, 'SKILL.md'))].map((file) => fs.access(file)));
 
   const catalog = JSON.parse(await fs.readFile(skillCatalogPath, 'utf8'));
   const catalogEntries = Array.isArray(catalog?.entries) ? catalog.entries : [];
@@ -163,16 +169,23 @@ async function selfTest() {
     throw new Error(`AI skill catalog mismatch: missing entries [${missingCatalogEntries.join(', ')}], missing directories [${missingSkillDirectories.join(', ')}]`);
   }
 
-  const [{ stdout }, { stdout: agenticStdout }] = await Promise.all([
+  const [{ stdout }, { stdout: agenticStdout }, { stdout: web3WalletStdout }, { stdout: skillMarketStdout }] = await Promise.all([
     execFileAsync(process.execPath, [web3McpPath, '--self-test'], { timeout: 10_000, maxBuffer: 1024 * 1024 }),
     execFileAsync(process.execPath, [binanceAgenticMcpProxyPath, '--self-test'], { timeout: 10_000, maxBuffer: 1024 * 1024 }),
+    execFileAsync(process.execPath, [binanceWeb3WalletMcpPath, '--self-test'], { timeout: 10_000, maxBuffer: 1024 * 1024 }),
+    execFileAsync(process.execPath, [skillMarketPath, '--self-test'], { timeout: 10_000, maxBuffer: 1024 * 1024 }),
   ]);
   const mcp = JSON.parse(stdout.trim());
   if (!mcp?.ok || !Array.isArray(mcp?.tools)) throw new Error('Web3 MCP self-test failed');
   const agenticMcp = JSON.parse(agenticStdout.trim());
   if (!agenticMcp?.ok || agenticMcp?.endpoint !== 'https://agent.binance.com/mcp/agentic') throw new Error('Binance Agentic MCP proxy self-test failed');
+  const web3WalletMcp = JSON.parse(web3WalletStdout.trim());
+  if (!web3WalletMcp?.ok || !Array.isArray(web3WalletMcp?.tools)) throw new Error('Binance Web3 Wallet MCP self-test failed');
+  const skillMarket = JSON.parse(skillMarketStdout.trim());
+  if (!skillMarket?.ok || skillMarket?.source !== 'binance/binance-skills-hub') throw new Error('Binance skill market self-test failed');
   const referencedTools = [...new Set(catalogEntries.flatMap((entry) => Array.isArray(entry?.tools) ? entry.tools : []))];
-  const missingTools = referencedTools.filter((name) => !mcp.tools.includes(name));
+  const availableTools = [...new Set([...mcp.tools, ...web3WalletMcp.tools])];
+  const missingTools = referencedTools.filter((name) => !availableTools.includes(name));
   if (missingTools.length) throw new Error(`AI skill catalog references unavailable tools: ${missingTools.join(', ')}`);
 
   return {
@@ -181,7 +194,7 @@ async function selfTest() {
     node: process.version,
     catalogVersion: catalog.version,
     skills,
-    tools: mcp.tools,
+    tools: availableTools,
   };
 }
 
