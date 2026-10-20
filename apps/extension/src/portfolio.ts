@@ -82,6 +82,14 @@ function decimalString(rawBalance: string, decimals: number): string {
   }
 }
 
+// Blockscout reports decimals as a string, or null when the contract exposes none.
+// Number(null) and Number('') are 0, so only accept an actual number or digit string.
+function tokenDecimals(value: unknown): number {
+  if (typeof value === 'number') return value;
+  if (typeof value === 'string' && /^\d+$/.test(value)) return Number(value);
+  return Number.NaN;
+}
+
 function tokenRisk(symbol: string, name: string, decimals: number): PortfolioAsset['risk'] {
   const text = `${symbol} ${name}`.toLowerCase();
   if (
@@ -104,7 +112,7 @@ export function parseBlockscoutTokenBalances(
     const token = entry?.token;
     const address = typeof token?.address_hash === 'string' ? token.address_hash : '';
     const rawBalance = typeof entry?.value === 'string' ? entry.value : '';
-    const decimals = Number(token?.decimals);
+    const decimals = tokenDecimals(token?.decimals);
     if (
       token?.type !== 'ERC-20' ||
       !EVM_ADDRESS.test(address) ||

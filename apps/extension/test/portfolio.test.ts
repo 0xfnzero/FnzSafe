@@ -34,6 +34,21 @@ test('Blockscout discovery normalizes, deduplicates and filters zero balances', 
   assert.equal(tokens[0].balance, '1.23');
 });
 
+test('Blockscout tokens with unknown decimals are skipped instead of read as 0 decimals', () => {
+  const tokens = parseBlockscoutTokenBalances([
+    { value: '1000000', token: { address_hash: '0x1111111111111111111111111111111111111111', decimals: null, symbol: 'NULL', name: 'Null decimals', type: 'ERC-20' } },
+    { value: '1000000', token: { address_hash: '0x2222222222222222222222222222222222222222', decimals: '', symbol: 'EMPTY', name: 'Empty decimals', type: 'ERC-20' } },
+    { value: '1000000', token: { address_hash: '0x3333333333333333333333333333333333333333', symbol: 'MISSING', name: 'Missing decimals', type: 'ERC-20' } },
+    { value: '1000000', token: { address_hash: '0x4444444444444444444444444444444444444444', decimals: '0', symbol: 'ZERO', name: 'Zero decimals', type: 'ERC-20' } },
+    { value: '1000000', token: { address_hash: '0x5555555555555555555555555555555555555555', decimals: 6, symbol: 'NUM', name: 'Numeric decimals', type: 'ERC-20' } },
+  ], ethereum);
+
+  assert.deepEqual(tokens.map((token) => [token.symbol, token.balance, token.decimals]), [
+    ['ZERO', '1000000', 0],
+    ['NUM', '1.0', 6],
+  ]);
+});
+
 test('suspicious token text is flagged and sorted after the native asset', () => {
   const [spam] = parseBlockscoutTokenBalances([
     { value: '1', token: { address_hash: '0x1111111111111111111111111111111111111111', decimals: '0', symbol: 'CLAIM', name: 'Visit https://bad.example to claim reward', type: 'ERC-20' } },
