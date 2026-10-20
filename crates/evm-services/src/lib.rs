@@ -624,7 +624,7 @@ pub fn builtin_chains() -> Vec<EvmChainConfig> {
             "Robinhood Chain",
             "ETH",
             "https://rpc.mainnet.chain.robinhood.com",
-            Some("https://robinscan.io"),
+            Some("https://robin.etherscan.io"),
             false,
         ),
         chain(
@@ -4455,6 +4455,10 @@ mod tests {
             .expect("Robinhood Chain mainnet should be built in");
         assert_eq!(robinhood.name, "Robinhood Chain");
         assert_eq!(robinhood.native_symbol, "ETH");
+        assert_eq!(
+            robinhood.explorer_url.as_deref(),
+            Some("https://robin.etherscan.io")
+        );
         assert!(!robinhood.testnet);
     }
 
