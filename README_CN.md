@@ -1,21 +1,35 @@
 <div align="center">
-  <h1>FnzSafe - 开源多链钱包</h1>
-  <p><strong>面向桌面端和移动端的本地优先、自托管加密钱包，覆盖安全密钥管理、DApp 签名、交易信号、DeFi 研究与 Squads 多签。</strong></p>
-  <p>
-    <a href="README.md">English</a> ·
-    <a href="https://github.com/0xfnzero/FnzSafe/releases/latest">下载</a> ·
-    <a href="https://fnzero.dev/">官网</a> ·
-    <a href="https://t.me/fnzero_group">Telegram</a> ·
-    <a href="https://discord.gg/ckf5UHxz">Discord</a>
-  </p>
-  <p>
+    <h1>FnzSafe - 开源多链钱包</h1>
+    <h3><em>桌面端与移动端自托管钱包</em></h3>
+</div>
+
+<p align="center">
+    <strong>面向桌面端和移动端的本地优先、自托管加密钱包，覆盖安全密钥管理、DApp 签名、交易信号、DeFi 研究与 Squads 多签。</strong>
+</p>
+
+<p align="center">
     <a href="https://crates.io/crates/fnzero-safe-core"><img src="https://img.shields.io/crates/v/fnzero-safe-core.svg" alt="fnzero-safe-core"></a>
     <a href="https://crates.io/crates/fnzero-safe-evm-services"><img src="https://img.shields.io/crates/v/fnzero-safe-evm-services.svg" alt="fnzero-safe-evm-services"></a>
     <a href="https://crates.io/crates/fnzero-safe-chain-core"><img src="https://img.shields.io/crates/v/fnzero-safe-chain-core.svg" alt="fnzero-safe-chain-core"></a>
     <a href="https://docs.rs/fnzero-safe-core"><img src="https://img.shields.io/docs.rs/fnzero-safe-core/badge.svg" alt="文档"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT 许可证"></a>
-  </p>
-</div>
+</p>
+
+<p align="center">
+    <img src="https://img.shields.io/badge/Rust-000000?style=for-the-badge&amp;logo=rust&amp;logoColor=white" alt="Rust">
+    <img src="https://img.shields.io/badge/Tauri-FFC131?style=for-the-badge&amp;logo=tauri&amp;logoColor=white" alt="Tauri">
+    <img src="https://img.shields.io/badge/Flutter-02569B?style=for-the-badge&amp;logo=flutter&amp;logoColor=white" alt="Flutter">
+</p>
+
+<p align="center">
+    <a href="https://github.com/0xfnzero/FnzSafe/blob/main/README_CN.md">中文</a> |
+    <a href="https://github.com/0xfnzero/FnzSafe/blob/main/README.md">English</a> |
+    <a href="https://fnzero.dev/">Website</a> |
+    <a href="https://t.me/fnzero_group">Telegram</a> |
+    <a href="https://discord.gg/ckf5UHxz">Discord</a>
+</p>
+
+[下载最新版本](https://github.com/0xfnzero/FnzSafe/releases/latest)
 
 FnzSafe 是一个开源多链钱包，支持 Solana 和 EVM 兼容网络，并提供实验性的 Bitcoin 与 TRON 账户适配器。Bitcoin 和 TRON 当前只支持账户派生与地址校验，尚不支持转账和广播。项目由 Tauri 桌面钱包、Flutter 移动钱包和 Rust 钱包 SDK/CLI 组成；私钥保存在本地加密 Keystore 中，钱包操作、DApp、加密货币信号和市场研究集中在同一个工作界面内。
 

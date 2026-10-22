@@ -1,21 +1,35 @@
 <div align="center">
-  <h1>FnzSafe - Open-Source Multi-Chain Wallet</h1>
-  <p><strong>A local-first, self-custody crypto wallet for desktop and mobile with secure key management, dApp signing, trading signals, DeFi research, and Squads multisig.</strong></p>
-  <p>
-    <a href="README_CN.md">中文</a> ·
-    <a href="https://github.com/0xfnzero/FnzSafe/releases/latest">Download</a> ·
-    <a href="https://fnzero.dev/">Website</a> ·
-    <a href="https://t.me/fnzero_group">Telegram</a> ·
-    <a href="https://discord.gg/ckf5UHxz">Discord</a>
-  </p>
-  <p>
+    <h1>FnzSafe - Open-Source Multi-Chain Wallet</h1>
+    <h3><em>Self-custody wallet for desktop and mobile</em></h3>
+</div>
+
+<p align="center">
+    <strong>A local-first, self-custody crypto wallet for desktop and mobile with secure key management, dApp signing, trading signals, DeFi research, and Squads multisig.</strong>
+</p>
+
+<p align="center">
     <a href="https://crates.io/crates/fnzero-safe-core"><img src="https://img.shields.io/crates/v/fnzero-safe-core.svg" alt="fnzero-safe-core"></a>
     <a href="https://crates.io/crates/fnzero-safe-evm-services"><img src="https://img.shields.io/crates/v/fnzero-safe-evm-services.svg" alt="fnzero-safe-evm-services"></a>
     <a href="https://crates.io/crates/fnzero-safe-chain-core"><img src="https://img.shields.io/crates/v/fnzero-safe-chain-core.svg" alt="fnzero-safe-chain-core"></a>
     <a href="https://docs.rs/fnzero-safe-core"><img src="https://img.shields.io/docs.rs/fnzero-safe-core/badge.svg" alt="Documentation"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
-  </p>
-</div>
+</p>
+
+<p align="center">
+    <img src="https://img.shields.io/badge/Rust-000000?style=for-the-badge&amp;logo=rust&amp;logoColor=white" alt="Rust">
+    <img src="https://img.shields.io/badge/Tauri-FFC131?style=for-the-badge&amp;logo=tauri&amp;logoColor=white" alt="Tauri">
+    <img src="https://img.shields.io/badge/Flutter-02569B?style=for-the-badge&amp;logo=flutter&amp;logoColor=white" alt="Flutter">
+</p>
+
+<p align="center">
+    <a href="https://github.com/0xfnzero/FnzSafe/blob/main/README_CN.md">中文</a> |
+    <a href="https://github.com/0xfnzero/FnzSafe/blob/main/README.md">English</a> |
+    <a href="https://fnzero.dev/">Website</a> |
+    <a href="https://t.me/fnzero_group">Telegram</a> |
+    <a href="https://discord.gg/ckf5UHxz">Discord</a>
+</p>
+
+[Download the latest release](https://github.com/0xfnzero/FnzSafe/releases/latest)
 
 FnzSafe is an open-source multi-chain wallet for Solana and EVM-compatible networks, with experimental Bitcoin and TRON account adapters. Bitcoin and TRON currently support account derivation and address validation, not transfers or broadcasting. It combines a Tauri desktop wallet, a Flutter mobile wallet, and a Rust wallet SDK/CLI. Private keys remain in encrypted local keystores while wallet operations, dApps, crypto signals, and market research share one working surface.
 
