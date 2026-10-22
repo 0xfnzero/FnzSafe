@@ -2697,7 +2697,7 @@ function walletFamilyForNetwork(value: string): "solana" | "evm" | "bitcoin" | "
 }
 
 function dappWalletAddress(wallet: SavedWallet, family: "solana" | "evm" | undefined): string {
-  return family === "evm" ? wallet.evm_address?.trim() || "" : wallet.public_key.trim();
+  return family === "evm" ? wallet.evm_address?.trim() || "" : wallet.private_key_family ? "" : wallet.public_key.trim();
 }
 
 function isDappMessageSigningMethod(method: string): boolean {
@@ -3466,7 +3466,7 @@ function detectedKeystoreSecretType(
       metadata?: { encrypted_mnemonic?: unknown };
     };
     if (
-      (parsed.version === 3 && parsed.secret_type === "mnemonic")
+      (parsed.secret_type === "mnemonic" && (parsed.version === 2 || parsed.version === 3))
       || typeof parsed.metadata?.encrypted_mnemonic === "string"
     ) {
       return "mnemonic";
@@ -11624,7 +11624,7 @@ export default function Home() {
     const isEvmRequest = request.wallet_family === "evm";
     const wallet = wallets.find((item) => isEvmRequest
       ? item.evm_address?.toLowerCase() === request.wallet_public_key.toLowerCase()
-      : item.public_key === request.wallet_public_key);
+      : !item.private_key_family && item.public_key === request.wallet_public_key);
     if (!wallet) {
       toast.error(tf("features.dapp-store.walletMissing", "这个请求指定的钱包不在当前钱包列表中。"));
       return;
@@ -11734,7 +11734,7 @@ export default function Home() {
     if (!dappSignRequest || walletsLoading) return;
     const walletExists = wallets.some((item) => dappSignRequest.wallet_family === "evm"
       ? item.evm_address?.toLowerCase() === dappSignRequest.wallet_public_key.toLowerCase()
-      : item.public_key === dappSignRequest.wallet_public_key);
+      : !item.private_key_family && item.public_key === dappSignRequest.wallet_public_key);
     if (walletExists) return;
     const request = dappSignRequest;
     void (async () => {
@@ -12021,7 +12021,7 @@ export default function Home() {
   }), [t, tf]);
 
   const solanaRecipientWallets: WalletRecipientOption[] = wallets
-    .filter((wallet) => Boolean(wallet.public_key.trim()))
+    .filter((wallet) => !wallet.private_key_family && Boolean(wallet.public_key.trim()))
     .map((wallet) => ({
       id: wallet.id,
       name: wallet.name,
@@ -12053,7 +12053,7 @@ export default function Home() {
       setWalletNativeBalances({});
       return;
     }
-    const mnemonicWallets = wallets.filter((wallet) => wallet.secret_type === "mnemonic");
+    const mnemonicWallets = wallets.filter((wallet) => wallet.secret_type === "mnemonic" || wallet.private_key_family === "bitcoin" || wallet.private_key_family === "tron");
     if (mnemonicWallets.length === 0) {
       setWalletMultichainAccountsByWallet({});
       return;
@@ -12258,15 +12258,17 @@ export default function Home() {
   const walletChainAddresses = useMemo<WalletChainAddress[]>(() => (
     effectiveWallet
       ? [
-        {
-          id: `solana:${effectiveNetwork}`,
-          family: "solana" as const,
-          chainName: effectiveNetwork === "mainnet" ? "Solana" : `Solana ${effectiveNetwork}`,
-          symbol: "SOL",
-          address: effectiveWallet.public_key,
-          logoUri: SOLANA_CHAIN_LOGO_URI,
-          testnet: effectiveNetwork !== "mainnet",
-        },
+        ...(!effectiveWallet.private_key_family ? [
+          {
+            id: `solana:${effectiveNetwork}`,
+            family: "solana" as const,
+            chainName: effectiveNetwork === "mainnet" ? "Solana" : `Solana ${effectiveNetwork}`,
+            symbol: "SOL",
+            address: effectiveWallet.public_key,
+            logoUri: SOLANA_CHAIN_LOGO_URI,
+            testnet: effectiveNetwork !== "mainnet",
+          }
+        ] : []),
         ...(effectiveWallet.evm_address
           ? portfolioEvmChains.map((chain) => ({
               id: `evm:${chain.chain_id}`,
@@ -12325,42 +12327,44 @@ export default function Home() {
     const solBalance = currentSolAssets?.solBalance && currentSolAssets.solBalance !== "--"
       ? currentSolAssets.solBalance
       : "--";
-    result.push({
-      id: `solana:${effectiveNetwork}:native`,
-      family: "solana",
-      chainName: effectiveNetwork === "mainnet" ? "Solana" : `Solana ${effectiveNetwork}`,
-      chainSymbol: "SOL",
-      symbol: "SOL",
-      name: "Solana",
-      balance: solBalance,
-      rawBalance: solBalance === "--" ? "" : solBalance,
-      decimals: 9,
-      logoUri: SOLANA_TOKEN_LOGO_URI,
-      tracked: true,
-      loading: Boolean(currentSolAssets?.loading || currentSolAssets?.refreshing || !currentSolAssets),
-      testnet: effectiveNetwork !== "mainnet",
-    });
-    const solTokens = currentSolAssets?.tokens ?? [];
-    const solMints = Array.from(new Set(solTokens.map((token) => token.mint)));
-    for (const mint of solMints) {
-      const token = solTokens.find((item) => item.mint === mint);
-      const balance = aggregateTokenBalance(solTokens, mint);
-      if (!token || !balance) continue;
+    if (!effectiveWallet.private_key_family) {
       result.push({
-        id: `solana:${effectiveNetwork}:${mint}`,
+        id: `solana:${effectiveNetwork}:native`,
         family: "solana",
         chainName: effectiveNetwork === "mainnet" ? "Solana" : `Solana ${effectiveNetwork}`,
         chainSymbol: "SOL",
-        symbol: tokenDisplaySymbol(token),
-        name: tokenDisplayName(token),
-        balance: balance.amount,
-        rawBalance: balance.rawAmount,
-        decimals: balance.decimals,
-        tokenAddress: mint,
-        logoUri: tokenLogoUri(token),
+        symbol: "SOL",
+        name: "Solana",
+        balance: solBalance,
+        rawBalance: solBalance === "--" ? "" : solBalance,
+        decimals: 9,
+        logoUri: SOLANA_TOKEN_LOGO_URI,
         tracked: true,
+        loading: Boolean(currentSolAssets?.loading || currentSolAssets?.refreshing || !currentSolAssets),
         testnet: effectiveNetwork !== "mainnet",
       });
+      const solTokens = currentSolAssets?.tokens ?? [];
+      const solMints = Array.from(new Set(solTokens.map((token) => token.mint)));
+      for (const mint of solMints) {
+        const token = solTokens.find((item) => item.mint === mint);
+        const balance = aggregateTokenBalance(solTokens, mint);
+        if (!token || !balance) continue;
+        result.push({
+          id: `solana:${effectiveNetwork}:${mint}`,
+          family: "solana",
+          chainName: effectiveNetwork === "mainnet" ? "Solana" : `Solana ${effectiveNetwork}`,
+          chainSymbol: "SOL",
+          symbol: tokenDisplaySymbol(token),
+          name: tokenDisplayName(token),
+          balance: balance.amount,
+          rawBalance: balance.rawAmount,
+          decimals: balance.decimals,
+          tokenAddress: mint,
+          logoUri: tokenLogoUri(token),
+          tracked: true,
+          testnet: effectiveNetwork !== "mainnet",
+        });
+      }
     }
     if (effectiveWallet.evm_address) {
       for (const chain of portfolioEvmChains) {
@@ -14066,7 +14070,11 @@ export default function Home() {
       toast.error(t("formUi.walletNameRequired"));
       return;
     }
-    if (formId === "import-keystore" && !String(nextFormData.keystoreJson ?? "").trim()) {
+    if (formId === "import-keystore" && !String(
+      nextFormData.importType === "private_key" ? nextFormData.private_key ?? ""
+        : nextFormData.importType === "mnemonic" ? nextFormData.mnemonic ?? ""
+        : nextFormData.keystoreJson ?? "",
+    ).trim()) {
       toast.error(t("features.import-keystore.fillAllFields"));
       return;
     }
@@ -15533,17 +15541,36 @@ export default function Home() {
 
         case "import-keystore": {
           const password = String(formData.password || "");
-          if (!formData.keystoreJson || !password) {
+          const importType = String(formData.importType || "keystore");
+          const material = String(importType === "private_key" ? formData.private_key || ""
+            : importType === "mnemonic" ? formData.mnemonic || "" : formData.keystoreJson || "").trim();
+          if (!material || !password) {
             toast.error(t("features.import-keystore.fillAllFields"));
             setLoading(false);
             return;
           }
 
+          const family = String(formData.importFamily || "solana");
+          const importResponse = await apiFetch("keys/recover-wallet", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              family, material_type: importType, secret: material, password,
+              name: formData.name || undefined,
+              derivation_path: String(formData.derivationPath || "").trim() || undefined,
+            }),
+          });
+          const imported = await importResponse.json();
+          if (!importResponse.ok) {
+            toast.error(imported.error || t("features.import-keystore.error"));
+            return;
+          }
+          const keystoreJson = imported.keystore_json;
           const response = await apiFetch("wallets", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              keystore_json: formData.keystoreJson,
+              keystore_json: keystoreJson,
               password,
               name: formData.name || undefined,
             }),
@@ -15554,16 +15581,23 @@ export default function Home() {
             toast.success(t("features.import-keystore.success"));
             setCurrentWallet(data.wallet.id);
             await loadWallets();
+            const recoveredFamily = data.wallet.private_key_family || family;
+            const recoveredNetwork = recoveredFamily === "evm" ? "evm:eip155:1"
+              : recoveredFamily === "bitcoin" ? "bip122:000000000019d6689c085ae165831e93"
+              : recoveredFamily === "tron" ? "tron:728126428" : "solana";
+            setCurrentWalletNetwork(recoveredNetwork);
+            saveCurrentWalletNetwork(recoveredNetwork);
             setFormData((prev) => {
               const next: FormState = {
                 ...prev,
-                publicKey: data.wallet.public_key,
+                publicKey: data.wallet.private_key_address || (family === "evm" ? data.wallet.evm_address : undefined) || data.wallet.public_key,
                 wallet_id: data.wallet.id,
               };
               delete next.password;
               delete next.keystoreJson;
               delete next.secretKey;
               delete next.private_key;
+              delete next.mnemonic;
               delete next.name;
               return next;
             });
@@ -17768,8 +17802,8 @@ export default function Home() {
       if (selectedNativeFamily === "tron") selectedWalletNetworkSymbol = "TRX";
       const walletsForSelectedNetwork = wallets.filter((wallet) => {
         if (selectedEvmChain) return Boolean(wallet.evm_address?.trim());
-        if (isNativeChainSelected) return wallet.secret_type === "mnemonic";
-        return Boolean(wallet.public_key.trim());
+        if (isNativeChainSelected) return wallet.secret_type === "mnemonic" || wallet.private_key_family === selectedNativeFamily;
+        return !wallet.private_key_family && Boolean(wallet.public_key.trim());
       });
       const solanaNetworks = Array.from(
         new Set(DEFAULT_RPC_PROFILES.map((profile) => profile.network)),
@@ -18108,7 +18142,7 @@ export default function Home() {
                               <Download className="h-3.5 w-3.5" />
                               {t("features.settings.exportBundleMenu")}
                             </button>
-                            {IS_DEVELOPMENT_BUILD && selectedNativeFamily === "bitcoin" && appPreferences.developerWalletMaintenance && (
+                            {IS_DEVELOPMENT_BUILD && selectedNativeFamily === "bitcoin" && !wallet.bitcoin_recovery_path && !wallet.private_key_family && appPreferences.developerWalletMaintenance && (
                               <button
                                 type="button"
                                 onClick={(event) => {
@@ -18484,12 +18518,12 @@ export default function Home() {
         const loading = Boolean(accountState?.loading || balanceState?.loading);
         const unavailableMessage = loading
           ? tf("features.unified-wallet.loadingNativeAccount", `Loading ${chainName} account...`, { chain: chainName })
-          : tf("features.unified-wallet.nativeAccountUnavailable", `${chainName} requires a mnemonic-backed wallet.`, { chain: chainName });
+          : tf("features.unified-wallet.nativeAccountUnavailable", `Select a wallet with a ${chainName} account.`, { chain: chainName });
         return (
           <div className="space-y-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               {renderChainViewTabs()}
-              {family === "bitcoin" && (
+              {family === "bitcoin" && !effectiveWallet?.bitcoin_recovery_path && effectiveWallet?.private_key_family !== "bitcoin" && (
                 <div className="inline-flex self-start rounded-lg border border-white/10 bg-black/30 p-1 sm:self-auto">
                   {(["taproot", "native-segwit"] as const).map((value) => (
                     <button
@@ -24411,6 +24445,11 @@ export default function Home() {
         );
 
       case "import-keystore": {
+        const importType = String(formData.importType || "keystore");
+        const importFamily = String(formData.importFamily || "solana");
+        const recoveryPath = importFamily === "evm" ? "m/44'/60'/0'/0/0"
+          : importFamily === "bitcoin" ? "m/86'/0'/0'/0/0"
+          : importFamily === "tron" ? "m/44'/195'/0'/0/0" : "m/44'/501'/0'/0'";
         const importedKeystoreSecretType = detectedKeystoreSecretType(
           typeof formData.keystoreJson === "string" ? formData.keystoreJson : undefined,
         );
@@ -24419,6 +24458,27 @@ export default function Home() {
             <p className="rounded-lg border border-sky-300/15 bg-sky-400/[0.06] px-3 py-2.5 text-xs leading-relaxed text-sky-100">
               {t("features.import-keystore.supportedTypesHint")}
             </p>
+            <div>
+              <label className="block text-sm font-medium mb-2">{t("features.import-keystore.chainFamily")}</label>
+              <select value={importFamily} disabled={loading}
+                onChange={(e) => setFormData((prev) => ({ name: prev.name, importType, importFamily: e.target.value }))}
+                className="w-full px-4 py-2 bg-neutral-900 border border-white/10 rounded-lg text-white">
+                <option value="solana">Solana</option>
+                <option value="evm">EVM (Ethereum / BNB Chain / Base / …)</option>
+                <option value="bitcoin">Bitcoin</option>
+                <option value="tron">TRON</option>
+              </select>
+              <p className="mt-1 text-xs text-gray-400">{t("features.import-keystore.multichainHint")}</p>
+            </div>
+            <div className="flex gap-2" role="tablist" aria-label={t("features.import-keystore.title")}>
+              {["keystore", "private_key", "mnemonic"].map((type) => (
+                <button type="button" role="tab" aria-selected={importType === type} key={type}
+                  disabled={loading}
+                  onClick={() => setFormData((prev) => ({ name: prev.name, importFamily, importType: type }))}
+                  className={`flex-1 rounded-lg px-3 py-2 text-sm ${importType === type ? "bg-white/20 text-white" : "bg-white/5 text-gray-400"}`}
+                >{t(`features.import-keystore.mode_${type}`)}</button>
+              ))}
+            </div>
             <div>
               <label className="block text-sm font-medium mb-2">{t("formUi.walletName")}</label>
               <input
@@ -24429,58 +24489,88 @@ export default function Home() {
                 placeholder={t("formUi.walletNamePlaceholder")}
               />
             </div>
-            <div>
-              <label className="block text-sm font-medium mb-2">{t("features.import-keystore.selectFile")}</label>
-              <input
-                type="file"
-                accept=".json"
-                onChange={handleFileUpload}
-                className="w-full px-4 py-2 bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-white/20 text-white file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-white/10 file:text-white hover:file:bg-white/20"
-              />
-            </div>
-            <div className="text-center text-gray-400">{t("features.import-keystore.or")}</div>
-            <div>
-              <label className="block text-sm font-medium mb-2">{t("features.import-keystore.pasteJson")}</label>
-              <textarea
-                value={formData.keystoreJson || ""}
-                onChange={(e) => {
-                  const content = e.target.value;
-                  setFormData((prev) => ({
-                    ...prev,
-                    keystoreJson: content,
-                    ...(!String(prev.name ?? "").trim() ? { name: keystoreMetadataName(content) } : {}),
-                  }));
-                }}
-                className="w-full px-4 py-2 bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-white/20 text-white min-h-[120px]"
-                placeholder={t("features.import-keystore.jsonPlaceholder")}
-              />
-              {formData.keystoreJson && (
-                <p className={`mt-2 text-xs ${
-                  importedKeystoreSecretType
-                    ? "text-emerald-300"
-                    : "text-amber-300"
-                }`}>
-                  {importedKeystoreSecretType === "mnemonic"
-                    ? t("features.import-keystore.detectedMnemonicKeystore")
-                    : importedKeystoreSecretType === "private_key"
-                      ? t("features.import-keystore.detectedPrivateKeyKeystore")
-                      : t("features.import-keystore.detectedUnknownKeystore")}
-                </p>
-              )}
-            </div>
+            {importType === "keystore" ? <>
+              <div>
+                <label className="block text-sm font-medium mb-2">{t("features.import-keystore.selectFile")}</label>
+                <input
+                  type="file"
+                  accept=".json"
+                  onChange={handleFileUpload}
+                  className="w-full px-4 py-2 bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-white/20 text-white file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-white/10 file:text-white hover:file:bg-white/20"
+                />
+              </div>
+              <div className="text-center text-gray-400">{t("features.import-keystore.or")}</div>
+              <div>
+                <label className="block text-sm font-medium mb-2">{t("features.import-keystore.pasteJson")}</label>
+                <textarea
+                  value={formData.keystoreJson || ""}
+                  onChange={(e) => {
+                    const content = e.target.value;
+                    setFormData((prev) => ({
+                      ...prev,
+                      keystoreJson: content,
+                      ...(!String(prev.name ?? "").trim() ? { name: keystoreMetadataName(content) } : {}),
+                    }));
+                  }}
+                  className="w-full px-4 py-2 bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-white/20 text-white min-h-[120px]"
+                  placeholder={t("features.import-keystore.jsonPlaceholder")}
+                />
+                {formData.keystoreJson && (
+                  <p className={`mt-2 text-xs ${
+                    importedKeystoreSecretType
+                      ? "text-emerald-300"
+                      : "text-amber-300"
+                  }`}>
+                    {importedKeystoreSecretType === "mnemonic"
+                      ? t("features.import-keystore.detectedMnemonicKeystore")
+                      : importedKeystoreSecretType === "private_key"
+                        ? t("features.import-keystore.detectedPrivateKeyKeystore")
+                        : t("features.import-keystore.detectedUnknownKeystore")}
+                  </p>
+                )}
+              </div>
+            </> : <>
+              <div>
+                <label className="block text-sm font-medium mb-2">{t(`features.import-keystore.mode_${importType}`)}</label>
+                <textarea
+                  data-sensitive-field={importType === "mnemonic" ? "mnemonic" : "private_key"}
+                  value={String((importType === "mnemonic" ? formData.mnemonic : formData.private_key) || "")}
+                  onChange={(e) => handleFormChange(importType === "mnemonic" ? "mnemonic" : "private_key", e.target.value)}
+                  autoComplete="off" autoCapitalize="none" spellCheck={false}
+                  className="w-full px-4 py-2 bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-white/20 text-white min-h-[120px]"
+                  placeholder={t(importType === "mnemonic" ? "features.import-mnemonic.mnemonicPlaceholder"
+                    : importFamily === "bitcoin" ? "features.import-keystore.bitcoinPrivateKeyPlaceholder"
+                    : importFamily === "evm" || importFamily === "tron" ? "features.import-keystore.hexPrivateKeyPlaceholder"
+                    : "features.import-keystore.privateKeyPlaceholder")}
+                />
+              </div>
+              {(importType === "mnemonic" || (importType === "private_key" && importFamily === "bitcoin")) && <div>
+                <label className="block text-sm font-medium mb-2">{t("features.import-mnemonic.derivationPath")}</label>
+                <input type="text" value={formData.derivationPath || ""}
+                  onChange={(e) => handleFormChange("derivationPath", e.target.value)}
+                  className="w-full px-4 py-2 bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-white/20 text-white"
+                  placeholder={recoveryPath}
+                  disabled={importFamily === "tron"}
+                />
+                <p className="mt-1 text-xs leading-relaxed text-gray-500">{t("features.import-mnemonic.derivationPathHint")}</p>
+              </div>}
+              <p className="text-xs text-gray-400">{t("features.import-keystore.plaintextHint")}</p>
+            </>}
             <button type="button"
               onClick={() => requestCreatePasswordSubmit("import-keystore")}
               disabled={loading}
               className="w-full py-3 bg-gradient-to-r from-purple-500 to-pink-500 rounded-lg font-semibold hover:from-purple-600 hover:to-pink-600 transition-all disabled:opacity-50"
             >
-              {loading ? t("features.import-keystore.importing") : t("features.import-keystore.importButton")}
+              {loading ? t("features.import-keystore.importing") : t("features.import-keystore.restoreButton")}
             </button>
             {formData.publicKey && (
               <div className="space-y-3 p-4 bg-white/5 rounded-lg">
                 <div>
-                  <label className="block text-sm font-medium mb-2">{t("features.create-plain.publicKey")}</label>
+                  <label className="block text-sm font-medium mb-2">{t("formUi.walletAddress")}</label>
                   <code className="block px-3 py-2 bg-black/30 rounded text-xs break-all">
-                    {formData.publicKey}
+                    {(importFamily === "bitcoin" || importFamily === "tron") && formData.wallet_id
+                      ? walletMultichainAccountsByWallet[String(formData.wallet_id)]?.accounts.find((account) => account.family === importFamily)?.address || t("common.loading")
+                      : formData.publicKey}
                   </code>
                 </div>
                 <p className="text-sm text-green-400">{t("formUi.walletSaved")}</p>

@@ -37,6 +37,9 @@ pub struct WalletSummary {
     pub id: String,
     pub name: String,
     pub public_key: String,
+    pub private_key_family: Option<String>,
+    pub private_key_address: Option<String>,
+    pub bitcoin_recovery_path: Option<String>,
     pub evm_address: Option<String>,
     pub evm_wallet_id: Option<String>,
     pub evm_derivation_path: Option<String>,
@@ -175,7 +178,17 @@ impl From<SavedWallet> for WalletSummary {
             id: wallet.id,
             name: wallet.name,
             public_key: wallet.public_key,
-            evm_address: metadata_string("evm_address"),
+            private_key_family: metadata_string("private_key_family"),
+            private_key_address: metadata_string("private_key_address"),
+            bitcoin_recovery_path: metadata_string("bitcoin_recovery_path"),
+            evm_address: if matches!(
+                metadata_string("private_key_family").as_deref(),
+                Some("bitcoin" | "tron")
+            ) {
+                None
+            } else {
+                metadata_string("evm_address")
+            },
             evm_wallet_id: metadata_string("evm_wallet_id"),
             evm_derivation_path: metadata_string("evm_derivation_path"),
             secret_type: root_secret_type.unwrap_or_else(|| {

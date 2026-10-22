@@ -33,6 +33,7 @@ use rand::{rngs::OsRng, RngCore};
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use sol_trade_sdk::{
     common::{
         fast_fn::get_associated_token_address_with_program_id_fast_use_seed, GasFeeStrategy,
@@ -899,9 +900,19 @@ fn require_unified_password_for_existing_wallets(
     Ok(())
 }
 
+fn require_solana_account(keystore_json: &str) -> Result<(), ApiError> {
+    if keystore_metadata_value(keystore_json, "private_key_family").is_some() {
+        return Err(ApiError {
+            message: "This imported account is not a Solana wallet".into(),
+        });
+    }
+    Ok(())
+}
+
 fn keypair_from_saved_wallet_session(wallet_id: &str) -> Result<Keypair, ApiError> {
     validate_wallet_id(wallet_id)?;
     let wallet = wallet_store::find(wallet_id).map_err(|message| ApiError { message })?;
+    require_solana_account(&wallet.keystore_json)?;
     let secrets = wallet_session_vault()
         .decrypt(wallet_id, &wallet.public_key)
         .map_err(|message| ApiError { message })?;
@@ -968,6 +979,8 @@ impl WalletAuthRequest {
             .map(str::trim)
             .filter(|s| !s.is_empty())
         {
+            let saved = wallet_store::find(id).map_err(|message| ApiError { message })?;
+            require_solana_account(&saved.keystore_json)?;
             if let Some(password) = self
                 .password
                 .as_deref()
@@ -1002,6 +1015,7 @@ impl WalletAuthRequest {
             .map(str::trim)
             .filter(|s| !s.is_empty())
         {
+            require_solana_account(keystore_json)?;
             let password = self.required_password("使用 keystore 时需要提供密码")?;
             return KeyManager::keypair_from_encrypted_json(keystore_json, password).map_err(|e| {
                 ApiError {
@@ -4232,6 +4246,16 @@ async fn main() -> anyhow::Result<()> {
             "/api/keys/import-mnemonic-keystore/",
             post(import_mnemonic_keystore),
         )
+        .route(
+            "/api/keys/import-private-key-keystore",
+            post(import_private_key_keystore),
+        )
+        .route(
+            "/api/keys/import-private-key-keystore/",
+            post(import_private_key_keystore),
+        )
+        .route("/api/keys/recover-wallet", post(recover_wallet_keystore))
+        .route("/api/keys/recover-wallet/", post(recover_wallet_keystore))
         .route("/api/keys/import-keystore", post(import_keystore))
         .route("/api/keys/import-keystore/", post(import_keystore))
         .route("/api/wallets", get(list_wallets).post(save_keystore_wallet))
@@ -4805,6 +4829,50 @@ async fn wallet_multichain_accounts(
     let secrets = wallet_session_vault()
         .decrypt(&wallet_id, &wallet.public_key)
         .map_err(|message| ApiError { message })?;
+    if let Some(family) = keystore_metadata_value(&wallet.keystore_json, "private_key_family") {
+        if matches!(family.as_str(), "bitcoin" | "tron") {
+            let key = secrets.evm_private_key().ok_or_else(|| ApiError {
+                message: "Imported account is locked".into(),
+            })?;
+            let (chain_id, address, path, symbol, name) =
+                if family == "bitcoin" {
+                    let path =
+                        keystore_metadata_value(&wallet.keystore_json, "recovery_derivation_path")
+                            .unwrap_or_else(|| "m/86'/0'/0'/0/0".into());
+                    let chain_id = fnzero_safe_bitcoin_services::BITCOIN_MAINNET_CAIP2;
+                    let address = fnzero_safe_bitcoin_services::address_from_private_key_at_path(
+                        key, chain_id, &path,
+                    )
+                    .map_err(map_bitcoin_error)?;
+                    (chain_id, address, path, "BTC", "Bitcoin")
+                } else {
+                    let address = fnzero_safe_tron_services::address_from_private_key(key)
+                        .map_err(|e| ApiError {
+                            message: e.to_string(),
+                        })?;
+                    (
+                        fnzero_safe_tron_services::TRON_MAINNET_CAIP2,
+                        address,
+                        String::new(),
+                        "TRX",
+                        "TRON",
+                    )
+                };
+            return Ok(Json(WalletMultichainAccountsResponse {
+                accounts: vec![WalletMultichainAccount {
+                    chain_id: chain_id.into(),
+                    family,
+                    chain_name: name.into(),
+                    network: "mainnet".into(),
+                    symbol: symbol.into(),
+                    address,
+                    derivation_path: path,
+                    testnet: false,
+                }],
+                mnemonic_backed: false,
+            }));
+        }
+    }
     let Some(value) = secrets.mnemonic() else {
         return Ok(Json(WalletMultichainAccountsResponse {
             accounts: Vec::new(),
@@ -4813,11 +4881,15 @@ async fn wallet_multichain_accounts(
     };
     let mnemonic = Zeroizing::new(value.to_string());
     drop(secrets);
-    let bitcoin_path = bitcoin_derivation_path(
-        fnzero_safe_bitcoin_services::BITCOIN_MAINNET_CAIP2,
-        query.bitcoin_address_type.as_deref(),
-        bitcoin_account_index(&wallet.keystore_json)?,
-    )?;
+    let bitcoin_path = keystore_metadata_value(&wallet.keystore_json, "bitcoin_recovery_path")
+        .map(Ok)
+        .unwrap_or_else(|| {
+            bitcoin_derivation_path(
+                fnzero_safe_bitcoin_services::BITCOIN_MAINNET_CAIP2,
+                query.bitcoin_address_type.as_deref(),
+                bitcoin_account_index(&wallet.keystore_json)?,
+            )
+        })?;
     let accounts =
         run_keystore_task(move || derive_wallet_multichain_accounts(&mnemonic, &bitcoin_path))
             .await?;
@@ -4912,6 +4984,11 @@ fn prepare_bitcoin_account_rotation(
     mnemonic: &str,
     keystore_json: &str,
 ) -> Result<(RotateBitcoinAccountResponse, String), ApiError> {
+    if keystore_metadata_value(keystore_json, "bitcoin_recovery_path").is_some() {
+        return Err(ApiError {
+            message: "Imported Bitcoin derivation paths cannot be rotated".into(),
+        });
+    }
     let next_index = bitcoin_account_index(keystore_json)?
         .checked_add(1)
         .filter(|index| *index <= MAX_BITCOIN_ACCOUNT_INDEX)
@@ -5177,6 +5254,11 @@ fn active_bitcoin_derivation_path(
     claimed_address: &str,
 ) -> Result<String, ApiError> {
     let wallet = wallet_store::find(wallet_id).map_err(|message| ApiError { message })?;
+    if let Some(path) = keystore_metadata_value(&wallet.keystore_json, "recovery_derivation_path")
+        .or_else(|| keystore_metadata_value(&wallet.keystore_json, "bitcoin_recovery_path"))
+    {
+        return Ok(path);
+    }
     let address_type = if claimed_address.trim().starts_with("bc1q")
         || claimed_address.trim().starts_with("tb1q")
     {
@@ -5210,15 +5292,30 @@ async fn bitcoin_wallet_balance(
     Path(wallet_id): Path<String>,
     Json(request): Json<NativeChainAccountRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let mnemonic = session_mnemonic(&wallet_id)?;
     let active_path =
         active_bitcoin_derivation_path(&wallet_id, &request.chain_id, &request.address)?;
-    verify_bitcoin_session_address(
-        &mnemonic,
+    let imported_key = verify_imported_native_address(
+        &wallet_id,
+        "bitcoin",
         &request.chain_id,
         &request.address,
-        request.derivation_path.as_deref().or(Some(&active_path)),
+        Some(&active_path),
     )?;
+    let mnemonic = if imported_key.is_none() {
+        Some(session_mnemonic(&wallet_id)?)
+    } else {
+        None
+    };
+    let _derivation_path = if let Some(mnemonic) = mnemonic.as_deref() {
+        verify_bitcoin_session_address(
+            mnemonic,
+            &request.chain_id,
+            &request.address,
+            request.derivation_path.as_deref().or(Some(&active_path)),
+        )?
+    } else {
+        active_path
+    };
     let balance = fnzero_safe_bitcoin_services::fetch_balance(&request.chain_id, &request.address)
         .await
         .map_err(map_bitcoin_error)?;
@@ -5241,15 +5338,30 @@ async fn bitcoin_send_preview(
             message: "Bitcoin preview does not accept a client-provided fee rate".to_string(),
         });
     }
-    let mnemonic = session_mnemonic(&wallet_id)?;
     let active_path =
         active_bitcoin_derivation_path(&wallet_id, &request.chain_id, &request.sender)?;
-    verify_bitcoin_session_address(
-        &mnemonic,
+    let imported_key = verify_imported_native_address(
+        &wallet_id,
+        "bitcoin",
         &request.chain_id,
         &request.sender,
-        request.derivation_path.as_deref().or(Some(&active_path)),
+        Some(&active_path),
     )?;
+    let mnemonic = if imported_key.is_none() {
+        Some(session_mnemonic(&wallet_id)?)
+    } else {
+        None
+    };
+    let _derivation_path = if let Some(mnemonic) = mnemonic.as_deref() {
+        verify_bitcoin_session_address(
+            mnemonic,
+            &request.chain_id,
+            &request.sender,
+            request.derivation_path.as_deref().or(Some(&active_path)),
+        )?
+    } else {
+        active_path
+    };
     let amount_sats = parse_atomic_amount(&request.amount_atomic, "BTC")?;
     let preview = fnzero_safe_bitcoin_services::preview_transfer(
         &request.chain_id,
@@ -5296,15 +5408,30 @@ async fn bitcoin_send_submit(
             message: "Bitcoin submit uses the fee from the approved preview".to_string(),
         });
     }
-    let mnemonic = session_mnemonic(&wallet_id)?;
     let active_path =
         active_bitcoin_derivation_path(&wallet_id, &request.chain_id, &request.sender)?;
-    let derivation_path = verify_bitcoin_session_address(
-        &mnemonic,
+    let imported_key = verify_imported_native_address(
+        &wallet_id,
+        "bitcoin",
         &request.chain_id,
         &request.sender,
-        request.derivation_path.as_deref().or(Some(&active_path)),
+        Some(&active_path),
     )?;
+    let mnemonic = if imported_key.is_none() {
+        Some(session_mnemonic(&wallet_id)?)
+    } else {
+        None
+    };
+    let derivation_path = if let Some(mnemonic) = mnemonic.as_deref() {
+        verify_bitcoin_session_address(
+            mnemonic,
+            &request.chain_id,
+            &request.sender,
+            request.derivation_path.as_deref().or(Some(&active_path)),
+        )?
+    } else {
+        active_path
+    };
     let amount_sats = parse_atomic_amount(&request.amount_atomic, "BTC")?;
     let preview_id = request.preview_id.as_deref().ok_or_else(|| ApiError {
         message: "Bitcoin submit requires an approved preview".to_string(),
@@ -5322,16 +5449,29 @@ async fn bitcoin_send_submit(
             message: "Transaction preview has the wrong chain family".to_string(),
         });
     };
-    let result = fnzero_safe_bitcoin_services::submit_prepared_transfer_at_path(
-        &request.chain_id,
-        &mnemonic,
-        &derivation_path,
-        &request.sender,
-        &request.recipient,
-        amount_sats,
-        &psbt_base64,
-    )
-    .await
+    let result = if let Some(key) = imported_key {
+        fnzero_safe_bitcoin_services::submit_prepared_transfer_with_private_key(
+            &request.chain_id,
+            &key,
+            &derivation_path,
+            &request.sender,
+            &request.recipient,
+            amount_sats,
+            &psbt_base64,
+        )
+        .await
+    } else {
+        fnzero_safe_bitcoin_services::submit_prepared_transfer_at_path(
+            &request.chain_id,
+            mnemonic.as_deref().expect("mnemonic branch"),
+            &derivation_path,
+            &request.sender,
+            &request.recipient,
+            amount_sats,
+            &psbt_base64,
+        )
+        .await
+    }
     .map_err(map_bitcoin_error)?;
     Ok(Json(json!({
         "chain_id": request.chain_id,
@@ -5344,8 +5484,21 @@ async fn tron_wallet_account(
     Path(wallet_id): Path<String>,
     Json(request): Json<NativeChainAccountRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let mnemonic = session_mnemonic(&wallet_id)?;
-    verify_tron_session_address(&mnemonic, &request.address)?;
+    let imported_key = verify_imported_native_address(
+        &wallet_id,
+        "tron",
+        &request.chain_id,
+        &request.address,
+        None,
+    )?;
+    let mnemonic = if imported_key.is_none() {
+        Some(session_mnemonic(&wallet_id)?)
+    } else {
+        None
+    };
+    if let Some(mnemonic) = mnemonic.as_deref() {
+        verify_tron_session_address(mnemonic, &request.address)?;
+    }
     let account = fnzero_safe_tron_services::fetch_account(&request.chain_id, &request.address)
         .await
         .map_err(map_tron_error)?;
@@ -5369,8 +5522,21 @@ async fn tron_send_preview(
             message: "TRON preview does not accept Bitcoin fee fields".to_string(),
         });
     }
-    let mnemonic = session_mnemonic(&wallet_id)?;
-    verify_tron_session_address(&mnemonic, &request.sender)?;
+    let imported_key = verify_imported_native_address(
+        &wallet_id,
+        "tron",
+        &request.chain_id,
+        &request.sender,
+        None,
+    )?;
+    let mnemonic = if imported_key.is_none() {
+        Some(session_mnemonic(&wallet_id)?)
+    } else {
+        None
+    };
+    if let Some(mnemonic) = mnemonic.as_deref() {
+        verify_tron_session_address(mnemonic, &request.sender)?;
+    }
     let amount_sun = parse_atomic_amount(&request.amount_atomic, "TRX")?;
     let (preview, transaction) = fnzero_safe_tron_services::prepare_transfer(
         &request.chain_id,
@@ -5416,8 +5582,21 @@ async fn tron_send_submit(
             message: "TRON submit does not accept Bitcoin fee fields".to_string(),
         });
     }
-    let mnemonic = session_mnemonic(&wallet_id)?;
-    verify_tron_session_address(&mnemonic, &request.sender)?;
+    let imported_key = verify_imported_native_address(
+        &wallet_id,
+        "tron",
+        &request.chain_id,
+        &request.sender,
+        None,
+    )?;
+    let mnemonic = if imported_key.is_none() {
+        Some(session_mnemonic(&wallet_id)?)
+    } else {
+        None
+    };
+    if let Some(mnemonic) = mnemonic.as_deref() {
+        verify_tron_session_address(mnemonic, &request.sender)?;
+    }
     let amount_sun = parse_atomic_amount(&request.amount_atomic, "TRX")?;
     let preview_id = request.preview_id.as_deref().ok_or_else(|| ApiError {
         message: "TRON submit requires an approved preview".to_string(),
@@ -5435,15 +5614,27 @@ async fn tron_send_submit(
             message: "Transaction preview has the wrong chain family".to_string(),
         });
     };
-    let result = fnzero_safe_tron_services::submit_prepared_transfer(
-        &request.chain_id,
-        &mnemonic,
-        &request.sender,
-        &request.recipient,
-        amount_sun,
-        transaction,
-    )
-    .await
+    let result = if let Some(key) = imported_key {
+        fnzero_safe_tron_services::submit_prepared_transfer_with_private_key(
+            &request.chain_id,
+            &key,
+            &request.sender,
+            &request.recipient,
+            amount_sun,
+            transaction,
+        )
+        .await
+    } else {
+        fnzero_safe_tron_services::submit_prepared_transfer(
+            &request.chain_id,
+            mnemonic.as_deref().expect("mnemonic branch"),
+            &request.sender,
+            &request.recipient,
+            amount_sun,
+            transaction,
+        )
+        .await
+    }
     .map_err(map_tron_error)?;
     Ok(Json(json!({
         "chain_id": request.chain_id,
@@ -6382,6 +6573,743 @@ async fn import_mnemonic_keystore(
     })
     .await?;
     Ok(Json(response))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecoverWalletRequest {
+    family: String,
+    material_type: String,
+    secret: String,
+    password: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    derivation_path: Option<String>,
+}
+
+impl Drop for RecoverWalletRequest {
+    fn drop(&mut self) {
+        self.secret.zeroize();
+        self.password.zeroize();
+    }
+}
+
+fn recovery_metadata(keystore: &str, family: &str, path: Option<&str>) -> Result<String, ApiError> {
+    let mut doc: Value = serde_json::from_str(keystore).map_err(|_| ApiError {
+        message: "Invalid recovery keystore".into(),
+    })?;
+    let metadata = doc["metadata"].as_object_mut().ok_or_else(|| ApiError {
+        message: "Missing recovery metadata".into(),
+    })?;
+    metadata.insert("private_key_family".into(), json!(family));
+    if let Some(path) = path {
+        metadata.insert("recovery_derivation_path".into(), json!(path));
+    }
+    serde_json::to_string(&doc).map_err(|_| ApiError {
+        message: "Unable to encode recovery keystore".into(),
+    })
+}
+
+fn recover_chain_keystore(req: &RecoverWalletRequest) -> Result<CreateKeystoreResponse, ApiError> {
+    validate_password(&req.password, "密码")?;
+    let name =
+        validate_optional_label(req.name.clone(), "钱包名称")?.unwrap_or_else(|| "Wallet".into());
+    let family = req.family.as_str();
+    if !matches!(family, "solana" | "evm" | "bitcoin" | "tron") {
+        return Err(ApiError {
+            message: "Unsupported wallet family".into(),
+        });
+    }
+    let secret = req.secret.trim();
+    require_nonempty(secret, "恢复内容")?;
+    let path = req
+        .derivation_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty());
+    // Mnemonics recover the existing universal wallet, retaining all derived accounts.
+    if req.material_type == "mnemonic" {
+        let mnemonic = Zeroizing::new(normalize_mnemonic_phrase(secret)?);
+        let sol_path =
+            normalize_mnemonic_derivation_path(if family == "solana" { path } else { None })?;
+        let keypair = keypair_from_mnemonic_phrase(&mnemonic, &sol_path)?;
+        let root = KeyManager::mnemonic_to_encrypted_json(&mnemonic, &sol_path, &req.password)
+            .map_err(|message| ApiError { message })?;
+        let root = with_keystore_metadata_extra(&root, Some(&name), None, Some(&sol_path))?;
+        let evm =
+            app_services::evm_wallet_import_mnemonic(app_services::EvmImportMnemonicRequest {
+                name,
+                mnemonic: mnemonic.to_string(),
+                password: req.password.clone(),
+                derivation_path: if family == "evm" {
+                    path.map(str::to_string)
+                } else {
+                    None
+                },
+            })
+            .map_err(api_error_from_app_service)?;
+        let mut root = with_universal_wallet_metadata(&root, &evm.wallet, &evm.keystore_json)?;
+        if matches!(family, "bitcoin" | "tron") {
+            let default_path = if family == "bitcoin" {
+                "m/86'/0'/0'/0/0"
+            } else {
+                "m/44'/195'/0'/0/0"
+            };
+            let path = path.unwrap_or(default_path);
+            if family == "bitcoin" {
+                fnzero_safe_bitcoin_services::private_key_from_mnemonic_at_path(
+                    &mnemonic,
+                    fnzero_safe_bitcoin_services::BITCOIN_MAINNET_CAIP2,
+                    path,
+                )
+                .map_err(map_bitcoin_error)?;
+            } else {
+                // The TRON adapter currently uses the standard account path.
+                if path != default_path {
+                    return Err(ApiError {
+                        message: "TRON currently supports m/44'/195'/0'/0/0".into(),
+                    });
+                }
+            }
+            let mut doc: Value = serde_json::from_str(&root).map_err(|_| ApiError {
+                message: "Invalid recovery keystore".into(),
+            })?;
+            doc["metadata"][format!("{family}_recovery_path")] = json!(path);
+            root = doc.to_string();
+        }
+        return Ok(CreateKeystoreResponse {
+            keystore_json: root,
+            public_key: keypair.pubkey().to_string(),
+        });
+    }
+    // Full FnzSafe backups already contain their account family and encrypted material.
+    if req.material_type == "keystore"
+        && serde_json::from_str::<Value>(secret)
+            .ok()
+            .and_then(|v| {
+                v.get("wallet_family")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .as_deref()
+            != Some("evm")
+        && KeyManager::keystore_version(secret).is_ok()
+    {
+        let keypair = KeyManager::keypair_from_encrypted_json(secret, &req.password)
+            .map_err(|message| ApiError { message })?;
+        return Ok(CreateKeystoreResponse {
+            keystore_json: secret.into(),
+            public_key: keypair.pubkey().to_string(),
+        });
+    }
+    if family == "solana" {
+        if req.material_type != "private_key" {
+            return Err(ApiError {
+                message: "Invalid Solana recovery type".into(),
+            });
+        }
+        let keypair = keypair_from_recovery_private_key(secret)?;
+        let root = KeyManager::keypair_to_encrypted_json(&keypair, &req.password)
+            .map_err(|message| ApiError { message })?;
+        return Ok(CreateKeystoreResponse {
+            keystore_json: with_keystore_metadata(&root, Some(&name))?,
+            public_key: keypair.pubkey().to_string(),
+        });
+    }
+    let bitcoin_path = path.unwrap_or("m/86'/0'/0'/0/0");
+    let evm = if req.material_type == "keystore" {
+        if family != "evm" {
+            return Err(ApiError {
+                message: "Import a FnzSafe backup for this chain".into(),
+            });
+        }
+        app_services::evm_wallet_import_keystore(app_services::EvmImportKeystoreRequest {
+            name: name.clone(),
+            keystore_json: secret.into(),
+            password: req.password.clone(),
+        })
+        .map_err(api_error_from_app_service)?
+    } else if req.material_type == "private_key" {
+        let private_hex = if family == "bitcoin" {
+            let key = fnzero_safe_bitcoin_services::private_key_from_wif(
+                secret,
+                fnzero_safe_bitcoin_services::BITCOIN_MAINNET_CAIP2,
+            )
+            .map_err(map_bitcoin_error)?;
+            Zeroizing::new(hex::encode(&key[..]))
+        } else {
+            Zeroizing::new(secret.to_string())
+        };
+        app_services::evm_wallet_import_private_key(app_services::EvmImportPrivateKeyRequest {
+            name: name.clone(),
+            private_key_hex: private_hex.to_string(),
+            password: req.password.clone(),
+        })
+        .map_err(api_error_from_app_service)?
+    } else {
+        return Err(ApiError {
+            message: "Unsupported recovery material type".into(),
+        });
+    };
+    let (_, key) =
+        app_services::evm_wallet_unlock_private_key(app_services::EvmUnlockWalletRequest {
+            keystore_json: evm.keystore_json.clone(),
+            password: req.password.clone(),
+        })
+        .map_err(api_error_from_app_service)?;
+    if family == "bitcoin" {
+        fnzero_safe_bitcoin_services::address_from_private_key_at_path(
+            &key,
+            fnzero_safe_bitcoin_services::BITCOIN_MAINNET_CAIP2,
+            bitcoin_path,
+        )
+        .map_err(map_bitcoin_error)?;
+    } else if family == "tron" {
+        fnzero_safe_tron_services::address_from_private_key(&key).map_err(|e| ApiError {
+            message: e.to_string(),
+        })?;
+    }
+    // The existing encrypted wallet container uses a Solana keypair as its storage identity.
+    // Other-chain private-key imports never expose that identity as a recovered Solana account.
+    let mut identity = Sha256::new();
+    identity.update(b"FnzSafe imported account identity v1");
+    identity.update(family.as_bytes());
+    if family == "bitcoin" {
+        identity.update(bitcoin_path.as_bytes());
+    }
+    identity.update(key.as_slice());
+    let seed = Zeroizing::new(<[u8; 32]>::from(identity.finalize()));
+    let keypair = Keypair::new_from_array(*seed);
+    let root = KeyManager::keypair_to_encrypted_json(&keypair, &req.password)
+        .map_err(|message| ApiError { message })?;
+    let root = with_keystore_metadata(&root, Some(&name))?;
+    let root = with_universal_wallet_metadata(&root, &evm.wallet, &evm.keystore_json)?;
+    let root = recovery_metadata(&root, family, (family == "bitcoin").then_some(bitcoin_path))?;
+    let address = if family == "bitcoin" {
+        fnzero_safe_bitcoin_services::address_from_private_key_at_path(
+            &key,
+            fnzero_safe_bitcoin_services::BITCOIN_MAINNET_CAIP2,
+            bitcoin_path,
+        )
+        .map_err(map_bitcoin_error)?
+    } else if family == "tron" {
+        fnzero_safe_tron_services::address_from_private_key(&key).map_err(|e| ApiError {
+            message: e.to_string(),
+        })?
+    } else {
+        evm.wallet.address.clone()
+    };
+    let mut root: Value = serde_json::from_str(&root).map_err(|_| ApiError {
+        message: "Invalid recovery keystore".into(),
+    })?;
+    root["metadata"]["private_key_address"] = json!(address);
+    let root = root.to_string();
+    Ok(CreateKeystoreResponse {
+        keystore_json: root,
+        public_key: keypair.pubkey().to_string(),
+    })
+}
+
+async fn recover_wallet_keystore(
+    Json(req): Json<RecoverWalletRequest>,
+) -> Result<Json<CreateKeystoreResponse>, ApiError> {
+    run_keystore_task(move || recover_chain_keystore(&req))
+        .await
+        .map(Json)
+}
+
+fn imported_native_key(
+    wallet_id: &str,
+    family: &str,
+) -> Result<Option<Zeroizing<Vec<u8>>>, ApiError> {
+    let wallet = wallet_store::find(wallet_id).map_err(|message| ApiError { message })?;
+    if keystore_metadata_value(&wallet.keystore_json, "private_key_family").as_deref()
+        != Some(family)
+    {
+        return Ok(None);
+    }
+    let secrets = wallet_session_vault()
+        .decrypt(wallet_id, &wallet.public_key)
+        .map_err(|message| ApiError { message })?;
+    let key = secrets.evm_private_key().ok_or_else(|| ApiError {
+        message: "Imported account is locked".into(),
+    })?;
+    Ok(Some(Zeroizing::new(key.to_vec())))
+}
+
+fn verify_imported_native_address(
+    wallet_id: &str,
+    family: &str,
+    chain_id: &str,
+    address: &str,
+    path: Option<&str>,
+) -> Result<Option<Zeroizing<Vec<u8>>>, ApiError> {
+    let Some(key) = imported_native_key(wallet_id, family)? else {
+        return Ok(None);
+    };
+    let expected = if family == "bitcoin" {
+        fnzero_safe_bitcoin_services::address_from_private_key_at_path(
+            &key,
+            chain_id,
+            path.unwrap_or("m/86'/0'/0'/0/0"),
+        )
+        .map_err(map_bitcoin_error)?
+    } else {
+        fnzero_safe_tron_services::address_from_private_key(&key).map_err(|e| ApiError {
+            message: e.to_string(),
+        })?
+    };
+    if expected != address.trim() {
+        return Err(ApiError {
+            message: "Imported key does not own the selected address".into(),
+        });
+    }
+    Ok(Some(key))
+}
+
+// Plaintext is accepted only to create an encrypted keystore for wallet recovery.
+#[derive(Deserialize)]
+struct ImportPrivateKeyKeystoreRequest {
+    private_key: String,
+    password: String,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+impl Drop for ImportPrivateKeyKeystoreRequest {
+    fn drop(&mut self) {
+        self.private_key.zeroize();
+        self.password.zeroize();
+    }
+}
+
+fn keypair_from_recovery_private_key(input: &str) -> Result<Keypair, ApiError> {
+    let input = input.trim();
+    if input.starts_with('[') {
+        let bytes =
+            Zeroizing::new(
+                serde_json::from_str::<Vec<u8>>(input).map_err(|_| ApiError {
+                    message: "无效的私钥 JSON 数组".to_string(),
+                })?,
+            );
+        Keypair::try_from(bytes.as_slice()).map_err(|_| ApiError {
+            message: "私钥必须是有效的 64 字节 Solana 密钥对".to_string(),
+        })
+    } else {
+        keypair_from_base58_safe(input).map_err(|_| ApiError {
+            message: "私钥必须是有效的 Base58 Solana 密钥对".to_string(),
+        })
+    }
+}
+
+async fn import_private_key_keystore(
+    Json(mut req): Json<ImportPrivateKeyKeystoreRequest>,
+) -> Result<Json<CreateKeystoreResponse>, ApiError> {
+    validate_password(req.password.as_str(), "密码")?;
+    require_nonempty(req.private_key.trim(), "私钥")?;
+    let name = validate_optional_label(req.name.take(), "钱包名称")?;
+    let response = run_keystore_task(move || {
+        let keypair = keypair_from_recovery_private_key(&req.private_key)?;
+        let keystore_json = KeyManager::keypair_to_encrypted_json(&keypair, &req.password)
+            .map_err(|message| ApiError { message })?;
+        Ok(CreateKeystoreResponse {
+            keystore_json: with_keystore_metadata(&keystore_json, name.as_deref())?,
+            public_key: keypair.pubkey().to_string(),
+        })
+    })
+    .await?;
+    Ok(Json(response))
+}
+
+#[cfg(test)]
+mod wallet_recovery_tests {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "Run with FNZERO_SAFE_DB_PATH pointing to an isolated temporary database"]
+    async fn imported_accounts_survive_save_lock_and_unlock() {
+        assert!(std::env::var("FNZERO_SAFE_DB_PATH")
+            .unwrap()
+            .contains("fnzsafe-recovery-test"));
+        let hex_key = format!("{:064x}", 1);
+        let wif = fnzero_safe_bitcoin_services::private_key_to_wif(
+            &hex::decode(&hex_key).unwrap(),
+            fnzero_safe_bitcoin_services::BITCOIN_MAINNET_CAIP2,
+        )
+        .unwrap();
+        let mut saved_ids = Vec::new();
+        for (family, secret) in [
+            ("evm", hex_key.as_str()),
+            ("bitcoin", wif.as_str()),
+            ("tron", hex_key.as_str()),
+        ] {
+            let recovered =
+                recover_chain_keystore(&recovery_request(family, "private_key", secret, None))
+                    .unwrap();
+            let saved = save_keystore_wallet(Json(SaveKeystoreWalletRequest {
+                keystore_json: recovered.keystore_json,
+                password: "recovery-test-password".into(),
+                name: Some(format!("Recovered {family}")),
+            }))
+            .await
+            .unwrap()
+            .0
+            .wallet;
+            assert_eq!(saved.private_key_family.as_deref(), Some(family));
+            assert!(keypair_from_saved_wallet_session(&saved.id).is_err());
+            wallet_session_vault().lock(&saved.id).unwrap();
+            assert!(imported_native_key(&saved.id, family).is_err());
+            let mut auth = WalletAuthRequest::default();
+            auth.wallet_id = Some(saved.id.clone());
+            auth.password = Some("recovery-test-password".into());
+            let _ = unlock_wallet(Json(UnlockWalletRequest { wallet: auth }))
+                .await
+                .unwrap();
+            let mut auth = WalletAuthRequest::default();
+            auth.wallet_id = Some(saved.id.clone());
+            let _ = unlock_wallet(Json(UnlockWalletRequest { wallet: auth }))
+                .await
+                .unwrap();
+            if family == "evm" {
+                let evm = unlock_saved_evm_wallet(
+                    Path(saved.id.clone()),
+                    Json(UnlockSavedEvmWalletRequest {
+                        password: "recovery-test-password".into(),
+                    }),
+                )
+                .await
+                .unwrap()
+                .0;
+                assert_eq!(Some(evm.wallet.address), saved.evm_address);
+            } else {
+                let accounts = wallet_multichain_accounts(
+                    Path(saved.id.clone()),
+                    Query(WalletMultichainAccountsQuery {
+                        bitcoin_address_type: None,
+                    }),
+                )
+                .await
+                .unwrap()
+                .0;
+                assert_eq!(accounts.accounts.len(), 1);
+                let account = &accounts.accounts[0];
+                assert_eq!(account.family, family);
+                assert_eq!(
+                    Some(account.address.as_str()),
+                    saved.private_key_address.as_deref()
+                );
+                assert!(verify_imported_native_address(
+                    &saved.id,
+                    family,
+                    &account.chain_id,
+                    &account.address,
+                    Some(&account.derivation_path)
+                )
+                .unwrap()
+                .is_some());
+                assert!(verify_imported_native_address(
+                    &saved.id,
+                    family,
+                    &account.chain_id,
+                    "wrong address",
+                    Some(&account.derivation_path)
+                )
+                .is_err());
+            }
+            saved_ids.push(saved.id);
+        }
+        saved_ids.sort();
+        saved_ids.dedup();
+        assert_eq!(saved_ids.len(), 3);
+        assert_eq!(list_wallets().await.unwrap().0.wallets.len(), 3);
+    }
+
+    fn recovery_request(
+        family: &str,
+        material_type: &str,
+        secret: &str,
+        path: Option<&str>,
+    ) -> RecoverWalletRequest {
+        RecoverWalletRequest {
+            family: family.into(),
+            material_type: material_type.into(),
+            secret: secret.into(),
+            password: "recovery-test-password".into(),
+            name: Some("Recovered".into()),
+            derivation_path: path.map(str::to_string),
+        }
+    }
+
+    fn saved_recovery(response: &CreateKeystoreResponse) -> wallet_store::SavedWallet {
+        wallet_store::SavedWallet {
+            id: "0123456789abcdef0123456789abcdef".into(),
+            name: "Recovered".into(),
+            public_key: response.public_key.clone(),
+            keystore_json: response.keystore_json.clone(),
+            created_at: 1,
+            updated_at: 1,
+        }
+    }
+
+    #[test]
+    fn recovers_private_keys_for_each_family_and_preserves_them_across_password_changes() {
+        let hex_key = format!("{:064x}", 1);
+        let bytes = hex::decode(&hex_key).unwrap();
+        let wif = fnzero_safe_bitcoin_services::private_key_to_wif(
+            &bytes,
+            fnzero_safe_bitcoin_services::BITCOIN_MAINNET_CAIP2,
+        )
+        .unwrap();
+        let mut identities = Vec::new();
+        for (family, secret) in [
+            ("evm", hex_key.as_str()),
+            ("tron", hex_key.as_str()),
+            ("bitcoin", wif.as_str()),
+        ] {
+            let request = recovery_request(family, "private_key", secret, None);
+            let recovered = recover_chain_keystore(&request).unwrap();
+            assert!(!recovered.keystore_json.contains(secret));
+            let wallet = saved_recovery(&recovered);
+            let summary = wallet_store::WalletSummary::from(wallet.clone());
+            assert_eq!(summary.private_key_family.as_deref(), Some(family));
+            let key = evm_private_key_from_saved_wallet(&wallet, &request.password)
+                .unwrap()
+                .unwrap();
+            assert_eq!(&key[..], &bytes);
+            let expected_address = match family {
+                "evm" => "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf".to_string(),
+                "tron" => "TMVQGm1qAQYVdetCeGRRkTWYYrLXuHK2HC".to_string(),
+                _ => fnzero_safe_bitcoin_services::address_from_wif(
+                    &wif,
+                    fnzero_safe_bitcoin_services::BITCOIN_MAINNET_CAIP2,
+                )
+                .unwrap(),
+            };
+            assert_eq!(
+                summary.private_key_address.as_ref().unwrap().to_lowercase(),
+                expected_address.to_lowercase()
+            );
+            assert_eq!(summary.evm_address.is_some(), family == "evm");
+            let changed = reencrypt_saved_wallet_material(
+                &wallet,
+                &request.password,
+                "new-recovery-password",
+            )
+            .unwrap();
+            let changed = wallet_store::SavedWallet {
+                keystore_json: changed,
+                ..wallet
+            };
+            assert_eq!(
+                evm_private_key_from_saved_wallet(&changed, "new-recovery-password")
+                    .unwrap()
+                    .unwrap()
+                    .as_slice(),
+                bytes.as_slice()
+            );
+            assert!(evm_private_key_from_saved_wallet(&changed, &request.password).is_err());
+            let backup = recover_chain_keystore(&recovery_request(
+                family,
+                "keystore",
+                &changed.keystore_json,
+                None,
+            ));
+            assert!(backup.is_err()); // Old password cannot restore a re-encrypted backup.
+            identities.push(recovered.public_key);
+        }
+        identities.sort();
+        identities.dedup();
+        assert_eq!(
+            identities.len(),
+            3,
+            "Same scalar on different chains must not overwrite another imported wallet"
+        );
+    }
+
+    #[test]
+    fn mnemonic_recovery_keeps_universal_accounts_and_selected_paths() {
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        for (family, path) in [
+            ("evm", "m/44'/60'/1'/0/0"),
+            ("bitcoin", "m/84'/0'/2'/0/3"),
+            ("tron", "m/44'/195'/0'/0/0"),
+        ] {
+            let request = recovery_request(family, "mnemonic", phrase, Some(path));
+            let recovered = recover_chain_keystore(&request).unwrap();
+            let wallet = saved_recovery(&recovered);
+            let keypair = KeyManager::keypair_from_encrypted_json(
+                &recovered.keystore_json,
+                &request.password,
+            )
+            .unwrap();
+            let phrase_back = verified_mnemonic_from_keystore_json(
+                &recovered.keystore_json,
+                &request.password,
+                &keypair.pubkey(),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(phrase_back.as_str(), phrase);
+            let evm_key = evm_private_key_from_saved_wallet(&wallet, &request.password).unwrap();
+            assert!(evm_key.is_some());
+            if family == "bitcoin" {
+                assert!(
+                    prepare_bitcoin_account_rotation(phrase, &recovered.keystore_json).is_err()
+                );
+                let (_, _, exported_path) = export_mnemonic_account_context(
+                    ExportWalletFamily::Bitcoin,
+                    None,
+                    &wallet,
+                    &keypair,
+                    phrase,
+                    None,
+                )
+                .unwrap();
+                assert_eq!(exported_path, path);
+            }
+            let summary = wallet_store::WalletSummary::from(wallet);
+            assert_eq!(summary.secret_type, "mnemonic");
+            assert!(summary.private_key_family.is_none());
+            if family == "evm" {
+                assert_eq!(summary.evm_derivation_path.as_deref(), Some(path));
+                assert_eq!(
+                    summary.evm_address.as_deref(),
+                    Some(
+                        app_services::evm_wallet_address_from_mnemonic(phrase, Some(path))
+                            .unwrap()
+                            .as_str()
+                    )
+                );
+            } else {
+                assert_eq!(
+                    keystore_metadata_value(
+                        &recovered.keystore_json,
+                        &format!("{family}_recovery_path")
+                    )
+                    .as_deref(),
+                    Some(path)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn standalone_evm_keystores_and_full_backups_recover_the_original_account() {
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let original =
+            app_services::evm_wallet_import_mnemonic(app_services::EvmImportMnemonicRequest {
+                name: "External".into(),
+                mnemonic: phrase.into(),
+                derivation_path: Some("m/44'/60'/2'/0/0".into()),
+                password: "recovery-test-password".into(),
+            })
+            .unwrap();
+        let request = recovery_request("evm", "keystore", &original.keystore_json, None);
+        let recovered = recover_chain_keystore(&request).unwrap();
+        let summary = wallet_store::WalletSummary::from(saved_recovery(&recovered));
+        assert_eq!(
+            summary.evm_address.as_deref(),
+            Some(original.wallet.address.as_str())
+        );
+        let backup = recover_chain_keystore(&recovery_request(
+            "evm",
+            "keystore",
+            &recovered.keystore_json,
+            None,
+        ))
+        .unwrap();
+        assert_eq!(backup.public_key, recovered.public_key);
+        let mut wrong_password = recovery_request("evm", "keystore", &original.keystore_json, None);
+        wrong_password.password = "wrong-password".into();
+        assert!(recover_chain_keystore(&wrong_password).is_err());
+    }
+
+    #[test]
+    fn recovery_rejects_invalid_material_and_unsupported_families() {
+        for (family, material_type, secret, path) in [
+            ("evm", "private_key", "not-a-hex-key", None),
+            ("tron", "private_key", "00", None),
+            ("bitcoin", "private_key", "not-a-wif", None),
+            ("evm", "mnemonic", "not a valid mnemonic", None),
+            ("bitcoin", "mnemonic", "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about", Some("m/44'/0'/0'/0/0")),
+            ("cosmos", "private_key", "anything", None),
+        ] {
+            assert!(recover_chain_keystore(&recovery_request(family, material_type, secret, path)).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn plaintext_private_keys_restore_as_encrypted_keystores() {
+        let keypair = Keypair::new();
+        let password = "recovery-test-password";
+        for private_key in [
+            format!("  {}\n", keypair.to_base58_string()),
+            serde_json::to_string(&keypair.to_bytes().to_vec()).unwrap(),
+        ] {
+            let response = import_private_key_keystore(Json(ImportPrivateKeyKeystoreRequest {
+                private_key,
+                password: password.to_string(),
+                name: Some("Recovered wallet".to_string()),
+            }))
+            .await
+            .unwrap()
+            .0;
+            assert_eq!(response.public_key, keypair.pubkey().to_string());
+            let restored =
+                KeyManager::keypair_from_encrypted_json(&response.keystore_json, password).unwrap();
+            assert_eq!(restored.pubkey(), keypair.pubkey());
+            assert!(KeyManager::keypair_from_encrypted_json(
+                &response.keystore_json,
+                "wrong-password"
+            )
+            .is_err());
+            assert!(!response.keystore_json.contains(&keypair.to_base58_string()));
+        }
+    }
+
+    #[test]
+    fn malformed_private_keys_are_rejected_without_echoing_the_input() {
+        for input in ["", "invalid-secret", "[1,2,3]", "[256]", "[true]"] {
+            let error = keypair_from_recovery_private_key(input).err().unwrap();
+            if !input.is_empty() {
+                assert!(!error.message.contains(input));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn plaintext_mnemonic_restores_with_selected_derivation_path() {
+        let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let path = "m/44'/501'/1'/0'";
+        let response = import_mnemonic_keystore(Json(ImportMnemonicKeystoreRequest {
+            mnemonic: mnemonic.to_string(),
+            password: "recovery-test-password".to_string(),
+            name: None,
+            derivation_path: Some(path.to_string()),
+        }))
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(
+            response.public_key,
+            keypair_from_mnemonic_phrase(mnemonic, path)
+                .unwrap()
+                .pubkey()
+                .to_string()
+        );
+        assert_eq!(response.derivation_path, path);
+        assert_eq!(
+            KeyManager::mnemonic_from_encrypted_json(
+                &response.keystore_json,
+                "recovery-test-password"
+            )
+            .unwrap()
+            .as_str(),
+            mnemonic
+        );
+        assert!(!response.keystore_json.contains(mnemonic));
+    }
 }
 
 // Import Keystore
@@ -8062,6 +8990,74 @@ async fn export_wallet_private_key(
     let (keypair, wallet) =
         keypair_from_saved_wallet_with_password(&wallet_id, &req.password, "钱包")?;
     let family = req.family.unwrap_or(ExportWalletFamily::Solana);
+    if let Some(imported_family) =
+        keystore_metadata_value(&wallet.keystore_json, "private_key_family")
+    {
+        let requested_family = match family {
+            ExportWalletFamily::Solana => "solana",
+            ExportWalletFamily::Evm => "evm",
+            ExportWalletFamily::Bitcoin => "bitcoin",
+            ExportWalletFamily::Tron => "tron",
+        };
+        if requested_family != imported_family {
+            return Err(ApiError {
+                message: "This imported key belongs to a different chain family".into(),
+            });
+        }
+        if matches!(
+            family,
+            ExportWalletFamily::Bitcoin | ExportWalletFamily::Tron
+        ) {
+            let key =
+                evm_private_key_from_saved_wallet(&wallet, &req.password)?.ok_or_else(|| {
+                    ApiError {
+                        message: "Missing imported account key".into(),
+                    }
+                })?;
+            let (value, address, encoding, path) =
+                if family == ExportWalletFamily::Bitcoin {
+                    let chain = req
+                        .chain_id
+                        .as_deref()
+                        .unwrap_or(fnzero_safe_bitcoin_services::BITCOIN_MAINNET_CAIP2);
+                    let path =
+                        keystore_metadata_value(&wallet.keystore_json, "recovery_derivation_path")
+                            .unwrap_or_else(|| "m/86'/0'/0'/0/0".into());
+                    let address = fnzero_safe_bitcoin_services::address_from_private_key_at_path(
+                        &key, chain, &path,
+                    )
+                    .map_err(map_bitcoin_error)?;
+                    let wif = fnzero_safe_bitcoin_services::private_key_to_wif(&key, chain)
+                        .map_err(map_bitcoin_error)?;
+                    (wif, address, "wif-compressed", Some(path))
+                } else {
+                    require_supported_tron_export_chain(req.chain_id.as_deref())?;
+                    let address = fnzero_safe_tron_services::address_from_private_key(&key)
+                        .map_err(|e| ApiError {
+                            message: e.to_string(),
+                        })?;
+                    (
+                        Zeroizing::new(hex::encode(&key[..])),
+                        address,
+                        "hex-32-byte",
+                        None,
+                    )
+                };
+            verify_export_expected_address(req.expected_address.as_deref(), family, &address)?;
+            return Ok(Json(ExportWalletPrivateKeyResponse {
+                export_protocol_version: 1,
+                private_key: value.to_string(),
+                family: if family == ExportWalletFamily::Bitcoin {
+                    "bitcoin"
+                } else {
+                    "tron"
+                },
+                address,
+                encoding,
+                derivation_path: path,
+            }));
+        }
+    }
     let (private_key, family_name, address, encoding, derivation_path) = match family {
         ExportWalletFamily::Solana => (
             Zeroizing::new(keypair.to_base58_string()),
@@ -8101,11 +9097,16 @@ async fn export_wallet_private_key(
                 .chain_id
                 .as_deref()
                 .unwrap_or(fnzero_safe_bitcoin_services::BITCOIN_MAINNET_CAIP2);
-            let default_path = bitcoin_derivation_path(
-                chain_id,
-                Some("taproot"),
-                bitcoin_account_index(&wallet.keystore_json)?,
-            )?;
+            let default_path =
+                keystore_metadata_value(&wallet.keystore_json, "bitcoin_recovery_path")
+                    .map(Ok)
+                    .unwrap_or_else(|| {
+                        bitcoin_derivation_path(
+                            chain_id,
+                            Some("taproot"),
+                            bitcoin_account_index(&wallet.keystore_json)?,
+                        )
+                    })?;
             let path = req.derivation_path.as_deref().unwrap_or(&default_path);
             let wif = fnzero_safe_bitcoin_services::private_key_wif_from_mnemonic_at_path(
                 &mnemonic, chain_id, path,
@@ -8235,11 +9236,16 @@ fn export_mnemonic_account_context(
         }
         ExportWalletFamily::Bitcoin => {
             let chain_id = chain_id.unwrap_or(fnzero_safe_bitcoin_services::BITCOIN_MAINNET_CAIP2);
-            let default_path = bitcoin_derivation_path(
-                chain_id,
-                Some("taproot"),
-                bitcoin_account_index(&wallet.keystore_json)?,
-            )?;
+            let default_path =
+                keystore_metadata_value(&wallet.keystore_json, "bitcoin_recovery_path")
+                    .map(Ok)
+                    .unwrap_or_else(|| {
+                        bitcoin_derivation_path(
+                            chain_id,
+                            Some("taproot"),
+                            bitcoin_account_index(&wallet.keystore_json)?,
+                        )
+                    })?;
             let account = app_services::multichain_derive_account(
                 app_services::MultiChainDeriveAccountRequest {
                     chain_id: chain_id.to_string(),
@@ -8324,6 +9330,32 @@ struct UnlockWalletResponse {
 async fn unlock_wallet(
     Json(req): Json<UnlockWalletRequest>,
 ) -> Result<Json<UnlockWalletResponse>, ApiError> {
+    if let Some(id) = req
+        .wallet
+        .wallet_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    {
+        let public_key =
+            if let Some(password) = req.wallet.password.as_deref().filter(|p| !p.is_empty()) {
+                unlock_saved_wallet_for_session(id, password, "钱包")?
+                    .0
+                    .pubkey()
+                    .to_string()
+            } else {
+                validate_wallet_id(id)?;
+                let wallet = wallet_store::find(id).map_err(|message| ApiError { message })?;
+                wallet_session_vault()
+                    .decrypt(id, &wallet.public_key)
+                    .map_err(|message| ApiError { message })?;
+                wallet.public_key
+            };
+        return Ok(Json(UnlockWalletResponse {
+            public_key,
+            unlocked: true,
+        }));
+    }
     let keypair = req.wallet.keypair()?;
     Ok(Json(UnlockWalletResponse {
         public_key: keypair.pubkey().to_string(),
@@ -12681,6 +13713,7 @@ fn keypair_from_saved_wallet(
     } else {
         unlock_saved_wallet_for_session(wallet_id, password, address_label)?
     };
+    require_solana_account(&wallet.keystore_json)?;
     let expected_pubkey = Pubkey::from_str(address_label).map_err(|_| ApiError {
         message: format!("Signer 地址无效: {address_label}"),
     })?;

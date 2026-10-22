@@ -253,7 +253,7 @@
       "reviewWarning": "Review the address, amount, and network carefully before sending.",
       "sendNativeAsset": "Send native asset",
       "loadingNativeAccount": "Loading {chain} account...",
-      "nativeAccountUnavailable": "{chain} requires a mnemonic-backed wallet.",
+      "nativeAccountUnavailable": "Select a wallet with a {chain} account.",
       "bitcoinAddressType": "Bitcoin address type"
     },
     "wallet-list": {
@@ -1278,7 +1278,7 @@
     },
     "import-keystore": {
       "title": "Import Wallet",
-      "supportedTypesHint": "Supports both mnemonic Keystores and private-key Keystores. The wallet is restored according to the encrypted secret type stored in the file.",
+      "supportedTypesHint": "Restore Solana, EVM, Bitcoin and TRON private keys or mnemonics, or FnzSafe encrypted backups. Standalone FnzSafe EVM Keystores are also supported.",
       "selectFile": "Select Keystore File",
       "pasteJson": "Paste Keystore JSON",
       "jsonPlaceholder": "Paste Keystore JSON content",
@@ -1293,7 +1293,17 @@
       "success": "Imported successfully!",
       "error": "Import failed",
       "fileUploaded": "File uploaded successfully",
-      "fillAllFields": "Please fill in all fields"
+      "fillAllFields": "Please fill in all fields",
+      "mode_keystore": "Keystore",
+      "mode_private_key": "Private key",
+      "mode_mnemonic": "Mnemonic phrase",
+      "privateKeyPlaceholder": "Paste a Base58 private key or a Solana CLI 64-byte JSON keypair array",
+      "plaintextHint": "Next, set a wallet password to encrypt the imported private key or mnemonic phrase.",
+      "restoreButton": "Restore wallet",
+      "chainFamily": "Account type",
+      "multichainHint": "Mnemonics restore multiple chain accounts; private keys restore the selected family. EVM accounts work across supported EVM networks. Bitcoin supports mainnet Taproot / Native SegWit compressed WIF.",
+      "bitcoinPrivateKeyPlaceholder": "Paste a Bitcoin mainnet compressed WIF private key (starting with K or L)",
+      "hexPrivateKeyPlaceholder": "Paste a 32-byte hex private key (optional 0x prefix)"
     },
     "import-mnemonic": {
       "title": "Import Mnemonic",

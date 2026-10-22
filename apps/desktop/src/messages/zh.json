@@ -253,7 +253,7 @@
       "reviewWarning": "发送前请仔细核对地址、数量和网络。",
       "sendNativeAsset": "发送原生资产",
       "loadingNativeAccount": "正在加载 {chain} 账户...",
-      "nativeAccountUnavailable": "{chain} 需要使用助记词创建的钱包。",
+      "nativeAccountUnavailable": "请选择已恢复 {chain} 账户的钱包。",
       "bitcoinAddressType": "Bitcoin 地址类型"
     },
     "wallet-list": {
@@ -1278,7 +1278,7 @@
     },
     "import-keystore": {
       "title": "导入钱包",
-      "supportedTypesHint": "同时支持助记词 Keystore 和私钥 Keystore；系统会按照文件中加密保存的密钥类型恢复钱包。",
+      "supportedTypesHint": "支持 Solana、EVM、Bitcoin、TRON 的明文私钥和助记词，以及 FnzSafe 加密备份；EVM 也支持独立的 FnzSafe EVM Keystore。",
       "selectFile": "选择 Keystore 文件",
       "pasteJson": "粘贴 Keystore JSON",
       "jsonPlaceholder": "粘贴 Keystore JSON 内容",
@@ -1293,7 +1293,17 @@
       "success": "导入成功！",
       "error": "导入失败",
       "fileUploaded": "文件上传成功",
-      "fillAllFields": "请填写所有字段"
+      "fillAllFields": "请填写所有字段",
+      "mode_keystore": "Keystore",
+      "mode_private_key": "明文私钥",
+      "mode_mnemonic": "明文助记词",
+      "privateKeyPlaceholder": "粘贴 Base58 私钥或 Solana CLI 的 64 字节 JSON 密钥数组",
+      "plaintextHint": "下一步设置钱包密码，用于加密保存导入的私钥或助记词。",
+      "restoreButton": "恢复钱包",
+      "chainFamily": "账户类型",
+      "multichainHint": "助记词会恢复多链账户；私钥按所选链类型恢复。EVM 账户适用于所有已支持的 EVM 网络。Bitcoin 当前支持主网的 Taproot / Native SegWit 压缩 WIF。",
+      "bitcoinPrivateKeyPlaceholder": "粘贴 Bitcoin 主网压缩 WIF 私钥（K 或 L 开头）",
+      "hexPrivateKeyPlaceholder": "粘贴 32 字节十六进制私钥（可带 0x 前缀）"
     },
     "import-mnemonic": {
       "title": "导入助记词",

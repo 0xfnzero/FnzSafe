@@ -679,12 +679,32 @@ pub async fn submit_prepared_transfer(
     sender: &str,
     recipient: &str,
     amount_sun: u64,
+    transaction: Value,
+) -> TronServiceResult<TronBroadcastResult> {
+    let private_key = private_key_from_mnemonic(mnemonic)?;
+    submit_prepared_transfer_with_private_key(
+        chain_id,
+        private_key.as_ref(),
+        sender,
+        recipient,
+        amount_sun,
+        transaction,
+    )
+    .await
+}
+
+/// Signs an approved transaction with an imported account key.
+pub async fn submit_prepared_transfer_with_private_key(
+    chain_id: &str,
+    private_key: &[u8],
+    sender: &str,
+    recipient: &str,
+    amount_sun: u64,
     mut transaction: Value,
 ) -> TronServiceResult<TronBroadcastResult> {
     let endpoint = network_endpoint(chain_id)?;
     let sender = normalize_tron_address(sender)?;
     let recipient = normalize_tron_address(recipient)?;
-    let private_key = private_key_from_mnemonic(mnemonic)?;
     let txid = sign_transaction(
         &mut transaction,
         private_key.as_ref(),

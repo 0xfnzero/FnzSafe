@@ -430,6 +430,32 @@ pub fn private_key_wif_from_mnemonic_at_path(
     ))
 }
 
+pub fn private_key_to_wif(
+    private_key: &[u8],
+    chain_id: &str,
+) -> BitcoinServiceResult<Zeroizing<String>> {
+    let (network, _, _) = network_config(chain_id)?;
+    let secret = SecretKey::from_slice(private_key)
+        .map_err(|_| BitcoinServiceError::InvalidInput("Invalid Bitcoin private key".into()))?;
+    Ok(Zeroizing::new(PrivateKey::new(secret, network).to_wif()))
+}
+
+/// Decode a compressed WIF after checking its network.
+pub fn private_key_from_wif(
+    wif: &str,
+    chain_id: &str,
+) -> BitcoinServiceResult<Zeroizing<[u8; 32]>> {
+    let (network, _, _) = network_config(chain_id)?;
+    let key = PrivateKey::from_wif(wif.trim())
+        .map_err(|_| BitcoinServiceError::InvalidInput("Invalid Bitcoin WIF".to_string()))?;
+    if key.network != network.into() || !key.compressed {
+        return Err(BitcoinServiceError::InvalidInput(
+            "WIF must be compressed and match the selected network".to_string(),
+        ));
+    }
+    Ok(Zeroizing::new(key.inner.secret_bytes()))
+}
+
 pub fn address_from_wif(wif: &str, chain_id: &str) -> BitcoinServiceResult<String> {
     let (_, path, _) = network_config(chain_id)?;
     address_from_wif_at_path(wif, chain_id, path)
@@ -961,11 +987,33 @@ pub async fn submit_prepared_transfer_at_path(
     amount_sats: u64,
     psbt_base64: &str,
 ) -> BitcoinServiceResult<BitcoinBroadcastResult> {
+    let private_key =
+        account_private_key_from_mnemonic_at_path(mnemonic, chain_id, derivation_path)?;
+    submit_prepared_transfer_with_private_key(
+        chain_id,
+        private_key.as_ref(),
+        derivation_path,
+        sender,
+        recipient,
+        amount_sats,
+        psbt_base64,
+    )
+    .await
+}
+
+/// Signs a previously validated preview with an imported account key.
+pub async fn submit_prepared_transfer_with_private_key(
+    chain_id: &str,
+    private_key: &[u8],
+    derivation_path: &str,
+    sender: &str,
+    recipient: &str,
+    amount_sats: u64,
+    psbt_base64: &str,
+) -> BitcoinServiceResult<BitcoinBroadcastResult> {
     let (network, _, endpoint) = network_config(chain_id)?;
     let sender = checked_address(sender, network)?;
     let recipient = checked_address(recipient, network)?;
-    let private_key =
-        account_private_key_from_mnemonic_at_path(mnemonic, chain_id, derivation_path)?;
     validate_sender_key(
         private_key.as_ref(),
         chain_id,

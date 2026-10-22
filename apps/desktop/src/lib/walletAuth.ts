@@ -17,6 +17,9 @@ export interface SavedWallet {
   id: string;
   name: string;
   public_key: string;
+  bitcoin_recovery_path?: string | null;
+  private_key_address?: string | null;
+  private_key_family?: "evm" | "bitcoin" | "tron" | null;
   evm_address?: string | null;
   evm_wallet_id?: string | null;
   evm_derivation_path?: string | null;
