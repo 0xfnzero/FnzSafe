@@ -1,4 +1,6 @@
 #!/bin/bash
+cd "$(dirname "${BASH_SOURCE[0]}")" || exit 1
+TARGET_DIR="${CARGO_TARGET_DIR:-build-cache-fnzsafe}"
 
 # Solana Bot Startup Script (Example)
 # 安全启动脚本 - 密码只在内存中，不保存到环境变量或文件
@@ -29,7 +31,7 @@ if [ "$SKIP_BUILD" = false ]; then
     echo -e "${BLUE}📦 Building bot (release mode with solana-ops feature)...${NC}"
     echo ""
 
-    cargo build --example bot_example --features solana-ops --release
+    cargo build --example bot_example --features solana-ops --release --target-dir "$TARGET_DIR"
 
     if [ $? -ne 0 ]; then
         echo ""
@@ -43,9 +45,9 @@ if [ "$SKIP_BUILD" = false ]; then
 fi
 
 # 检查编译产物
-if [ ! -f "build-cache/release/examples/bot_example" ]; then
+if [ ! -f "${TARGET_DIR}/release/examples/bot_example" ]; then
     echo -e "${RED}❌ Bot executable not found${NC}"
-    echo "Expected: build-cache/release/examples/bot_example"
+    echo "Expected: ${TARGET_DIR}/release/examples/bot_example"
     exit 1
 fi
 
@@ -73,7 +75,7 @@ if [ ! -f "./keystore.json" ]; then
     fi
 
     # 创建钱包 (通过管道传递密码)
-    echo "$NEW_PASSWORD" | ./build-cache/release/examples/bot_example
+    echo "$NEW_PASSWORD" | "${TARGET_DIR}/release/examples/bot_example"
     NEW_PASSWORD=""
     CONFIRM_PASSWORD=""
 
@@ -102,7 +104,7 @@ echo ""
 echo -e "${BLUE}🚀 Starting bot...${NC}"
 echo ""
 
-echo "$WALLET_PASSWORD" | ./build-cache/release/examples/bot_example > bot.log 2>&1
+echo "$WALLET_PASSWORD" | "${TARGET_DIR}/release/examples/bot_example" > bot.log 2>&1
 BOT_EXIT_CODE=$?
 
 # 立即清除密码变量
