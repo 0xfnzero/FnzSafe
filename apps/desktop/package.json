@@ -22,6 +22,7 @@
     "start": "next start",
     "test:dependency-compat": "node scripts/test-dependency-compat.cjs",
     "test:devnet-airdrop": "node scripts/test-devnet-airdrop.cjs",
+    "test:program-close": "node --experimental-strip-types --test src/lib/programClose.test.mjs",
     "test:program-deploy": "node scripts/test-program-deploy.cjs",
     "lint": "node scripts/check-sensitive-inputs.cjs && eslint",
     "tauri": "node scripts/run-tauri-cef.cjs",

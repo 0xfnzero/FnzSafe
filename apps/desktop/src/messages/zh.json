@@ -170,6 +170,33 @@
     "squads": "🛡️ Squads 多签"
   },
   "features": {
+    "program-close": {
+      "discoverHelp": "只有私钥也可以：先导入钱包，选择部署时的网络，再查询链上当前由该钱包持有升级权限的合约。不需要合约地址、源码或部署记录。",
+      "discover": "查询该钱包可关闭的合约",
+      "discovered": "选择一个合约，再查询权限、费用与租金预览。列表金额来自当前链上扫描，签名前会重新核对。",
+      "noPrograms": "当前所选网络未找到升级权限属于该钱包的 loader-v3 合约。这不代表没有历史部署；权限已转移、已放弃升级、已关闭或部署在其他网络的合约不会出现在此列表。",
+      "actualRefund": "按交易前后余额核验的实际退款",
+      "title": "关闭合约 / 回收部署租金",
+      "warning": "关闭后合约永久停用，原 Program ID 不能重新部署。请先确认该合约已不再使用。",
+      "wallet": "当前钱包",
+      "inspect": "第一步：查询权限与可回收租金",
+      "processing": "处理中，请勿重复操作…",
+      "recipient": "退款钱包",
+      "refund": "可退回 ProgramData 租金（未扣交易费）",
+      "fee": "预估交易费（钱包需预先持有 SOL）",
+      "net": "预计净回收",
+      "retained": "Program 地址保留的租金（无法回收）",
+      "scope": "仅支持 loader-v3，要求所选钱包持有当前升级权限。退款固定回到该钱包；PDA、Token 账户和 Buffer 不随程序关闭。预览有效期 5 分钟，状态变化后需重新查询。",
+      "acknowledge": "我理解此操作不可逆，确认永久关闭该合约。",
+      "typeId": "再次输入完整 Program ID 确认关闭",
+      "password": "钱包密码（已解锁时可留空）",
+      "submit": "第二步：签名并永久关闭，回收租金",
+      "previewMismatch": "预览与所选钱包、合约或网络不一致，已拒绝关闭。",
+      "success": "交易已 finalized，ProgramData 关闭回读通过。",
+      "readbackMismatch": "交易已 finalized，但账户回读不匹配。请核对签名，不要重复提交。",
+      "signature": "交易签名",
+      "download": "下载关闭回执"
+    },
     "key-workbench": {
       "title": "密钥管理"
     },

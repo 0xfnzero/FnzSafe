@@ -6,6 +6,9 @@ target-dir = "build-cache-fnzsafe"
 version = "0.9.109" # Use your actual version
 features = ["vendored"]
 
+# Standard Cargo settings; sccache is optional, and no local path is required.
+# Optional: RUSTC_WRAPPER=sccache SCCACHE_CACHE_SIZE=10G cargo build --release
+# Keep target-dir, release optimization and linker settings project-specific.
 [profile.dev]
 debug = 1
 

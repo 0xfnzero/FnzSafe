@@ -96,6 +96,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use zeroize::{Zeroize, Zeroizing};
 
 mod automated_trade;
+mod program_close;
 mod program_deploy;
 mod program_source_build;
 mod squads_v4;
@@ -4525,6 +4526,12 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/external-sign/submit", post(external_sign_submit))
         .route("/api/external-sign/submit/", post(external_sign_submit))
         .route("/api/program/info", post(program_info))
+        .route("/api/program/close/discover", post(program_close::discover))
+        .route("/api/program/close/discover/", post(program_close::discover))
+        .route("/api/program/close/preview", post(program_close::preview))
+        .route("/api/program/close/preview/", post(program_close::preview))
+        .route("/api/program/close/submit", post(program_close::submit))
+        .route("/api/program/close/submit/", post(program_close::submit))
         .route("/api/program/info/", post(program_info))
         .route("/api/program/derive-address", post(program_derive_address))
         .route("/api/program/derive-address/", post(program_derive_address))

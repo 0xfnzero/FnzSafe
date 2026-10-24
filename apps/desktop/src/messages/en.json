@@ -170,6 +170,33 @@
     "squads": "🛡️ Squads Multisig"
   },
   "features": {
+    "program-close": {
+      "discoverHelp": "Only have a private key? Import the wallet, select the deployment network, then find programs whose current upgrade authority is this wallet. No Program ID, source code or deployment record is required.",
+      "discover": "Find programs this wallet can close",
+      "discovered": "Select a program, then inspect authority, fees and refundable rent. Scan amounts are current observations and are rechecked before signing.",
+      "noPrograms": "No loader-v3 programs with this wallet as current upgrade authority were found on this network. Historical deployments with transferred or revoked authority, closed programs, or deployments on another network do not appear here.",
+      "actualRefund": "Actual refund verified from transaction balances",
+      "title": "Close program / reclaim deployment rent",
+      "warning": "Closure permanently disables the program. The same Program ID cannot be redeployed. Confirm that the program is no longer needed.",
+      "wallet": "Current wallet",
+      "inspect": "Step 1: check authority and refundable rent",
+      "processing": "Processing — do not resubmit…",
+      "recipient": "Refund wallet",
+      "refund": "Refundable ProgramData rent (before transaction fee)",
+      "fee": "Estimated fee (wallet must hold SOL upfront)",
+      "net": "Estimated net recovery",
+      "retained": "Rent retained at the Program address (not refundable)",
+      "scope": "Loader-v3 only. The selected wallet must hold the current upgrade authority and receives the refund. PDA, token accounts and buffers are not closed. Previews expire after 5 minutes; changed state requires a new preview.",
+      "acknowledge": "I understand this is irreversible and confirm permanent closure.",
+      "typeId": "Type the complete Program ID again to confirm",
+      "password": "Wallet password (optional when already unlocked)",
+      "submit": "Step 2: sign, permanently close and reclaim rent",
+      "previewMismatch": "Preview does not match the selected wallet, program or network. Closure blocked.",
+      "success": "Transaction finalized and ProgramData closure verified.",
+      "readbackMismatch": "Transaction finalized, but account readback does not match. Check the signature; do not resubmit.",
+      "signature": "Transaction signature",
+      "download": "Download closure receipt"
+    },
     "key-workbench": {
       "title": "Key Management"
     },

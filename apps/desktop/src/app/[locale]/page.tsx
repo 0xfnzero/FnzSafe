@@ -109,6 +109,7 @@ import { ChainDirectory } from "@/components/ChainDirectory";
 import { EvmContractInvokePanel } from "@/components/EvmContractInvokePanel";
 import { DEFAULT_API_PORT } from "@/lib/api";
 import { apiFetch } from "@/lib/apiFetch";
+import { ProgramClosePanel } from "@/components/ProgramClosePanel";
 import { shouldShowNativeDappWebview } from "@/lib/dappVisibility";
 import { persistJsonAfterHydration } from "@/lib/hydratedStorage";
 import { atomicToDecimalUnits } from "@/lib/multichain";
@@ -3414,6 +3415,7 @@ function defaultBackTarget(formId: string): string | null {
     case "program-invoke":
     case "program-info":
       return "program-workbench";
+    case "program-close":
     case "program-invoke-standalone":
     case "evm-contract-invoke":
     case "external-sign":
@@ -3789,6 +3791,12 @@ export default function Home() {
           id: "program-workbench",
           label: t("features.program-workbench.title"),
           icon: <Hash className="w-4 h-4" />,
+          network: true,
+        },
+        {
+          id: "program-close",
+          label: t("features.program-close.title"),
+          icon: <Download className="w-4 h-4" />,
           network: true,
         },
         {
@@ -19183,9 +19191,22 @@ export default function Home() {
       );
     };
 
+    const renderProgramClosePanel = (initiallyOpen = false) => (
+      <ProgramClosePanel
+        initiallyOpen={initiallyOpen}
+        key={`${effectiveWalletId}|${effectiveNetwork}`}
+        walletId={effectiveWalletId || ""}
+        walletAddress={effectiveWallet?.public_key || ""}
+        network={currentNetwork(effectiveNetwork)}
+        expectedGenesisHash={SOLANA_GENESIS_HASHES[currentNetwork(effectiveNetwork)]}
+        onClosed={() => refreshWalletAfterMutation(effectiveWallet)}
+      />
+    );
+
     const renderProgramWorkspacePanel = (showWorkspaceHeader = false) => (
       <div className="space-y-4">
         {showWorkspaceHeader && renderSquadsWorkspaceHeader()}
+        {renderProgramClosePanel()}
         <section className="space-y-3">
           <div className="flex items-center justify-between gap-3">
             <h3 className="text-sm font-semibold text-gray-300">{t("features.program-projects.title")}</h3>
@@ -24133,6 +24154,12 @@ export default function Home() {
                 preset: { network: effectiveNetwork },
               },
               {
+                id: "program-close",
+                title: t("features.program-close.title"),
+                icon: <Download className="w-4 h-4" />,
+                preset: { wallet_id: effectiveWalletId, network: effectiveNetwork },
+              },
+              {
                 id: "program-invoke-standalone",
                 title: t("features.program-invoke.title"),
                 icon: <Send className="w-4 h-4" />,
@@ -24159,6 +24186,9 @@ export default function Home() {
             ])}
           </div>
         );
+
+      case "program-close":
+        return renderProgramClosePanel(true);
 
       case "program-workbench":
         return renderProgramWorkspacePanel();
