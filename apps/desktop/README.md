@@ -9,6 +9,10 @@ This directory contains the integrated Next.js interface, local Rust API, and Ta
 - [General Solana Program deployment guide](PROGRAM_DEPLOYMENT.md)
 - [通用 Solana Program 部署指南](PROGRAM_DEPLOYMENT_CN.md)
 
+## Safe EVM multisig
+
+The desktop sidebar includes Safe EVM multisig creation, proposal exchange, owner signing, execution, and per-wallet account / per-Safe transaction lists for supported mainnets and testnets. See [Safe multisig usage and verification](../../docs/safe-multisig.md).
+
 ## Development
 
 Prerequisites: Rust 1.89 or newer for workspace/API builds, and Node.js 20 or 22 and newer (Node.js 21 is unsupported). The release gate uses Node.js 20.19.5 and npm 10.8.2 exactly. The standalone Tauri crate declares its independently audited Rust 1.88 minimum, but repository-wide commands require Rust 1.89.

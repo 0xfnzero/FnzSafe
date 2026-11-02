@@ -1,5 +1,7 @@
 "use client";
 
+import { NetworkEnvironmentSelector } from "@/components/NetworkEnvironmentSelector";
+
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { getVersion } from "@tauri-apps/api/app";
@@ -106,6 +108,7 @@ import {
 } from "@/components/UnifiedWallet";
 import { BrowserMenu } from "@/components/BrowserMenu";
 import { ChainDirectory } from "@/components/ChainDirectory";
+import { SafeMultisigPanel } from "@/components/SafeMultisigPanel";
 import { EvmContractInvokePanel } from "@/components/EvmContractInvokePanel";
 import { DEFAULT_API_PORT } from "@/lib/api";
 import { apiFetch } from "@/lib/apiFetch";
@@ -259,6 +262,10 @@ import {
 } from "@/lib/requestIntent";
 import {
   DEFAULT_APP_PREFERENCES,
+  enabledNetworkEnvironments,
+  isNetworkEnvironmentEnabled,
+  normalizeAppPreferences,
+  toggleNetworkEnvironment,
   addressBookDuplicate,
   buildLegacySettingsImport,
   createSerialTaskQueue,
@@ -3844,6 +3851,11 @@ export default function Home() {
       network: true,
     },
     {
+      id: "safe-multisig",
+      label: t("features.safe-multisig.title"),
+      icon: <ShieldCheck className="w-5 h-5" />,
+    },
+    {
       id: "squads-workspace",
       label: t("features.workspace.title"),
       icon: <ShieldCheck className="w-5 h-5" />,
@@ -4239,6 +4251,7 @@ export default function Home() {
   const [tokenMintInfo, setTokenMintInfo] = useState<TokenMintInfoState | null>(null);
   const walletAuth = (formId: string): WalletAuthTab =>
     normalizeWalletAuth((authMethod[formId] ?? "keystore") as WalletAuthTab);
+  const enabledEnvironments = enabledNetworkEnvironments(appPreferences);
   const enabledEvmChainIds = visibleEvmChainIds(evmChains, appPreferences);
   const visibleEvmChains = evmChains.filter((chain) => enabledEvmChainIds.includes(chain.chain_id));
   const activeEvmChain =
@@ -4590,8 +4603,8 @@ export default function Home() {
 
   const refreshEvmPortfolio = useCallback(async () => {
     if (!evmWallet) return;
-    const mainnetChains = evmChains.filter((chain) => !chain.testnet);
-    const chains = mainnetChains.length > 0 ? mainnetChains : evmChains;
+    const ids = new Set(visibleEvmChainIds(evmChains, appPreferences));
+    const chains = evmChains.filter((chain) => ids.has(chain.chain_id));
     if (chains.length === 0) return;
     const requestId = evmPortfolioRequestIdRef.current + 1;
     evmPortfolioRequestIdRef.current = requestId;
@@ -4636,7 +4649,7 @@ export default function Home() {
     } finally {
       if (evmPortfolioRequestIdRef.current === requestId) setEvmPortfolioRefreshing(false);
     }
-  }, [evmChainId, evmChains, evmWallet, loadEvmAssetSnapshot]);
+  }, [appPreferences, evmChainId, evmChains, evmWallet, loadEvmAssetSnapshot]);
 
   const previewEvmPayment = () => withEvmBusy(async () => {
     if (!evmWallet) throw new Error("Select a wallet first");
@@ -4816,7 +4829,7 @@ export default function Home() {
         const { snapshot, entries, permissions, diagnostics } = await settingsStoreLoadRef.current;
         if (cancelled || settingsStoreHydratedRef.current) return;
         settingsStoreHydratedRef.current = true;
-        setAppPreferences({ ...DEFAULT_APP_PREFERENCES, ...snapshot.preferences });
+        setAppPreferences(normalizeAppPreferences({ ...DEFAULT_APP_PREFERENCES, ...snapshot.preferences, enabledNetworkEnvironments: snapshot.preferences.enabledNetworkEnvironments }));
         if (snapshot.preferences.defaultEvmChainId) {
           const preferredChainId = String(snapshot.preferences.defaultEvmChainId);
           setEvmChainId(preferredChainId);
@@ -5267,16 +5280,13 @@ export default function Home() {
       setEvmAssetsByChain({});
       return;
     }
-    const mainnetChainIds = evmChains
-      .filter((chain) => !chain.testnet)
-      .map((chain) => chain.chain_id)
-      .join(",");
-    const portfolioKey = `${evmWallet.address.toLowerCase()}:${mainnetChainIds}`;
+    const portfolioChainIds = visibleEvmChainIds(evmChains, appPreferences).join(",");
+    const portfolioKey = `${evmWallet.address.toLowerCase()}:${portfolioChainIds}`;
     if (evmPortfolioLoadedKeyRef.current === portfolioKey) return;
     evmPortfolioLoadedKeyRef.current = portfolioKey;
     setEvmAssetsByChain({});
     void refreshEvmPortfolio();
-  }, [evmChains, evmWallet, refreshEvmPortfolio]);
+  }, [appPreferences, evmChains, evmWallet, refreshEvmPortfolio]);
 
   const effectiveProgramWorkspaceOwner = effectiveWallet?.public_key || "";
   const effectiveProgramWorkspaceOwnerLabel = effectiveWallet?.name || undefined;
@@ -6161,14 +6171,16 @@ export default function Home() {
     const profile = rpcProfiles.find((item) => item.id === profileId);
     if (!profile) return;
     setSelectedRpcId(profileId);
+    setAppPreferences((previous) => ({...toggleNetworkEnvironment(previous, profile.network, true, evmChains), defaultSolanaNetwork: profile.network}));
     setSettingsNetwork(profile.network);
     setCurrentWalletNetwork("solana");
     saveCurrentWalletNetwork("solana");
     saveSelectedRpcProfileId(profileId);
     setFormData((prev) => ({ ...prev, network: profile.network }));
-  }, [rpcProfiles]);
+  }, [evmChains, rpcProfiles]);
 
   const setAppNetwork = useCallback((network: AppNetwork) => {
+    setAppPreferences((previous) => ({...toggleNetworkEnvironment(previous, network, true, evmChains), defaultSolanaNetwork: network}));
     setSettingsNetwork(network);
     const nextProfile = rpcProfiles.find((profile) => profile.network === network && profile.id === selectedRpcId)
       || rpcProfiles.find((profile) => profile.network === network)
@@ -6179,7 +6191,31 @@ export default function Home() {
     saveCurrentWalletNetwork("solana");
     saveSelectedRpcProfileId(nextProfile.id);
     setFormData((prev) => ({ ...prev, network }));
-  }, [rpcProfiles, selectedRpcId]);
+  }, [evmChains, rpcProfiles, selectedRpcId]);
+
+  useEffect(() => {
+    if (!settingsStoreLoaded) return;
+    const enabled = enabledNetworkEnvironments(appPreferences);
+    if (!enabled.includes(effectiveNetwork)) {
+      const network = appPreferences.defaultSolanaNetwork;
+      const profile = rpcProfiles.find((item) => item.network === network)
+        || DEFAULT_RPC_PROFILES.find((item) => item.network === network)!;
+      setSelectedRpcId(profile.id);
+      setSettingsNetwork(network);
+      saveSelectedRpcProfileId(profile.id);
+      setFormData((previous) => ({...previous, network}));
+    }
+    const currentEvmId = currentWalletNetwork.startsWith("evm:") ? Number(currentWalletNetwork.slice(4)) : null;
+    if ((!enabled.includes("mainnet") && /^(bip122:|tron:)/.test(currentWalletNetwork))
+      || (currentEvmId !== null && !visibleEvmChainIds(evmChains, appPreferences).includes(currentEvmId))) {
+      const fallback = visibleEvmChainIds(evmChains, appPreferences)[0];
+      if (fallback && currentEvmId !== null) selectEvmChain(String(fallback), {openChainView: false});
+      else {
+        setCurrentWalletNetwork("solana");
+        saveCurrentWalletNetwork("solana");
+      }
+    }
+  }, [appPreferences, currentWalletNetwork, effectiveNetwork, evmChains, rpcProfiles, selectEvmChain, settingsStoreLoaded]);
 
   const handleAddRpcProfile = () => {
     const url = validateRpcUrl(newRpcUrl);
@@ -11958,8 +11994,7 @@ export default function Home() {
   const portfolioEvmChains = useMemo(() => {
     const enabledIds = new Set(visibleEvmChainIds(evmChains, appPreferences));
     const enabledChains = evmChains.filter((chain) => enabledIds.has(chain.chain_id));
-    const mainnetChains = enabledChains.filter((chain) => !chain.testnet);
-    return mainnetChains.length > 0 ? mainnetChains : enabledChains;
+    return enabledChains;
   }, [appPreferences, evmChains]);
 
   const unifiedWalletLabels = useMemo<UnifiedWalletLabels>(() => ({
@@ -12266,17 +12301,15 @@ export default function Home() {
   const walletChainAddresses = useMemo<WalletChainAddress[]>(() => (
     effectiveWallet
       ? [
-        ...(!effectiveWallet.private_key_family ? [
-          {
-            id: `solana:${effectiveNetwork}`,
+        ...(!effectiveWallet.private_key_family ? enabledNetworkEnvironments(appPreferences).map((network) => ({
+            id: `solana:${network}`,
             family: "solana" as const,
-            chainName: effectiveNetwork === "mainnet" ? "Solana" : `Solana ${effectiveNetwork}`,
+            chainName: `Solana · ${networkLabel(t, network)}`,
             symbol: "SOL",
             address: effectiveWallet.public_key,
             logoUri: SOLANA_CHAIN_LOGO_URI,
-            testnet: effectiveNetwork !== "mainnet",
-          }
-        ] : []),
+            testnet: network === "testnet",
+          })) : []),
         ...(effectiveWallet.evm_address
           ? portfolioEvmChains.map((chain) => ({
               id: `evm:${chain.chain_id}`,
@@ -12289,7 +12322,7 @@ export default function Home() {
               testnet: chain.testnet,
             }))
           : []),
-        ...(walletMultichainAccountsByWallet[effectiveWallet.id]?.accounts.map((account) => ({
+        ...(walletMultichainAccountsByWallet[effectiveWallet.id]?.accounts.filter((account) => isNetworkEnvironmentEnabled(appPreferences, account.testnet)).map((account) => ({
               id: account.chain_id,
               family: account.family,
               networkId: account.chain_id,
@@ -12302,7 +12335,7 @@ export default function Home() {
             })) ?? []),
         ]
       : []
-  ), [effectiveNetwork, effectiveWallet, portfolioEvmChains, walletMultichainAccountsByWallet]);
+  ), [appPreferences, effectiveWallet, portfolioEvmChains, t, walletMultichainAccountsByWallet]);
 
   const selectedWalletChainId = currentWalletNetwork === "solana"
     ? `solana:${effectiveNetwork}`
@@ -12321,8 +12354,7 @@ export default function Home() {
       saveCurrentWalletNetwork(item.id);
       return;
     }
-    setCurrentWalletNetwork("solana");
-    saveCurrentWalletNetwork("solana");
+    setAppNetwork(currentNetwork(item.id.replace(/^solana:/, "")));
   };
 
   const unifiedOwnedAssets = useMemo<UnifiedWalletAsset[]>(() => {
@@ -12415,6 +12447,7 @@ export default function Home() {
       }
     }
     for (const account of walletMultichainAccountsByWallet[effectiveWallet.id]?.accounts ?? []) {
+      if (!isNetworkEnvironmentEnabled(appPreferences, account.testnet)) continue;
       const decimals = account.family === "bitcoin" ? 8 : 6;
       const balanceState = walletNativeBalances[nativeBalanceKey(effectiveWallet.id, account.chain_id)];
       const rawBalance = balanceState?.balanceAtomic ?? "";
@@ -12438,6 +12471,7 @@ export default function Home() {
     }
     return result;
   }, [
+    appPreferences,
     effectiveNetwork,
     effectiveWallet,
     evmAssetsByChain,
@@ -17792,6 +17826,16 @@ export default function Home() {
       </div>
     );
 
+    const renderNetworkEnvironmentSelector = () => (
+      <NetworkEnvironmentSelector
+        enabled={enabledEnvironments}
+        labels={{mainnet: networkLabel(t, "mainnet"), testnet: networkLabel(t, "testnet"), devnet: networkLabel(t, "devnet")}}
+        title={t("features.settings.enabledNetworkEnvironments")}
+        hint={t("features.settings.enabledNetworkEnvironmentsHint")}
+        onChange={(network, checked) => setAppPreferences((previous) => toggleNetworkEnvironment(previous, network, checked, evmChains))}
+      />
+    );
+
     const renderWalletAccountManager = () => {
       const selectedEvmChainId = currentWalletNetwork.startsWith("evm:")
         ? Number(currentWalletNetwork.slice(4))
@@ -17813,9 +17857,7 @@ export default function Home() {
         if (isNativeChainSelected) return wallet.secret_type === "mnemonic" || wallet.private_key_family === selectedNativeFamily;
         return !wallet.private_key_family && Boolean(wallet.public_key.trim());
       });
-      const solanaNetworks = Array.from(
-        new Set(DEFAULT_RPC_PROFILES.map((profile) => profile.network)),
-      );
+      const solanaNetworks = enabledEnvironments;
 
       const selectWalletAccountNetwork = (networkId: string) => {
         setWalletActionsMenuOpen(null);
@@ -17877,12 +17919,10 @@ export default function Home() {
                     ))}
                   </optgroup>
                 )}
-                <optgroup label="Bitcoin">
-                  <option value={BITCOIN_MAINNET_ID}>Bitcoin · BTC</option>
-                </optgroup>
-                <optgroup label="TRON">
-                  <option value={TRON_MAINNET_ID}>TRON · TRX</option>
-                </optgroup>
+                {enabledEnvironments.includes("mainnet") && <>
+                  <optgroup label="Bitcoin"><option value={BITCOIN_MAINNET_ID}>Bitcoin · BTC</option></optgroup>
+                  <optgroup label="TRON"><option value={TRON_MAINNET_ID}>TRON · TRX</option></optgroup>
+                </>}
               </select>
             </label>
             <p className="text-xs leading-5 text-gray-500">
@@ -23525,30 +23565,7 @@ export default function Home() {
                       </div>
                     </section>
                     <section className="space-y-3 rounded-lg border border-white/10 bg-white/[0.035] p-4">
-                      <label className="block text-sm text-gray-300">
-                        <span className="mb-1.5 block">{tf("features.settings.defaultNetwork", "默认 Solana 网络")}</span>
-                        <select
-                          value={appPreferences.defaultSolanaNetwork}
-                          onChange={(event) => setAppPreferences((previous) => ({
-                            ...previous,
-                            defaultSolanaNetwork: event.target.value as AppNetwork,
-                          }))}
-                          className="h-10 w-full rounded-lg border border-white/10 bg-black/20 px-3 text-sm text-gray-100"
-                        >
-                          {(["mainnet", "devnet", "testnet"] as AppNetwork[]).map((network) => (
-                            <option key={network} value={network}>{networkLabel(t, network)}</option>
-                          ))}
-                        </select>
-                      </label>
-                      <label className="flex items-center justify-between gap-4 border-t border-white/10 pt-3 text-sm text-gray-300">
-                        <span>{tf("features.settings.showTestnets", "显示测试网")}</span>
-                        <input
-                          type="checkbox"
-                          checked={appPreferences.showTestnets}
-                          onChange={(event) => setAppPreferences((previous) => ({ ...previous, showTestnets: event.target.checked }))}
-                          className="h-4 w-4 accent-violet-500"
-                        />
-                      </label>
+                      {renderNetworkEnvironmentSelector()}
                     </section>
                   </div>
                 )}
@@ -23694,7 +23711,7 @@ export default function Home() {
 
                 {settingsSection === "developer" && (
                   <section className="space-y-4 rounded-lg border border-white/10 bg-white/[0.035] p-4">
-                    <label className="flex items-center justify-between gap-4 text-sm text-gray-300"><span>{tf("features.settings.showTestnets", "显示测试网")}</span><input type="checkbox" checked={appPreferences.showTestnets} onChange={(event) => setAppPreferences((previous) => ({ ...previous, showTestnets: event.target.checked }))} className="h-4 w-4 accent-violet-500" /></label>
+                    {renderNetworkEnvironmentSelector()}
                     <label className="flex items-center justify-between gap-4 border-t border-white/10 pt-4 text-sm text-gray-300"><span>{tf("features.settings.transactionDebug", "显示交易调试详情")}</span><input type="checkbox" checked={appPreferences.transactionDebugDetails} onChange={(event) => setAppPreferences((previous) => ({ ...previous, transactionDebugDetails: event.target.checked }))} className="h-4 w-4 accent-violet-500" /></label>
                     {IS_DEVELOPMENT_BUILD && (
                       <label className="flex items-start justify-between gap-4 border-t border-white/10 pt-4 text-sm text-gray-300">
@@ -23730,8 +23747,10 @@ export default function Home() {
                 <h3 className="text-sm font-semibold text-gray-200">{t("features.settings.networkTitle")}</h3>
                 <p className="mt-1 text-xs text-gray-500">{t("features.settings.networkHint")}</p>
               </div>
+              {renderNetworkEnvironmentSelector()}
+              <p className="text-xs text-gray-400">{t("features.settings.solanaRpcSelection")}</p>
               <div className="grid grid-cols-3 gap-2 rounded-xl border border-white/10 bg-black/20 p-1">
-                {(["mainnet", "devnet", "testnet"] as AppNetwork[]).map((network) => {
+                {enabledEnvironments.map((network) => {
                   const isNetworkSelected = settingsNetwork === network;
                   return (
                     <button
@@ -23842,7 +23861,7 @@ export default function Home() {
                 </button>
               </div>
               <div className="grid gap-2 sm:grid-cols-2">
-                {evmChains.filter((chain) => appPreferences.showTestnets || !chain.testnet).map((chain) => {
+                {evmChains.filter((chain) => isNetworkEnvironmentEnabled(appPreferences, chain.testnet)).map((chain) => {
                   const enabled = enabledEvmChainIds.includes(chain.chain_id);
                   return (
                     <label key={chain.chain_id} className="flex min-w-0 items-center gap-2 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-gray-300">
@@ -26929,6 +26948,9 @@ export default function Home() {
         );
       }
 
+      case "safe-multisig":
+        return <SafeMultisigPanel chains={evmChains} wallets={wallets} initialChainId={activeEvmChain?.chain_id} initialWalletId={effectiveWallet?.evm_address ? effectiveWallet.id : undefined} />;
+
       case "evm-contract-invoke":
         return (
           <EvmContractInvokePanel
@@ -29797,6 +29819,7 @@ export default function Home() {
         "evm-contract-invoke": tf("features.evm-contract-invoke.title", "ABI 调用"),
         "external-sign": t("features.external-sign.title"),
         "program-info": t("features.program-info.title"),
+        "safe-multisig": t("features.safe-multisig.title"),
         "squads-workspace": t("features.workspace.title"),
         "squads-proposals": t("features.workspace.savedProposals"),
         "squads-programs": t("features.workspace.savedPrograms"),
@@ -29820,6 +29843,7 @@ export default function Home() {
     selectedForm === "evm-contract-invoke";
   const showFormHeader = selectedForm !== "wallet-list" && !isBrowserWorkspaceForm;
   const isWideWorkspaceForm = [
+    "safe-multisig",
     "contract-tools",
     "program-workbench",
     "program-deploy",

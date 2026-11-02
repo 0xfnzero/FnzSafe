@@ -1563,7 +1563,19 @@ pub fn browser_passwords_clear(app: crate::DesktopAppHandle) -> Result<(), Strin
 }
 
 #[tauri::command]
-pub fn browser_autofill(
+pub async fn browser_autofill(
+    app: crate::DesktopAppHandle,
+    tab_id: String,
+) -> Result<BrowserAutofillResult, String> {
+    // CEF dispatches synchronous commands on its UI thread. Reading a webview
+    // URL waits for that same thread, so run the complete blocking operation
+    // outside the IPC callback (including filesystem/keychain access).
+    tauri::async_runtime::spawn_blocking(move || browser_autofill_blocking(app, tab_id))
+        .await
+        .map_err(|error| format!("browser autofill task failed: {error}"))?
+}
+
+fn browser_autofill_blocking(
     app: crate::DesktopAppHandle,
     tab_id: String,
 ) -> Result<BrowserAutofillResult, String> {
@@ -1591,9 +1603,11 @@ pub fn browser_autofill(
     let username_json =
         serde_json::to_string(&credential.username).map_err(|error| error.to_string())?;
     let password_json = serde_json::to_string(&password).map_err(|error| error.to_string())?;
+    let origin_json = serde_json::to_string(&origin).map_err(|error| error.to_string())?;
     let script = format!(
         r#"
 (() => {{
+  if (location.origin !== {origin_json}) return;
   const visible = (el) => !el.disabled && el.getClientRects().length > 0;
   const password = Array.from(document.querySelectorAll('input[type="password"]')).find(visible);
   if (!password) return;

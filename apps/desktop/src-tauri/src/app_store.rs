@@ -40,6 +40,8 @@ impl AppStore {
 pub struct AppPreferences {
     pub auto_lock_minutes: Option<u32>,
     pub enabled_evm_chain_ids: Vec<u64>,
+    #[serde(default)]
+    pub enabled_network_environments: Option<Vec<String>>,
     pub show_testnets: bool,
     pub transaction_debug_details: bool,
     pub default_solana_network: String,
@@ -52,6 +54,7 @@ impl Default for AppPreferences {
         Self {
             auto_lock_minutes: Some(15),
             enabled_evm_chain_ids: Vec::new(),
+            enabled_network_environments: Some(vec!["mainnet".to_string()]),
             show_testnets: false,
             transaction_debug_details: false,
             default_solana_network: "mainnet".to_string(),
@@ -276,7 +279,7 @@ fn load_snapshot(connection: &Connection) -> Result<SettingsSnapshot, String> {
         .map_err(|error| format!("failed to decode preferences: {error}"))?
         .unwrap_or_default();
     Ok(SettingsSnapshot {
-        preferences,
+        preferences: normalize_preferences(preferences)?,
         theme: setting_value(connection, "theme")?
             .and_then(|value| value.as_str().map(ToOwned::to_owned)),
         solana_rpc_profiles: setting_value(connection, "solana_rpc_profiles")?,
@@ -415,6 +418,17 @@ fn validate_preferences(preferences: &AppPreferences) -> Result<(), String> {
     ) {
         return Err("invalid default Solana network".to_string());
     }
+    if let Some(environments) = &preferences.enabled_network_environments {
+        if environments.is_empty()
+            || environments.len() > 3
+            || environments
+                .iter()
+                .any(|network| !matches!(network.as_str(), "mainnet" | "testnet" | "devnet"))
+            || environments.iter().collect::<HashSet<_>>().len() != environments.len()
+        {
+            return Err("invalid enabled network environments".to_string());
+        }
+    }
     if preferences.enabled_evm_chain_ids.len() > MAX_ENABLED_EVM_CHAINS
         || preferences
             .enabled_evm_chain_ids
@@ -438,6 +452,23 @@ fn validate_preferences(preferences: &AppPreferences) -> Result<(), String> {
 fn normalize_preferences(mut preferences: AppPreferences) -> Result<AppPreferences, String> {
     preferences.migration_version = SETTINGS_SCHEMA_VERSION as u32;
     validate_preferences(&preferences)?;
+    let enabled = preferences
+        .enabled_network_environments
+        .get_or_insert_with(|| {
+            ["mainnet", "testnet", "devnet"]
+                .into_iter()
+                .filter(|network| {
+                    *network == "mainnet"
+                        || *network == preferences.default_solana_network
+                        || (*network == "testnet" && preferences.show_testnets)
+                })
+                .map(ToOwned::to_owned)
+                .collect()
+        });
+    preferences.show_testnets = enabled.iter().any(|network| network == "testnet");
+    if !enabled.contains(&preferences.default_solana_network) {
+        preferences.default_solana_network = enabled[0].clone();
+    }
     Ok(preferences)
 }
 
@@ -527,11 +558,14 @@ pub fn settings_import_legacy(
     let transaction = connection
         .transaction()
         .map_err(|error| format!("failed to begin settings migration: {error}"))?;
-    if setting_value(&transaction, "preferences")?.is_none() {
+    let stored_preferences = setting_value(&transaction, "preferences")?;
+    if stored_preferences.is_none() {
         let mut preferences = AppPreferences::default();
         if let Some(network) = legacy.solana_network.as_deref() {
             if matches!(network, "mainnet" | "devnet" | "testnet") {
                 preferences.default_solana_network = network.to_string();
+                // Preserve the previously selected test/dev network on first import.
+                preferences.enabled_network_environments = None;
             }
         }
         preferences.default_evm_chain_id = legacy
@@ -541,6 +575,25 @@ pub fn settings_import_legacy(
             &transaction,
             "preferences",
             &serde_json::to_value(preferences).map_err(|error| error.to_string())?,
+        )?;
+    } else if let Some(stored) = stored_preferences.filter(|value| {
+        value
+            .get("enabledNetworkEnvironments")
+            .is_none_or(Value::is_null)
+    }) {
+        let mut preferences: AppPreferences = serde_json::from_value(stored)
+            .map_err(|error| format!("failed to decode preferences: {error}"))?;
+        // The old RPC selector persisted the active network separately from defaults.
+        // Include that actual selection once when introducing multi-selection.
+        if let Some(network @ ("mainnet" | "testnet" | "devnet")) = legacy.solana_network.as_deref()
+        {
+            preferences.default_solana_network = network.to_string();
+        }
+        put_setting(
+            &transaction,
+            "preferences",
+            &serde_json::to_value(normalize_preferences(preferences)?)
+                .map_err(|error| error.to_string())?,
         )?;
     }
     for (key, value) in [
@@ -897,6 +950,42 @@ pub fn settings_diagnostics(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn network_environment_preferences_validate_and_preserve_legacy_selection() {
+        let legacy = AppPreferences {
+            enabled_network_environments: None,
+            default_solana_network: "devnet".to_string(),
+            show_testnets: true,
+            ..AppPreferences::default()
+        };
+        let loaded = normalize_preferences(legacy).unwrap();
+        assert_eq!(
+            loaded.enabled_network_environments.as_ref().unwrap(),
+            &["mainnet", "testnet", "devnet"]
+        );
+        assert_eq!(loaded.default_solana_network, "devnet");
+        let encoded = serde_json::to_value(&loaded).unwrap();
+        let reloaded =
+            normalize_preferences(serde_json::from_value(encoded.clone()).unwrap()).unwrap();
+        assert_eq!(serde_json::to_value(reloaded).unwrap(), encoded);
+        for invalid in [vec![], vec!["mainnet", "mainnet"], vec!["unknown"]] {
+            let preferences = AppPreferences {
+                enabled_network_environments: Some(
+                    invalid.into_iter().map(ToOwned::to_owned).collect(),
+                ),
+                ..AppPreferences::default()
+            };
+            assert!(normalize_preferences(preferences).is_err());
+        }
+        let testnet_only = normalize_preferences(AppPreferences {
+            enabled_network_environments: Some(vec!["testnet".to_string()]),
+            ..AppPreferences::default()
+        })
+        .unwrap();
+        assert_eq!(testnet_only.default_solana_network, "testnet");
+        assert!(testnet_only.show_testnets);
+    }
 
     #[test]
     fn schema_and_legacy_migration_are_idempotent() {

@@ -4167,6 +4167,8 @@ async fn main() -> anyhow::Result<()> {
             post(multichain_derive_account),
         )
         .route("/api/evm/chains", get(evm_chains))
+        .route("/api/evm/safe", post(evm_safe_request))
+        .route("/api/evm/safe/", post(evm_safe_request))
         .route("/api/evm/chains/", get(evm_chains))
         .route("/api/evm/wallet/create", post(evm_wallet_create))
         .route("/api/evm/wallet/create/", post(evm_wallet_create))
@@ -4527,7 +4529,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/external-sign/submit/", post(external_sign_submit))
         .route("/api/program/info", post(program_info))
         .route("/api/program/close/discover", post(program_close::discover))
-        .route("/api/program/close/discover/", post(program_close::discover))
+        .route(
+            "/api/program/close/discover/",
+            post(program_close::discover),
+        )
         .route("/api/program/close/preview", post(program_close::preview))
         .route("/api/program/close/preview/", post(program_close::preview))
         .route("/api/program/close/submit", post(program_close::submit))
@@ -6135,6 +6140,27 @@ async fn evm_dapp_preview(
 }
 
 #[derive(Deserialize)]
+struct DesktopSafeRequest {
+    #[serde(default)]
+    wallet_id: String,
+    request: app_services::SafeRequest,
+}
+
+async fn evm_safe_request(
+    Json(req): Json<DesktopSafeRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let expected_address = req.request.wallet_address.clone();
+    run_app_service_task(move || {
+        app_services::evm_safe_request(req.request, move || {
+            evm_private_key_from_saved_wallet_session(&req.wallet_id, &expected_address)
+                .map_err(|error| error.message)
+        })
+    })
+    .await
+    .map(Json)
+}
+
+#[derive(Deserialize)]
 struct DesktopEvmDappSubmitRequest {
     #[serde(default)]
     wallet_id: Option<String>,
@@ -6179,12 +6205,7 @@ struct DesktopEvmContractInvokeRequest {
 async fn evm_contract_invoke(
     Json(mut req): Json<DesktopEvmContractInvokeRequest>,
 ) -> Result<Json<app_services::EvmContractInvokeResult>, ApiError> {
-    let mode = req
-        .request
-        .mode
-        .as_deref()
-        .map(str::trim)
-        .unwrap_or("call");
+    let mode = req.request.mode.as_deref().map(str::trim).unwrap_or("call");
     let wallet_id = req
         .wallet_id
         .take()

@@ -198,6 +198,7 @@ try {
       "node",
       "--target",
       "ES2020",
+      "--rewriteRelativeImportExtensions",
       "--esModuleInterop",
       "--skipLibCheck",
     ],
@@ -213,6 +214,11 @@ try {
     );
     const run = spawnSync(process.execPath, ["--test", ...compiledTests], {
       cwd: uiRoot,
+      env: {
+        ...process.env,
+        NODE_PATH: [path.join(uiRoot, "node_modules"), process.env.NODE_PATH]
+          .filter(Boolean).join(path.delimiter),
+      },
       encoding: "utf8",
       stdio: "inherit",
     });

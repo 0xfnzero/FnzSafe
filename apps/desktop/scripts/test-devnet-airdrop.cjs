@@ -43,7 +43,8 @@ assert.match(page, /void openWalletFaucet\(effectiveWallet, "circle"\)/);
 assert.doesNotMatch(page, /window\.open\(SOLANA_FAUCET_URL/);
 assert.doesNotMatch(page, /apiFetch\("wallet\/airdrop"/);
 
-assert.match(openExternal, /invoke\("open_external_url"/);
+assert.match(openExternal, /openValidatedExternalUrl\(url, "open_external_url"\)/);
+assert.match(openExternal, /await invoke\(command, \{\s*url: target\s*\}\)/);
 assert.match(openExternal, /__TAURI_INTERNALS__/);
 assert.match(openExternal, /window\.open\(target, "_blank", "noopener,noreferrer"\)/);
 

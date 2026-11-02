@@ -2229,8 +2229,8 @@ fn parse_sign_deep_link(url: &tauri::Url) -> Result<DappSignRequestEvent, String
     let wallet_family_param = deep_link_query_param(url, "wallet_family")
         .or_else(|| deep_link_query_param(url, "family"));
     let wallet_family = validate_deep_link_wallet_family(wallet_family_param.as_deref())?;
-    let method_raw = deep_link_query_param(url, "method")
-        .ok_or_else(|| "method is required".to_string())?;
+    let method_raw =
+        deep_link_query_param(url, "method").ok_or_else(|| "method is required".to_string())?;
     let wallet_public_key = validate_short_deep_link_text(
         deep_link_query_param(url, "wallet_public_key")
             .as_deref()
@@ -2506,10 +2506,7 @@ fn oldest_pending_dapp_connect_event(
         .min_by_key(|event| event.created_at_ms))
 }
 
-fn notify_pending_dapp_requests_after_unlock(
-    app: &DesktopAppHandle,
-    state: &DappBridgeState,
-) {
+fn notify_pending_dapp_requests_after_unlock(app: &DesktopAppHandle, state: &DappBridgeState) {
     if let Ok(Some(event)) = oldest_pending_dapp_connect_event(state) {
         let request_id = event.request_id.clone();
         if let Err(error) = app.emit_to("main", DAPP_CONNECT_REQUEST_EVENT, event) {

@@ -132,6 +132,46 @@ test("network toggles materialize hidden-testnet fallback and keep one eligible 
   assert.deepEqual(settings.toggleEnabledEvmChain(chains, twoMainnets, 1, false), [10, 11155111]);
 });
 
+test("old testnet and devnet choices remain visible after loading saved settings", () => {
+  const legacy = {...settings.DEFAULT_APP_PREFERENCES, enabledNetworkEnvironments: undefined, defaultSolanaNetwork: "devnet", showTestnets: true};
+  assert.deepEqual(settings.enabledNetworkEnvironments(legacy), ["mainnet", "testnet", "devnet"]);
+  const normalized = settings.normalizeAppPreferences(legacy);
+  assert.deepEqual(settings.normalizeAppPreferences(JSON.parse(JSON.stringify(normalized))), normalized);
+  assert.equal(normalized.defaultSolanaNetwork, "devnet");
+});
+
+test("enabling testnets exposes BNB Testnet even with a previously explicit mainnet list", () => {
+  const chains = [{chain_id: 56, testnet: false}, {chain_id: 97, testnet: true}];
+  const before = {...settings.DEFAULT_APP_PREFERENCES, enabledEvmChainIds: [56]};
+  const after = settings.toggleNetworkEnvironment(before, "testnet", true, chains);
+  assert.deepEqual(settings.visibleEvmChainIds(chains, after), [56, 97]);
+  assert.equal(settings.enabledChainFallback(97, settings.visibleEvmChainIds(chains, after)), 97);
+});
+
+test("all seven environment combinations survive persistence and toggles never disable the last environment", () => {
+  const environments = ["mainnet", "testnet", "devnet"];
+  const chains = [{chain_id: 1, testnet: false}, {chain_id: 56, testnet: false}, {chain_id: 97, testnet: true}, {chain_id: 11155111, testnet: true}];
+  for (let mask = 1; mask < 8; mask++) {
+    const enabled = environments.filter((_, index) => mask & (1 << index));
+    const preferences = settings.normalizeAppPreferences({...settings.DEFAULT_APP_PREFERENCES, enabledNetworkEnvironments: enabled});
+    assert.deepEqual(settings.enabledNetworkEnvironments(JSON.parse(JSON.stringify(preferences))), enabled);
+    assert.ok(enabled.includes(preferences.defaultSolanaNetwork));
+    const visible = settings.visibleEvmChainIds(chains, preferences);
+    // Every requested network is available, and no hidden environment leaks in.
+    assert.equal(visible.includes(56), enabled.includes("mainnet"));
+    assert.equal(visible.includes(97), enabled.includes("testnet"));
+    for (const environment of environments) {
+      const next = settings.toggleNetworkEnvironment(preferences, environment, false, chains);
+      const remaining = settings.enabledNetworkEnvironments(next);
+      assert.ok(remaining.length >= 1);
+      for (const other of enabled.filter(item => item !== environment)) assert.ok(remaining.includes(other));
+      const selected = settings.toggleNetworkEnvironment(preferences, environment, true, chains);
+      assert.ok(settings.enabledNetworkEnvironments(selected).includes(environment));
+      for (const other of enabled) assert.ok(settings.enabledNetworkEnvironments(selected).includes(other));
+    }
+  }
+});
+
 test("auto lock deadline supports never and deterministic expiry", () => {
   assert.equal(settings.nextAutoLockDeadline(1000, null), null);
   const deadline = settings.nextAutoLockDeadline(1000, 1);

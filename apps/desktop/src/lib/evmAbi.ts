@@ -42,20 +42,17 @@ function normalizeMutability(value: unknown, payable?: unknown, constant?: unkno
   return "nonpayable";
 }
 
-function parseParam(value: unknown, index: number): AbiParam | null {
-  if (!value || typeof value !== "object") return null;
+function parseParam(value: unknown, index: number, depth = 0, budget = { remaining: 4096 }): AbiParam {
+  if (depth > 32 || --budget.remaining < 0 || !value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid-abi-param");
   const record = value as Record<string, unknown>;
-  const type = requireCleanName(record.type);
-  if (!type) return null;
+  if (typeof record.type !== "string" || (record.name !== undefined && typeof record.name !== "string")) throw new Error("invalid-abi-param");
+  const type = record.type.trim();
+  if (!/^[a-zA-Z][a-zA-Z0-9]*(\[(?:[1-9]\d*)?\])*$/.test(type)) throw new Error("invalid-abi-type");
   const name = requireCleanName(record.name, `arg${index}`);
-  const components = Array.isArray(record.components)
-    ? record.components
-        .map((item, childIndex) => parseParam(item, childIndex))
-        .filter((item): item is AbiParam => Boolean(item))
-    : undefined;
-  if (type.startsWith("tuple") && (!components || components.length === 0)) {
-    return null;
-  }
+  const tuple = /^tuple(?:\[|$)/.test(type);
+  if (tuple && (!Array.isArray(record.components) || record.components.length === 0)) throw new Error("invalid-abi-tuple");
+  if (!tuple && record.components !== undefined) throw new Error("invalid-abi-components");
+  const components = tuple ? (record.components as unknown[]).map((item, childIndex) => parseParam(item, childIndex, depth + 1, budget)) : undefined;
   return { name, type, components };
 }
 
@@ -93,20 +90,14 @@ export function parseAbiJson(value: string): AbiFunctionItem[] {
     const record = item as Record<string, unknown>;
     if (String(record.type || "").toLowerCase() !== "function") continue;
     const name = requireCleanName(record.name);
-    if (!name) continue;
-    const inputs = Array.isArray(record.inputs)
-      ? record.inputs
-          .map((input, index) => parseParam(input, index))
-          .filter((input): input is AbiParam => Boolean(input))
-      : [];
-    if (Array.isArray(record.inputs) && inputs.length !== record.inputs.length) {
-      continue;
-    }
-    const outputs = Array.isArray(record.outputs)
-      ? record.outputs
-          .map((output, index) => parseParam(output, index))
-          .filter((output): output is AbiParam => Boolean(output))
-      : [];
+    if (!/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(name) || !Array.isArray(record.inputs) ||
+      (record.outputs !== undefined && !Array.isArray(record.outputs))) throw new Error("invalid-abi-function");
+    if ((record.stateMutability !== undefined && !["pure", "view", "nonpayable", "payable"].includes(String(record.stateMutability))) ||
+      (record.constant !== undefined && typeof record.constant !== "boolean") ||
+      (record.payable !== undefined && typeof record.payable !== "boolean")) throw new Error("invalid-abi-mutability");
+    const budget = { remaining: 4096 };
+    const inputs = record.inputs.map((input, index) => parseParam(input, index, 0, budget));
+    const outputs = ((record.outputs || []) as unknown[]).map((output, index) => parseParam(output, index, 0, budget));
     functions.push({
       type: "function",
       name,
@@ -150,7 +141,7 @@ export function canonicalAbiType(param: AbiParam): string {
     const suffix = param.type.slice("tuple".length);
     return `(${param.components.map((item) => canonicalAbiType(item)).join(",")})${suffix}`;
   }
-  return param.type;
+  return param.type.replace(/^(u?int)(?=\[|$)/, "$1256");
 }
 
 export function functionSignature(fn: AbiFunctionItem): string {
@@ -191,8 +182,9 @@ function assertSupportedType(param: AbiParam): void {
     /^u?int(\d+)?$/.test(type)
   ) {
     if (/^u?int(\d+)$/.test(type)) {
-      const bits = Number(type.replace(/^u?int/, ""));
-      if (!Number.isInteger(bits) || bits <= 0 || bits > 256 || bits % 8 !== 0) {
+      const size = type.replace(/^u?int/, "");
+      const bits = Number(size);
+      if (String(bits) !== size || !Number.isInteger(bits) || bits <= 0 || bits > 256 || bits % 8 !== 0) {
         throw new Error(`unsupported-abi-type:${type}`);
       }
     }
@@ -297,7 +289,7 @@ function encodeInt(value: string, bits: number): Uint8Array {
 
 function encodeAddress(value: string): Uint8Array {
   const trimmed = value.trim();
-  if (!ADDRESS_RE.test(trimmed)) throw new Error("invalid-address");
+  if (!isValidEvmAddress(trimmed)) throw new Error("invalid-address");
   return pad32Left(hexToBytes(trimmed));
 }
 
@@ -344,8 +336,12 @@ function parseJsonArray(value: string): unknown[] {
 }
 
 function encodeTuple(components: AbiParam[], values: unknown): Uint8Array {
-  if (!values || typeof values !== "object" || Array.isArray(values)) {
+  if (!values || typeof values !== "object") {
     throw new Error("invalid-tuple");
+  }
+  if (Array.isArray(values)) {
+    if (values.length !== components.length) throw new Error("invalid-tuple");
+    return encodeAbiSequence(components, components.map((component, index) => encodeAbiValue(component, values[index])));
   }
   const record = values as Record<string, unknown>;
   const encodedValues = components.map((component, index) => {
@@ -463,10 +459,16 @@ export function encodeFunctionCalldata(
   fn: AbiFunctionItem,
   argValues: Record<string, string>,
 ): EncodedAbiCall {
+  return encodeFunctionCalldataValues(fn, fn.inputs.map(input => argValues[input.name] ?? ""));
+}
+
+/** Positional inputs preserve unnamed/duplicate ABI names, including nested tuples. */
+export function encodeFunctionCalldataValues(fn: AbiFunctionItem, values: unknown[]): EncodedAbiCall {
+  if (values.length !== fn.inputs.length) throw new Error("invalid-argument-count");
   for (const input of fn.inputs) assertSupportedType(input);
   const signature = functionSignature(fn);
   const selectorBytes = keccak256(new TextEncoder().encode(signature)).subarray(0, 4);
-  const encodedArgs = fn.inputs.map((input) => encodeAbiValue(input, argValues[input.name] ?? ""));
+  const encodedArgs = fn.inputs.map((input, index) => encodeAbiValue(input, values[index]));
   const body = encodeAbiSequence(fn.inputs, encodedArgs);
   const data = bytesToHex(concatBytes([selectorBytes, body]));
   return {
@@ -685,4 +687,14 @@ export function defaultTokenDecimalsForArg(name: string): number {
   if (/(eth|weth|wei)/.test(lower)) return 18;
   if (/(amount|value|qty|quantity|balance|profit)/.test(lower)) return 6;
   return 18;
+}
+
+/** Accept uniform-case addresses; mixed-case addresses must satisfy EIP-55. */
+export function isValidEvmAddress(value: string): boolean {
+  if (!ADDRESS_RE.test(value)) return false;
+  const hex = value.slice(2);
+  if (hex === hex.toLowerCase() || hex === hex.toUpperCase()) return true;
+  const hash = bytesToHex(keccak256(new TextEncoder().encode(hex.toLowerCase()))).slice(2);
+  return [...hex].every((char, index) => !/[a-fA-F]/.test(char) ||
+    (Number.parseInt(hash[index], 16) >= 8 ? char === char.toUpperCase() : char === char.toLowerCase()));
 }

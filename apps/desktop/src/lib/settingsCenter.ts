@@ -20,6 +20,8 @@ export type AutoLockMinutes = null | 1 | 5 | 15 | 30 | 60;
 export interface AppPreferences {
   autoLockMinutes: AutoLockMinutes;
   enabledEvmChainIds: number[];
+  enabledNetworkEnvironments?: AppNetwork[];
+  /** Only used to read preferences saved before environment multi-selection. */
   showTestnets: boolean;
   transactionDebugDetails: boolean;
   developerWalletMaintenance: boolean;
@@ -131,6 +133,7 @@ export function createSerialTaskQueue(): SerialTaskQueue {
 export const DEFAULT_APP_PREFERENCES: AppPreferences = {
   autoLockMinutes: 15,
   enabledEvmChainIds: [],
+  enabledNetworkEnvironments: ["mainnet"],
   showTestnets: false,
   transactionDebugDetails: false,
   developerWalletMaintenance: false,
@@ -293,12 +296,58 @@ export function dappPermissionMatchesWallet(
     || Boolean(wallet.evm_address && permission.walletId.toLowerCase() === wallet.evm_address.toLowerCase());
 }
 
+export const NETWORK_ENVIRONMENTS: readonly AppNetwork[] = ["mainnet", "testnet", "devnet"];
+
+export function enabledNetworkEnvironments(preferences: AppPreferences): AppNetwork[] {
+  if (preferences.enabledNetworkEnvironments?.length) {
+    const enabled = NETWORK_ENVIRONMENTS.filter((network) => preferences.enabledNetworkEnvironments?.includes(network));
+    if (enabled.length) return enabled;
+  }
+  return NETWORK_ENVIRONMENTS.filter((network) => network === "mainnet"
+    || network === preferences.defaultSolanaNetwork
+    || (network === "testnet" && preferences.showTestnets));
+}
+
+export function normalizeAppPreferences(preferences: AppPreferences): AppPreferences {
+  const enabled = enabledNetworkEnvironments(preferences);
+  return {
+    ...preferences,
+    enabledNetworkEnvironments: enabled,
+    showTestnets: enabled.includes("testnet"),
+    defaultSolanaNetwork: enabled.includes(preferences.defaultSolanaNetwork)
+      ? preferences.defaultSolanaNetwork : enabled[0],
+  };
+}
+
+export function toggleNetworkEnvironment(
+  preferences: AppPreferences,
+  network: AppNetwork,
+  enabled: boolean,
+  chains: Array<{chain_id: number; testnet: boolean}> = [],
+): AppPreferences {
+  const current = enabledNetworkEnvironments(preferences);
+  const next = enabled ? [...current, network] : current.filter((item) => item !== network);
+  if (!next.length) return preferences;
+  // When enabling a new environment, make its networks available even if an older
+  // installation stored an explicit list containing only mainnets.
+  const enabledEvmChainIds = enabled && !current.includes(network) && preferences.enabledEvmChainIds.length
+    ? [...new Set([...preferences.enabledEvmChainIds, ...chains
+      .filter((chain) => (chain.testnet ? "testnet" : "mainnet") === network)
+      .map((chain) => chain.chain_id)])]
+    : preferences.enabledEvmChainIds;
+  return normalizeAppPreferences({...preferences, enabledEvmChainIds, enabledNetworkEnvironments: next});
+}
+
+export function isNetworkEnvironmentEnabled(preferences: AppPreferences, testnet: boolean): boolean {
+  return enabledNetworkEnvironments(preferences).includes(testnet ? "testnet" : "mainnet");
+}
+
 export function visibleEvmChainIds(
   chains: Array<{ chain_id: number; testnet: boolean }>,
   preferences: AppPreferences,
 ): number[] {
   const configured = new Set(preferences.enabledEvmChainIds);
-  const eligible = chains.filter((chain) => preferences.showTestnets || !chain.testnet);
+  const eligible = chains.filter((chain) => isNetworkEnvironmentEnabled(preferences, chain.testnet));
   if (configured.size === 0) return eligible.map((chain) => chain.chain_id);
   const visible = eligible.filter((chain) => configured.has(chain.chain_id)).map((chain) => chain.chain_id);
   return visible.length > 0 ? visible : eligible.slice(0, 1).map((chain) => chain.chain_id);
@@ -330,7 +379,7 @@ export function toggleEnabledEvmChain(
     const remainingEligible = chains.some(
       (chain) =>
         chain.chain_id !== chainId
-        && (preferences.showTestnets || !chain.testnet)
+        && isNetworkEnvironmentEnabled(preferences, chain.testnet)
         && current.has(chain.chain_id),
     );
     if (remainingEligible) current.delete(chainId);

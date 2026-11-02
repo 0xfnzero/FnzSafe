@@ -2058,7 +2058,9 @@ mod tests {
 
         assert_eq!(catalog.len(), 26);
         assert!(catalog.iter().any(|chain| chain.chain_id == "eip155:5042"));
-        assert!(catalog.iter().any(|chain| chain.chain_id == "eip155:5042002" && chain.testnet));
+        assert!(catalog
+            .iter()
+            .any(|chain| chain.chain_id == "eip155:5042002" && chain.testnet));
         for family in ["solana", "evm", "bitcoin", "tron"] {
             assert!(catalog.iter().any(|chain| chain.family == family));
         }

@@ -28,6 +28,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 
+pub mod safe;
+
 const DEFAULT_EVM_DERIVATION_PATH: &str = "m/44'/60'/0'/0/0";
 const LEGACY_KEYSTORE_VERSION: u8 = 1;
 const KEYSTORE_VERSION: u8 = 2;
@@ -520,8 +522,17 @@ fn default_keystore_secret_type() -> String {
 
 #[derive(Debug, Deserialize)]
 struct JsonRpcResponse {
+    // A present null result is a valid pending receipt; a missing result is not.
+    #[serde(default, deserialize_with = "deserialize_rpc_result")]
     result: Option<serde_json::Value>,
     error: Option<JsonRpcError>,
+}
+
+fn deserialize_rpc_result<'de, D>(deserializer: D) -> Result<Option<serde_json::Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    serde_json::Value::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Deserialize)]
@@ -782,11 +793,7 @@ pub fn resolve_evm_keystore_json(document_json: &str) -> EvmResult<String> {
     require_non_empty(document_json, "keystore json")?;
     let doc: serde_json::Value = serde_json::from_str(document_json)
         .map_err(|_| EvmServiceError::InvalidInput("Invalid keystore JSON".to_string()))?;
-    if doc
-        .get("wallet_family")
-        .and_then(serde_json::Value::as_str)
-        == Some("evm")
-    {
+    if doc.get("wallet_family").and_then(serde_json::Value::as_str) == Some("evm") {
         return Ok(document_json.to_string());
     }
     if let Some(nested) = doc
@@ -1439,8 +1446,13 @@ where
             .and_then(rpc_hex_quantity_to_decimal)
             .map_err(|_| EvmServiceError::RpcUnavailable)?;
             let fee_quote = load_fee_quote(&req.chain)?;
-            let gas_limit =
-                estimate_gas(&req.chain, &wallet_address, &contract_address, &value, &data)?;
+            let gas_limit = estimate_gas(
+                &req.chain,
+                &wallet_address,
+                &contract_address,
+                &value,
+                &data,
+            )?;
             let raw_tx = sign_evm_transaction(&EvmTxSigningInput {
                 signing_key: &signing_key,
                 chain_id: req.chain.chain_id,
@@ -4032,15 +4044,39 @@ mod tests {
     const DEV_MNEMONIC: &str =
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
+    fn read_rpc_request(stream: &mut std::net::TcpStream) -> String {
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+            .unwrap();
+        let mut request = Vec::new();
+        loop {
+            let mut chunk = [0_u8; 4096];
+            let length = stream.read(&mut chunk).unwrap();
+            assert!(length > 0, "incomplete HTTP request");
+            request.extend_from_slice(&chunk[..length]);
+            assert!(request.len() <= 65536, "oversized test request");
+            if let Some(header_end) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                let headers = String::from_utf8_lossy(&request[..header_end]);
+                let content_length: usize = headers
+                    .lines()
+                    .filter_map(|line| line.split_once(':'))
+                    .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                    .map(|(_, value)| value.trim().parse().unwrap())
+                    .unwrap_or(0);
+                if request.len() >= header_end + 4 + content_length {
+                    return String::from_utf8(request).unwrap();
+                }
+            }
+        }
+    }
+
     fn spawn_rpc_server(expected_requests: usize) -> (String, std::thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let handle = std::thread::spawn(move || {
             for _ in 0..expected_requests {
                 let (mut stream, _) = listener.accept().unwrap();
-                let mut request = [0_u8; 4_096];
-                let length = stream.read(&mut request).unwrap();
-                let request = String::from_utf8_lossy(&request[..length]);
+                let request = read_rpc_request(&mut stream);
                 let result = if request.contains("eth_chainId") {
                     "\"0x539\""
                 } else {
@@ -4080,9 +4116,7 @@ mod tests {
         let server = std::thread::spawn(move || {
             for _ in 0..expected_requests {
                 let (mut stream, _) = listener.accept().unwrap();
-                let mut request = [0u8; 4096];
-                let length = stream.read(&mut request).unwrap();
-                let request = String::from_utf8_lossy(&request[..length]);
+                let request = read_rpc_request(&mut stream);
                 let body = if request.contains("eth_estimateGas") {
                     serde_json::json!({"jsonrpc": "2.0", "id": 1, "error": {"code": -32000, "message": "gas estimation failed"}})
                 } else {

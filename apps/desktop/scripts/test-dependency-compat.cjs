@@ -10,8 +10,8 @@ const numericExpected = ["item-1", "item-2", "item-3"];
 
 async function main() {
   const braceExpansion = require("brace-expansion");
-  assert.equal(require("brace-expansion/package.json").version, "5.0.9");
-  assert.equal(require("brace-expansion-upstream/package.json").version, "5.0.9");
+  assert.equal(require("brace-expansion/package.json").version, require("../vendor/brace-expansion-compat/package.json").version);
+  assert.equal(require("brace-expansion-upstream/package.json").version, require("../package.json").devDependencies["brace-expansion-upstream"].split("@").at(-1));
   assert.equal(typeof braceExpansion, "function");
   assert.equal(typeof braceExpansion.expand, "function");
   assert.equal(braceExpansion.EXPANSION_MAX, 100_000);

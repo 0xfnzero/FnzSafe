@@ -32,6 +32,18 @@ use zeroize::{Zeroize, Zeroizing};
 
 mod squads_v4;
 
+pub use evm::safe::{SafeCommand, SafeRequest};
+
+pub fn evm_safe_request<F>(
+    request: SafeRequest,
+    loader: F,
+) -> Result<serde_json::Value, AppServiceError>
+where
+    F: FnOnce() -> Result<Zeroizing<Vec<u8>>, String>,
+{
+    evm::safe::handle(request, loader).map_err(map_evm_error)
+}
+
 pub mod capabilities {
     pub const CHAIN_CATALOG: &str = "chain_catalog";
     pub const WALLET_MANAGEMENT: &str = "wallet_management";
@@ -3292,7 +3304,10 @@ mod tests {
         let catalog = registry.descriptors();
         assert_eq!(catalog.len(), 26);
         for (id, testnet) in [("eip155:5042", false), ("eip155:5042002", true)] {
-            let arc = catalog.iter().find(|chain| chain.chain_id.as_str() == id).unwrap();
+            let arc = catalog
+                .iter()
+                .find(|chain| chain.chain_id.as_str() == id)
+                .unwrap();
             assert_eq!(arc.native_asset.symbol, "USDC");
             assert_eq!(arc.native_asset.decimals, 18);
             assert_eq!(arc.testnet, testnet);
