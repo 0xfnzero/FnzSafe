@@ -1,0 +1,32 @@
+[
+  {
+    "expected_address": "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+    "family": "evm",
+    "name": "desktop-evm-key",
+    "text": "{\"version\":2,\"wallet_family\":\"evm\",\"secret_type\":\"private_key\",\"address\":\"0x7e5f4552091a69125d5dfcb7b8c2659029395bdf\",\"derivation_path\":null,\"crypto\":{\"kdf\":\"argon2id\",\"kdf_params\":{\"memory_kib\":65536,\"iterations\":3,\"parallelism\":1,\"salt\":\"IRT86tk9IxZsQmFLdLlGLQ==\"},\"cipher\":\"aes-256-gcm\",\"nonce\":\"5j9QviTVFJVcyL7A\",\"ciphertext\":\"jlfOtEhJLcCUhcuoeHxBewrvhElqu6ZnEjVTVuEXwNXp1MTtKGZ/S9fy4hgpmy9R\"},\"metadata\":{\"wallet_name\":\"Public fixture\"}}"
+  },
+  {
+    "expected_address": "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+    "family": "evm",
+    "name": "desktop-evm-mnemonic-custom-path",
+    "text": "{\"version\":2,\"wallet_family\":\"evm\",\"secret_type\":\"mnemonic\",\"address\":\"0x70997970c51812dc3a010c7d01b50e0d17dc79c8\",\"derivation_path\":\"m/44'/60'/0'/0/1\",\"crypto\":{\"kdf\":\"argon2id\",\"kdf_params\":{\"memory_kib\":65536,\"iterations\":3,\"parallelism\":1,\"salt\":\"dThOGB3H810GwWjDJxJf5w==\"},\"cipher\":\"aes-256-gcm\",\"nonce\":\"UR1hYzklmcsmobSI\",\"ciphertext\":\"NKxUMKrOK/DwPcnWeV0SwbwtbLM/YR1YRv24bftwrUetYXIvJH/kQdq0TOxJXZgwUGTU+OiORZfc1Dr8D0NkdIQAxTlxApy5kHTW\"},\"metadata\":{\"wallet_name\":\"Public fixture\"}}"
+  },
+  {
+    "expected_address": "oeYf6KAJkLYhBuR8CiGc6L4D4Xtfepr85fuDgA9kq96",
+    "family": "solana",
+    "name": "desktop-solana-key",
+    "text": "{\"version\":2,\"public_key\":\"oeYf6KAJkLYhBuR8CiGc6L4D4Xtfepr85fuDgA9kq96\",\"encryption_type\":\"password_only\",\"crypto\":{\"kdf\":\"argon2id\",\"kdf_params\":{\"memory_kib\":65536,\"iterations\":3,\"parallelism\":1,\"salt\":\"wJpI8I3zc2pn0RsGojoPRA==\"},\"cipher\":\"aes-256-gcm\",\"nonce\":\"oSdGkOGqzRJR3JlF\",\"ciphertext\":\"F+12eV0Z58WFu2t9PhBZYKc5APaMhxGXylX6KIU8Frq0gkSou7NDIMTmCpUThPM+axgn3hHONFpW+0HXg5Hi3/Y3enqcruyENfIy3xeoy+k=\"},\"created_at\":\"2026-11-02T23:15:18.554021+00:00\"}"
+  },
+  {
+    "expected_address": "oeYf6KAJkLYhBuR8CiGc6L4D4Xtfepr85fuDgA9kq96",
+    "family": "solana",
+    "name": "desktop-solana-mnemonic",
+    "text": "{\"version\":3,\"public_key\":\"oeYf6KAJkLYhBuR8CiGc6L4D4Xtfepr85fuDgA9kq96\",\"secret_type\":\"mnemonic\",\"derivation_path\":\"m/44'/501'/0'/0'\",\"encryption_type\":\"password_only\",\"crypto\":{\"kdf\":\"argon2id\",\"kdf_params\":{\"memory_kib\":65536,\"iterations\":3,\"parallelism\":1,\"salt\":\"7/bhW+sk04H7LCTE4xCZ1A==\"},\"cipher\":\"aes-256-gcm\",\"nonce\":\"GAaEZ2QAXNHPckjw\",\"ciphertext\":\"FvPOeo5FdrojNz0mkFAtw7s9G4YYz5yBt6lNlyoXpf0kHPw3jcM3ssfBY1XFMIF4PxFF6B2HTwAGay6b/frn3Ypu5C8bWJKxOMyQ\"},\"created_at\":\"2026-11-02T23:15:18.647509+00:00\"}"
+  },
+  {
+    "expected_address": "oeYf6KAJkLYhBuR8CiGc6L4D4Xtfepr85fuDgA9kq96",
+    "family": "solana",
+    "name": "desktop-encrypted-phrase",
+    "text": "{\"version\":1,\"kind\":\"password-secret\",\"crypto\":{\"kdf\":\"argon2id\",\"kdf_params\":{\"memory_kib\":65536,\"iterations\":3,\"parallelism\":1,\"salt\":\"6/5fI824dlD0ZJDcGzkaCQ==\"},\"cipher\":\"aes-256-gcm\",\"nonce\":\"q3s5six3HUOtfyP0\",\"ciphertext\":\"rceB00LPePnLaMi40wlNK8W1qFZWYbtiBZBJpi+Id4Qq7HJcDs+DliB19bXigDDF8noAWqjOpwp8Vo4MZP/+LzzxRf0TZVxIQRsx\"},\"created_at\":\"2026-11-02T23:15:18.735785+00:00\"}"
+  }
+]

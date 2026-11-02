@@ -31,6 +31,8 @@
 
 [下载最新版本](https://github.com/0xfnzero/FnzSafe/releases/latest)
 
+Chrome 浏览器扩展 **0.2.0** 已支持明文/加密恢复、自定义 RPC 校验、手动添加 ERC-20 和 Safe 多签。安装、功能范围与测试说明见 [扩展文档](apps/extension/README.md)。
+
 FnzSafe 是一个开源多链钱包，支持 Solana 和 EVM 兼容网络，并提供实验性的 Bitcoin 与 TRON 账户适配器。Bitcoin 和 TRON 当前只支持账户派生与地址校验，尚不支持转账和广播。项目由 Tauri 桌面钱包、Flutter 移动钱包和 Rust 钱包 SDK/CLI 组成；私钥保存在本地加密 Keystore 中，钱包操作、DApp、加密货币信号和市场研究集中在同一个工作界面内。
 
 ## Rust SDK crates

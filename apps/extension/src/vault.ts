@@ -130,7 +130,7 @@ export async function decryptVaultWithMigration(
 
 export function createInitialVault(importedMnemonic?: string): VaultPayload {
   const mnemonic =
-    importedMnemonic?.trim().toLowerCase() || generateMnemonic(wordlist, 128);
+    importedMnemonic?.trim().toLowerCase().split(/\s+/).join(' ') || generateMnemonic(wordlist, 128);
   if (!validateMnemonic(mnemonic, wordlist)) {
     throw new Error('Invalid BIP-39 recovery phrase');
   }
@@ -176,7 +176,7 @@ export function createInitialVault(importedMnemonic?: string): VaultPayload {
 
 function validateVaultPayload(payload: VaultPayload): void {
   if (!payload || typeof payload !== 'object' || typeof payload.recoveryMnemonic !== 'string' ||
-      payload.recoveryMnemonic.length > 512 || !validateMnemonic(payload.recoveryMnemonic, wordlist) ||
+      payload.recoveryMnemonic.length > 512 || (payload.recoveryMnemonic !== '' && !validateMnemonic(payload.recoveryMnemonic, wordlist)) ||
       !Array.isArray(payload.accounts) || payload.accounts.length === 0 || payload.accounts.length > MAX_ACCOUNTS ||
       typeof payload.selectedAccountId !== 'string' || payload.selectedAccountId.length > 128 ||
       !Number.isSafeInteger(payload.selectedEvmChainId) || payload.selectedEvmChainId <= 0 ||
@@ -353,7 +353,7 @@ function getBytesFromHex(value: string): Uint8Array {
   );
 }
 
-function deriveEd25519Path(seed: Uint8Array, path: string): Uint8Array {
+export function deriveEd25519Path(seed: Uint8Array, path: string): Uint8Array {
   let digest = hmac(sha512, new TextEncoder().encode('ed25519 seed'), seed);
   let key = digest.slice(0, 32);
   let chainCode = digest.slice(32);
@@ -376,4 +376,59 @@ function deriveEd25519Path(seed: Uint8Array, path: string): Uint8Array {
   digest.fill(0);
   chainCode.fill(0);
   return key;
+}
+
+/** Imported keys have no invented recovery phrase. Keep the original key backup. */
+export function createPrivateKeyVault(family: VaultPayload['accounts'][number]['family'], raw: string): VaultPayload {
+  if (typeof raw !== 'string' || raw.length > 2048) throw new Error('Invalid private key');
+  let key = raw.trim();
+  let derivationPath: string | undefined;
+  if (family === 'solana') {
+    let bytes: Uint8Array;
+    if (key.startsWith('[')) {
+      const parsed: unknown = JSON.parse(key);
+      if (!Array.isArray(parsed) || ![32, 64].includes(parsed.length) || parsed.some(v => !Number.isInteger(v) || v < 0 || v > 255)) throw new Error('Invalid Solana key array');
+      bytes = Uint8Array.from(parsed);
+    } else if (/^(0x)?[a-f\d]{64}$/i.test(key)) {
+      bytes = getBytesFromHex(key.replace(/^0x/i, ''));
+    } else bytes = bs58.decode(key);
+    try {
+      const pair = bytes.length === 32 ? Keypair.fromSeed(bytes) : Keypair.fromSecretKey(bytes);
+      key = bs58.encode(pair.secretKey);
+    } finally { bytes.fill(0); }
+  } else {
+    if (family === 'bitcoin' && !/^(0x)?[a-f\d]{64}$/i.test(key)) {
+      const bytes = bs58.decode(key);
+      if (bytes.length !== 38 || bytes[0] !== 0x80 || bytes[33] !== 1 ||
+        !sha256(sha256(bytes.slice(0, 34))).slice(0, 4).every((b, i) => b === bytes[34 + i])) {
+        throw new Error('Use a compressed Bitcoin mainnet WIF or a 32-byte hex key');
+      }
+      key = `0x${toHex(bytes.slice(1, 33))}`;
+      bytes.fill(0);
+    } else {
+      if (!/^(0x)?[a-f\d]{64}$/i.test(key)) throw new Error('Use a 32-byte hex private key');
+      key = `0x${key.replace(/^0x/i, '').toLowerCase()}`;
+    }
+    if (family === 'bitcoin') derivationPath = BITCOIN_NATIVE_SEGWIT_PATH;
+  }
+  const id = crypto.randomUUID();
+  const payload: VaultPayload = { recoveryMnemonic: '', accounts: [{ id, name: `${family.toUpperCase()} imported`, family,
+    address: addressFromAccountKey(family, key, derivationPath), privateKey: key, ...(derivationPath ? { derivationPath } : {}) }],
+    selectedAccountId: id, selectedEvmChainId: 1, selectedSolanaCluster: 'mainnet-beta' };
+  validateVaultPayload(payload);
+  return payload;
+}
+
+export function mergeVaultAccounts(existing: VaultPayload, imported: VaultPayload): VaultPayload {
+  validateVaultPayload(existing);
+  validateVaultPayload(imported);
+  const accounts = [...existing.accounts];
+  for (const account of imported.accounts) {
+    if (!accounts.some(a => a.family === account.family && a.address === account.address)) accounts.push({ ...account, id: crypto.randomUUID() });
+  }
+  if (accounts.length === existing.accounts.length) throw new Error('These accounts are already imported');
+  // Preserve the original vault's recovery root; encrypted backups include all imported keys.
+  const payload = { ...existing, accounts, selectedAccountId: accounts[accounts.length - 1].id };
+  validateVaultPayload(payload);
+  return payload;
 }

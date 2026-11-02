@@ -1,0 +1,10 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>FnzSafe local DApp test</title><style>body{font:16px system-ui;padding:40px;max-width:800px}button{margin:8px;padding:12px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#eee;padding:16px}</style><h1>FnzSafe local DApp test</h1><p>Public test accounts and local Anvil only. Do not connect a real wallet.</p><button id="connect">Connect EVM</button><button id="sign">Sign test message</button><button id="send">Send 0.0001 local ETH</button><button id="reject">Request rejection test</button><button id="solana">Connect Solana</button><button id="solsign">Sign Solana test message</button><pre id="result">Ready</pre><script>
+const result=document.getElementById('result');let account;
+function action(id,fn){document.getElementById(id).onclick=async()=>{result.textContent='Waiting for wallet approval...';try{result.textContent=JSON.stringify(await fn(),null,2);}catch(e){result.textContent='Rejected/error: '+e.message;}}}
+action('connect',async()=>{const accounts=await window.fnzsafe.ethereum.request({method:'eth_requestAccounts'});account=accounts[0];return {connected:account};});
+action('sign',()=>window.fnzsafe.ethereum.request({method:'personal_sign',params:['FnzSafe local UI test',account]}));
+action('send',()=>window.fnzsafe.ethereum.request({method:'eth_sendTransaction',params:[{from:account,to:'0x70997970C51812dc3A010C7d01b50e0d17dc79C8',value:'0x5af3107a4000',chainId:'0x1'}]}));
+action('reject',()=>window.fnzsafe.ethereum.request({method:'personal_sign',params:['Reject this local test',account]}));
+action('solana',()=>window.fnzsafe.solana.connect());
+action('solsign',async()=>{const signed=await window.fnzsafe.solana.signMessage(new TextEncoder().encode('FnzSafe local Solana UI test'));return {publicKey:signed.publicKey.toString(),signature:Array.from(signed.signature)};});
+</script></html>

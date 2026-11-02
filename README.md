@@ -31,6 +31,8 @@
 
 [Download the latest release](https://github.com/0xfnzero/FnzSafe/releases/latest)
 
+The Chrome extension **0.2.0** adds plaintext/encrypted recovery, verified custom RPC, manual ERC-20 assets and Safe multisig. See [extension setup, supported features and tests](apps/extension/README.md).
+
 FnzSafe is an open-source multi-chain wallet for Solana and EVM-compatible networks, with experimental Bitcoin and TRON account adapters. Bitcoin and TRON currently support account derivation and address validation, not transfers or broadcasting. It combines a Tauri desktop wallet, a Flutter mobile wallet, and a Rust wallet SDK/CLI. Private keys remain in encrypted local keystores while wallet operations, dApps, crypto signals, and market research share one working surface.
 
 ## Rust SDK crates

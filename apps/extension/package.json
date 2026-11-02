@@ -1,6 +1,6 @@
 {
   "name": "@fnzero/safe-extension",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -16,7 +16,8 @@
     "test:e2e": "node test/extension.e2e.mjs",
     "test:e2e:arc": "node test/arc.e2e.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test test/*.test.ts"
+    "test": "node --import tsx --test test/*.test.ts",
+    "test:safe-local": "node --import tsx test/safe-local.integration.ts"
   },
   "dependencies": {
     "@noble/curves": "^1.9.7",

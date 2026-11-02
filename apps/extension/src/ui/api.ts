@@ -16,6 +16,7 @@ export interface WalletStatus {
     evmChainId: number;
     solanaCluster: 'mainnet-beta' | 'devnet';
     enhancedAssetDetection: boolean;
+    rpcOverrides?: Record<string, string>;
   };
   chains: ChainInfo[];
   connectedOrigins: string[];

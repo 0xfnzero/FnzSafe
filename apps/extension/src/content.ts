@@ -9,7 +9,11 @@ function bindPort(next: chrome.runtime.Port): void {
     window.postMessage({ channel: 'fnzsafe:provider', direction: 'response', ...response }, location.origin);
   });
   port.onDisconnect.addListener(() => {
-    window.setTimeout(() => bindPort(chrome.runtime.connect({ name: 'fnzsafe-provider' })), 250);
+    void chrome.runtime.lastError;
+    window.setTimeout(() => {
+      // Extension reload invalidates this content script until the page reloads.
+      try { bindPort(chrome.runtime.connect({ name: 'fnzsafe-provider' })); } catch { /* Page must reload. */ }
+    }, 250);
   });
 }
 

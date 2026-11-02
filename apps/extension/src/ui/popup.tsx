@@ -1,7 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ThemeControl, ThemeSettings } from './theme';
+import { SafeView } from './safe-view';
+import { ActivityView, EvmSendDialog, ImportToken } from './transactions';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   ArrowDownLeft,
+  History,
+  Eye,
+  EyeOff,
   ArrowUpRight,
   Check,
   Copy,
@@ -13,7 +19,7 @@ import {
   WalletCards,
   X,
 } from 'lucide-react';
-import { socialRecoveryConfig } from '../chains';
+import { ImportFields, RecoverySettings, RpcSettings, emptyImport } from './wallet-settings';
 import type { ChainFamily, ChainInfo, PortfolioSnapshot } from '../types';
 import { api, compact, type WalletStatus } from './api';
 
@@ -29,7 +35,12 @@ function Popup() {
     }
   }, []);
 
-  useEffect(() => void refresh(), [refresh]);
+  useEffect(() => {
+    void refresh();
+    // Keep the worker alive while the wallet UI is open; this does not extend the inactivity lock.
+    const timer = setInterval(() => void refresh(), 15000);
+    return () => clearInterval(timer);
+  }, [refresh]);
   if (!status) return <Shell><Loading error={error} /></Shell>;
   if (!status.initialized) {
     return <Shell><CreateWallet onComplete={refresh} /></Shell>;
@@ -41,8 +52,8 @@ function Popup() {
 function Shell({ children }: { children: React.ReactNode }) {
   return <main className="shell">
     <header className="brand">
-      <span className="brand-mark">F</span><strong>FnzSafe</strong>
-      <ShieldCheck size={18} />
+      <span className="brand-mark"><ShieldCheck size={20} strokeWidth={2.2} /></span><strong>FnzSafe<span className="brand-caption">YOUR WEB3 COMPANION</span></strong>
+      <ThemeControl />
     </header>
     {children}
   </main>;
@@ -58,7 +69,7 @@ function CreateWallet({ onComplete }: { onComplete: () => Promise<void> }) {
   const [mode, setMode] = useState<'create' | 'import'>('create');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
-  const [mnemonic, setMnemonic] = useState('');
+  const [walletImport, setWalletImport] = useState(emptyImport);
   const [recoveryPhrase, setRecoveryPhrase] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -71,10 +82,10 @@ function CreateWallet({ onComplete }: { onComplete: () => Promise<void> }) {
       const result = await api<{ recoveryMnemonic: string }>({
         type: 'CREATE_VAULT',
         password,
-        ...(mode === 'import' ? { mnemonic } : {}),
+        ...(mode === 'import' ? { import: walletImport } : {}),
       });
       if (mode === 'create') setRecoveryPhrase(result.recoveryMnemonic);
-      else await onComplete();
+      else { setWalletImport(emptyImport()); await onComplete(); }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -97,15 +108,16 @@ function CreateWallet({ onComplete }: { onComplete: () => Promise<void> }) {
   }
 
   return <section className="onboarding">
-    <ShieldCheck size={44} />
-    <h1>{mode === 'create' ? 'Create FnzSafe' : 'Import wallet'}</h1>
-    <p>One password protects EVM, Solana, Bitcoin and TRON accounts derived from one recovery root.</p>
+    <div className="onboarding-symbol"><WalletCards size={34} /></div>
+    <span className="eyebrow">YOUR KEYS. YOUR WORLD.</span>
+    <h1>{mode === 'create' ? 'A wallet of your own' : 'Welcome to FnzSafe'}</h1>
+    <p>One home for your crypto. Create a wallet or bring your existing accounts with you.</p>
     <div className="mode-tabs">
       <button className={mode === 'create' ? 'active' : ''} onClick={() => setMode('create')}>Create</button>
       <button className={mode === 'import' ? 'active' : ''} onClick={() => setMode('import')}>Import</button>
     </div>
     <form onSubmit={submit}>
-      {mode === 'import' && <label>Recovery phrase<textarea rows={3} autoComplete="off" spellCheck={false} value={mnemonic} onChange={(event) => setMnemonic(event.target.value)} required /></label>}
+      {mode === 'import' && <ImportFields value={walletImport} onChange={setWalletImport} />}
       <label>Wallet password<input type="password" minLength={10} autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
       <label>Confirm password<input type="password" minLength={10} autoComplete="new-password" value={confirm} onChange={(event) => setConfirm(event.target.value)} required /></label>
       {error && <p className="error">{error}</p>}
@@ -135,8 +147,8 @@ function Unlock({ onComplete }: { onComplete: () => Promise<void> }) {
   }
 
   return <section className="onboarding">
-    <Lock size={42} /><h1>Welcome back</h1>
-    <p>Unlock the encrypted vault. It locks after five minutes or when the background session ends.</p>
+    <div className="onboarding-symbol"><Lock size={32} /></div><span className="eyebrow">SECURE BY YOU</span><h1>Welcome back</h1>
+    <p>Your wallet is locked. Enter your password to pick up where you left off.</p>
     <form onSubmit={submit}>
       <label>Wallet password<input autoFocus type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
       {error && <p className="error">{error}</p>}
@@ -146,11 +158,18 @@ function Unlock({ onComplete }: { onComplete: () => Promise<void> }) {
 }
 
 function WalletHome({ status, refresh }: { status: WalletStatus; refresh: () => Promise<void> }) {
-  const [family, setFamily] = useState<ChainFamily>('evm');
-  const [tab, setTab] = useState<'wallet' | 'activity' | 'settings'>('wallet');
+  const [family, setFamily] = useState<ChainFamily>(() => status.accounts.find(account => account.id === status.settings.activeAccountId)?.family ?? status.accounts[0]?.family ?? 'evm');
+  const [tab, setTab] = useState<'wallet' | 'activity' | 'safe' | 'settings'>('wallet');
   const [portfolio, setPortfolio] = useState<PortfolioSnapshot | null>(null);
   const [portfolioError, setPortfolioError] = useState('');
   const [sendOpen, setSendOpen] = useState(false);
+  const [receiveOpen, setReceiveOpen] = useState(false);
+  const [balanceHidden, setBalanceHidden] = useState(false);
+  const [copied, setCopied] = useState(false);
+  async function copyAddress() {
+    if (!account) return;
+    try { await navigator.clipboard.writeText(account.address); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch { setCopied(false); }
+  }
   const accounts = status.accounts.filter((account) => account.family === family);
   const account = accounts.find((item) => item.id === status.settings.activeAccountId) ?? accounts[0];
   const selectedChain = useMemo(
@@ -164,18 +183,22 @@ function WalletHome({ status, refresh }: { status: WalletStatus; refresh: () => 
     [family, status],
   );
 
+  const portfolioRequest = useRef(0);
   const refreshPortfolio = useCallback(async (force = false) => {
+    const requestId = ++portfolioRequest.current;
     setPortfolio(null);
     setPortfolioError('');
     try {
-      setPortfolio(await api<PortfolioSnapshot>({ type: 'GET_PORTFOLIO', family, force }));
+      const snapshot = await api<PortfolioSnapshot>({ type: 'GET_PORTFOLIO', family, force });
+      if (requestId === portfolioRequest.current) { setPortfolio(snapshot); setPortfolioError(''); }
     } catch (reason) {
-      setPortfolioError(reason instanceof Error ? reason.message : String(reason));
+      if (requestId === portfolioRequest.current) setPortfolioError(reason instanceof Error ? reason.message : String(reason));
     }
-  }, [family, selectedChain?.key, status.settings.enhancedAssetDetection]);
+  }, [family, account?.id, selectedChain?.key, selectedChain?.rpcUrl, status.settings.enhancedAssetDetection]);
 
   useEffect(() => {
     void refreshPortfolio(false);
+    return () => { portfolioRequest.current++; };
   }, [refreshPortfolio]);
 
   const nativeBalance = portfolio?.assets.find((asset) => asset.native);
@@ -212,26 +235,27 @@ function WalletHome({ status, refresh }: { status: WalletStatus; refresh: () => 
     </div>
     {tab === 'wallet' && <section className="wallet-view">
       <div className="account-card">
-        <img src={`chain-icons/${selectedChain?.icon ?? 'ethereum.svg'}`} />
+        <span className="account-avatar"><img alt="" src={`chain-icons/${selectedChain?.icon ?? 'ethereum.svg'}`} /></span>
         <div>{accounts.length > 1 ? (
-          <select aria-label="Bitcoin address type" value={account?.id ?? ''} onChange={(event) => void changeAccount(event.target.value)}>
+          <select aria-label="Account" value={account?.id ?? ''} onChange={(event) => void changeAccount(event.target.value)}>
             {accounts.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select>
         ) : <strong>{account?.name ?? `${selectedChain?.name ?? family} account`}</strong>}
-          <button className="address" disabled={!account} onClick={() => account && navigator.clipboard.writeText(account.address)}>
-            {account ? compact(account.address) : 'Not available'} <Copy size={13} />
+          <button className="address" disabled={!account} onClick={() => void copyAddress()}>
+            {copied ? 'Address copied' : account ? compact(account.address) : 'Not available'} {copied ? <Check size={12} /> : <Copy size={12} />}
           </button>
         </div>
       </div>
       <div className="balance">
-        <span>{selectedChain?.name}</span>
-        <strong>{nativeBalance ? `${nativeBalance.balance} ${nativeBalance.symbol}` : '--'}</strong>
-        {totalUsd > 0 && <small>{formatUsd(totalUsd)}</small>}
+        <div className="balance-caption"><span>{totalUsd > 0 ? 'Estimated value' : 'Native balance'}</span><button className="balance-visibility" aria-label={balanceHidden ? 'Show balances' : 'Hide balances'} onClick={() => setBalanceHidden(!balanceHidden)}>{balanceHidden ? <EyeOff size={15} /> : <Eye size={15} />}</button><span className="network-badge"><i />{selectedChain?.name}</span></div>
+        <strong className={totalUsd > 0 ? '' : 'native-total'}>{balanceHidden ? '••••••' : totalUsd > 0 ? formatUsd(totalUsd) : nativeBalance ? compactAmount(nativeBalance.balance) : '—'}</strong>
+        <small>{balanceHidden ? 'Balances hidden' : nativeBalance ? `${compactAmount(nativeBalance.balance)} ${nativeBalance.symbol}` : 'Your assets, in one place'}</small>
+        {!balanceHidden && totalUsd > 0 && portfolio?.assets.some(asset => asset.valueUsd === undefined) && <span className="valuation-note">Some assets have no price available</span>}
       </div>
       {(family === 'bitcoin' || family === 'tron') && <div className="notice"><ShieldCheck size={18} /><span>Address support is visible, but signing and broadcast remain disabled until the native implementation is complete.</span></div>}
       <div className="actions">
         <Action icon={<ArrowUpRight />} label="Send" disabled={!selectedChain?.transactionSupport || !account} onClick={() => setSendOpen(true)} />
-        <Action icon={<ArrowDownLeft />} label="Receive" disabled={!account} onClick={() => account && navigator.clipboard.writeText(account.address)} />
+        <Action icon={<ArrowDownLeft />} label="Receive" disabled={!account} onClick={() => setReceiveOpen(true)} />
         <Action
           icon={<Globe2 />}
           label="DApps"
@@ -241,31 +265,35 @@ function WalletHome({ status, refresh }: { status: WalletStatus; refresh: () => 
           })}
         />
       </div>
-      <div className="section-title"><strong>Assets</strong><button className="icon-button" title="Refresh assets" onClick={() => void refreshPortfolio(true)}><RefreshCw size={16} /></button></div>
+      <div className="section-title"><strong>Tokens <span className="count-badge">{portfolio?.assets.length ?? 0}</span></strong><button className="icon-button" title="Refresh assets" onClick={() => void refreshPortfolio(true)}><RefreshCw size={16} /></button></div>
       {portfolioError && <p className="error">{portfolioError}</p>}
       {portfolio?.warnings.map((warning) => <p className="asset-warning" key={warning}>{warning}</p>)}
       {!portfolio && !portfolioError && <div className="empty"><RefreshCw className="spin" size={24} /><span>Loading balances...</span></div>}
       {portfolio && portfolio.assets.length === 0 && <div className="empty"><WalletCards size={28} /><span>No assets found on this network</span></div>}
       {portfolio && <div className="asset-list">
         {portfolio.assets.map((asset) => <div className={`asset-row${asset.risk === 'spam' ? ' risky' : ''}`} key={asset.id}>
-          <span className="asset-symbol">{asset.symbol.slice(0, 4)}</span>
+          <span className={`asset-symbol ${asset.native ? 'native' : ''}`}>{asset.native ? <img alt="" src={`chain-icons/${selectedChain?.icon ?? 'ethereum.svg'}`} /> : asset.symbol.slice(0, 2)}</span>
           <span><strong>{asset.symbol}</strong><small>{asset.risk === 'spam' ? `Potential spam - ${asset.name}` : asset.name}</small></span>
-          <span className="asset-amount"><strong>{compactAmount(asset.balance)}</strong><small>{asset.valueUsd !== undefined ? formatUsd(asset.valueUsd) : 'Price unavailable'}</small></span>
+          <span className="asset-amount"><strong>{balanceHidden ? '••••' : compactAmount(asset.balance)}</strong><small>{balanceHidden ? '••••' : asset.valueUsd !== undefined ? formatUsd(asset.valueUsd) : 'Price unavailable'}</small></span>
         </div>)}
       </div>}
-      {portfolio && !portfolio.enhancedDetection && (family === 'evm' || family === 'solana') && <p className="privacy-hint">Enhanced token detection is off. Only the native asset is shown.</p>}
+      {family === 'evm' && account && <ImportToken onImported={() => void refreshPortfolio(true)} />}
+      {portfolio && !portfolio.enhancedDetection && (family === 'evm' || family === 'solana') && <p className="privacy-hint">Automatic token discovery is off. Native assets and manually imported tokens are queried.</p>}
     </section>}
-    {tab === 'activity' && <section className="empty-page"><RefreshCw size={32} /><h2>Activity</h2><p>Submitted transaction hashes appear after a transfer. Full indexed history depends on the selected network.</p></section>}
+    {tab === 'activity' && <ActivityView family={family} context={`${selectedChain?.key}:${account?.id}`} />}
+    {tab === 'safe' && (family === 'evm' ? <SafeView key={`${selectedChain?.key}:${account?.id}:${selectedChain?.rpcUrl}`} chainId={status.settings.evmChainId} accountId={account?.id} /> : <div className="empty-page"><ShieldCheck size={36} /><h2>Shared control</h2><p>Switch to an EVM network to manage your Safe multisig wallets.</p></div>)}
     {tab === 'settings' && <SettingsView status={status} onLock={lock} onRefresh={refresh} />}
     <nav>
       <button className={tab === 'wallet' ? 'active' : ''} onClick={() => setTab('wallet')}><WalletCards />Wallet</button>
-      <button className={tab === 'activity' ? 'active' : ''} onClick={() => setTab('activity')}><RefreshCw />Activity</button>
+      <button className={tab === 'activity' ? 'active' : ''} onClick={() => setTab('activity')}><History />Activity</button>
+      <button className={tab === 'safe' ? 'active' : ''} onClick={() => setTab('safe')}><ShieldCheck />Multisig</button>
       <button className={tab === 'settings' ? 'active' : ''} onClick={() => {
         setTab('settings');
         void refresh();
       }}><Settings />Settings</button>
     </nav>
-    {sendOpen && account && selectedChain && <SendDialog family={family} chain={selectedChain} onClose={() => setSendOpen(false)} onSent={() => { setSendOpen(false); location.reload(); }} />}
+    {receiveOpen && account && <div className="modal-backdrop"><section className="modal receive-modal" role="dialog" aria-modal="true" aria-label="Receive assets"><div className="dialog-heading"><span className="dialog-icon"><ArrowDownLeft size={22} /></span><button className="icon-button" aria-label="Close receive" onClick={() => setReceiveOpen(false)}><X size={18} /></button></div><h2>Receive {selectedChain?.symbol}</h2><p>Use this address on <strong>{selectedChain?.name}</strong>.</p><div className="receive-address">{account.address}</div><p className="fine-print">Make sure the sender uses the correct network.</p><button className="primary" onClick={() => void copyAddress()}>{copied ? <Check size={16} /> : <Copy size={16} />}{copied ? 'Address copied' : 'Copy address'}</button></section></div>}
+    {sendOpen && account && selectedChain && (family === 'evm' ? <EvmSendDialog tokens={portfolio?.assets ?? []} nativeSymbol={selectedChain.symbol} onClose={() => setSendOpen(false)} onSent={() => { setSendOpen(false); void refreshPortfolio(true); }} /> : <SendDialog accountId={account.id} family={family} chain={selectedChain} onClose={() => setSendOpen(false)} onSent={() => { setSendOpen(false); void refreshPortfolio(true); }} />)}
   </Shell>;
 }
 
@@ -284,7 +312,7 @@ function compactAmount(value: string): string {
   return new Intl.NumberFormat('en-US', { maximumSignificantDigits: 8 }).format(numeric);
 }
 
-function SendDialog({ family, chain, onClose, onSent }: { family: ChainFamily; chain: ChainInfo; onClose: () => void; onSent: () => void }) {
+function SendDialog({ accountId, family, chain, onClose, onSent }: { accountId: string; family: ChainFamily; chain: ChainInfo; onClose: () => void; onSent: () => void }) {
   const [recipient, setRecipient] = useState('');
   const [amount, setAmount] = useState('');
   const [confirming, setConfirming] = useState(false);
@@ -296,7 +324,7 @@ function SendDialog({ family, chain, onClose, onSent }: { family: ChainFamily; c
     if (!confirming) return setConfirming(true);
     setBusy(true);
     try {
-      const result = await api<{ signature: string }>({ type: 'SEND_NATIVE', family, recipient, amount });
+      const result = await api<{ signature: string }>({ type: 'SEND_NATIVE', family, recipient, amount, accountId, chainKey: chain.key });
       window.alert(`Submitted\n${result.signature}`);
       onSent();
     } catch (reason) {
@@ -306,7 +334,7 @@ function SendDialog({ family, chain, onClose, onSent }: { family: ChainFamily; c
     }
   }
 
-  return <div className="modal-backdrop"><form className="modal" onSubmit={submit}>
+  return <div className="modal-backdrop"><form className="modal" role="dialog" aria-modal="true" aria-label="Send native asset" onSubmit={submit}>
     <h2>{confirming ? 'Confirm transfer' : `Send ${chain.symbol}`}</h2>
     {confirming ? <dl><dt>Network</dt><dd>{chain.name}</dd><dt>Recipient</dt><dd>{recipient}</dd><dt>Amount</dt><dd>{amount} {chain.symbol}</dd></dl> : <><label>Recipient<input value={recipient} onChange={(event) => setRecipient(event.target.value.trim())} required /></label><label>Amount<input type="number" min="0" step="any" value={amount} onChange={(event) => setAmount(event.target.value)} required /></label></>}
     {error && <p className="error">{error}</p>}
@@ -315,21 +343,21 @@ function SendDialog({ family, chain, onClose, onSent }: { family: ChainFamily; c
 }
 
 function SettingsView({ status, onLock, onRefresh }: { status: WalletStatus; onLock: () => void; onRefresh: () => Promise<void> }) {
-  return <section className="settings-view"><h2>Security & privacy</h2><div className="settings-list">
+  return <section className="settings-view"><div className="page-heading"><span className="eyebrow">YOUR WALLET, YOUR WAY</span><h2>Settings</h2><p>A little more personal. Just as secure.</p></div><ThemeSettings /><h3 className="group-label">Security & privacy</h3><div className="settings-list">
     <button onClick={onLock}><Lock /><span><strong>Lock wallet</strong><small>Clear decrypted keys from memory</small></span></button>
-    <div><ShieldCheck /><span><strong>Auto-lock</strong><small>Five minutes of inactivity</small></span><Check /></div>
-    <div className="disabled"><Globe2 /><span><strong>Google login & social recovery</strong><small>{socialRecoveryConfig.reason}</small></span><Lock /></div>
+    <div><ShieldCheck /><span><strong>Auto-lock</strong><small>Five minutes of inactivity</small></span><span className="status-dot" /></div>
+
     <button onClick={async () => {
       await api({ type: 'SET_ENHANCED_ASSET_DETECTION', enabled: !status.settings.enhancedAssetDetection });
       await onRefresh();
-    }}><WalletCards /><span><strong>Enhanced token detection</strong><small>{status.settings.enhancedAssetDetection ? 'On by default - public addresses may be sent to configured index services' : 'Off - only native assets are queried'}</small></span>{status.settings.enhancedAssetDetection ? <Check /> : null}</button>
+    }}><WalletCards /><span><strong>Enhanced token detection</strong><small>{status.settings.enhancedAssetDetection ? 'On by default - public addresses may be sent to configured index services' : 'Off - native assets and manually imported tokens only'}</small></span>{status.settings.enhancedAssetDetection ? <Check /> : null}</button>
     <div><Globe2 /><span><strong>Connected sites</strong><small>{status.connectedSites.length === 0 ? 'No sites currently authorized' : `${status.connectedSites.length} authorized`}</small></span></div>
     {status.connectedSites.map((site) => <button key={site.origin} onClick={async () => {
       await api({ type: 'REVOKE_PERMISSION', origin: site.origin });
       await onRefresh();
     }}><span><strong>{new URL(site.origin).hostname}</strong><small>{site.families.join(' + ').toUpperCase()} - {site.accountCount} account - {site.networkCount} network</small></span><X aria-label={`Disconnect ${new URL(site.origin).hostname}`} /></button>)}
     {status.connectedSites.length > 1 && <button className="danger-action" onClick={async () => { await api({ type: 'CLEAR_PERMISSIONS' }); await onRefresh(); }}><X /><span><strong>Disconnect all sites</strong><small>Revoke every DApp connection</small></span></button>}
-  </div></section>;
+  </div><RpcSettings status={status} onRefresh={onRefresh} /><RecoverySettings onRefresh={onRefresh} /></section>;
 }
 
 createRoot(document.getElementById('root')!).render(<Popup />);

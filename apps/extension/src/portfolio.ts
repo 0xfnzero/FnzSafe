@@ -13,7 +13,6 @@ const blockscoutBaseUrls: Record<number, string> = {
   137: 'https://polygon.blockscout.com',
   8453: 'https://base.blockscout.com',
   42161: 'https://arbitrum.blockscout.com',
-  4663: 'https://explorer.mainnet.chain.robinhood.com',
 };
 
 const defiLlamaNamespaces: Record<number, string> = {
@@ -170,6 +169,7 @@ export async function discoverEvmTokens(
 ): Promise<PortfolioAsset[]> {
   if (chain.family !== 'evm' || !chain.chainId || !EVM_ADDRESS.test(walletAddress)) return [];
   const baseUrl = blockscoutBaseUrls[chain.chainId];
+  if (chain.chainId === 4663) throw new Error('Robinhood automatic token discovery is currently unavailable. Add known ERC-20 contracts manually to query your RPC.');
   if (!baseUrl) throw new Error(`Automatic token discovery is unavailable for ${chain.name}`);
   const data = await fetchJson(
     `${baseUrl}/api/v2/addresses/${encodeURIComponent(walletAddress)}/token-balances`,
