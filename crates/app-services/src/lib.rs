@@ -2068,6 +2068,10 @@ pub fn create_wallet(req: CreateWalletRequest) -> AppServiceResult<WalletKeystor
     })
 }
 
+pub fn evm_validate_primary_rpc(chain: EvmChainConfig) -> AppServiceResult<()> {
+    evm::validate_primary_rpc_chain_id(&chain.into()).map_err(map_evm_error)
+}
+
 pub fn evm_builtin_chains() -> Vec<EvmChainConfig> {
     evm::builtin_chains().into_iter().map(Into::into).collect()
 }

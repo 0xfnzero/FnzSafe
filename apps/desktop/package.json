@@ -1,6 +1,6 @@
 {
   "name": "@fnzero/safe",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "engines": {
     "node": ">=22 <25"
@@ -29,7 +29,8 @@
     "predesktop:dev": "node scripts/kill-dev-processes.cjs && node scripts/refresh-desktop-icons.cjs && npm run prepare:ai-runtime",
     "desktop:dev": "node scripts/desktop-dev.cjs",
     "desktop:build": "npm run tauri -- build",
-    "test:safe-abi-reference": "node --experimental-strip-types --test src/lib/safeAbi.reference.test.mjs"
+    "test:safe-abi-reference": "node --experimental-strip-types --test src/lib/safeAbi.reference.test.mjs",
+    "test:rpc-settings": "node scripts/test-rpc-settings.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.3.0",

@@ -2092,6 +2092,13 @@ fn builtin_rpc_fallbacks(chain_id: u64) -> &'static [&'static str] {
 fn rpc_candidates(chain: &EvmChainConfig) -> Vec<&str> {
     let mut candidates = Vec::with_capacity(1 + builtin_rpc_fallbacks(chain.chain_id).len());
     candidates.push(chain.rpc_url.as_str());
+    // A user-selected endpoint must not silently leak requests to public RPCs.
+    let is_default = builtin_chains()
+        .iter()
+        .any(|builtin| builtin.chain_id == chain.chain_id && builtin.rpc_url == chain.rpc_url);
+    if !is_default {
+        return candidates;
+    }
     for fallback in builtin_rpc_fallbacks(chain.chain_id) {
         if !candidates.iter().any(|candidate| candidate == fallback) {
             candidates.push(fallback);
@@ -2149,6 +2156,13 @@ fn rpc_call_candidates(
         }
     }
     Err(last_error)
+}
+
+/// Validate the selected endpoint itself, without any fallback masking a bad URL.
+pub fn validate_primary_rpc_chain_id(chain: &EvmChainConfig) -> EvmResult<()> {
+    validate_chain(chain)?;
+    let reported = rpc_call_url(&chain.rpc_url, "eth_chainId", serde_json::json!([]))?;
+    validate_reported_chain_id(chain.chain_id, &reported)
 }
 
 pub fn validate_rpc_chain_id(chain: &EvmChainConfig) -> EvmResult<()> {
@@ -4092,6 +4106,39 @@ mod tests {
             }
         });
         (format!("http://{address}"), handle)
+    }
+
+    #[test]
+    fn custom_rpc_does_not_fall_back_to_public_endpoints() {
+        let mut config = builtin_chains()
+            .into_iter()
+            .find(|c| c.chain_id == 1)
+            .unwrap();
+        config.rpc_url = "https://private.example/rpc?apikey=fixture".into();
+        assert_eq!(rpc_candidates(&config), vec![config.rpc_url.as_str()]);
+    }
+
+    #[test]
+    fn primary_rpc_validation_rejects_wrong_chain_without_fallback() {
+        let (url, server) = spawn_rpc_server(1);
+        let mut config = builtin_chains()
+            .into_iter()
+            .find(|c| c.chain_id == 1)
+            .unwrap();
+        config.rpc_url = url;
+        assert!(matches!(
+            validate_primary_rpc_chain_id(&config),
+            Err(EvmServiceError::InvalidChainId)
+        ));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn primary_rpc_validation_accepts_matching_chain() {
+        let (url, server) = spawn_rpc_server(1);
+        let config = chain(1337, "Local", "ETH", &url, None, true);
+        validate_primary_rpc_chain_id(&config).unwrap();
+        server.join().unwrap();
     }
 
     #[test]

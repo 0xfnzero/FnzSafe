@@ -1306,7 +1306,16 @@
       "deleteWallet": "删除钱包",
       "deleteWalletConfirm": "确定要删除钱包“{name}”吗？本地保存的 keystore 记录会被移除，请确保你已经备份。",
       "deleteWalletSuccess": "钱包已删除",
-      "deleteWalletFailed": "删除钱包失败"
+      "deleteWalletFailed": "删除钱包失败",
+      "evmRpcLabel": "RPC 节点",
+      "evmRpcHint": "使用默认节点，或填写服务商的 HTTPS 地址（本机节点允许 HTTP）。保存前会校验链 ID，自定义节点不会自动回退到公共节点。",
+      "evmRpcShow": "显示地址",
+      "evmRpcHide": "隐藏地址",
+      "evmRpcSave": "验证并保存",
+      "evmRpcReset": "恢复默认 RPC",
+      "evmRpcChecking": "正在验证网络…",
+      "evmRpcSaved": "RPC 已保存，余额和交易预览将使用所选节点。",
+      "evmRpcFailed": "无法验证 RPC，请检查地址、API key 和链 ID；仍保留此前的节点配置。"
     },
     "create-plain": {
       "title": "创建明文私钥",

@@ -4167,6 +4167,7 @@ async fn main() -> anyhow::Result<()> {
             post(multichain_derive_account),
         )
         .route("/api/evm/chains", get(evm_chains))
+        .route("/api/evm/rpc/validate", post(evm_validate_rpc))
         .route("/api/evm/safe", post(evm_safe_request))
         .route("/api/evm/safe/", post(evm_safe_request))
         .route("/api/evm/chains/", get(evm_chains))
@@ -4702,6 +4703,13 @@ mod password_security_tests {
         assert!(!object.contains_key("api_token"));
         assert!(!value.to_string().contains("api_token"));
     }
+}
+
+async fn evm_validate_rpc(
+    Json(chain): Json<app_services::EvmChainConfig>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    run_app_service_task(move || app_services::evm_validate_primary_rpc(chain)).await?;
+    Ok(Json(json!({ "valid": true })))
 }
 
 async fn evm_chains() -> Json<Vec<app_services::EvmChainConfig>> {

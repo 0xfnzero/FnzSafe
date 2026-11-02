@@ -1306,7 +1306,16 @@
       "rpcInvalid": "Enter an RPC name and a valid http/https URL",
       "rpcAdded": "RPC added and selected",
       "rpcRemoved": "RPC removed",
-      "rpcSelected": "Switched to the existing RPC"
+      "rpcSelected": "Switched to the existing RPC",
+      "evmRpcLabel": "RPC endpoint",
+      "evmRpcHint": "Use the default endpoint or your provider’s HTTPS URL (HTTP is allowed for localhost). FnzSafe checks the chain ID before saving. Custom endpoints do not fall back to public providers.",
+      "evmRpcShow": "Show URL",
+      "evmRpcHide": "Hide URL",
+      "evmRpcSave": "Verify and save",
+      "evmRpcReset": "Restore default RPC",
+      "evmRpcChecking": "Checking network…",
+      "evmRpcSaved": "RPC saved. Balances and transaction previews will use the selected endpoint.",
+      "evmRpcFailed": "Unable to validate this RPC. Check the URL, API key, and chain ID; the previous endpoint is still selected."
     },
     "create-plain": {
       "title": "Create Plain Private Key",

@@ -1,5 +1,6 @@
 "use client";
 
+import { EvmRpcEditor } from "@/components/EvmRpcEditor";
 import { NetworkEnvironmentSelector } from "@/components/NetworkEnvironmentSelector";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
@@ -4207,6 +4208,7 @@ export default function Home() {
   const evmPreviewRequestIdRef = useRef(0);
   const walletListRequestIdRef = useRef(0);
   const [evmChains, setEvmChains] = useState<DesktopEvmChainConfig[]>([]);
+  const [evmBuiltinChains, setEvmBuiltinChains] = useState<DesktopEvmChainConfig[]>([]);
   const [evmCustomChainIds, setEvmCustomChainIds] = useState<number[]>([]);
   const [evmChainId, setEvmChainId] = useState("");
   const [evmWallet, setEvmWallet] = useState<DesktopEvmWalletSummary | null>(null);
@@ -4390,6 +4392,7 @@ export default function Home() {
     if (!response.ok || !Array.isArray(data)) {
       throw new Error(data?.error || "Failed to load chains");
     }
+    setEvmBuiltinChains(data as DesktopEvmChainConfig[]);
     const merged = new Map<number, DesktopEvmChainConfig>();
     for (const chain of data as DesktopEvmChainConfig[]) {
       merged.set(chain.chain_id, chain);
@@ -4481,6 +4484,29 @@ export default function Home() {
     setEvmNewChain({ chainId: "", name: "", nativeSymbol: "", rpcUrl: "", explorerUrl: "", testnet: true });
     setEvmCustomChainEditorOpen(false);
     setEvmAssets(null);
+  };
+
+  const saveDesktopEvmRpc = async (url: string) => {
+    if (!activeEvmChain) throw new Error("Select a network");
+    const nextChain = normalizeStoredEvmChain({ ...activeEvmChain, rpc_url: url });
+    if (!nextChain) throw new Error("Invalid RPC URL");
+    const builtin = evmBuiltinChains.find((chain) => chain.chain_id === nextChain.chain_id);
+    if (nextChain.rpc_url !== builtin?.rpc_url) {
+      const response = await apiFetch("evm/rpc/validate", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(nextChain),
+      });
+      if (!response.ok) throw new Error("RPC validation failed");
+    }
+    const stored = loadStoredDesktopEvmChains().filter((chain) => chain.chain_id !== nextChain.chain_id);
+    if (!builtin || JSON.stringify(nextChain) !== JSON.stringify(normalizeStoredEvmChain(builtin))) stored.push(nextChain);
+    saveStoredDesktopEvmChains(stored);
+    setEvmCustomChainIds(stored.map((chain) => chain.chain_id));
+    setEvmChains((previous) => previous.map((chain) => chain.chain_id === nextChain.chain_id ? nextChain : chain));
+    evmAssetRequestIdRef.current += 1;
+    evmTokenLookupRequestIdRef.current += 1;
+    setEvmAssetsByChain({});
+    resetEvmChainScopedState();
+    toast.success(t("features.settings.evmRpcSaved"));
   };
 
   const removeDesktopEvmChain = () => {
@@ -23920,7 +23946,12 @@ export default function Home() {
                     </span>
                   )}
                 </div>
-                <p className="mt-2 break-all">{activeEvmChain?.rpc_url || t("features.settings.evmChainNoRpc")}</p>
+                {activeEvmChain && <EvmRpcEditor
+                  key={`${activeEvmChain.chain_id}:${activeEvmChain.rpc_url}`}
+                  rpcUrl={activeEvmChain.rpc_url}
+                  defaultRpcUrl={evmBuiltinChains.find((chain) => chain.chain_id === activeEvmChain.chain_id)?.rpc_url}
+                  onSave={saveDesktopEvmRpc}
+                />}
               </div>
               <div className="border-t border-white/10 pt-3">
                 <button
