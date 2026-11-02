@@ -74,3 +74,7 @@ apps/desktop/scripts/       Development and security checks
 ```
 
 Wallet data is stored locally in `apps/desktop/data/` by default and is ignored by Git. Passwords remain in memory only long enough to process each request and are never persisted by the frontend.
+
+## Release language
+
+Write GitHub Release titles, release notes, and annotated Git tag messages in English.
