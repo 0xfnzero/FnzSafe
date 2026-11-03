@@ -1,3 +1,5 @@
+import { unlockWithPasskey } from '../passkey';
+import type { WalletStatus } from './api';
 import { ThemeControl } from './theme';
 import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -9,10 +11,12 @@ function Approval() {
   const id = new URLSearchParams(location.search).get('id') ?? '';
   const [view, setView] = useState<ApprovalView | null>(null);
   const [password, setPassword] = useState('');
+  const [walletStatus, setWalletStatus] = useState<WalletStatus | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
+    void api<WalletStatus>({ type: 'STATUS' }).then(setWalletStatus).catch(() => undefined);
     void api<ApprovalView>({ type: 'GET_PENDING', id })
       .then(setView)
       .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
@@ -24,7 +28,8 @@ function Approval() {
     setBusy(true);
     try {
       if (approved && view?.locked) {
-        await api({ type: 'UNLOCK', password });
+        const authorization = walletStatus?.passkey ? await unlockWithPasskey(walletStatus.passkey) : password;
+        await api({ type: 'UNLOCK', password: authorization });
         setPassword('');
         setView(await api<ApprovalView>({ type: 'GET_PENDING', id }));
         setBusy(false);
@@ -45,9 +50,9 @@ function Approval() {
       <section className="approval-heading"><span className="site-icon">{new URL(view.origin).hostname.slice(0, 1).toUpperCase()}</span><h1>{view.summary}</h1><p>{new URL(view.origin).hostname}</p></section>
       <section className="request-details">{view.details.map((detail) => <div key={detail.label}><span>{detail.label}</span><strong>{detail.value}</strong></div>)}</section>
       {view.warnings.map((warning) => <div className="warning" key={warning}><AlertTriangle size={18} /><span>{warning}</span></div>)}
-      {view.locked && <label className="unlock-field"><span><Lock size={16} /> Unlock to approve</span><input autoFocus type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>}
+      {view.locked && !walletStatus?.passkey && <label className="unlock-field"><span><Lock size={16} /> Unlock to approve</span><input autoFocus type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>}
       {error && <p className="error panel-error">{error}</p>}
-      <footer className="approval-actions"><button disabled={busy} onClick={() => void decide(false)}>Reject</button><button className="primary" disabled={busy || view.blocking || (view.locked && !password)} onClick={() => void decide(true)}>{busy ? 'Processing...' : view.blocking ? 'Blocked' : view.locked ? 'Unlock & review' : 'Approve'}</button></footer>
+      <footer className="approval-actions"><button disabled={busy} onClick={() => void decide(false)}>Reject</button><button className="primary" disabled={busy || view.blocking || (view.locked && !walletStatus?.passkey && !password)} onClick={() => void decide(true)}>{busy ? 'Processing...' : view.blocking ? 'Blocked' : view.locked ? walletStatus?.passkey ? 'Passkey & review' : 'Unlock & review' : 'Approve'}</button></footer>
     </>}
   </main>;
 }

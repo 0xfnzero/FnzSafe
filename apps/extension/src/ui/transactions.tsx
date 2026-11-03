@@ -2,10 +2,12 @@ import { ArrowUpRight, History, ShieldCheck } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import type { PreparedTransaction } from '../evm-transfers';
 import { api } from './api';
+import { useDialogFocus } from './dialog-focus';
 export interface TransactionReview { id: string; kind: string; network: string; chainId: number; transaction?: PreparedTransaction; details: Record<string, unknown> }
 export function ReviewDialog({ review, onClose, onDone }: { review: TransactionReview; onClose: () => void; onDone: (result: { hash?: string; proposal?: unknown; address?: string }) => Promise<void> | void }) {
   const [checked, setChecked] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState('');
-  return <div className="modal-backdrop"><form className="modal transaction-review" role="dialog" aria-modal="true" aria-label="Review transaction" onSubmit={async e => {
+  const ref = useDialogFocus<HTMLFormElement>(() => { if (!busy) onClose(); });
+  return <div className="modal-backdrop"><form ref={ref} className="modal transaction-review" role="dialog" aria-modal="true" aria-label="Review transaction" onSubmit={async e => {
     e.preventDefault(); if (!checked) return; setBusy(true); setError('');
     try { const result = await api<{ hash?: string; proposal?: unknown; address?: string }>({ type: 'EXECUTE_REVIEW', id: review.id }); await onDone(result); }
     catch (e) { setError(e instanceof Error ? e.message : 'Transaction failed'); }
@@ -43,14 +45,15 @@ export function ActivityView({ family, context }: { family: string; context: str
     }}>Check receipt</button></article>)}
   </section>;
 }
-export function EvmSendDialog({ tokens, nativeSymbol, onClose, onSent }: { tokens: Array<{ address?: string; symbol: string; native: boolean }>; nativeSymbol: string; onClose: () => void; onSent: () => void }) {
-  const [token, setToken] = useState(''), [recipient, setRecipient] = useState(''), [amount, setAmount] = useState('');
+export function EvmSendDialog({ initialToken, tokens, nativeSymbol, onClose, onSent }: { initialToken?: string; tokens: Array<{ address?: string; symbol: string; native: boolean }>; nativeSymbol: string; onClose: () => void; onSent: () => void }) {
+  const [token, setToken] = useState(initialToken ?? ''), [recipient, setRecipient] = useState(''), [amount, setAmount] = useState('');
   const [review, setReview] = useState<TransactionReview | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState('');
+  const ref = useDialogFocus<HTMLFormElement>(() => { if (!busy) onClose(); }, !review);
   if (review) return <ReviewDialog review={review} onClose={() => setReview(null)} onDone={onSent} />;
-  return <div className="modal-backdrop"><form className="modal" role="dialog" aria-modal="true" aria-label="Send asset" onSubmit={async e => {
+  return <div className="modal-backdrop"><form ref={ref} className="modal" role="dialog" aria-modal="true" aria-label="Send asset" onSubmit={async e => {
     e.preventDefault(); setBusy(true); setError('');
     try { setReview(await api({ type: 'PREPARE_TRANSFER', token, recipient, amount })); }
     catch (e) { setError(e instanceof Error ? e.message : 'Transfer preview failed'); }
     finally { setBusy(false); }
-  }}><h2>Send asset</h2><label>Asset<select value={token} onChange={e => setToken(e.target.value)}><option value="">{nativeSymbol} (native)</option>{tokens.filter(t => !t.native && t.address).map(t => <option key={t.address} value={t.address}>{t.symbol} · {t.address}</option>)}</select></label><label>Recipient<input value={recipient} onChange={e => setRecipient(e.target.value.trim())} required /></label><label>Amount<input inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)} required /></label>{error && <p className="error">{error}</p>}<div className="modal-actions"><button type="button" onClick={onClose}>Cancel</button><button className="primary" disabled={busy}>{busy ? 'Simulating...' : 'Preview transfer'}</button></div></form></div>;
+  }}><h2>Send asset</h2><label>Asset<select value={token} onChange={e => setToken(e.target.value)}><option value="">{nativeSymbol} (native)</option>{tokens.filter(t => !t.native && t.address).map(t => <option key={t.address} value={t.address}>{t.symbol} · {t.address}</option>)}</select></label><label>Recipient<input value={recipient} onChange={e => setRecipient(e.target.value.trim())} required /></label><label>Amount<input inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)} required /></label>{error && <p className="error">{error}</p>}<div className="modal-actions"><button type="button" disabled={busy} onClick={onClose}>Cancel</button><button className="primary" disabled={busy}>{busy ? 'Simulating...' : 'Preview transfer'}</button></div></form></div>;
 }

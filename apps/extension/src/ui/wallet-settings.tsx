@@ -1,3 +1,4 @@
+import { unlockWithPasskey } from '../passkey';
 import { useEffect, useState } from 'react';
 import { api, type WalletStatus } from './api';
 import type { WalletImport } from '../import-wallet';
@@ -28,31 +29,35 @@ export function ImportFields({ value, onChange }: { value: WalletImport; onChang
     {error && <p className="error">{error}</p>}
   </>;
 }
-export function RecoverySettings({ onRefresh }: { onRefresh: () => Promise<void> }) {
+export function RecoverySettings({ status, onRefresh }: { status: WalletStatus; onRefresh: () => Promise<void> }) {
   const [mode, setMode] = useState<'import' | 'export' | null>(null);
   const [value, setValue] = useState(emptyImport);
   const [password, setPassword] = useState('');
+  const [backupPassword, setBackupPassword] = useState('');
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   async function submit(e: React.FormEvent) {
     e.preventDefault(); setBusy(true); setError('');
     try {
-      if (mode === 'import') { await api({ type: 'IMPORT_ACCOUNTS', password, import: value }); await onRefresh(); }
+      const authorization = status.passkey ? await unlockWithPasskey(status.passkey) : password;
+      if (mode === 'import') { await api({ type: 'IMPORT_ACCOUNTS', password: authorization, import: value }); await onRefresh(); }
       else {
-        const backup = await api({ type: 'EXPORT_BACKUP', password });
+        const backup = await api({ type: 'EXPORT_BACKUP', password: authorization, backupPassword });
         const url = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' }));
         const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'fnzsafe-extension-backup.json'; anchor.click();
         setTimeout(() => URL.revokeObjectURL(url), 10000);
       }
       setMode(null); setValue(emptyImport());
     } catch (e) { setError(e instanceof Error ? e.message : 'Wallet operation failed'); }
-    finally { setBusy(false); setPassword(''); }
+    finally { setBusy(false); setPassword(''); setBackupPassword(''); }
   }
   return <section className="settings-panel"><h3>Recovery & backup</h3>
     {!mode ? <div className="modal-actions"><button onClick={() => setMode('import')}>Import accounts</button><button onClick={() => setMode('export')}>Export encrypted backup</button></div> :
       <form onSubmit={submit}>
         {mode === 'import' && <ImportFields value={value} onChange={setValue} />}
         {mode === 'export' && <p>This backup includes every imported account. Keep its wallet password separately.</p>}
-        <label>Current wallet password<input type="password" value={password} onChange={e => setPassword(e.target.value)} required autoComplete="current-password" /></label>
+        {!status.passkey && <label>Current wallet password<input type="password" value={password} onChange={e => setPassword(e.target.value)} required autoComplete="current-password" /></label>}
+        {status.passkey && mode === 'export' && <label>Backup file password<input type="password" minLength={10} value={backupPassword} onChange={e => setBackupPassword(e.target.value)} required autoComplete="new-password" /><span className="fine-print">Choose a separate password so this file can be restored without your Passkey.</span></label>}
+        {status.passkey && <p className="fine-print">Your Passkey will be verified before this operation.</p>}
         {error && <p className="error">{error}</p>}
         <div className="modal-actions"><button type="button" disabled={busy} onClick={() => { setMode(null); setValue(emptyImport()); setPassword(''); }}>Cancel</button><button disabled={busy}>{busy ? 'Working...' : mode === 'import' ? 'Import accounts' : 'Download backup'}</button></div>
       </form>}

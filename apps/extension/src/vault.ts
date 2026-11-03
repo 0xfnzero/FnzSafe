@@ -174,7 +174,7 @@ export function createInitialVault(importedMnemonic?: string): VaultPayload {
   }
 }
 
-function validateVaultPayload(payload: VaultPayload): void {
+export function validateVaultPayload(payload: VaultPayload): void {
   if (!payload || typeof payload !== 'object' || typeof payload.recoveryMnemonic !== 'string' ||
       payload.recoveryMnemonic.length > 512 || (payload.recoveryMnemonic !== '' && !validateMnemonic(payload.recoveryMnemonic, wordlist)) ||
       !Array.isArray(payload.accounts) || payload.accounts.length === 0 || payload.accounts.length > MAX_ACCOUNTS ||

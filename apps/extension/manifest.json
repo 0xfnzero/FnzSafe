@@ -3,10 +3,11 @@
   "name": "FnzSafe Wallet",
   "description": "Self-custody multichain wallet for EVM and Solana",
   "version": "0.2.0",
-  "minimum_chrome_version": "111",
+  "minimum_chrome_version": "114",
   "permissions": [
     "storage",
-    "alarms"
+    "alarms",
+    "sidePanel"
   ],
   "host_permissions": [
     "https://*/*",
@@ -18,7 +19,6 @@
     "type": "module"
   },
   "action": {
-    "default_popup": "popup.html",
     "default_title": "FnzSafe Wallet",
     "default_icon": {
       "32": "icons/32.png",
@@ -56,5 +56,8 @@
   ],
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+  },
+  "side_panel": {
+    "default_path": "popup.html"
   }
 }

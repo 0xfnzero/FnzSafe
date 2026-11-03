@@ -1,3 +1,4 @@
+import type { PasskeyConfig } from '../passkey';
 import type { ChainInfo } from '../types';
 
 export interface PublicAccount {
@@ -9,6 +10,9 @@ export interface PublicAccount {
 
 export interface WalletStatus {
   initialized: boolean;
+  passwordProtected: boolean;
+  passkey: PasskeyConfig | null;
+  backupConfirmed: boolean;
   locked: boolean;
   accounts: PublicAccount[];
   settings: {

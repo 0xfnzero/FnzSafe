@@ -11,17 +11,27 @@ npm test
 npm run build
 ```
 
-Load `apps/extension/dist` as an unpacked extension from `chrome://extensions`.
+Load `apps/extension/dist` as an unpacked extension from `chrome://extensions`. Chrome 114 or newer is required. Click the toolbar icon to open the wallet in the side panel.
 
 ## Appearance
 
-Choose **Light**, **Dark** or **System** from the header or Settings → Appearance. The choice is stored locally and shared by the wallet and DApp confirmation windows. System follows the OS appearance. The refreshed interface includes an asset summary card, token icons, balance visibility control, transaction status badges, a receive-address sheet, and consistent multisig/settings forms.
+Choose **Light**, **Dark** or **System** from the header or Settings → Appearance. The choice is stored locally and shared by the wallet and DApp confirmation windows. System follows the OS appearance. Both palettes distinguish the page background, balance card, asset panel, controls and selected navigation. Searchable account/network panels, local receive QR codes, token details, token-specific sending, copy feedback and keyboard focus handling are included.
+
+## First open and wallet protection
+
+First open creates one recovery-phrase wallet locally and opens the asset screen, with derived accounts for the supported chain families. Reopening or restarting the extension preserves it. Existing encrypted wallets remain locked and are never replaced.
+
+Before protection is configured, the default wallet is stored in IndexedDB as AES-GCM ciphertext alongside a nonextractable browser CryptoKey. This is browser storage, **not password or Passkey protection**. Signing is blocked until protection is configured. Protect and back up before receiving funds; clearing the extension's storage can permanently remove an unbacked-up wallet.
+
+Choose **Protect wallet** to set a password or a Passkey. Passkey mode requires a WebAuthn provider supporting the PRF extension: a verified assertion must return a 32-byte PRF output, which encrypts the vault. A credential ID or public assertion is never used as an encryption key. Unsupported providers fail with a password alternative. Enrollment and unlock require user verification; the user confirmed successful real-browser enrollment, including the required PRF verification. A separate lock/unlock acceptance check is pending.
+
+Passkeys are scoped to the extension ID. Keep the installation path stable for unpacked extensions and retain an offline recovery phrase. Passkey sync alone is not a wallet backup. Passkey-protected encrypted exports require a separate backup-file password so they can be restored without the original credential. Imported private keys require the encrypted export; the original phrase does not recover separately imported keys.
 
 ## Recovery, networks and assets
 
 - Restore a plaintext BIP-39 phrase or import an individual EVM/TRON hex key, Solana base58 key / seed hex / JSON key array, or Bitcoin mainnet compressed WIF / hex key. Bitcoin derives a native SegWit address.
 - Restore extension encrypted backups, standard Web3 keystore v3, and supported FnzSafe desktop password-only key/mnemonic backups. Desktop custom derivation paths are preserved. Hardware-backed, social/MPC and other desktop backup schemes are not supported.
-- Settings can append accounts to the existing encrypted vault and export an encrypted backup after password verification. Appending accounts preserves the original recovery phrase; keep the encrypted backup to recover separately imported keys.
+- Settings can append accounts to the existing encrypted vault and export an encrypted backup after password or Passkey verification. Appending accounts preserves the original recovery phrase; keep the encrypted backup to recover separately imported keys.
 - Configure HTTPS RPC endpoints per EVM network and Solana cluster, with chain ID / genesis verification. HTTP is allowed only for localhost testing. Reset restores the built-in endpoint. Custom endpoints do not silently fall back to another provider.
 - Add ERC-20 contracts directly, read decimals and balances through the selected RPC, preview native/ERC-20 transfers, and check local submission receipts in Activity.
 - Robinhood automatic token discovery remains unavailable (Issue #8). Custom RPC plus manual token import is a workaround, not a repair of the external indexer.
@@ -34,7 +44,7 @@ Only verified canonical Safe deployments, EIP-712 EOA signatures and CALL operat
 
 ## Installation
 
-The 0.2.0 visual redesign is a release candidate awaiting browser acceptance testing. Build from source for now; the archive instructions below apply after publication.
+Version 0.2.0 is an extension preview release. Passkey enrollment has been confirmed by the user; a separate lock/unlock acceptance check is pending. The password path remains available.
 
 Download and extract `FnzSafe-extension-0.2.0.zip` from the `extension-v0.2.0` GitHub Release. In Chrome, open `chrome://extensions`, enable Developer mode and choose **Load unpacked**, then select the extracted directory containing `manifest.json`. Keep that directory in place. This is an unpacked developer distribution, not a Chrome Web Store listing; updates are manual.
 
@@ -42,7 +52,7 @@ For local development, load `dist` after building. Use a separate Chrome profile
 
 ## Reproducible validation
 
-`npm test` covers RPC validation and redaction, plaintext recovery, encrypted backup formats, Safe signatures/proposals, vault migration, DApp permission/security boundaries and serialized background imports. The desktop compatibility fixtures were produced independently by the Rust implementation:
+`npm test` covers RPC validation and redaction, plaintext recovery, encrypted backup formats, Safe signatures/proposals, vault migration, default-wallet persistence and protection migration, mocked Passkey PRF validation, DApp permission/security boundaries and serialized background imports. The current suite contains 53 passing tests. The desktop compatibility fixtures were produced independently by the Rust implementation:
 
 ```bash
 # Run from the repository root (requires the usual Rust/OpenSSL build dependencies).
@@ -62,11 +72,11 @@ SAFE_ARTIFACTS_DIR=/absolute/path/to/package/build/artifacts/contracts \
 
 The test starts an ephemeral local chain, installs verified Safe runtime code, creates/funds a Safe, executes a 2/2 transaction, checks its receipt, rejects replay/code tampering and transfers a six-decimal ERC-20. It requires no public-chain funds. `test/fixtures/TestToken.json` is compiled from the adjacent Solidity source with solc 0.8.24. For manual UI testing, run `scripts/local-test-chain.mjs` with the same environment variables; it serves a disposable RPC at `127.0.0.1:18545` and the test DApp at `127.0.0.1:18777`. Stop it with Ctrl-C.
 
-Before the visual redesign, release validation also exercised plaintext recovery, account import, persisted custom RPC, ERC-20 sending, Safe creation/proposal/signature merge/execution, DApp connect/sign/send/reject, Solana message signing and locked-wallet re-review in Chrome for Testing. The new visual design and theme persistence still require browser acceptance testing. Public-network Solana transfers and every supported EVM network were not exercised end-to-end.
+Before the visual redesign, release validation also exercised plaintext recovery, account import, persisted custom RPC, ERC-20 sending, Safe creation/proposal/signature merge/execution, DApp connect/sign/send/reject, Solana message signing and locked-wallet re-review in Chrome for Testing. The final design was checked in Chrome and Chrome for Testing: light/dark themes and persistence, side-panel layout, first-open wallet creation and restart persistence, account/network search and switching, receive QR/copy feedback, and token-specific send selection. Passkey/password protection choices were inspected, and the user subsequently confirmed successful Passkey enrollment. The agent did not enter credentials or perform the user verification. Public-network Solana transfers and every supported EVM network were not exercised end-to-end.
 
 ## Security model
 
-- The vault is encrypted with PBKDF2-SHA-256 (600,000 iterations) and AES-256-GCM before storage.
+- Protected vaults use PBKDF2-SHA-256 (600,000 iterations) and AES-256-GCM. Password mode derives from the chosen password; Passkey mode derives from the PRF output. The initial browser-bound wallet has the separate storage boundary described above.
 - Decrypted keys exist only in the Manifest V3 service worker and are cleared after five minutes of inactivity, explicit lock, or worker suspension. An open wallet/approval UI checks session status without extending the inactivity timeout.
 - Page scripts never receive private keys or the wallet password.
 - A content-script bridge validates top-level HTTPS/localhost origins before forwarding provider requests.
@@ -77,7 +87,7 @@ Before the visual redesign, release validation also exercised plaintext recovery
 - Solana transactions are signer-bound, decoded to show fee payer and programs, and simulated before broadcast.
 - Provider messages are size bounded and confirmation queues are rate limited per origin.
 - Arbitrary HTTPS dApps are supported, so host access is intentionally broad; the injected page bridge contains no key or password access.
-- Enhanced token detection is enabled by default. EVM uses supported address indexers, Solana queries SPL Token and Token-2022 accounts, and USD prices use chain/address keys rather than token symbols.
+- Enhanced token detection is off for automatically created wallets; older/imported vault settings are preserved. EVM uses supported address indexers, Solana queries SPL Token and Token-2022 accounts, and USD prices use chain/address keys rather than token symbols.
 - Google login and social recovery are intentionally disabled. They may only be enabled with OAuth authorization-code PKCE, strict redirect allowlisting, an audited MPC/threshold-key provider, and a documented recovery policy. OAuth identity must never be used as a private key or bypass local transaction confirmation.
 
 This implementation follows public wallet interaction conventions such as EIP-1193 and EIP-6963. It does not copy MetaMask source code, branding, or visual assets.

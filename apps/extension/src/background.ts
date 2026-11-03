@@ -1,3 +1,5 @@
+import { validatePasskeyConfig } from './passkey';
+import { ensureDeviceWallet, hasDeviceWallet, loadDeviceWallet, removeDeviceWallet } from './device-vault';
 import { displaySignedMessage } from './message-preview';
 import { tokenAsset, transferRequest, prepareTransaction, signPrepared, sendPrepared, type PreparedTransaction } from './evm-transfers';
 import { safeAccount, parseProposal, validateProposal, propose, signProposal, mergeProposals, prepareSafeCreation, prepareSafeExecution, safeReceipt, type SafeProposal } from './safe';
@@ -90,6 +92,8 @@ interface PendingRequest {
 }
 
 let contextRevision = 0;
+let deviceMode = false;
+void chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => undefined);
 let unlockedVault: UnlockedVaultSession | null = null;
 const pending = new Map<string, PendingRequest>();
 const approvalGuard = new ApprovalRequestGuard();
@@ -200,12 +204,17 @@ async function decryptUnlockedVault(): Promise<VaultPayload> {
 async function unlockVault(password: string): Promise<void> {
   const stored = await encryptedVault();
   if (!stored) throw new Error('Create a FnzSafe wallet first');
+  const generation = contextRevision;
   const { payload, migrated } = await decryptVaultWithMigration(stored, password);
   if (migrated) {
     await chrome.storage.local.set({ [VAULT_KEY]: await encryptVault(payload, password) });
   }
   payload.recoveryMnemonic = '';
-  unlockedVault = await protectVaultInMemory(payload);
+  const session = await protectVaultInMemory(payload);
+  if (generation !== contextRevision) { destroyVaultSession(session); throw new Error('Wallet changed during unlock'); }
+  if (unlockedVault) destroyVaultSession(unlockedVault);
+  unlockedVault = session;
+  deviceMode = false;
   touchSession();
 }
 
@@ -214,6 +223,7 @@ async function activeAccount(
   includePrivateKey = false,
 ): Promise<VaultAccount> {
   if (!unlockedVault) throw new Error('Wallet is locked');
+  if (includePrivateKey && deviceMode) throw new Error('Protect your wallet with a Passkey or password before signing. Open Protect wallet in FnzSafe.');
   const state = await settings();
   const accounts = includePrivateKey
     ? (await decryptUnlockedVault()).accounts
@@ -257,6 +267,9 @@ async function approvalView(item: PendingRequest): Promise<ApprovalView> {
   if (selected) details.push({ label: 'Signing account', value: selected.address });
   const warnings: string[] = [];
   let blocking = false;
+  if (deviceMode && !['eth_requestAccounts', 'solana_connect', 'wallet_switchEthereumChain', 'wallet_addEthereumChain'].includes(request.method)) {
+    blocking = true; warnings.push('Protect your wallet with a Passkey or password in FnzSafe before signing or sending transactions.');
+  }
   let summary = 'Allow this site to connect to FnzSafe?';
   if (request.method.includes('sign')) {
     summary = 'Review and sign this request';
@@ -814,7 +827,7 @@ chrome.runtime.onConnect.addListener((port) => {
 });
 
 let uiMutation: Promise<unknown> = Promise.resolve();
-const SERIAL_UI_ACTIONS = new Set(['CREATE_VAULT', 'IMPORT_ACCOUNTS', 'IMPORT_TOKEN', 'SET_RPC', 'SET_NETWORK', 'SET_ACTIVE_ACCOUNT', 'SET_ENHANCED_ASSET_DETECTION', 'SAFE_IMPORT', 'SAFE_PROPOSE', 'SAFE_ACCOUNT', 'EXECUTE_REVIEW', 'REFRESH_ACTIVITY', 'SEND_NATIVE']);
+const SERIAL_UI_ACTIONS = new Set(['OPEN_WALLET', 'PROTECT_DEFAULT_WALLET', 'CONFIRM_BACKUP', 'CREATE_VAULT', 'IMPORT_ACCOUNTS', 'IMPORT_TOKEN', 'SET_RPC', 'SET_NETWORK', 'SET_ACTIVE_ACCOUNT', 'SET_ENHANCED_ASSET_DETECTION', 'SAFE_IMPORT', 'SAFE_PROPOSE', 'SAFE_ACCOUNT', 'EXECUTE_REVIEW', 'REFRESH_ACTIVITY', 'SEND_NATIVE']);
 
 chrome.runtime.onMessage.addListener((message: Record<string, unknown>, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id || !sender.url || ![chrome.runtime.getURL('popup.html'), chrome.runtime.getURL('approval.html')].includes(sender.url.split('?')[0])) {
@@ -963,13 +976,62 @@ async function handleUiMessage(message: Record<string, unknown>): Promise<unknow
       } finally { provider.destroy(); }
     }
 
+    case 'OPEN_WALLET': {
+      if (await encryptedVault()) return true;
+      const generation = contextRevision;
+      const payload = await ensureDeviceWallet();
+      const savedSettings = (await chrome.storage.local.get(SETTINGS_KEY))[SETTINGS_KEY];
+      if (!savedSettings) await chrome.storage.local.set({ [SETTINGS_KEY]: {
+        activeAccountId: payload.selectedAccountId, evmChainId: payload.selectedEvmChainId,
+        solanaCluster: payload.selectedSolanaCluster, enhancedAssetDetection: false,
+      } });
+      payload.recoveryMnemonic = '';
+      const session = await protectVaultInMemory(payload);
+      if (generation !== contextRevision) { destroyVaultSession(session); throw new Error('Wallet changed while opening'); }
+      if (unlockedVault) destroyVaultSession(unlockedVault);
+      unlockedVault = session; deviceMode = true; touchSession();
+      return true;
+    }
+    case 'PROTECT_DEFAULT_WALLET': {
+      if (!deviceMode || !unlockedVault || await encryptedVault()) throw new Error('Default wallet is not available');
+      const generation = contextRevision;
+      const payload = await loadDeviceWallet();
+      if (!payload) throw new Error('Local wallet could not be recovered');
+      const passkey = message.passkey ? validatePasskeyConfig(message.passkey, chrome.runtime.id) : null;
+      if (passkey && !/^[a-f0-9]{64}$/.test(String(message.password))) throw new Error('Invalid passkey encryption secret');
+      const encrypted = await encryptVault(payload, String(message.password ?? ''));
+      if (generation !== contextRevision || !unlockedVault) throw new Error('Wallet changed during password setup');
+      // Persist the password vault first: a crash must never destroy the only copy.
+      await chrome.storage.local.set({ [VAULT_KEY]: encrypted, passkeyConfig: passkey, backupConfirmed: false });
+      deviceMode = false;
+      await removeDeviceWallet().catch(() => undefined);
+      contextRevision++; reviews.clear();
+      return true;
+    }
+    case 'GET_RECOVERY_PHRASE': {
+      if (!unlockedVault || deviceMode) throw new Error('Protect your wallet with a Passkey or password first');
+      const generation = contextRevision;
+      const stored = await encryptedVault();
+      if (!stored) throw new Error('Wallet not found');
+      const { payload } = await decryptVaultWithMigration(stored, String(message.password ?? ''));
+      if (!unlockedVault || generation !== contextRevision) throw new Error('Wallet changed during backup');
+      if (!payload.recoveryMnemonic) throw new Error('Imported private keys require an encrypted backup');
+      return payload.recoveryMnemonic;
+    }
+    case 'CONFIRM_BACKUP': {
+      if (!unlockedVault || deviceMode) throw new Error('Unlock your protected wallet first');
+      await chrome.storage.local.set({ backupConfirmed: true }); return true;
+    }
     case 'SESSION_STATUS': return { locked: unlockedVault === null };
     case 'STATUS': {
       const stored = await encryptedVault();
       const state = await settings();
       const permissions = await permissionStore();
       return {
-        initialized: stored !== null,
+        initialized: stored !== null || deviceMode || await hasDeviceWallet(),
+        passwordProtected: stored !== null,
+        passkey: (await chrome.storage.local.get('passkeyConfig')).passkeyConfig ?? null,
+        backupConfirmed: (await chrome.storage.local.get('backupConfirmed')).backupConfirmed === true,
         locked: unlockedVault === null,
         accounts: unlockedVault?.accounts ?? [],
         settings: normalizedSettings(state),
@@ -986,7 +1048,7 @@ async function handleUiMessage(message: Record<string, unknown>): Promise<unknow
       };
     }
     case 'CREATE_VAULT': {
-      if (await encryptedVault()) throw new Error('A wallet vault already exists');
+      if (await encryptedVault() || await loadDeviceWallet()) throw new Error('A wallet already exists; import accounts from Settings');
       const password = String(message.password ?? '');
       const payload = message.import ? await importWallet(message.import as WalletImport) : createInitialVault(
         typeof message.mnemonic === 'string' ? message.mnemonic : undefined,
@@ -999,6 +1061,7 @@ async function handleUiMessage(message: Record<string, unknown>): Promise<unknow
           solanaCluster: payload.selectedSolanaCluster,
           enhancedAssetDetection: true,
         } satisfies WalletSettings,
+        backupConfirmed: false,
       });
       const recoveryMnemonic = payload.recoveryMnemonic;
       payload.recoveryMnemonic = '';
@@ -1029,7 +1092,10 @@ async function handleUiMessage(message: Record<string, unknown>): Promise<unknow
       if (!unlockedVault) throw new Error('Unlock the wallet first');
       const stored = await encryptedVault();
       if (!stored) throw new Error('Wallet not found');
-      await decryptVaultWithMigration(stored, String(message.password ?? ''));
+      const { payload } = await decryptVaultWithMigration(stored, String(message.password ?? ''));
+      if ((await chrome.storage.local.get('passkeyConfig')).passkeyConfig) {
+        return encryptVault(payload, String(message.backupPassword ?? ''));
+      }
       return stored;
     }
     case 'GET_BALANCE': {
