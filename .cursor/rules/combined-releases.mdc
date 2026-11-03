@@ -1,0 +1,13 @@
+---
+description: Publish desktop and compiled browser extension together in every FnzSafe release
+alwaysApply: true
+---
+
+# Combined releases
+
+- Every FnzSafe GitHub Release must contain both the desktop installer and compiled browser extension ZIP, plus SHA-256 checksums. This applies to extension preview releases too.
+- Rebuild both clients from the release source, keep their independent version numbers, and create matching annotated tags (for example, v0.6.5 and extension-v0.3.5).
+- Do not publish a release containing only one client. Upload as a draft, verify all required assets and their remote digests, then publish.
+- Never overwrite a published tag, version or asset. State the platform/architecture and signing/notarization status accurately.
+- Update installation documentation and release notes. Source-code archives do not substitute for compiled packages.
+- Updating an unpacked Chrome installation must preserve its existing directory and extension ID; do not remove wallet data.

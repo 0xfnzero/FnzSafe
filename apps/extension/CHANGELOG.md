@@ -1,5 +1,12 @@
 # Extension changelog
 
+## 0.3.5 — 2026-11-03
+
+- Rebuild alongside desktop 0.6.5 for the combined release. Keep discovery opt-in, address-based Safe addition, and the 0.3.4 interaction fixes.
+- Desktop now also waits for an explicit Find onchain Safes action; opening the page or switching wallet/network does not scan automatically.
+
+Validation: 73 automated tests, TypeScript checking and production packaging.
+
 ## 0.3.4 — 2026-11-03
 
 - Load only locally saved Safes by default. Empty wallets no longer start chain scans or show scan errors, zero-count headings or irrelevant filters.

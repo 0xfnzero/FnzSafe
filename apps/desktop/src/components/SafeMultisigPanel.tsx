@@ -460,7 +460,7 @@ export function SafeMultisigPanel({ chains, wallets, initialChainId, initialWall
     </dialog>}
     <fieldset disabled={blocked || !storageReady || (!chain && view !== "create")} className="space-y-5" aria-busy={busy}>
       {view === "accounts" && <>
-        {wallet && <section className="safe-discovery space-y-3 rounded-2xl border border-border bg-muted/30 p-4" aria-label={t("syncAccounts")}>
+        {wallet && discovery.status !== "idle" && <section className="safe-discovery space-y-3 rounded-2xl border border-border bg-muted/30 p-4" aria-label={t("syncAccounts")}>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2 text-sm font-semibold"><RefreshCw size={17} className={discovery.status === "running" ? "animate-spin" : ""} aria-hidden="true" />{t(`discovery.${discovery.status}`)}</div>
             <div className="flex gap-2">
@@ -483,6 +483,7 @@ export function SafeMultisigPanel({ chains, wallets, initialChainId, initialWall
         <div className="flex flex-wrap items-center justify-between gap-4">
           <span className="text-sm text-muted-foreground">{t("savedLocally")} <span className="safe-count ml-2">{safes.length}</span></span>
           <div className="flex flex-wrap gap-2">
+            {wallet && discovery.status === "idle" && <button className={buttonClass} onClick={() => void discovery.start(true)}><Search size={16} />{t("syncAccounts")}</button>}
             <button className={buttonClass} onClick={() => navigate("import")}><FileJson2 size={16} />{t("import")}</button>
             <button className={buttonClass} onClick={() => navigate("load")}><ArrowDownToLine size={16} />{t("loadExisting")}</button>
             <button className={primaryClass} onClick={() => navigate("create")}><Plus size={16} />{t("create")}</button>
