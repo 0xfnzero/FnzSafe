@@ -6536,10 +6536,11 @@ export default function Home() {
       if (refresh && !data.cached) {
         lastAssetRefreshRef.current.set(walletKey, Date.now());
       }
+      if (data.sol_balance == null) throw new Error(t("features.wallet-list.assetLoadFailed"));
       const nextAssetsBase: WalletAssetsState = {
         address: data.address || wallet.public_key,
         network: currentNetwork(data.network),
-        solBalance: String(data.sol_balance ?? "0"),
+        solBalance: String(data.sol_balance),
         tokens: Array.isArray(data.tokens) ? data.tokens : [],
         loading: false,
         refreshing: false,
@@ -6578,12 +6579,12 @@ export default function Home() {
       setWalletAssets((prev) => ({
         address: wallet.public_key,
         network: effectiveNetwork,
-        solBalance: prev?.solBalance && prev.solBalance !== "--" ? prev.solBalance : "0",
-        tokens: prev?.address === wallet.public_key ? prev.tokens : [],
+        solBalance: prev?.address === wallet.public_key && prev.network === effectiveNetwork ? prev.solBalance : "--",
+        tokens: prev?.address === wallet.public_key && prev.network === effectiveNetwork ? prev.tokens : [],
         loading: false,
         refreshing: false,
-        cached: prev?.address === wallet.public_key ? prev.cached : undefined,
-        updatedAt: prev?.address === wallet.public_key ? prev.updatedAt : undefined,
+        cached: prev?.address === wallet.public_key && prev.network === effectiveNetwork ? prev.cached : undefined,
+        updatedAt: prev?.address === wallet.public_key && prev.network === effectiveNetwork ? prev.updatedAt : undefined,
         error: err instanceof Error ? err.message : "",
       }));
       return null;
