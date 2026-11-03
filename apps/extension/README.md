@@ -23,7 +23,7 @@ First open creates one recovery-phrase wallet locally and opens the asset screen
 
 Before protection is configured, the default wallet is stored in IndexedDB as AES-GCM ciphertext alongside a nonextractable browser CryptoKey. This is browser storage, **not password or Passkey protection**. Signing is blocked until protection is configured. Protect and back up before receiving funds; clearing the extension's storage can permanently remove an unbacked-up wallet.
 
-Choose **Protect wallet** to set a password or a Passkey. Passkey mode requires a WebAuthn provider supporting the PRF extension: a verified assertion must return a 32-byte PRF output, which encrypts the vault. A credential ID or public assertion is never used as an encryption key. Unsupported providers fail with a password alternative. Enrollment and unlock require user verification; the user confirmed successful real-browser enrollment, including the required PRF verification. A separate lock/unlock acceptance check is pending.
+Choose **Protect wallet** to set a password or a Passkey. Passkey mode requires a WebAuthn provider supporting the PRF extension: a verified assertion must return a 32-byte PRF output, which encrypts the vault. A credential ID or public assertion is never used as an encryption key. Unsupported providers fail with a password alternative. Enrollment and unlock require user verification; the user confirmed successful real-browser enrollment, including the required PRF verification. The user also confirmed locking and successfully unlocking the same wallet with the Passkey.
 
 Passkeys are scoped to the extension ID. Keep the installation path stable for unpacked extensions and retain an offline recovery phrase. Passkey sync alone is not a wallet backup. Passkey-protected encrypted exports require a separate backup-file password so they can be restored without the original credential. Imported private keys require the encrypted export; the original phrase does not recover separately imported keys.
 
@@ -44,7 +44,7 @@ Only verified canonical Safe deployments, EIP-712 EOA signatures and CALL operat
 
 ## Installation
 
-Version 0.2.0 is an extension preview release. Passkey enrollment has been confirmed by the user; a separate lock/unlock acceptance check is pending. The password path remains available.
+Version 0.2.0 is an extension preview release. Passkey enrollment has been confirmed by the user; the user also confirmed locking and successfully unlocking the same wallet with the Passkey. The password path remains available.
 
 Download and extract `FnzSafe-extension-0.2.0.zip` from the `extension-v0.2.0` GitHub Release. In Chrome, open `chrome://extensions`, enable Developer mode and choose **Load unpacked**, then select the extracted directory containing `manifest.json`. Keep that directory in place. This is an unpacked developer distribution, not a Chrome Web Store listing; updates are manual.
 
