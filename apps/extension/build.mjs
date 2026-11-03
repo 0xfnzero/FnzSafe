@@ -30,7 +30,10 @@ const options = {
   },
   outdir: dist,
   bundle: true,
-  format: 'esm',
+  // Manifest content scripts are classic scripts, including world: MAIN.
+  // Keep provider references lexical: top-level vars otherwise alias window.ethereum
+  // and can be replaced by another wallet after EIP-6963 discovery.
+  format: 'iife',
   target: 'chrome111',
   sourcemap: watch,
   define: {

@@ -1,5 +1,14 @@
 # Extension changelog
 
+## 0.3.1 — 2026-11-03
+
+- Isolate injected bundles from page globals. EIP-6963 announcements retain the FnzSafe provider when Phantom, MetaMask or another extension replaces a legacy global provider.
+- Validate Solana mainnet/devnet RPCs against full genesis hashes instead of truncated chain identifiers. Keep official defaults and display actionable HTTP 403/429 errors.
+- Add BNB Smart Chain Testnet (97), including reviewed DApp network switching. Reject unknown networks with error 4902 before opening a confirmation window.
+- Add production-bundle coexistence tests, full-hash/balance RPC regressions, and approved network-switch tests.
+
+Validation: 72 automated tests, TypeScript checking and a production build. Manual Chrome validation confirmed Uniswap opens FnzSafe's own approval window with other wallets installed. X404 connected a test account and switched to BNB Testnet successfully. Official Solana devnet and API-key-free PublicNode mainnet balance refreshes succeeded in a separate test wallet. The official mainnet endpoint still returned HTTP 403 for browser-origin requests; defaults remain unchanged.
+
 ## 0.3.0 — 2026-11-03
 
 - Create additional multichain wallets with one click and one mnemonic per wallet. No mandatory phrase display or backup wizard. Names increment automatically and can be edited before creation.

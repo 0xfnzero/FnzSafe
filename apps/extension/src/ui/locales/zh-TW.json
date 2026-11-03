@@ -409,5 +409,7 @@
   "This wallet uses custom derivation paths. Also save a full encrypted backup to preserve its exact accounts.": "此錢包使用自定義派生路徑。請同時保存完整加密備份，以保留準確的賬戶信息。",
   "New wallet name": "新錢包名稱",
   "A wallet with this name already exists": "已有同名錢包，請修改名稱",
-  "Wallet name is too long": "錢包名稱過長"
+  "Wallet name is too long": "錢包名稱過長",
+  "RPC access denied (HTTP 403). Set a custom RPC in Settings.": "RPC 拒絕存取（HTTP 403）。請在設定中配置自訂 RPC。",
+  "RPC rate limit reached (HTTP 429). Try again later or set a custom RPC in Settings.": "RPC 請求頻率超限（HTTP 429）。請稍後重試，或在設定中配置自訂 RPC。"
 }

@@ -3,6 +3,7 @@ import type { ChainInfo } from './types';
 export const chains: ChainInfo[] = [
   { key: 'evm:1', family: 'evm', name: 'Ethereum', symbol: 'ETH', icon: 'ethereum.svg', rpcUrl: 'https://ethereum-rpc.publicnode.com', chainId: 1, transactionSupport: true },
   { key: 'evm:56', family: 'evm', name: 'BNB Smart Chain', symbol: 'BNB', icon: 'binance-smart-chain.svg', rpcUrl: 'https://bsc-dataseed.binance.org', chainId: 56, transactionSupport: true },
+  { key: 'evm:97', family: 'evm', name: 'BNB Smart Chain Testnet', symbol: 'tBNB', icon: 'binance-smart-chain.svg', rpcUrl: 'https://data-seed-prebsc-1-s1.bnbchain.org:8545', chainId: 97, testnet: true, transactionSupport: true },
   { key: 'evm:42161', family: 'evm', name: 'Arbitrum One', symbol: 'ETH', icon: 'arbitrum-one.svg', rpcUrl: 'https://arb1.arbitrum.io/rpc', chainId: 42161, transactionSupport: true },
   { key: 'evm:10', family: 'evm', name: 'Optimism', symbol: 'ETH', icon: 'optimism.svg', rpcUrl: 'https://mainnet.optimism.io', chainId: 10, transactionSupport: true },
   { key: 'evm:137', family: 'evm', name: 'Polygon', symbol: 'POL', icon: 'polygon.svg', rpcUrl: 'https://polygon-rpc.com', chainId: 137, transactionSupport: true },
@@ -32,6 +33,9 @@ export function requestedBuiltinChain(params: unknown): ChainInfo {
   if (typeof raw !== 'string' || !/^0x[0-9a-fA-F]+$/.test(raw)) throw new Error('Requested chainId is invalid');
   const id = Number(BigInt(raw));
   if (!Number.isSafeInteger(id)) throw new Error('Requested chainId is invalid');
+  if (!chains.some(chain => chain.family === 'evm' && chain.chainId === id)) {
+    throw Object.assign(new Error(`Unsupported EVM chain ${id}`), { code: 4902 });
+  }
   return evmChain(id);
 }
 

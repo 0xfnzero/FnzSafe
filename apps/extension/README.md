@@ -1,4 +1,4 @@
-# FnzSafe Chrome Extension 0.3.0
+# FnzSafe Chrome Extension 0.3.1
 
 Manifest V3 wallet extension for EVM and Solana. Bitcoin and TRON support key recovery and address display; transaction signing and broadcasting for these families remain disabled.
 
@@ -36,6 +36,16 @@ Passkeys are scoped to the extension ID. Keep the installation path stable for u
 - Add ERC-20 contracts directly, read decimals and balances through the selected RPC, preview native/ERC-20 transfers, and check local submission receipts in Activity.
 - Robinhood automatic token discovery remains unavailable (Issue #8). Custom RPC plus manual token import is a workaround, not a repair of the external indexer.
 
+## DApp compatibility and RPC availability
+
+EVM discovery uses EIP-6963 and requests use EIP-1193; Solana discovery uses Wallet Standard. There is no DApp domain allowlist. A site must support these standards and the requested network/method. BNB Smart Chain Testnet (97) is included. Unknown EVM networks return error 4902 without opening an unusable confirmation; arbitrary DApp-supplied networks are not installed automatically.
+
+Injected bundles use an isolated IIFE scope so other extensions replacing `window.ethereum` or `window.solana` cannot redirect FnzSafe's announced provider. Regression tests execute the production bundle as a classic script with another wallet injected both before and after it.
+
+Solana validation uses the full genesis hash. Defaults remain the official mainnet and devnet endpoints. During release testing, the official mainnet endpoint returned HTTP 403 for browser/extension Origin headers, while requests without Origin and official devnet requests succeeded. This external restriction is not repaired by changing the wallet's genesis check. HTTP 403/429 errors now identify access denial/rate limiting. An explicitly configured public endpoint such as `https://solana-rpc.publicnode.com` works without an API key; public service availability and rate limits still apply. No silent fallback is used.
+
+Manual validation for 0.3.1 confirmed Uniswap opens the FnzSafe approval window alongside Phantom, MetaMask, TokenPocket and Binance Wallet. A separate test wallet connected to X404 and switched to BNB Testnet; official Solana devnet and PublicNode mainnet balances refreshed successfully. No asset-transfer transactions were submitted.
+
 ## Wallets, languages and backups
 
 The wallet picker has wallet-name tabs on the left and per-network addresses on the right. Each row has independent copy and select controls; selection updates the account and network together. New wallets use one BIP-39 phrase for EVM, Solana, Bitcoin (Taproot and Native SegWit) and TRON. Creation is immediate, with no forced phrase display or backup confirmation. The name field is prefilled with the next sequential Wallet number and can be edited before creation. Previously imported private keys are grouped separately when they cannot be recovered from the recorded mnemonic's supported paths.
@@ -56,15 +66,15 @@ Only verified canonical Safe deployments, EIP-712 EOA signatures and CALL operat
 
 ## Installation
 
-Version 0.3.0 is an extension preview release. Passkey enrollment has been confirmed by the user; the user also confirmed locking and successfully unlocking the same wallet with the Passkey. The password path remains available.
+Version 0.3.1 is an extension preview release. Passkey enrollment has been confirmed by the user; the user also confirmed locking and successfully unlocking the same wallet with the Passkey. The password path remains available.
 
-Download and extract `FnzSafe-extension-0.3.0.zip` from the `extension-v0.3.0` GitHub Release. In Chrome, open `chrome://extensions`, enable Developer mode and choose **Load unpacked**, then select the extracted directory containing `manifest.json`. Keep that directory in place. When updating an existing unpacked installation, replace its files in the same directory and use Reload; changing the path changes the extension ID and can break Passkey access. This is an unpacked developer distribution, not a Chrome Web Store listing; updates are manual.
+Download and extract `FnzSafe-extension-0.3.1.zip` from the `extension-v0.3.1` GitHub Release. In Chrome, open `chrome://extensions`, enable Developer mode and choose **Load unpacked**, then select the extracted directory containing `manifest.json`. Keep that directory in place. When updating an existing unpacked installation, replace its files in the same directory and use Reload; changing the path changes the extension ID and can break Passkey access. This is an unpacked developer distribution, not a Chrome Web Store listing; updates are manual.
 
 For local development, load `dist` after building. Use a separate Chrome profile and public test accounts for development; never fund fixture accounts on a public network.
 
 ## Reproducible validation
 
-`npm test` covers RPC validation and redaction, plaintext recovery, encrypted backup formats, Safe signatures/proposals, vault migration, default-wallet persistence and protection migration, mocked Passkey PRF validation, DApp permission/security boundaries and serialized background imports. The current suite contains 66 passing tests, including multiple mnemonic roots, legacy import grouping, failed-write preservation, scoped exports, encrypted backup restoration, locale completeness, atomic account/network selection and idle-lock settings. The desktop compatibility fixtures were produced independently by the Rust implementation:
+`npm test` covers RPC validation and redaction, plaintext recovery, encrypted backup formats, Safe signatures/proposals, vault migration, default-wallet persistence and protection migration, mocked Passkey PRF validation, DApp permission/security boundaries and serialized background imports. The current suite contains 72 passing tests, including multiple mnemonic roots, legacy import grouping, failed-write preservation, scoped exports, encrypted backup restoration, locale completeness, atomic account/network selection and idle-lock settings. The desktop compatibility fixtures were produced independently by the Rust implementation:
 
 ```bash
 # Run from the repository root (requires the usual Rust/OpenSSL build dependencies).

@@ -193,3 +193,43 @@ test('DApp account fallback stays inside the selected mnemonic wallet and cannot
   await send({ type: 'LOCK' });
   assert.deepEqual((await provider()).result, []);
 });
+
+test('DApp network switching requires approval; unknown networks return 4902 without a broken popup', async () => {
+  await send({ type: 'UNLOCK', password: 'multi-wallet-password' });
+  let providerListener: (r: any) => void;
+  let respond: (r: any) => void;
+  let opened: (id: string) => void = () => {};
+  let popupCount = 0;
+  Object.assign(chrome.windows, {
+    async create(options: { url: string }) { popupCount++; opened(new URL(options.url).searchParams.get('id')!); return { id: 123 }; },
+    async remove() {},
+  });
+  connectListener({ name: 'fnzsafe-provider', sender: { url: 'https://network-test.example/', frameId: 0 },
+    onMessage: { addListener(fn: typeof providerListener) { providerListener = fn; } }, onDisconnect: noopEvent,
+    postMessage(message: any) { respond(message); }, disconnect() {} });
+  function provider(method: string, params: any[] = []) {
+    return new Promise<any>(resolve => { respond = resolve; providerListener({ channel: 'fnzsafe:provider', id: crypto.randomUUID(), family: 'evm', method, params }); });
+  }
+  for (const method of ['wallet_addEthereumChain', 'wallet_switchEthereumChain']) {
+    const result = await provider(method, [{ chainId: '0xffffff' }]);
+    assert.equal(result.error.code, 4902);
+  }
+  assert.equal(popupCount, 0);
+  let ready = new Promise<string>(resolve => { opened = resolve; });
+  let response = provider('eth_requestAccounts');
+  let id = await ready;
+  assert.equal((await send({ type: 'RESOLVE_PENDING', id, approved: true })).ok, true);
+  assert.equal((await response).result.length, 1);
+  const before = (await send({ type: 'STATUS' })).result.settings.evmChainId;
+  ready = new Promise<string>(resolve => { opened = resolve; });
+  response = provider('wallet_switchEthereumChain', [{ chainId: '0x61' }]);
+  id = await ready;
+  const view = await send({ type: 'GET_PENDING', id });
+  assert.equal(view.ok, true);
+  assert.ok(view.result.details.some((d: any) => d.value === 'BNB Smart Chain Testnet (97)'));
+  assert.equal((await send({ type: 'STATUS' })).result.settings.evmChainId, before);
+  assert.equal((await send({ type: 'RESOLVE_PENDING', id, approved: true })).ok, true);
+  assert.equal((await response).result, null);
+  assert.equal((await provider('eth_chainId')).result, '0x61');
+  await send({ type: 'LOCK' });
+});

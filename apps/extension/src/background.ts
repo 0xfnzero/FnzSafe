@@ -804,6 +804,8 @@ async function handleProviderRequest(request: ProviderRequest, origin: string): 
       return [account.address];
     }
     if (request.method === 'wallet_getCapabilities') return {};
+    // Reject unknown networks before opening an approval that cannot be rendered.
+    if (['wallet_switchEthereumChain', 'wallet_addEthereumChain'].includes(request.method)) requestedBuiltinChain(request.params);
     if (SAFE_EVM_READ_METHODS.has(request.method)) {
       const chain = configuredChain(evmChain(state.evmChainId), state.rpcOverrides ?? {});
       const provider = await evmProvider(chain);
@@ -835,7 +837,7 @@ chrome.runtime.onConnect.addListener((port) => {
         port.postMessage({ id: request.id, result });
       } catch (error) {
         const id = request?.id ?? (typeof rawRequest === 'object' && rawRequest && 'id' in rawRequest && typeof rawRequest.id === 'string' ? rawRequest.id.slice(0, 128) : '');
-        port.postMessage({ id, error: { code: -32600, message: errorMessage(error) } });
+        port.postMessage({ id, error: { code: error instanceof Error && 'code' in error && error.code === 4902 ? 4902 : -32600, message: errorMessage(error) } });
       }
     })();
   });

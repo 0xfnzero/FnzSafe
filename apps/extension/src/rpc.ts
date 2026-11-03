@@ -28,12 +28,16 @@ export function normalizeRpcOverrides(raw: unknown): RpcOverrides {
 export function configuredChain(chain: ChainInfo, overrides: RpcOverrides): ChainInfo {
   return { ...chain, rpcUrl: overrides[chain.key] ?? chain.rpcUrl };
 }
+class RpcAccessError extends Error {}
+
 async function rpcIdentity(url: string, method: string): Promise<unknown> {
   const response = await fetch(normalizeRpcUrl(url), {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params: [] }),
     signal: AbortSignal.timeout(10_000), redirect: 'error', credentials: 'omit',
   });
+  if (response.status === 403) throw new RpcAccessError('RPC access denied (HTTP 403). Set a custom RPC in Settings.');
+  if (response.status === 429) throw new RpcAccessError('RPC rate limit reached (HTTP 429). Try again later or set a custom RPC in Settings.');
   if (!response.ok) throw new Error('RPC unavailable');
   const body = await response.json();
   if (body.error || body.id !== 1) throw new Error('Invalid RPC response');
@@ -46,10 +50,13 @@ export async function validateRpc(chain: ChainInfo): Promise<void> {
       const result = await rpcIdentity(chain.rpcUrl, 'eth_chainId');
       if (typeof result !== 'string' || !/^0x[0-9a-f]+$/i.test(result) || BigInt(result) !== BigInt(chain.chainId!)) throw new Error('Wrong chain');
     } else if (chain.family === 'solana') {
-      const expected = chain.key === 'solana:devnet' ? 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1' : '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
+      const expected = chain.key === 'solana:devnet' ? 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG' : '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d';
       if (await rpcIdentity(chain.rpcUrl, 'getGenesisHash') !== expected) throw new Error('Wrong cluster');
     } else throw new Error('Unsupported network');
-  } catch { throw new Error('RPC verification failed. Check the endpoint and selected network.'); }
+  } catch (error) {
+    if (error instanceof RpcAccessError) throw error;
+    throw new Error('RPC verification failed. Check the endpoint and selected network.');
+  }
 }
 export async function evmProvider(chain: ChainInfo): Promise<JsonRpcProvider> {
   await validateRpc(chain);
