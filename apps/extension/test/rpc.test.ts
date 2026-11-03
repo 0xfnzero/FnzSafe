@@ -11,6 +11,10 @@ test('RPC settings reject unsafe schemes, credentials and fragments; preserve va
   assert.equal(normalizeRpcUrl('http://127.0.0.1:8545'), 'http://127.0.0.1:8545/');
   assert.deepEqual(normalizeRpcOverrides({ 'evm:1': 'file:///tmp', 'evm:999': 'https://rpc.example' }), {});
   assert.equal(configuredChain(evmChain(1), {}).rpcUrl, evmChain(1).rpcUrl);
+  const solana = chains.find(c => c.key === 'solana:mainnet-beta')!;
+  assert.equal(configuredChain(solana, {}).rpcUrl, 'https://solana-rpc.publicnode.com');
+  assert.equal(configuredChain(solana, { [solana.key]: 'https://api.mainnet-beta.solana.com' }).rpcUrl, 'https://api.mainnet-beta.solana.com');
+  assert.equal(chains.find(c => c.key === 'solana:devnet')!.rpcUrl, 'https://api.devnet.solana.com');
 });
 test('RPC validates actual endpoint chain/cluster, rejects redirects and redacts provider errors', async () => {
   let mode = 'matching'; let calls = 0;

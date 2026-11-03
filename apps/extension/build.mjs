@@ -15,8 +15,8 @@ await Promise.all([
   cp(resolve(root, 'popup.html'), resolve(dist, 'popup.html')),
   cp(resolve(root, 'approval.html'), resolve(dist, 'approval.html')),
   cp(resolve(root, 'src/ui/styles.css'), resolve(dist, 'styles.css')),
-  cp(resolve(root, '../desktop/src-tauri/icons/32x32.png'), resolve(dist, 'icons/32.png')),
-  cp(resolve(root, '../desktop/src-tauri/icons/128x128.png'), resolve(dist, 'icons/128.png')),
+  // Toolbar icons have their own crop; desktop app padding makes 16px icons too small.
+  cp(resolve(root, 'icons'), resolve(dist, 'icons'), { recursive: true }),
   cp(resolve(root, '../desktop/public/chain-icons'), resolve(dist, 'chain-icons'), { recursive: true }),
 ]);
 

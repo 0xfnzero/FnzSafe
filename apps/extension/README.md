@@ -1,4 +1,4 @@
-# FnzSafe Chrome Extension 0.3.1
+# FnzSafe Chrome Extension 0.3.2
 
 Manifest V3 wallet extension for EVM and Solana. Bitcoin and TRON support key recovery and address display; transaction signing and broadcasting for these families remain disabled.
 
@@ -15,7 +15,7 @@ Load `apps/extension/dist` as an unpacked extension from `chrome://extensions`. 
 
 ## Appearance
 
-Choose **Light**, **Dark** or **System** from the header or Settings → Appearance. The choice is stored locally and shared by the wallet and DApp confirmation windows. System follows the OS appearance. Both palettes distinguish the page background, balance card, asset panel, controls and selected navigation. Searchable account/network panels, local receive QR codes, token details, token-specific sending, copy feedback and keyboard focus handling are included.
+Choose **Light**, **Dark** or **System** from the header or Settings → Appearance. The choice is stored locally and shared by the wallet and DApp confirmation windows. System follows the OS appearance. Toolbar icons use a dedicated crop of the existing artwork, with native 16/32/48/128 pixel assets, so desktop transparent margins do not shrink the visible toolbar mark. Both palettes distinguish the page background, balance card, asset panel, controls and selected navigation. Searchable account/network panels, local receive QR codes, token details, token-specific sending, copy feedback and keyboard focus handling are included.
 
 ## First open and wallet protection
 
@@ -42,7 +42,7 @@ EVM discovery uses EIP-6963 and requests use EIP-1193; Solana discovery uses Wal
 
 Injected bundles use an isolated IIFE scope so other extensions replacing `window.ethereum` or `window.solana` cannot redirect FnzSafe's announced provider. Regression tests execute the production bundle as a classic script with another wallet injected both before and after it.
 
-Solana validation uses the full genesis hash. Defaults remain the official mainnet and devnet endpoints. During release testing, the official mainnet endpoint returned HTTP 403 for browser/extension Origin headers, while requests without Origin and official devnet requests succeeded. This external restriction is not repaired by changing the wallet's genesis check. HTTP 403/429 errors now identify access denial/rate limiting. An explicitly configured public endpoint such as `https://solana-rpc.publicnode.com` works without an API key; public service availability and rate limits still apply. No silent fallback is used.
+Solana validation uses the full genesis hash. The browser extension defaults to API-key-free PublicNode for mainnet and the official endpoint for devnet. Desktop RPC defaults are managed separately and are unchanged by this extension release. Existing explicit RPC overrides are preserved. During release testing, the official mainnet endpoint returned HTTP 403 for browser/extension Origin headers, while requests without Origin and official devnet requests succeeded. This external restriction is not repaired by changing the wallet's genesis check. HTTP 403/429 errors now identify access denial/rate limiting. An explicitly configured public endpoint such as `https://solana-rpc.publicnode.com` works without an API key; public service availability and rate limits still apply. No silent fallback is used. Reset restores the extension's built-in endpoint for that network.
 
 Manual validation for 0.3.1 confirmed Uniswap opens the FnzSafe approval window alongside Phantom, MetaMask, TokenPocket and Binance Wallet. A separate test wallet connected to X404 and switched to BNB Testnet; official Solana devnet and PublicNode mainnet balances refreshed successfully. No asset-transfer transactions were submitted.
 
@@ -66,9 +66,9 @@ Only verified canonical Safe deployments, EIP-712 EOA signatures and CALL operat
 
 ## Installation
 
-Version 0.3.1 is an extension preview release. Passkey enrollment has been confirmed by the user; the user also confirmed locking and successfully unlocking the same wallet with the Passkey. The password path remains available.
+Version 0.3.2 is an extension preview release. Passkey enrollment has been confirmed by the user; the user also confirmed locking and successfully unlocking the same wallet with the Passkey. The password path remains available.
 
-Download and extract `FnzSafe-extension-0.3.1.zip` from the `extension-v0.3.1` GitHub Release. In Chrome, open `chrome://extensions`, enable Developer mode and choose **Load unpacked**, then select the extracted directory containing `manifest.json`. Keep that directory in place. When updating an existing unpacked installation, replace its files in the same directory and use Reload; changing the path changes the extension ID and can break Passkey access. This is an unpacked developer distribution, not a Chrome Web Store listing; updates are manual.
+Download and extract `FnzSafe-extension-0.3.2.zip` from the `extension-v0.3.2` GitHub Release. In Chrome, open `chrome://extensions`, enable Developer mode and choose **Load unpacked**, then select the extracted directory containing `manifest.json`. Keep that directory in place. When updating an existing unpacked installation, replace its files in the same directory and use Reload; changing the path changes the extension ID and can break Passkey access. This is an unpacked developer distribution, not a Chrome Web Store listing; updates are manual.
 
 For local development, load `dist` after building. Use a separate Chrome profile and public test accounts for development; never fund fixture accounts on a public network.
 

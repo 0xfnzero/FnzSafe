@@ -16,7 +16,7 @@ export const chains: ChainInfo[] = [
   { key: 'evm:4663', family: 'evm', name: 'Robinhood Chain', symbol: 'ETH', icon: 'robinhood.svg', rpcUrl: 'https://rpc.mainnet.chain.robinhood.com', chainId: 4663, transactionSupport: true },
   { key: 'evm:5042', family: 'evm', name: 'Arc', symbol: 'USDC', icon: 'arc.svg', rpcUrl: 'https://rpc.mainnet.arc.io', chainId: 5042, transactionSupport: true },
   { key: 'evm:5042002', family: 'evm', name: 'Arc Testnet', symbol: 'USDC', icon: 'arc.svg', rpcUrl: 'https://rpc.testnet.arc.io', chainId: 5042002, testnet: true, transactionSupport: true },
-  { key: 'solana:mainnet-beta', family: 'solana', name: 'Solana', symbol: 'SOL', icon: 'solana.svg', rpcUrl: 'https://api.mainnet-beta.solana.com', transactionSupport: true },
+  { key: 'solana:mainnet-beta', family: 'solana', name: 'Solana', symbol: 'SOL', icon: 'solana.svg', rpcUrl: 'https://solana-rpc.publicnode.com', transactionSupport: true },
   { key: 'solana:devnet', family: 'solana', name: 'Solana Devnet', symbol: 'SOL', icon: 'solana.svg', rpcUrl: 'https://api.devnet.solana.com', transactionSupport: true },
   { key: 'bitcoin:mainnet', family: 'bitcoin', name: 'Bitcoin', symbol: 'BTC', icon: 'bitcoin.svg', transactionSupport: false },
   { key: 'tron:mainnet', family: 'tron', name: 'TRON', symbol: 'TRX', icon: 'tron.svg', transactionSupport: false },

@@ -1,5 +1,12 @@
 # Extension changelog
 
+## 0.3.2 — 2026-11-03
+
+- Default the extension's Solana mainnet RPC to API-key-free PublicNode, after the official endpoint returned HTTP 403 for browser-origin requests. Keep official devnet and desktop defaults unchanged; preserve explicit custom RPC settings.
+- Crop desktop-only transparent margins from extension artwork and supply native 16/32/48/128 pixel icons for the toolbar and extension manager.
+
+Validation: 72 automated tests, TypeScript checking and production build. Includes default/override RPC regression checks and browser verification of the updated installation.
+
 ## 0.3.1 — 2026-11-03
 
 - Isolate injected bundles from page globals. EIP-6963 announcements retain the FnzSafe provider when Phantom, MetaMask or another extension replaces a legacy global provider.
