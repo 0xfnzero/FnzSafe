@@ -489,5 +489,17 @@
   "Choose the owners and required approvals. Review the network fee before creating your Safe.": "设置成员与签名门槛，创建前将预览网络费用。",
   "One owner address per line. At least two owners.": "每行一个成员地址，至少需要两位成员。",
   "{count} accounts": "{count} 个账户",
-  "Recovery phrase, private keys and encrypted backups": "助记词、私钥与加密备份"
+  "Recovery phrase, private keys and encrypted backups": "助记词、私钥与加密备份",
+  "Find onchain Safes": "从链上查找 Safe",
+  "Import proposal": "导入提案",
+  "No Safe accounts added": "尚未添加多签钱包",
+  "Add a Safe by address to get started. No history scan needed.": "输入已有 Safe 地址即可添加，无需扫描历史。",
+  "Start scan": "开始查找",
+  "Unable to finish the lookup. You can add your Safe by address instead.": "暂时无法完成查找，你可以直接输入 Safe 地址添加。",
+  "Technical details": "技术详情",
+  "Optional: search this network for Safes you own. Scanning older history may take time.": "可选操作：查找当前网络中你参与的 Safe。查询较早历史可能需要较长时间。",
+  "No matching Safes found. You can still add one by address.": "未找到匹配的 Safe，也可以直接按地址添加。",
+  "Enter a valid Safe address": "请输入有效的 Safe 地址",
+  "Only this address is checked. No history scan is performed.": "仅验证此地址，不扫描链上历史。",
+  "Verify & add Safe": "验证并添加 Safe"
 }

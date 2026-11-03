@@ -51,8 +51,9 @@ export function useSafeDiscovery({ scope, enabled, request, onAccounts }: {
     // Scope includes chain configuration + owner. Late responses cannot populate
     // another wallet or network, including an A -> B -> A switch.
     const activeGeneration = generation;
-    if (enabled) void start(true);
-    else { setStatus("idle"); setPage(undefined); setCount(0); setError(""); }
+    // Opening a wallet never starts expensive history reads. Discovery is opt-in.
+    cursor.current = { offset: 0 }; found.current = new Set();
+    setStatus("idle"); setPage(undefined); setCount(0); setUnsupported(0); setError("");
     return () => { activeGeneration.current++; };
   }, [scope, enabled, start]);
   return { status, error, page, count, unsupported, start,

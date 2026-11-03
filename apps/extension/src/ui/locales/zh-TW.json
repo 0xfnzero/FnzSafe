@@ -489,5 +489,17 @@
   "Choose the owners and required approvals. Review the network fee before creating your Safe.": "設定成員與簽署門檻，建立前將預覽網路費用。",
   "One owner address per line. At least two owners.": "每行一個成員地址，至少需要兩位成員。",
   "{count} accounts": "{count} 個帳戶",
-  "Recovery phrase, private keys and encrypted backups": "助記詞、私鑰與加密備份"
+  "Recovery phrase, private keys and encrypted backups": "助記詞、私鑰與加密備份",
+  "Find onchain Safes": "從鏈上尋找 Safe",
+  "Import proposal": "匯入提案",
+  "No Safe accounts added": "尚未新增多簽錢包",
+  "Add a Safe by address to get started. No history scan needed.": "輸入現有 Safe 地址即可新增，無需掃描歷史。",
+  "Start scan": "開始尋找",
+  "Unable to finish the lookup. You can add your Safe by address instead.": "暫時無法完成尋找，你可以直接輸入 Safe 地址新增。",
+  "Technical details": "技術詳情",
+  "Optional: search this network for Safes you own. Scanning older history may take time.": "選用操作：尋找目前網路中你參與的 Safe。查詢較早歷史可能需要較長時間。",
+  "No matching Safes found. You can still add one by address.": "找不到相符的 Safe，也可以直接依地址新增。",
+  "Enter a valid Safe address": "請輸入有效的 Safe 地址",
+  "Only this address is checked. No history scan is performed.": "僅驗證此地址，不掃描鏈上歷史。",
+  "Verify & add Safe": "驗證並新增 Safe"
 }

@@ -1,4 +1,4 @@
-# FnzSafe Chrome Extension 0.3.3
+# FnzSafe Chrome Extension 0.3.4
 
 Manifest V3 wallet extension for EVM and Solana. Bitcoin and TRON support key recovery and address display; transaction signing and broadcasting for these families remain disabled.
 
@@ -65,15 +65,15 @@ Create or open a verified Safe 1.4.1 account on the selected EVM network. Creati
 
 Safe navigation is organized as account list → account details → proposal details. Creation, address import, proposals and Transaction Builder imports each have a focused page with a back action. Account details separate proposals from owners. Settings likewise uses grouped entries with dedicated appearance, security, RPC, privacy, connections and backup pages.
 
-On opening Safe, the extension scans canonical Safe 1.4.1 factory history from newest to oldest and verifies current ownership before caching accounts. Clearing the local Safe cache no longer requires remembering each address. Scans show progress and support pause, continue and retry; RPC errors retain existing accounts. Scanning may take time on large histories, resumes only within the current mounted view, and does not recover offchain proposals, signatures or labels. Other factories require adding an address.
+Opening Safe only loads saved local accounts; it never scans chain history automatically. **Add existing Safe** checks and saves the address you enter. Optional **Find onchain Safes → Start scan** scans canonical Safe 1.4.1 factory history from newest to oldest and verifies current ownership before caching accounts. Clearing the local Safe cache no longer requires remembering each address. Scans show progress and support pause, continue and retry; RPC errors retain existing accounts. Scanning may take time on large histories, resumes only within the current mounted view, and does not recover offchain proposals, signatures or labels. Other factories require adding an address.
 
 Transaction Builder JSON imports support one CALL or a reviewed atomic CALL-only batch using the verified canonical MultiSendCallOnly deployment. Desktop and extension share batch encoding and proposal validation. Only verified canonical Safe deployments, EIP-712 EOA signatures and zero gas refunds are supported. Arbitrary delegate calls, smart-contract owner signatures and a hosted transaction service are not supported. Raw contract calldata must be independently understood before signing.
 
 ## Installation
 
-Version 0.3.3 is an extension preview release. Passkey enrollment has been confirmed by the user; the user also confirmed locking and successfully unlocking the same wallet with the Passkey. The password path remains available.
+Version 0.3.4 is an extension preview release. Passkey enrollment has been confirmed by the user; the user also confirmed locking and successfully unlocking the same wallet with the Passkey. The password path remains available.
 
-Download and extract `FnzSafe-extension-0.3.3.zip` from **Assets** on the [latest combined Release](https://github.com/0xfnzero/FnzSafe/releases/latest). The same compiled artifact is also available under `extension-v0.3.3`. GitHub's automatic Source code downloads are not installable extension packages. End users do not need Node or a build tool. In Chrome, open `chrome://extensions`, enable Developer mode and choose **Load unpacked**, then select the extracted directory containing `manifest.json`. Keep that directory in place. When updating an existing unpacked installation, replace its files in the same directory and use Reload; changing the path changes the extension ID and can break Passkey access. This is an unpacked developer distribution, not a Chrome Web Store listing; updates are manual.
+Download and extract `FnzSafe-extension-0.3.4.zip` from **Assets** on the [latest combined Release](https://github.com/0xfnzero/FnzSafe/releases/latest). The same compiled artifact is also available under `extension-v0.3.4`. GitHub's automatic Source code downloads are not installable extension packages. End users do not need Node or a build tool. In Chrome, open `chrome://extensions`, enable Developer mode and choose **Load unpacked**, then select the extracted directory containing `manifest.json`. Keep that directory in place. When updating an existing unpacked installation, replace its files in the same directory and use Reload; changing the path changes the extension ID and can break Passkey access. This is an unpacked developer distribution, not a Chrome Web Store listing; updates are manual.
 
 For local development, load `dist` after building. Use a separate Chrome profile and public test accounts for development; never fund fixture accounts on a public network.
 

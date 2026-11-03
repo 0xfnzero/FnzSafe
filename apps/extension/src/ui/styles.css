@@ -484,3 +484,8 @@ body { width: 100%; min-width: 320px; min-height: 100%; background: var(--bg); f
 .settings-flow .success-note { display:flex; align-items:center; gap:6px; color:var(--success); }
 .settings-flow .modal-actions button { display:flex; align-items:center; justify-content:center; gap:5px; }
 @media (prefers-reduced-motion:reduce) { .toggle-switch > span { transition:none; } }
+.safe-empty { min-height:180px; padding:24px 12px; }
+.safe-empty > span { max-width:270px; font-size:12px; line-height:1.7; }
+.safe-secondary-actions { display:flex; justify-content:center; gap:22px; padding:14px 0; border-top:1px solid var(--border); margin-top:14px; }
+.scan-notice { padding:12px; border-radius:10px; background:var(--surface-2); margin-top:12px; }
+.scan-notice p { margin:0; }.scan-notice details { margin-top:10px; }.scan-notice details p { margin-top:8px; overflow-wrap:anywhere; }

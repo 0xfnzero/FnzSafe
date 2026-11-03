@@ -31,7 +31,7 @@
 
 [下载最新版本](https://github.com/0xfnzero/FnzSafe/releases/latest)
 
-桌面安装包和已编译的 Chrome 扩展 **0.3.3** ZIP 均可从同一 Release 的 **Assets** 下载。扩展 ZIP 解压后，在 `chrome://extensions` 开启开发者模式，点击“加载已解压的扩展程序”，选择包含 `manifest.json` 的目录；无需 Node 或编译。请下载 `FnzSafe-extension-*.zip`，不要下载 GitHub 自动生成的 Source code。更新时保留安装目录以维持扩展 ID 和 Passkey。详见 [扩展文档](apps/extension/README.md)。
+桌面安装包和已编译的 Chrome 扩展 **0.3.4** ZIP 均可从同一 Release 的 **Assets** 下载。扩展 ZIP 解压后，在 `chrome://extensions` 开启开发者模式，点击“加载已解压的扩展程序”，选择包含 `manifest.json` 的目录；无需 Node 或编译。请下载 `FnzSafe-extension-*.zip`，不要下载 GitHub 自动生成的 Source code。更新时保留安装目录以维持扩展 ID 和 Passkey。详见 [扩展文档](apps/extension/README.md)。
 
 FnzSafe 是一个开源多链钱包，支持 Solana 和 EVM 兼容网络，并提供实验性的 Bitcoin 与 TRON 账户适配器。Bitcoin 和 TRON 当前只支持账户派生与地址校验，尚不支持转账和广播。项目由 Tauri 桌面钱包、Flutter 移动钱包和 Rust 钱包 SDK/CLI 组成；私钥保存在本地加密 Keystore 中，钱包操作、DApp、加密货币信号和市场研究集中在同一个工作界面内。
 

@@ -19,7 +19,10 @@ function Fixture(){
   const [chain,setChain]=useState(97),[account,setAccount]=useState(owner),[version,setVersion]=useState(0);
   const stored=useRef<{safes:Array<{chainId:number;address:string;owners:string[]}>;proposals:SafeProposal[]}>({safes:[],proposals:[]});
   const fail=useRef(false);
+  const [requests,setRequests]=useState({scan:0,account:0});
   Object.assign(window,{chrome:{runtime:{sendMessage:async (message:Record<string,unknown>)=>{
+    if(message.type==='SAFE_DISCOVER')setRequests(r=>({...r,scan:r.scan+1}));
+    if(message.type==='SAFE_ACCOUNT')setRequests(r=>({...r,account:r.account+1}));
     if(message.type==='SAFE_LIST')return {ok:true,result:structuredClone(stored.current)};
     await new Promise(resolve=>setTimeout(resolve,900));
     if(message.type==='SAFE_DISCOVER'){
@@ -37,10 +40,10 @@ function Fixture(){
       const p:SafeProposal={version:1,chain_id:97,safe_address:String(message.address),to:String(message.to),value:String(message.value),data:String(message.data),nonce:String(message.nonce),signatures:[],safe_tx_hash:'0x'+'a'.repeat(64)};
       stored.current.proposals.push(p);return {ok:true,result:p};
     }
-    if(message.type==='SAFE_ACCOUNT')return {ok:true,result:info(String(message.address))};
+    if(message.type==='SAFE_ACCOUNT'){const item=info(String(message.address));if(!stored.current.safes.some(s=>s.address===item.address))stored.current.safes.push({chainId:chain,address:item.address,owners:item.owners});return {ok:true,result:item};}
     return {ok:false,error:'This fixture only permits read-only Safe requests'};
   }}}});
-  return <main className="shell wallet-shell"><div style={{padding:12,background:'#fff1c2',color:'#463000'}}>TEST ONLY · Synthetic Safe accounts</div><details><summary>Fixture controls</summary><div style={{padding:12,display:'grid',gap:8}}>
+  return <main className="shell wallet-shell"><div style={{padding:12,background:'#fff1c2',color:'#463000'}}>TEST ONLY · Synthetic Safe accounts<br/><output>Scan requests: {requests.scan} · Address requests: {requests.account}</output></div><details><summary>Fixture controls</summary><div style={{padding:12,display:'grid',gap:8}}>
     <button onClick={()=>{stored.current={safes:[],proposals:[]};setVersion(v=>v+1);}}>Clear fixture cache</button>
     <button onClick={()=>{fail.current=true;}}>Fail next scan</button>
     <select aria-label="Fixture network" value={chain} onChange={e=>setChain(Number(e.target.value))}><option value={97}>BSC Testnet</option><option value={56}>BSC Mainnet</option></select>

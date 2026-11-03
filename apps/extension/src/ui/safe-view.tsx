@@ -1,7 +1,7 @@
 import {t} from './i18n';
 import {ArrowLeft, Plus, Search, ShieldCheck, FileSignature, RefreshCw, LoaderCircle, ChevronRight, Download, Upload} from 'lucide-react';
 import {useEffect, useRef, useState} from 'react';
-import {formatUnits, parseUnits} from 'ethers';
+import {formatUnits, isAddress, parseUnits} from 'ethers';
 import type {SafeAccount, SafeProposal} from '../safe';
 import {useSafeDiscovery} from './use-safe-discovery';
 import type {SafeDiscoveryPage} from '../../../desktop/src/lib/safeMultisig';
@@ -9,7 +9,7 @@ import {parseSafeImport} from '../safe-import';
 import {api, compact} from './api';
 import {ReviewDialog, type TransactionReview} from './transactions';
 
-type View = 'list' | 'account' | 'add' | 'create' | 'propose' | 'import' | 'transaction';
+type View = 'list' | 'account' | 'add' | 'create' | 'propose' | 'import' | 'transaction' | 'discover';
 export function SafeView({chainId, chainName, accountId, accountAddress}: {chainId:number; chainName?:string; accountId?:string; accountAddress?:string}) {
   const [workspace,setWorkspace]=useState<{safes:Array<{chainId:number;address:string;owners?:string[]}>;proposals:SafeProposal[]}>({safes:[],proposals:[]});
   const [view,setView]=useState<View>('list'),[back,setBack]=useState<View>('list');
@@ -33,7 +33,7 @@ export function SafeView({chainId, chainName, accountId, accountAddress}: {chain
   const discovery=useSafeDiscovery({scope:`${chainId}:${accountId}`,enabled:!!accountId,
     request:async cursor=>{const result=await read<SafeDiscoveryPage>({type:'SAFE_DISCOVER',...cursor},90_000);await load();return result;},onAccounts:()=>{},
   });
-  function navigate(next:View,parent:View='list'){setView(next);setBack(parent);setError('');setMessage('');}
+  function navigate(next:View,parent:View='list'){if(view==='discover'&&next!=='discover'&&discovery.status==='running')discovery.pause();setView(next);setBack(parent);setError('');setMessage('');}
   async function run(action:()=>Promise<void>){
     if(lock.current)return;lock.current=true;setBusy(true);setMessage('');setError('');
     try{await action();await load();}catch(e){if(active.current)setError(e instanceof Error?e.message:'Safe operation failed');}
@@ -44,6 +44,7 @@ export function SafeView({chainId, chainName, accountId, accountAddress}: {chain
     try{const info=await read<SafeAccount>({type:'SAFE_ACCOUNT',address:value});if(active.current){setAddress(info.address);setAccount(info);setNonce(info.nonce);}}
     finally{if(active.current)setAccountLoading(false);}
   }
+  function addSafe(){setAddress('');setAccount(null);navigate('add');}
   function importFrom(parent:View){if(parent==='list'){setAccount(null);setAddress('');}setImportText('');navigate('import',parent);}
   async function importProposal(){
     const file=parseSafeImport(importText);
@@ -51,31 +52,37 @@ export function SafeView({chainId, chainName, accountId, accountAddress}: {chain
     const p=await api<SafeProposal>(file.kind==='transactions'?{type:'SAFE_IMPORT_TRANSACTIONS',file:importText,address:account?.address||address.trim()}:{type:'SAFE_IMPORT',proposal:importText});
     await openSafe(p.safe_address);setSelected(p);navigate('transaction','account');setMessage('Proposal validated and saved');
   }
-  const saved=workspace.safes.filter(s=>s.chainId===chainId&&(showAll||!s.owners||s.owners.some(o=>o.toLowerCase()===accountAddress?.toLowerCase())));
+  const chainSafes=workspace.safes.filter(s=>s.chainId===chainId);
+  const saved=chainSafes.filter(s=>showAll||!s.owners||s.owners.some(o=>o.toLowerCase()===accountAddress?.toLowerCase()));
   const visible=saved.filter(s=>s.address.toLowerCase().includes(search.trim().toLowerCase()));
   const proposals=workspace.proposals.filter(p=>p.chain_id===chainId&&p.safe_address.toLowerCase()===account?.address.toLowerCase());
   const proposal=workspace.proposals.find(p=>p.chain_id===selected?.chain_id&&p.safe_tx_hash===selected?.safe_tx_hash)||selected;
-  const titles:Record<View,string>={list:'Safe multisig',account:'Safe account',add:'Add existing Safe',create:'Create Safe',propose:'New proposal',import:'Import proposal / Transaction Builder',transaction:'Proposal details'};
+  const titles:Record<View,string>={list:'Safe multisig',account:'Safe account',add:'Add existing Safe',create:'Create Safe',propose:'New proposal',import:'Import proposal / Transaction Builder',transaction:'Proposal details',discover:'Find onchain Safes'};
   return <section ref={root} className="safe-view safe-flow">
     <header className="flow-header">{view!=='list'&&<button className="icon-button" aria-label={t('Back')} disabled={busy} onClick={()=>navigate(back)}><ArrowLeft size={20}/></button>}<div><h2 ref={heading} tabIndex={-1}>{t(titles[view])}</h2><p>{chainName && <>{chainName} · </>}{view==='list'?t('Your shared wallets, in one place.'):account?compact(account.address):t('SAFE MULTISIG · EVM')}</p></div>{view==='list'&&<ShieldCheck size={25}/>}</header>
     {error&&<p role="alert" className="error">{t(error)}</p>}{message&&<p role="status" className="success-note">{t(message)}</p>}
     {busy&&<div role="status" className="safe-operation"><LoaderCircle size={18} className="spin"/>{t(accountLoading?'Loading Safe details…':'Checking Safe operation…')}</div>}
     {view==='list'&&<>
-      <div className="safe-sync settings-panel"><div className="safe-sync-heading"><RefreshCw size={15} className={discovery.status==='running'?'spin':''}/><strong>{t(discovery.status==='running'?'Scanning onchain Safes':discovery.status==='complete'?'Factory scan complete':discovery.status==='error'?'Scan interrupted':discovery.status==='paused'?'Scan paused':'Sync onchain Safes')}</strong>{discovery.status==='running'?<button onClick={discovery.pause}>{t('Pause')}</button>:<button onClick={()=>void discovery.start(discovery.status==='complete'||discovery.status==='idle')}>{t(discovery.status==='paused'||discovery.status==='error'?'Continue scan':'Sync')}</button>}</div>
+      <div className="flow-actions"><button className="primary" onClick={addSafe}><Download size={16}/>{t('Add existing Safe')}</button><button onClick={()=>{setAccount(null);setOwners(accountAddress||'');navigate('create');}}><Plus size={16}/>{t('Create Safe')}</button></div>
+      {saved.length>0&&<div className="list-heading"><h3>{t('Saved accounts')} <span>{saved.length}</span></h3><button className="text-button" onClick={()=>importFrom('list')}><Upload size={14}/>{t('Import proposal')}</button></div>}
+      {saved.length>0&&<label className="search-field"><Search size={16}/><input aria-label={t('Search Safe address')} placeholder={t('Search Safe address')} value={search} onChange={e=>setSearch(e.target.value)}/></label>}
+      {chainSafes.length>saved.length||showAll?<label className="check-label safe-filter"><input type="checkbox" checked={showAll} onChange={e=>setShowAll(e.target.checked)}/>{t('Show all saved Safes')}</label>:null}
+      <div className="saved-safes safe-cards">{visible.map(s=><button key={s.address} onClick={()=>void run(()=>openSafe(s.address))}><ShieldCheck size={20}/><span><strong>{compact(s.address)}</strong><small>{s.owners?t('{count} owners',{count:s.owners.length}):t('Saved account')}</small></span><ChevronRight size={16}/></button>)}</div>
+      {!visible.length&&<div className="empty safe-empty"><ShieldCheck size={28}/><strong>{t(search?'No matching Safes':'No Safe accounts added')}</strong><span>{t('Add a Safe by address to get started. No history scan needed.')}</span></div>}
+      <div className="safe-secondary-actions"><button className="text-button" onClick={()=>{setAccount(null);navigate('discover');}}><Search size={14}/>{t('Find onchain Safes')}</button>{!saved.length&&<button className="text-button" onClick={()=>importFrom('list')}><Upload size={14}/>{t('Import proposal')}</button>}</div>
+    </>}
+    {view==='discover'&&<>
+      <p className="fine-print">{t('Optional: search this network for Safes you own. Scanning older history may take time.')}</p>
+      <div className="safe-sync settings-panel"><div className="safe-sync-heading"><RefreshCw size={15} className={discovery.status==='running'?'spin':''}/><strong>{t(discovery.status==='running'?'Scanning onchain Safes':discovery.status==='complete'?'Factory scan complete':discovery.status==='error'?'Scan interrupted':discovery.status==='paused'?'Scan paused':'Find onchain Safes')}</strong>{discovery.status==='running'?<button onClick={discovery.pause}>{t('Pause')}</button>:<button onClick={()=>void discovery.start(discovery.status==='complete'||discovery.status==='idle')}>{t(discovery.status==='paused'||discovery.status==='error'?'Continue scan':'Start scan')}</button>}</div>
         {discovery.page?<progress aria-label={t('History scan progress')} max={discovery.page.latest_block+1} value={discovery.page.latest_block-(discovery.page.next_before_block??-1)}/>:discovery.status==='running'&&<div className="safe-loading-bar"/>}
         <details className="sync-details"><summary>{t('Sync details')}{discovery.page&&` · ${t('Found: {count}',{count:discovery.count})}`}</summary><p className="fine-print">{t('Recover Safe 1.4.1 accounts from the canonical factory, newest first. Older accounts may take longer. Other factories require adding the address.')}</p>{discovery.page&&<p className="fine-print">{discovery.page.from_block.toLocaleString()}–{discovery.page.to_block.toLocaleString()}</p>}{discovery.unsupported>0&&<p className="fine-print">{t('Incompatible contracts were skipped.')}</p>}{['paused','error'].includes(discovery.status)&&discovery.page&&<button onClick={()=>void discovery.start(true)}>{t('Restart from latest block')}</button>}</details>
-        {discovery.error&&<p role="alert" className="error">{t('Scan incomplete. Cached accounts remain available. Retry or change RPC.')} {t(discovery.error)}</p>}
+        {discovery.error&&<div className="scan-notice" role="status"><p>{t('Unable to finish the lookup. You can add your Safe by address instead.')}</p><details><summary>{t('Technical details')}</summary><p>{t(discovery.error)}</p></details></div>}
       </div>
-      <div className="flow-actions"><button className="primary" onClick={()=>{setAccount(null);setOwners(accountAddress||'');navigate('create');}}><Plus size={16}/>{t('Create Safe')}</button><button onClick={()=>{setAddress('');setAccount(null);navigate('add');}}><Download size={16}/>{t('Add existing Safe')}</button></div>
-      <div className="list-heading"><h3>{t('Saved accounts')} <span>{saved.length}</span></h3><button className="text-button" onClick={()=>importFrom('list')}><Upload size={14}/>{t('Import')}</button></div>
-      {saved.length>0&&<label className="search-field"><Search size={16}/><input aria-label={t('Search Safe address')} placeholder={t('Search Safe address')} value={search} onChange={e=>setSearch(e.target.value)}/></label>}
-      <label className="check-label safe-filter"><input type="checkbox" checked={showAll} onChange={e=>setShowAll(e.target.checked)}/>{t('Show all saved Safes')}</label>
-      <div className="saved-safes safe-cards">{visible.map(s=><button key={s.address} onClick={()=>void run(()=>openSafe(s.address))}><ShieldCheck size={20}/><span><strong>{compact(s.address)}</strong><small>{s.owners?t('{count} owners',{count:s.owners.length}):t('Saved account')}</small></span><ChevronRight size={16}/></button>)}</div>
-      {!saved.length&&discovery.status==='running'&&<div className="token-skeleton" aria-label={t('Loading Safe details…')}><i/><i/></div>}
-      {!visible.length&&discovery.status!=='running'&&<div className="empty"><ShieldCheck size={28}/><strong>{t(search?'No matching Safes':'No cached Safes yet')}</strong><span>{t('Complete the chain scan or add a Safe address.')}</span></div>}
+      {discovery.status==='complete'&&<p role="status" className="fine-print">{discovery.count?t('Found: {count}',{count:discovery.count}):t('No matching Safes found. You can still add one by address.')}</p>}
+      <button className="secondary-wide" onClick={addSafe}>{t('Add existing Safe')}</button>
     </>}
     <fieldset className="safe-controls" disabled={busy} aria-busy={busy}>
-      {view==='add'&&<form className="flow-form" onSubmit={e=>{e.preventDefault();void run(()=>openSafe(address));}}><p>{t('Enter the Safe contract address on the selected network.')}</p><label>{t('Safe address')}<input value={address} onChange={e=>setAddress(e.target.value)} required/></label><button className="primary">{t('Open Safe')}</button></form>}
+      {view==='add'&&<form className="flow-form" onSubmit={e=>{e.preventDefault();void run(async()=>{const value=address.trim();if(!isAddress(value))throw new Error('Enter a valid Safe address');await openSafe(value);setShowAll(true);});}}><p>{t('Enter the Safe contract address on the selected network.')}</p><p className="fine-print">{t('Only this address is checked. No history scan is performed.')}</p><label>{t('Safe address')}<input value={address} onChange={e=>setAddress(e.target.value)} required/></label><button className="primary">{t('Verify & add Safe')}</button></form>}
       {view==='create'&&<form className="flow-form" onSubmit={e=>{e.preventDefault();void run(async()=>{setReview(await api({type:'SAFE_PREPARE_CREATE',owners:owners.split(/[\s,;]+/).filter(Boolean),threshold:Number(threshold),salt:BigInt('0x'+Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('')).toString()}));});}}><p>{t('Choose the owners and required approvals. Review the network fee before creating your Safe.')}</p><label>{t('Owner addresses')}<textarea value={owners} onChange={e=>setOwners(e.target.value)} rows={5} required/><small>{t('One owner address per line. At least two owners.')}</small></label><label>{t('Required signatures')}<input type="number" min={2} max={50} value={threshold} onChange={e=>setThreshold(e.target.value)} required/></label><button className="primary">{t('Preview Safe creation')}</button></form>}
       {view==='account'&&<>{accountLoading?<div className="token-skeleton"><i/><i/><i/></div>:!account?<button onClick={()=>void run(()=>openSafe(address))}>{t('Retry')}</button>:<>
         <div className="safe-account-summary"><code>{account.address}</code><strong>{formatUnits(account.balance_wei,18)} {t('native')}</strong><div><span>{account.threshold} / {account.owners.length} {t('signatures')}</span><button className="icon-button" aria-label={t('Refresh Safe')} onClick={()=>void run(()=>openSafe(account.address))}><RefreshCw size={16}/></button></div></div>

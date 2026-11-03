@@ -1,5 +1,13 @@
 # Extension changelog
 
+## 0.3.4 — 2026-11-03
+
+- Load only locally saved Safes by default. Empty wallets no longer start chain scans or show scan errors, zero-count headings or irrelevant filters.
+- Make address-based Safe addition the primary action. Verify the entered address without scanning factory history.
+- Move optional onchain discovery into its own page with an explicit Start action. Pause when leaving, keep failures scoped to that page and place RPC diagnostics behind a disclosure.
+
+Validation: 73 automated tests, TypeScript checking, production packaging and browser verification of zero automatic scan requests, address-based addition and isolated scan failures.
+
 ## 0.3.3 — 2026-11-03
 
 - Recover Safe 1.4.1 accounts from canonical factory history after local cache loss, with verified current ownership, progress, pause/continue and actionable errors.
