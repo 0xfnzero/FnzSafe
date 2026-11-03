@@ -1,5 +1,7 @@
+import { nextWalletName } from './wallet-names';
+import { encryptSecretBackup } from './secret-backup';
 import { validatePasskeyConfig } from './passkey';
-import { ensureDeviceWallet, hasDeviceWallet, loadDeviceWallet, removeDeviceWallet } from './device-vault';
+import { ensureDeviceWallet, hasDeviceWallet, loadDeviceWallet, saveDeviceWallet, removeDeviceWallet } from './device-vault';
 import { displaySignedMessage } from './message-preview';
 import { tokenAsset, transferRequest, prepareTransaction, signPrepared, sendPrepared, type PreparedTransaction } from './evm-transfers';
 import { safeAccount, parseProposal, validateProposal, propose, signProposal, mergeProposals, prepareSafeCreation, prepareSafeExecution, safeReceipt, type SafeProposal } from './safe';
@@ -31,7 +33,7 @@ import type {
   VaultPayload,
 } from './types';
 import { importWallet, type WalletImport } from './import-wallet';
-import { createInitialVault, decryptVaultWithMigration, encryptVault, mergeVaultAccounts } from './vault';
+import { createInitialVault, decryptVaultWithMigration, encryptVault, mergeVaultAccounts, walletGroups, groupedVault } from './vault';
 import {
   attachUsdPrices,
   discoverEvmTokens,
@@ -39,6 +41,7 @@ import {
   visiblePortfolioAssets,
 } from './portfolio';
 import type { PortfolioAsset, PortfolioSnapshot } from './types';
+import { sessionAuthorization } from './memory-vault';
 import {
   grantOriginPermission,
   hasOriginPermission,
@@ -64,7 +67,7 @@ import {
 } from './memory-vault';
 
 const LOCK_ALARM = 'fnzsafe-lock';
-const SESSION_MS = 5 * 60_000;
+const AUTO_LOCK_MINUTES = [5, 15, 30, 60];
 const VAULT_KEY = 'encryptedVault';
 const PERMISSIONS_KEY = 'originPermissions';
 const SETTINGS_KEY = 'walletSettings';
@@ -73,6 +76,7 @@ const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ
 const TOKEN_2022_PROGRAM_ID = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
 
 interface WalletSettings {
+  autoLockMinutes?: number;
   activeAccountId?: string;
   evmChainId: number;
   solanaCluster: 'mainnet-beta' | 'devnet';
@@ -95,6 +99,8 @@ let contextRevision = 0;
 let deviceMode = false;
 void chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => undefined);
 let unlockedVault: UnlockedVaultSession | null = null;
+let sessionDeadline = 0;
+let sessionKeepAlive: ReturnType<typeof setInterval> | undefined;
 const pending = new Map<string, PendingRequest>();
 const approvalGuard = new ApprovalRequestGuard();
 const portfolioCache = new Map<string, { snapshot: PortfolioSnapshot; expiresAt: number }>();
@@ -164,6 +170,7 @@ function normalizedSettings(value: WalletSettings): WalletSettings {
     : undefined;
   return {
     activeAccountId,
+    autoLockMinutes: AUTO_LOCK_MINUTES.includes(value?.autoLockMinutes ?? 0) ? value.autoLockMinutes : 15,
     evmChainId,
     solanaCluster,
     enhancedAssetDetection: value?.enhancedAssetDetection !== false,
@@ -181,10 +188,23 @@ async function updateSettings(patch: Partial<WalletSettings>): Promise<WalletSet
 }
 
 function touchSession(): void {
-  void chrome.alarms.create(LOCK_ALARM, { when: Date.now() + SESSION_MS });
+  if (unlockedVault && !sessionKeepAlive) {
+    // Chrome 110+ resets worker idle termination on extension API calls. Keep the
+    // in-memory session alive only until its own idle deadline; never persist keys.
+    sessionKeepAlive = setInterval(() => {
+      if (Date.now() >= sessionDeadline) { lockVault(); return; }
+      void chrome.runtime.getPlatformInfo().catch(() => undefined);
+    }, 20_000);
+  }
+  const session = unlockedVault;
+  void settings().then(state => {
+    if (session && session === unlockedVault) { sessionDeadline = Date.now() + (state.autoLockMinutes ?? 15) * 60_000; void chrome.alarms.create(LOCK_ALARM, { when: sessionDeadline }); }
+  }).catch(() => undefined);
 }
 
 function lockVault(): void {
+  if (sessionKeepAlive) clearInterval(sessionKeepAlive);
+  sessionKeepAlive = undefined; sessionDeadline = 0;
   if (unlockedVault) {
     destroyVaultSession(unlockedVault);
   }
@@ -209,8 +229,7 @@ async function unlockVault(password: string): Promise<void> {
   if (migrated) {
     await chrome.storage.local.set({ [VAULT_KEY]: await encryptVault(payload, password) });
   }
-  payload.recoveryMnemonic = '';
-  const session = await protectVaultInMemory(payload);
+  const session = await protectVaultInMemory(payload, password, true);
   if (generation !== contextRevision) { destroyVaultSession(session); throw new Error('Wallet changed during unlock'); }
   if (unlockedVault) destroyVaultSession(unlockedVault);
   unlockedVault = session;
@@ -228,12 +247,13 @@ async function activeAccount(
   const accounts = includePrivateKey
     ? (await decryptUnlockedVault()).accounts
     : unlockedVault.accounts.map((account) => ({ ...account, privateKey: '' }));
-  const selected = accounts.find(
+  const activeWalletId = unlockedVault.accounts.find(a => a.id === state.activeAccountId)?.walletId ?? unlockedVault.wallets[0].id;
+  const scopedAccounts = accounts.filter(a => (a.walletId ?? unlockedVault!.wallets[0].id) === activeWalletId);
+  const selected = scopedAccounts.find(
     (account) => account.id === state.activeAccountId && account.family === family,
   );
-  const account = selected ?? accounts.find((candidate) => candidate.family === family);
+  const account = selected ?? scopedAccounts.find((candidate) => candidate.family === family);
   if (!account) throw new Error(`No ${family} account is available`);
-  touchSession();
   return account;
 }
 
@@ -646,9 +666,11 @@ async function loadPortfolio(family: string, force = false): Promise<PortfolioSn
   if (!unlockedVault) throw new Error('Wallet is locked');
   const generation = contextRevision;
   const state = await settings();
-  const selectedAccount = unlockedVault.accounts.find(
+  const activeWalletId = unlockedVault.accounts.find(a => a.id === state.activeAccountId)?.walletId ?? unlockedVault.wallets[0].id;
+  const scopedAccounts = unlockedVault.accounts.filter(a => a.walletId === activeWalletId);
+  const selectedAccount = scopedAccounts.find(
     (account) => account.id === state.activeAccountId && account.family === family,
-  ) ?? unlockedVault.accounts.find((account) => account.family === family);
+  ) ?? scopedAccounts.find((account) => account.family === family);
   const cacheKey = [family, selectedAccount?.id ?? 'none', state.evmChainId, state.solanaCluster, state.enhancedAssetDetection, JSON.stringify(state.rpcOverrides)].join(':');
   const cached = portfolioCache.get(cacheKey);
   if (!force && cached && cached.expiresAt > Date.now()) return cached.snapshot;
@@ -770,6 +792,7 @@ const SAFE_EVM_READ_METHODS = new Set([
 ]);
 
 async function handleProviderRequest(request: ProviderRequest, origin: string): Promise<unknown> {
+  if (unlockedVault && sessionDeadline && Date.now() >= sessionDeadline) lockVault();
   const state = await settings();
   if (request.family === 'evm') {
     if (request.method === 'eth_chainId') return `0x${state.evmChainId.toString(16)}`;
@@ -827,7 +850,7 @@ chrome.runtime.onConnect.addListener((port) => {
 });
 
 let uiMutation: Promise<unknown> = Promise.resolve();
-const SERIAL_UI_ACTIONS = new Set(['OPEN_WALLET', 'PROTECT_DEFAULT_WALLET', 'CONFIRM_BACKUP', 'CREATE_VAULT', 'IMPORT_ACCOUNTS', 'IMPORT_TOKEN', 'SET_RPC', 'SET_NETWORK', 'SET_ACTIVE_ACCOUNT', 'SET_ENHANCED_ASSET_DETECTION', 'SAFE_IMPORT', 'SAFE_PROPOSE', 'SAFE_ACCOUNT', 'EXECUTE_REVIEW', 'REFRESH_ACTIVITY', 'SEND_NATIVE']);
+const SERIAL_UI_ACTIONS = new Set(['SELECT_WALLET_ACCOUNT', 'SET_AUTO_LOCK', 'CREATE_WALLET', 'OPEN_WALLET', 'PROTECT_DEFAULT_WALLET', 'CONFIRM_BACKUP', 'CREATE_VAULT', 'IMPORT_ACCOUNTS', 'IMPORT_TOKEN', 'SET_RPC', 'SET_NETWORK', 'SET_ACTIVE_ACCOUNT', 'SET_ENHANCED_ASSET_DETECTION', 'SAFE_IMPORT', 'SAFE_PROPOSE', 'SAFE_ACCOUNT', 'EXECUTE_REVIEW', 'REFRESH_ACTIVITY', 'SEND_NATIVE']);
 
 chrome.runtime.onMessage.addListener((message: Record<string, unknown>, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id || !sender.url || ![chrome.runtime.getURL('popup.html'), chrome.runtime.getURL('approval.html')].includes(sender.url.split('?')[0])) {
@@ -845,6 +868,7 @@ chrome.runtime.onMessage.addListener((message: Record<string, unknown>, sender, 
 });
 
 async function handleUiMessage(message: Record<string, unknown>): Promise<unknown> {
+  if (unlockedVault && sessionDeadline && Date.now() >= sessionDeadline) lockVault();
   switch (message.type) {
     case 'IMPORT_TOKEN': {
       if (!unlockedVault) throw new Error('Unlock the wallet first');
@@ -976,6 +1000,27 @@ async function handleUiMessage(message: Record<string, unknown>): Promise<unknow
       } finally { provider.destroy(); }
     }
 
+    case 'CREATE_WALLET': {
+      if (!unlockedVault) throw new Error('Unlock the wallet first');
+      const generation = contextRevision;
+      const password = deviceMode ? undefined : await sessionAuthorization(unlockedVault);
+      const stored = await encryptedVault();
+      const existing = deviceMode ? await loadDeviceWallet() : stored ? (await decryptVaultWithMigration(stored, password!)).payload : null;
+      if (!existing) throw new Error('Wallet not found');
+      if (message.name !== undefined && (typeof message.name !== 'string' || message.name.length > 80)) throw new Error('Wallet name is too long');
+      const merged = mergeVaultAccounts(existing, createInitialVault(), message.name as string | undefined);
+      const session = await protectVaultInMemory(merged, password, true);
+      try {
+        const encrypted = password !== undefined ? await encryptVault(merged, password) : null;
+        if (generation !== contextRevision || !unlockedVault) throw new Error('Wallet changed during creation');
+        if (encrypted) await chrome.storage.local.set({ [VAULT_KEY]: encrypted });
+        else await saveDeviceWallet(merged);
+        if (generation !== contextRevision || !unlockedVault) throw new Error('Wallet changed during creation');
+        destroyVaultSession(unlockedVault); unlockedVault = session;
+        await updateSettings({ activeAccountId: merged.selectedAccountId }); touchSession();
+        return true;
+      } catch (e) { if (unlockedVault !== session) destroyVaultSession(session); throw e; }
+    }
     case 'OPEN_WALLET': {
       if (await encryptedVault()) return true;
       const generation = contextRevision;
@@ -985,8 +1030,7 @@ async function handleUiMessage(message: Record<string, unknown>): Promise<unknow
         activeAccountId: payload.selectedAccountId, evmChainId: payload.selectedEvmChainId,
         solanaCluster: payload.selectedSolanaCluster, enhancedAssetDetection: false,
       } });
-      payload.recoveryMnemonic = '';
-      const session = await protectVaultInMemory(payload);
+      const session = await protectVaultInMemory(payload, undefined, true);
       if (generation !== contextRevision) { destroyVaultSession(session); throw new Error('Wallet changed while opening'); }
       if (unlockedVault) destroyVaultSession(unlockedVault);
       unlockedVault = session; deviceMode = true; touchSession();
@@ -1003,10 +1047,36 @@ async function handleUiMessage(message: Record<string, unknown>): Promise<unknow
       if (generation !== contextRevision || !unlockedVault) throw new Error('Wallet changed during password setup');
       // Persist the password vault first: a crash must never destroy the only copy.
       await chrome.storage.local.set({ [VAULT_KEY]: encrypted, passkeyConfig: passkey, backupConfirmed: false });
+      const session = await protectVaultInMemory(payload, String(message.password), true);
+      if (generation !== contextRevision || !unlockedVault) { destroyVaultSession(session); throw new Error('Wallet changed during protection'); }
+      destroyVaultSession(unlockedVault); unlockedVault = session;
       deviceMode = false;
       await removeDeviceWallet().catch(() => undefined);
       contextRevision++; reviews.clear();
       return true;
+    }
+    case 'EXPORT_SECRET': {
+      if (!unlockedVault || deviceMode) throw new Error('Protect and unlock the wallet before exporting secrets');
+      const generation = contextRevision;
+      const stored = await encryptedVault();
+      if (!stored) throw new Error('Wallet not found');
+      const decrypted = await decryptVaultWithMigration(stored, String(message.password ?? ''));
+      const payload = groupedVault(decrypted.payload);
+      const wallet = walletGroups(payload).find(w => w.id === message.walletId);
+      if (!wallet) throw new Error('Unknown wallet');
+      const account = payload.accounts.find(a => a.id === message.accountId && (a.walletId ?? walletGroups(payload)[0].id) === wallet.id);
+      if (!['mnemonic', 'privateKey'].includes(String(message.kind)) || !['encrypted', 'plaintext'].includes(String(message.format))) throw new Error('Unknown export format');
+      const secret = message.kind === 'mnemonic' ? wallet.recoveryMnemonic : account?.privateKey;
+      if (!secret) throw new Error('No recovery phrase or private key is available for this selection');
+      let value = secret;
+      if (message.format === 'encrypted') {
+        if (message.kind === 'privateKey' && account?.family === 'bitcoin') {
+          // Preserve the Bitcoin address type/path in an authenticated single-key backup.
+          value = JSON.stringify(await encryptVault({ recoveryMnemonic: '', accounts: [{ ...account, walletId: undefined }], selectedAccountId: account.id, selectedEvmChainId: 1, selectedSolanaCluster: 'mainnet-beta' }, String(message.backupPassword ?? '')));
+        } else value = await encryptSecretBackup(secret, String(message.backupPassword ?? ''));
+      }
+      if (!unlockedVault || generation !== contextRevision) throw new Error('Wallet changed during export');
+      return { value, kind: message.kind, format: message.format, family: account?.family, address: account?.address, derivationPath: account?.derivationPath };
     }
     case 'GET_RECOVERY_PHRASE': {
       if (!unlockedVault || deviceMode) throw new Error('Protect your wallet with a Passkey or password first');
@@ -1015,23 +1085,35 @@ async function handleUiMessage(message: Record<string, unknown>): Promise<unknow
       if (!stored) throw new Error('Wallet not found');
       const { payload } = await decryptVaultWithMigration(stored, String(message.password ?? ''));
       if (!unlockedVault || generation !== contextRevision) throw new Error('Wallet changed during backup');
-      if (!payload.recoveryMnemonic) throw new Error('Imported private keys require an encrypted backup');
-      return payload.recoveryMnemonic;
+      const activeId = (await settings()).activeAccountId;
+      const walletId = message.walletId ?? unlockedVault.accounts.find(a => a.id === activeId)?.walletId;
+      const wallet = walletGroups(payload).find(w => w.id === walletId) ?? (!message.walletId ? walletGroups(payload)[0] : undefined);
+      if (!wallet?.recoveryMnemonic) throw new Error('Imported private keys require an encrypted backup');
+      return wallet.recoveryMnemonic;
     }
     case 'CONFIRM_BACKUP': {
       if (!unlockedVault || deviceMode) throw new Error('Unlock your protected wallet first');
-      await chrome.storage.local.set({ backupConfirmed: true }); return true;
+      const selectedId = (await settings()).activeAccountId;
+      const id = message.walletId ?? unlockedVault.accounts.find(a => a.id === selectedId)?.walletId;
+      if (!unlockedVault.wallets.some(w => w.id === id)) throw new Error('Unknown wallet');
+      const flags = (await chrome.storage.local.get('walletBackupConfirmations')).walletBackupConfirmations ?? {};
+      await chrome.storage.local.set({ walletBackupConfirmations: { ...flags, [String(id)]: true } }); return true;
     }
     case 'SESSION_STATUS': return { locked: unlockedVault === null };
     case 'STATUS': {
       const stored = await encryptedVault();
       const state = await settings();
       const permissions = await permissionStore();
+      const walletId = unlockedVault?.accounts.find(a => a.id === state.activeAccountId)?.walletId ?? unlockedVault?.wallets[0]?.id;
+      const backupState = await chrome.storage.local.get(['walletBackupConfirmations', 'backupConfirmed']);
       return {
         initialized: stored !== null || deviceMode || await hasDeviceWallet(),
         passwordProtected: stored !== null,
         passkey: (await chrome.storage.local.get('passkeyConfig')).passkeyConfig ?? null,
-        backupConfirmed: (await chrome.storage.local.get('backupConfirmed')).backupConfirmed === true,
+        backupConfirmed: backupState.walletBackupConfirmations?.[walletId ?? ''] === true || (walletId === unlockedVault?.wallets[0]?.id && backupState.backupConfirmed === true),
+        wallets: unlockedVault?.wallets ?? [],
+        suggestedWalletName: nextWalletName(unlockedVault?.wallets ?? []),
+        activeWalletId: walletId,
         locked: unlockedVault === null,
         accounts: unlockedVault?.accounts ?? [],
         settings: normalizedSettings(state),
@@ -1064,8 +1146,7 @@ async function handleUiMessage(message: Record<string, unknown>): Promise<unknow
         backupConfirmed: false,
       });
       const recoveryMnemonic = payload.recoveryMnemonic;
-      payload.recoveryMnemonic = '';
-      unlockedVault = await protectVaultInMemory(payload);
+      unlockedVault = await protectVaultInMemory(payload, password, true);
       touchSession();
       return { recoveryMnemonic };
     }
@@ -1079,11 +1160,13 @@ async function handleUiMessage(message: Record<string, unknown>): Promise<unknow
       const imported = await importWallet(message.import as WalletImport);
       const merged = mergeVaultAccounts(existing, imported);
       const encrypted = await encryptVault(merged, password);
-      if (generation !== contextRevision || !unlockedVault) throw new Error('Wallet changed during import');
-      await chrome.storage.local.set({ [VAULT_KEY]: encrypted });
-      merged.recoveryMnemonic = '';
-      destroyVaultSession(unlockedVault);
-      unlockedVault = await protectVaultInMemory(merged);
+      const session = await protectVaultInMemory(merged, password, true);
+      try {
+        if (generation !== contextRevision || !unlockedVault) throw new Error('Wallet changed during import');
+        await chrome.storage.local.set({ [VAULT_KEY]: encrypted });
+        if (generation !== contextRevision || !unlockedVault) throw new Error('Wallet changed during import');
+        destroyVaultSession(unlockedVault); unlockedVault = session;
+      } catch (e) { destroyVaultSession(session); throw e; }
       await updateSettings({ activeAccountId: merged.selectedAccountId });
       touchSession();
       return true;
@@ -1209,6 +1292,23 @@ async function handleUiMessage(message: Record<string, unknown>): Promise<unknow
       delete permissions[origin];
       await chrome.storage.local.set({ [PERMISSIONS_KEY]: permissions });
       return true;
+    }
+    case 'TOUCH_SESSION':
+      if (unlockedVault) touchSession();
+      return true;
+    case 'SET_AUTO_LOCK': {
+      if (!unlockedVault) throw new Error('Unlock the wallet first');
+      if (!AUTO_LOCK_MINUTES.includes(Number(message.minutes))) throw new Error('Invalid auto-lock duration');
+      await updateSettings({ autoLockMinutes: Number(message.minutes) }); touchSession(); return true;
+    }
+    case 'SELECT_WALLET_ACCOUNT': {
+      const account = unlockedVault?.accounts.find(a => a.id === message.accountId);
+      const chain = chains.find(c => c.key === message.chainKey);
+      if (!account || !chain || chain.family !== account.family) throw new Error('Account and network do not match');
+      await updateSettings({ activeAccountId: account.id,
+        ...(chain.family === 'evm' ? { evmChainId: chain.chainId } : {}),
+        ...(chain.family === 'solana' ? { solanaCluster: chain.key === 'solana:devnet' ? 'devnet' : 'mainnet-beta' } : {}),
+      }); touchSession(); return true;
     }
     case 'SET_ACTIVE_ACCOUNT':
       if (!unlockedVault?.accounts.some((account) => account.id === message.accountId)) throw new Error('Unknown account');

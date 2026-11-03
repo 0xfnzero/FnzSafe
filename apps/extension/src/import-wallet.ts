@@ -6,7 +6,7 @@ import bs58 from 'bs58';
 import { createInitialVault, createPrivateKeyVault, decryptVault, deriveEd25519Path } from './vault';
 import type { ChainFamily, VaultPayload } from './types';
 
-export type WalletImport = { kind: 'mnemonic' | 'privateKey' | 'encrypted'; text: string; family: ChainFamily; password?: string };
+export type WalletImport = { kind: 'mnemonic' | 'privateKey' | 'encrypted'; text: string; family: ChainFamily; password?: string; bitcoinAddressType?: 'native-segwit' | 'taproot' };
 function base64(raw: unknown, length?: number): Uint8Array<ArrayBuffer> {
   if (typeof raw !== 'string' || raw.length > 32_000 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(raw)) throw new Error('Invalid encrypted backup');
   const bytes = Uint8Array.from(atob(raw), c => c.charCodeAt(0));
@@ -20,7 +20,7 @@ export async function importWallet(input: WalletImport, depth = 0): Promise<Vaul
     if (!input.text.trim()) throw new Error('Enter a recovery phrase');
     return createInitialVault(input.text);
   }
-  if (input.kind === 'privateKey') return createPrivateKeyVault(input.family, input.text);
+  if (input.kind === 'privateKey') return createPrivateKeyVault(input.family, input.text, input.bitcoinAddressType);
   if (input.kind !== 'encrypted') throw new Error('Unknown import format');
   const password = input.password ?? '';
   if (!password || password.length > 1024) throw new Error('Enter the backup password');
@@ -57,7 +57,7 @@ export async function importWallet(input: WalletImport, depth = 0): Promise<Vaul
     if (envelope) {
       const text = new TextDecoder('utf-8', { fatal: true }).decode(clear);
       if (!text.trim()) throw new Error('Empty encrypted secret');
-      try { return createInitialVault(text); } catch { return createPrivateKeyVault(input.family, text); }
+      try { return createInitialVault(text); } catch { return createPrivateKeyVault(input.family, text, input.bitcoinAddressType); }
     }
     let payload: VaultPayload;
     if (doc.secret_type === 'mnemonic') {
@@ -69,13 +69,13 @@ export async function importWallet(input: WalletImport, depth = 0): Promise<Vaul
         if (evm) {
           const wallet = HDNodeWallet.fromSeed(seed).derivePath(doc.derivation_path);
           const index = payload.accounts.findIndex(a => a.family === 'evm');
-          payload.accounts[index] = { ...payload.accounts[index], address: wallet.address, privateKey: wallet.privateKey };
+          payload.accounts[index] = { ...payload.accounts[index], address: wallet.address, privateKey: wallet.privateKey, derivationPath: doc.derivation_path };
         } else {
           const secret = deriveEd25519Path(seed, doc.derivation_path);
           try {
             const pair = Keypair.fromSeed(secret);
             const index = payload.accounts.findIndex(a => a.family === 'solana');
-            payload.accounts[index] = { ...payload.accounts[index], address: pair.publicKey.toBase58(), privateKey: bs58.encode(pair.secretKey) };
+            payload.accounts[index] = { ...payload.accounts[index], address: pair.publicKey.toBase58(), privateKey: bs58.encode(pair.secretKey), derivationPath: doc.derivation_path };
           } finally { secret.fill(0); }
         }
       } finally { seed.fill(0); }

@@ -60,3 +60,14 @@ export async function removeDeviceWallet(): Promise<void> {
     });
   } finally { db.close(); }
 }
+
+export async function saveDeviceWallet(payload: VaultPayload): Promise<void> {
+  validateVaultPayload(payload);
+  const candidate = await protectVaultInMemory(payload), db = await open();
+  try { await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction('vault', 'readwrite');
+    tx.objectStore('vault').put(candidate, 'default');
+    tx.oncomplete = () => resolve();
+    tx.onabort = tx.onerror = () => reject(new Error('Unable to save local wallet'));
+  }); } finally { db.close(); }
+}

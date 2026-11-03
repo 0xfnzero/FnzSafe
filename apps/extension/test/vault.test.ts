@@ -68,13 +68,13 @@ test('one recovery phrase deterministically derives all supported families', () 
 
   assert.deepEqual(restoredAddresses, addresses);
   assert.match(addresses["bitcoin:m/86'/0'/0'/0/0"], /^bc1p/);
-  assert.match(addresses['tron:default'], /^T/);
+  assert.match(addresses["tron:m/44'/195'/0'/0/0"], /^T/);
   assert.deepEqual(addresses, {
-    'evm:default': '0x9858EfFD232B4033E47d90003D41EC34EcaEda94',
-    'solana:default': 'HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk',
+    "evm:m/44'/60'/0'/0/0": '0x9858EfFD232B4033E47d90003D41EC34EcaEda94',
+    "solana:m/44'/501'/0'/0'": 'HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk',
     "bitcoin:m/86'/0'/0'/0/0": 'bc1pmg5dhafms6h9nts4dtehgkanym6yeccfmk5hx3ts3jxnm4zh2knqv80ha5',
     "bitcoin:m/84'/0'/0'/0/0": 'bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu',
-    'tron:default': 'TUEZSdKsoDHQMeZwihtdoBiN46zxhGWYdH',
+    "tron:m/44'/195'/0'/0/0": 'TUEZSdKsoDHQMeZwihtdoBiN46zxhGWYdH',
   });
 });
 

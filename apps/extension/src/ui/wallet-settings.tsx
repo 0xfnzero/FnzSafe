@@ -1,3 +1,4 @@
+import { t } from './i18n';
 import { unlockWithPasskey } from '../passkey';
 import { useEffect, useState } from 'react';
 import { api, type WalletStatus } from './api';
@@ -7,26 +8,27 @@ export const emptyImport = (): WalletImport => ({ kind: 'mnemonic', text: '', fa
 export function ImportFields({ value, onChange }: { value: WalletImport; onChange: (value: WalletImport) => void }) {
   const [error, setError] = useState('');
   return <>
-    <label>Import format<select value={value.kind} onChange={e => onChange({ ...emptyImport(), kind: e.target.value as WalletImport['kind'] })}>
-      <option value="mnemonic">Recovery phrase</option><option value="privateKey">Plaintext private key</option><option value="encrypted">Encrypted backup / keystore JSON</option>
+    <label>{t("Import format")}<select value={value.kind} onChange={e => onChange({ ...emptyImport(), kind: e.target.value as WalletImport['kind'] })}>
+      <option value="mnemonic">{t("Recovery phrase")}</option><option value="privateKey">{t("Plaintext private key")}</option><option value="encrypted">{t("Encrypted backup / keystore JSON")}</option>
     </select></label>
-    {value.kind !== 'mnemonic' && <label>Key network<select value={value.family} onChange={e => onChange({ ...value, family: e.target.value as WalletImport['family'] })}>
-      <option value="evm">EVM</option><option value="solana">Solana</option><option value="bitcoin">Bitcoin (Native SegWit)</option><option value="tron">TRON</option>
+    {value.kind !== 'mnemonic' && <label>{t("Key network")}<select value={value.family} onChange={e => onChange({ ...value, family: e.target.value as WalletImport['family'] })}>
+      <option value="evm">{t("EVM")}</option><option value="solana">{t("Solana")}</option><option value="bitcoin">{t("Bitcoin")}</option><option value="tron">{t("TRON")}</option>
     </select></label>}
-    <label>{value.kind === 'mnemonic' ? 'Recovery phrase' : value.kind === 'privateKey' ? 'Private key' : 'Encrypted JSON'}
+    {value.kind !== 'mnemonic' && value.family === 'bitcoin' && <label>{t("Bitcoin address type")}<select value={value.bitcoinAddressType ?? 'native-segwit'} onChange={e => onChange({ ...value, bitcoinAddressType: e.target.value as 'native-segwit' | 'taproot' })}><option value="native-segwit">{t("Native SegWit (bc1q)")}</option><option value="taproot">{t("Taproot (bc1p)")}</option></select></label>}
+    <label>{value.kind === 'mnemonic' ? t("Recovery phrase") : value.kind === 'privateKey' ? t("Private key") : t("Encrypted JSON")}
       <textarea rows={4} maxLength={700000} autoComplete="off" spellCheck={false} value={value.text} onChange={e => onChange({ ...value, text: e.target.value })} required /></label>
     {value.kind === 'encrypted' && <>
-      <label>Backup file<input type="file" accept=".json,application/json" onChange={async e => {
+      <label>{t("Backup file")}<input type="file" accept=".json,application/json" onChange={async e => {
         const file = e.target.files?.[0];
         if (!file) return;
         if (file.size > 700000) return setError('Backup exceeds the size limit');
         onChange({ ...value, text: await file.text() }); setError('');
       }} /></label>
-      <label>Backup password<input type="password" autoComplete="off" value={value.password} onChange={e => onChange({ ...value, password: e.target.value })} required /></label>
-      <p className="fine-print">FnzSafe extension backups, desktop Argon2 encrypted keys/phrases and standard EVM keystores are supported.</p>
+      <label>{t("Backup password")}<input type="password" autoComplete="off" value={value.password} onChange={e => onChange({ ...value, password: e.target.value })} required /></label>
+      <p className="fine-print">{t("FnzSafe extension backups, desktop Argon2 encrypted keys/phrases and standard EVM keystores are supported.")}</p>
     </>}
-    {value.kind === 'privateKey' && <p className="fine-print">EVM/TRON: hex. Solana: base58, seed hex or JSON byte array. Bitcoin: compressed mainnet WIF or hex. Imported keys need their own backup.</p>}
-    {error && <p className="error">{error}</p>}
+    {value.kind === 'privateKey' && <p className="fine-print">{t("EVM/TRON: hex. Solana: base58, seed hex or JSON byte array. Bitcoin: compressed mainnet WIF or hex. Imported keys need their own backup.")}</p>}
+    {error && <p className="error">{t(error)}</p>}
   </>;
 }
 export function RecoverySettings({ status, onRefresh }: { status: WalletStatus; onRefresh: () => Promise<void> }) {
@@ -50,24 +52,24 @@ export function RecoverySettings({ status, onRefresh }: { status: WalletStatus; 
     } catch (e) { setError(e instanceof Error ? e.message : 'Wallet operation failed'); }
     finally { setBusy(false); setPassword(''); setBackupPassword(''); }
   }
-  return <section className="settings-panel"><h3>Recovery & backup</h3>
-    {!mode ? <div className="modal-actions"><button onClick={() => setMode('import')}>Import accounts</button><button onClick={() => setMode('export')}>Export encrypted backup</button></div> :
+  return <section className="settings-panel"><h3>{t("Recovery & backup")}</h3>
+    {!mode ? <div className="modal-actions"><button onClick={() => setMode('import')}>{t("Import accounts")}</button><button onClick={() => setMode('export')}>{t("Export encrypted backup")}</button></div> :
       <form onSubmit={submit}>
         {mode === 'import' && <ImportFields value={value} onChange={setValue} />}
-        {mode === 'export' && <p>This backup includes every imported account. Keep its wallet password separately.</p>}
-        {!status.passkey && <label>Current wallet password<input type="password" value={password} onChange={e => setPassword(e.target.value)} required autoComplete="current-password" /></label>}
-        {status.passkey && mode === 'export' && <label>Backup file password<input type="password" minLength={10} value={backupPassword} onChange={e => setBackupPassword(e.target.value)} required autoComplete="new-password" /><span className="fine-print">Choose a separate password so this file can be restored without your Passkey.</span></label>}
-        {status.passkey && <p className="fine-print">Your Passkey will be verified before this operation.</p>}
-        {error && <p className="error">{error}</p>}
-        <div className="modal-actions"><button type="button" disabled={busy} onClick={() => { setMode(null); setValue(emptyImport()); setPassword(''); }}>Cancel</button><button disabled={busy}>{busy ? 'Working...' : mode === 'import' ? 'Import accounts' : 'Download backup'}</button></div>
+        {mode === 'export' && <p>{t("This backup includes every imported account. Keep its wallet password separately.")}</p>}
+        {!status.passkey && <label>{t("Current wallet password")}<input type="password" value={password} onChange={e => setPassword(e.target.value)} required autoComplete="current-password" /></label>}
+        {status.passkey && mode === 'export' && <label>{t("Backup file password")}<input type="password" minLength={10} value={backupPassword} onChange={e => setBackupPassword(e.target.value)} required autoComplete="new-password" /><span className="fine-print">{t("Choose a separate password so this file can be restored without your Passkey.")}</span></label>}
+        {status.passkey && <p className="fine-print">{t("Your Passkey will be verified before this operation.")}</p>}
+        {error && <p className="error">{t(error)}</p>}
+        <div className="modal-actions"><button type="button" disabled={busy} onClick={() => { setMode(null); setValue(emptyImport()); setPassword(''); }}>{t("Cancel")}</button><button disabled={busy}>{busy ? t("Working...") : mode === 'import' ? t("Import accounts") : t("Download backup")}</button></div>
       </form>}
   </section>;
 }
 export function RpcSettings({ status, onRefresh }: { status: WalletStatus; onRefresh: () => Promise<void> }) {
   const [key, setKey] = useState(`evm:${status.settings.evmChainId}`);
   const chain = status.chains.find(c => c.key === key)!;
-  return <section className="settings-panel"><h3>Network RPC</h3>
-    <label>RPC network<select value={key} onChange={e => setKey(e.target.value)}>{status.chains.filter(c => c.rpcUrl).map(c => <option key={c.key} value={c.key}>{c.name}</option>)}</select></label>
+  return <section className="settings-panel"><h3>{t("Network RPC")}</h3>
+    <label>{t("RPC network")}<select value={key} onChange={e => setKey(e.target.value)}>{status.chains.filter(c => c.rpcUrl).map(c => <option key={c.key} value={c.key}>{c.name}</option>)}</select></label>
     <RpcEditor key={key} chainKey={key} initial={chain.rpcUrl!} onRefresh={onRefresh} />
   </section>;
 }
@@ -81,10 +83,10 @@ function RpcEditor({ chainKey, initial, onRefresh }: { chainKey: string; initial
     finally { setBusy(false); }
   }
   return <form onSubmit={e => { e.preventDefault(); void save(); }}>
-    <label>RPC URL<input type={visible ? 'text' : 'password'} value={url} maxLength={2048} autoComplete="off" spellCheck={false} onChange={e => setUrl(e.target.value)} required /></label>
-    <button type="button" onClick={() => setVisible(!visible)}>{visible ? 'Hide URL' : 'Show URL'}</button>
-    <p className="fine-print">The endpoint must match this network. Custom endpoints do not fall back to public providers. Token discovery uses a separate index service.</p>
-    {message && <p role="status">{message}</p>}
-    <div className="modal-actions"><button type="button" disabled={busy} onClick={() => void save(true)}>Restore default</button><button disabled={busy}>{busy ? 'Verifying...' : 'Verify & save'}</button></div>
+    <label>{t("RPC URL")}<input type={visible ? "text" : "password"} value={url} maxLength={2048} autoComplete="off" spellCheck={false} onChange={e => setUrl(e.target.value)} required /></label>
+    <button type="button" onClick={() => setVisible(!visible)}>{visible ? t("Hide URL") : t("Show URL")}</button>
+    <p className="fine-print">{t("The endpoint must match this network. Custom endpoints do not fall back to public providers. Token discovery uses a separate index service.")}</p>
+    {message && <p role="status">{t(message)}</p>}
+    <div className="modal-actions"><button type="button" disabled={busy} onClick={() => void save(true)}>{t("Restore default")}</button><button disabled={busy}>{busy ? t("Verifying...") : t("Verify & save")}</button></div>
   </form>;
 }

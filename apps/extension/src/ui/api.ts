@@ -1,7 +1,9 @@
 import type { PasskeyConfig } from '../passkey';
-import type { ChainInfo } from '../types';
+import type { ChainInfo, PublicWallet } from '../types';
 
 export interface PublicAccount {
+  walletId: string;
+  derivationPath?: string;
   id: string;
   name: string;
   family: 'evm' | 'solana' | 'bitcoin' | 'tron';
@@ -15,7 +17,11 @@ export interface WalletStatus {
   backupConfirmed: boolean;
   locked: boolean;
   accounts: PublicAccount[];
+  wallets: PublicWallet[];
+  suggestedWalletName: string;
+  activeWalletId?: string;
   settings: {
+    autoLockMinutes: number;
     activeAccountId?: string;
     evmChainId: number;
     solanaCluster: 'mainnet-beta' | 'devnet';

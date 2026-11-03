@@ -30,7 +30,8 @@ test('mnemonic whitespace normalized; empty imports rejected; appending preserve
   await assert.rejects(importWallet({ kind: 'mnemonic', text: ' ', family: 'evm' }));
   const merged = mergeVaultAccounts(payload, createPrivateKeyVault('evm', key));
   assert.equal(merged.recoveryMnemonic, phrase); assert.equal(merged.accounts.length, 6);
-  assert.deepEqual(merged.accounts.slice(0, 5), payload.accounts);
+  assert.deepEqual(merged.accounts.slice(0, 5).map(({ walletId: _, ...a }) => a), payload.accounts);
+  assert.equal(merged.wallets?.length, 2);
   assert.throws(() => mergeVaultAccounts(merged, createPrivateKeyVault('evm', key)), /already imported/);
 });
 test('extension backup and standard EVM keystore restore correct addresses and reject hostile work factors', async () => {
@@ -53,4 +54,42 @@ test('desktop Rust-generated encrypted key and phrase fixtures restore matching 
   }
   const corrupted = JSON.parse(fixtures[0].text); corrupted.address = '0x' + '11'.repeat(20);
   await assert.rejects(importWallet({ kind: 'encrypted', text: JSON.stringify(corrupted), family: 'evm', password }), /damaged backup/);
+});
+
+test('legacy imported private keys are separated from the mnemonic wallet without changing keys', async () => {
+  const { groupedVault, createPrivateKeyVault } = await import('../src/vault');
+  const legacy = createInitialVault('test test test test test test test test test test test junk');
+  const imported = createPrivateKeyVault('evm', '7'.padStart(64, '0'));
+  legacy.accounts.push(imported.accounts[0]);
+  const grouped = groupedVault(legacy);
+  assert.equal(grouped.wallets!.length, 2);
+  assert.equal(grouped.wallets![0].recoveryMnemonic, legacy.recoveryMnemonic);
+  assert.equal(grouped.wallets![1].recoveryMnemonic, '');
+  assert.equal(grouped.accounts.at(-1)!.walletId, grouped.wallets![1].id);
+  assert.deepEqual(grouped.accounts.map(({ walletId, ...a }) => a), legacy.accounts);
+});
+
+test('verified custom derivation paths retain mnemonic grouping and full-backup metadata', async () => {
+  const { HDNodeWallet } = await import('ethers');
+  const { mnemonicToSeedSync } = await import('@scure/bip39');
+  const { groupedVault } = await import('../src/vault');
+  const payload = createInitialVault(phrase);
+  const path = "m/44'/60'/0'/0/1";
+  const account = HDNodeWallet.fromSeed(mnemonicToSeedSync(phrase)).derivePath(path);
+  payload.accounts[0] = { ...payload.accounts[0], privateKey: account.privateKey, address: account.address, derivationPath: path };
+  const grouped = groupedVault(payload);
+  assert.equal(grouped.wallets!.length, 1);
+  const restored = await decryptVault(await encryptVault(grouped, password), password);
+  assert.equal(restored.accounts[0].derivationPath, path);
+  assert.equal(restored.accounts[0].address, account.address);
+});
+
+test('importing a full mnemonic after one of its keys still provides every chain in that wallet', () => {
+  const root = createInitialVault(phrase);
+  const existing = createPrivateKeyVault('evm', root.accounts[0].privateKey);
+  const merged = mergeVaultAccounts(existing, root);
+  assert.equal(merged.wallets!.length, 2);
+  assert.equal(merged.accounts.filter(a => a.walletId === merged.wallets![1].id).length, 5);
+  assert.equal(merged.accounts[0].id, existing.accounts[0].id);
+  assert.throws(() => mergeVaultAccounts(merged, root), /already imported/);
 });

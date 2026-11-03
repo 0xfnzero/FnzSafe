@@ -1,4 +1,4 @@
-# FnzSafe Chrome Extension 0.2.0
+# FnzSafe Chrome Extension 0.3.0
 
 Manifest V3 wallet extension for EVM and Solana. Bitcoin and TRON support key recovery and address display; transaction signing and broadcasting for these families remain disabled.
 
@@ -25,16 +25,28 @@ Before protection is configured, the default wallet is stored in IndexedDB as AE
 
 Choose **Protect wallet** to set a password or a Passkey. Passkey mode requires a WebAuthn provider supporting the PRF extension: a verified assertion must return a 32-byte PRF output, which encrypts the vault. A credential ID or public assertion is never used as an encryption key. Unsupported providers fail with a password alternative. Enrollment and unlock require user verification; the user confirmed successful real-browser enrollment, including the required PRF verification. The user also confirmed locking and successfully unlocking the same wallet with the Passkey.
 
-Passkeys are scoped to the extension ID. Keep the installation path stable for unpacked extensions and retain an offline recovery phrase. Passkey sync alone is not a wallet backup. Passkey-protected encrypted exports require a separate backup-file password so they can be restored without the original credential. Imported private keys require the encrypted export; the original phrase does not recover separately imported keys.
+Passkeys are scoped to the extension ID. Keep the installation path stable for unpacked extensions and retain an offline recovery phrase. Passkey sync alone is not a wallet backup. Passkey-protected encrypted exports require a separate backup-file password so they can be restored without the original credential. Imported private keys have independent backup/export controls; another wallet’s phrase does not recover them.
 
 ## Recovery, networks and assets
 
-- Restore a plaintext BIP-39 phrase or import an individual EVM/TRON hex key, Solana base58 key / seed hex / JSON key array, or Bitcoin mainnet compressed WIF / hex key. Bitcoin derives a native SegWit address.
+- Restore a plaintext BIP-39 phrase or import an individual EVM/TRON hex key, Solana base58 key / seed hex / JSON key array, or Bitcoin mainnet compressed WIF / hex key. Bitcoin imports can select Native SegWit or Taproot; encrypted extension key exports preserve the original address type.
 - Restore extension encrypted backups, standard Web3 keystore v3, and supported FnzSafe desktop password-only key/mnemonic backups. Desktop custom derivation paths are preserved. Hardware-backed, social/MPC and other desktop backup schemes are not supported.
-- Settings can append accounts to the existing encrypted vault and export an encrypted backup after password or Passkey verification. Appending accounts preserves the original recovery phrase; keep the encrypted backup to recover separately imported keys.
+- Settings can append accounts to the existing encrypted vault and export an encrypted backup after password or Passkey verification. New mnemonic imports retain their own root and wallet group. Imported keys remain separate from mnemonic wallets.
 - Configure HTTPS RPC endpoints per EVM network and Solana cluster, with chain ID / genesis verification. HTTP is allowed only for localhost testing. Reset restores the built-in endpoint. Custom endpoints do not silently fall back to another provider.
 - Add ERC-20 contracts directly, read decimals and balances through the selected RPC, preview native/ERC-20 transfers, and check local submission receipts in Activity.
 - Robinhood automatic token discovery remains unavailable (Issue #8). Custom RPC plus manual token import is a workaround, not a repair of the external indexer.
+
+## Wallets, languages and backups
+
+The wallet picker has wallet-name tabs on the left and per-network addresses on the right. Each row has independent copy and select controls; selection updates the account and network together. New wallets use one BIP-39 phrase for EVM, Solana, Bitcoin (Taproot and Native SegWit) and TRON. Creation is immediate, with no forced phrase display or backup confirmation. The name field is prefilled with the next sequential Wallet number and can be edited before creation. Previously imported private keys are grouped separately when they cannot be recovered from the recorded mnemonic's supported paths.
+
+Settings → Language offers English, Simplified Chinese, Traditional Chinese and automatic browser detection. Language and appearance persist across wallet and approval windows. Addresses, user names, token names and raw transaction data are not translated.
+
+**Backup & export** targets the active wallet's mnemonic or a selected chain private key. It supports encrypted JSON files/strings, plaintext, locally generated QR codes, and ordered plaintext fragments. Password/Passkey verification is required before export. Results clear on exit, lock detection or after 90 seconds. Fragments are simple ordered pieces, not Shamir shares; all pieces are required. Mnemonic fragments keep whole words.
+
+Mnemonic and EVM/Solana/TRON key encryption uses the desktop password-secret envelope (Argon2id and AES-GCM). Bitcoin encrypted key exports use a single-account extension vault to preserve the address type and path; these require the extension importer. Plaintext Bitcoin recovery must select the matching address type. Full-vault exports preserve every mnemonic root and imported key. Custom derivation paths require a full encrypted backup to preserve exact account metadata in addition to the phrase. Version 2 grouped vaults require extension 0.3.0 or newer; version 0.2.0 cannot open them. Existing version 1 vaults remain readable.
+
+Manual validation for 0.3.0 used public test accounts in Chrome for Testing: one-click creation, legacy grouping, wallet/chain switching, copy without selection, all three languages, optional backup formats, and downloaded encrypted-key restoration. No real user's secrets were used in export tests.
 
 ## Safe multisig
 
@@ -44,15 +56,15 @@ Only verified canonical Safe deployments, EIP-712 EOA signatures and CALL operat
 
 ## Installation
 
-Version 0.2.0 is an extension preview release. Passkey enrollment has been confirmed by the user; the user also confirmed locking and successfully unlocking the same wallet with the Passkey. The password path remains available.
+Version 0.3.0 is an extension preview release. Passkey enrollment has been confirmed by the user; the user also confirmed locking and successfully unlocking the same wallet with the Passkey. The password path remains available.
 
-Download and extract `FnzSafe-extension-0.2.0.zip` from the `extension-v0.2.0` GitHub Release. In Chrome, open `chrome://extensions`, enable Developer mode and choose **Load unpacked**, then select the extracted directory containing `manifest.json`. Keep that directory in place. This is an unpacked developer distribution, not a Chrome Web Store listing; updates are manual.
+Download and extract `FnzSafe-extension-0.3.0.zip` from the `extension-v0.3.0` GitHub Release. In Chrome, open `chrome://extensions`, enable Developer mode and choose **Load unpacked**, then select the extracted directory containing `manifest.json`. Keep that directory in place. When updating an existing unpacked installation, replace its files in the same directory and use Reload; changing the path changes the extension ID and can break Passkey access. This is an unpacked developer distribution, not a Chrome Web Store listing; updates are manual.
 
 For local development, load `dist` after building. Use a separate Chrome profile and public test accounts for development; never fund fixture accounts on a public network.
 
 ## Reproducible validation
 
-`npm test` covers RPC validation and redaction, plaintext recovery, encrypted backup formats, Safe signatures/proposals, vault migration, default-wallet persistence and protection migration, mocked Passkey PRF validation, DApp permission/security boundaries and serialized background imports. The current suite contains 53 passing tests. The desktop compatibility fixtures were produced independently by the Rust implementation:
+`npm test` covers RPC validation and redaction, plaintext recovery, encrypted backup formats, Safe signatures/proposals, vault migration, default-wallet persistence and protection migration, mocked Passkey PRF validation, DApp permission/security boundaries and serialized background imports. The current suite contains 66 passing tests, including multiple mnemonic roots, legacy import grouping, failed-write preservation, scoped exports, encrypted backup restoration, locale completeness, atomic account/network selection and idle-lock settings. The desktop compatibility fixtures were produced independently by the Rust implementation:
 
 ```bash
 # Run from the repository root (requires the usual Rust/OpenSSL build dependencies).
@@ -77,7 +89,8 @@ Before the visual redesign, release validation also exercised plaintext recovery
 ## Security model
 
 - Protected vaults use PBKDF2-SHA-256 (600,000 iterations) and AES-256-GCM. Password mode derives from the chosen password; Passkey mode derives from the PRF output. The initial browser-bound wallet has the separate storage boundary described above.
-- Decrypted keys exist only in the Manifest V3 service worker and are cleared after five minutes of inactivity, explicit lock, or worker suspension. An open wallet/approval UI checks session status without extending the inactivity timeout.
+- Protected signing keys and the authorization needed for one-click creation are encrypted with a nonextractable, in-memory AES key. Mnemonic roots are removed from the signing session. The session and encrypted authorization are cleared on lock. No password/PRF authorization is persisted.
+- Idle lock defaults to 15 minutes and supports 5/15/30/60 minutes. Visible UI clicks, typing and scrolling reset it; status polling and DApp reads do not. While unlocked, an extension API heartbeat prevents ordinary Chrome worker-idle termination before that deadline. Explicit lock, actual worker termination, extension reload and browser restart still discard the session.
 - Page scripts never receive private keys or the wallet password.
 - A content-script bridge validates top-level HTTPS/localhost origins before forwarding provider requests.
 - EVM and Solana permissions are recorded per origin and per chain family.
@@ -92,4 +105,4 @@ Before the visual redesign, release validation also exercised plaintext recovery
 
 This implementation follows public wallet interaction conventions such as EIP-1193 and EIP-6963. It does not copy MetaMask source code, branding, or visual assets.
 
-The five-minute in-memory vault reduces exposure but cannot guarantee JavaScript string zeroization. Hardware-backed or native isolated signing remains a required hardening step before treating the extension as suitable for high-value custody.
+The time-limited in-memory vault reduces exposure but cannot guarantee JavaScript string zeroization. Hardware-backed or native isolated signing remains a required hardening step before treating the extension as suitable for high-value custody.

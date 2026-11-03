@@ -7,9 +7,14 @@ export interface VaultAccount {
   address: string;
   privateKey: string;
   derivationPath?: string;
+  walletId?: string;
 }
 
+export interface VaultWallet { id: string; name: string; recoveryMnemonic: string }
+export interface PublicWallet { id: string; name: string; hasRecoveryPhrase: boolean }
+
 export interface VaultPayload {
+  wallets?: VaultWallet[];
   recoveryMnemonic: string;
   accounts: VaultAccount[];
   selectedAccountId: string;
@@ -18,7 +23,7 @@ export interface VaultPayload {
 }
 
 export interface EncryptedVault {
-  version: 1;
+  version: 1 | 2;
   kdf: { name: 'PBKDF2'; hash: 'SHA-256'; iterations: number; salt: string };
   cipher: { name: 'AES-GCM'; iv: string; data: string };
 }

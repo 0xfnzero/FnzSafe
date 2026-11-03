@@ -1,3 +1,4 @@
+import { t } from './i18n';
 import { useSyncExternalStore } from 'react';
 import { Monitor, Moon, Sun } from 'lucide-react';
 
@@ -27,22 +28,22 @@ function change(value: Theme) {
 }
 export function ThemeControl() {
   const theme = useSyncExternalStore(subscribe, preference);
-  return <label className="theme-control" title="Appearance">
+  return <label className="theme-control" title={t("Appearance")}>
     {theme === 'dark' ? <Moon size={17} /> : theme === 'light' ? <Sun size={17} /> : <Monitor size={17} />}
-    <select aria-label="Appearance" value={theme} onChange={e => change(e.target.value as Theme)}>
-      <option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option>
+    <select aria-label={t("Appearance")} value={theme} onChange={e => change(e.target.value as Theme)}>
+      <option value="system">{t("System")}</option><option value="light">{t("Light")}</option><option value="dark">{t("Dark")}</option>
     </select>
   </label>;
 }
 export function ThemeSettings() {
   const theme = useSyncExternalStore(subscribe, preference);
-  return <section className="settings-panel appearance-panel"><div className="panel-heading"><h3>Appearance</h3><span>Make it yours</span></div>
-    <div className="theme-options" role="group" aria-label="Wallet theme">
+  return <section className="settings-panel appearance-panel"><div className="panel-heading"><h3>{t("Appearance")}</h3><span>{t("Make it yours")}</span></div>
+    <div className="theme-options" role="group" aria-label={t("Wallet theme")}>
       {(['light', 'dark', 'system'] as const).map(value => <button key={value} aria-pressed={theme === value} className={`theme-option ${theme === value ? 'selected' : ''}`} onClick={() => change(value)}>
         <span className={`theme-swatch ${value}`} aria-hidden="true"><i /><i /><i /></span>
-        <span>{value === 'light' ? <Sun size={14} /> : value === 'dark' ? <Moon size={14} /> : <Monitor size={14} />}{value[0].toUpperCase() + value.slice(1)}</span>
+        <span>{value === 'light' ? <Sun size={14} /> : value === 'dark' ? <Moon size={14} /> : <Monitor size={14} />}{t(value[0].toUpperCase() + value.slice(1))}</span>
       </button>)}
     </div>
-    <p className="fine-print">Your choice also applies to transaction confirmations.</p>
+    <p className="fine-print">{t("Your choice also applies to transaction confirmations.")}</p>
   </section>;
 }

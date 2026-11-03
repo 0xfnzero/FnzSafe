@@ -1,3 +1,4 @@
+import { nextWalletName } from './wallet-names';
 import bs58 from 'bs58';
 import { Keypair } from '@solana/web3.js';
 import { HDNodeWallet, SigningKey, computeAddress } from 'ethers';
@@ -74,7 +75,7 @@ export async function encryptVault(payload: VaultPayload, password: string): Pro
   try {
     const data = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, cleartext);
     return {
-      version: 1,
+      version: payload.wallets ? 2 : 1,
       kdf: { name: 'PBKDF2', hash: 'SHA-256', iterations: KDF_ITERATIONS, salt: encode(salt) },
       cipher: { name: 'AES-GCM', iv: encode(iv), data: encode(data) },
     };
@@ -93,7 +94,7 @@ export async function decryptVaultWithMigration(
 ): Promise<{ payload: VaultPayload; migrated: boolean }> {
   if (password.length > MAX_PASSWORD_LENGTH) throw new Error('Incorrect password or damaged wallet vault');
   if (
-    !vault || vault.version !== 1 || vault.kdf?.name !== 'PBKDF2' ||
+    !vault || ![1, 2].includes(vault.version) || vault.kdf?.name !== 'PBKDF2' ||
     vault.kdf.hash !== 'SHA-256' || vault.cipher?.name !== 'AES-GCM' ||
     !Number.isSafeInteger(vault.kdf.iterations) || vault.kdf.iterations < KDF_ITERATIONS ||
     vault.kdf.iterations > MAX_KDF_ITERATIONS
@@ -118,7 +119,8 @@ export async function decryptVaultWithMigration(
       encrypted,
     ));
     const payload = JSON.parse(decoder.decode(cleartext)) as VaultPayload;
-    const migrated = migrateLegacyBitcoinAddresses(payload);
+    const migrated = vault.version === 1 ? migrateLegacyBitcoinAddresses(payload) : false;
+    if (vault.version === 2 && !payload.wallets) throw new Error('Missing wallet groups');
     validateVaultPayload(payload);
     return { payload, migrated };
   } catch {
@@ -157,11 +159,11 @@ export function createInitialVault(importedMnemonic?: string): VaultPayload {
     return {
       recoveryMnemonic: mnemonic,
       accounts: [
-        { id: evmId, name: 'EVM Account 1', family: 'evm', address: evm.address, privateKey: evm.privateKey },
-        { id: crypto.randomUUID(), name: 'Solana Account 1', family: 'solana', address: solana.publicKey.toBase58(), privateKey: bs58.encode(solana.secretKey) },
+        { id: evmId, name: 'EVM Account 1', family: 'evm', address: evm.address, privateKey: evm.privateKey, derivationPath: "m/44'/60'/0'/0/0" },
+        { id: crypto.randomUUID(), name: 'Solana Account 1', family: 'solana', address: solana.publicKey.toBase58(), privateKey: bs58.encode(solana.secretKey), derivationPath: "m/44'/501'/0'/0'" },
         { id: crypto.randomUUID(), name: 'Bitcoin Taproot', family: 'bitcoin', address: bitcoinAddress, privateKey: `0x${toHex(bitcoinTaprootKey)}`, derivationPath: BITCOIN_TAPROOT_PATH },
         { id: crypto.randomUUID(), name: 'Bitcoin Native SegWit', family: 'bitcoin', address: bitcoinNativeSegwitAddress, privateKey: `0x${toHex(bitcoinNativeSegwitNode.privateKey)}`, derivationPath: BITCOIN_NATIVE_SEGWIT_PATH },
-        { id: crypto.randomUUID(), name: 'TRON Account 1', family: 'tron', address: tronAddress, privateKey: `0x${toHex(tronNode.privateKey)}` },
+        { id: crypto.randomUUID(), name: 'TRON Account 1', family: 'tron', address: tronAddress, privateKey: `0x${toHex(tronNode.privateKey)}`, derivationPath: "m/44'/195'/0'/0/0" },
       ],
       selectedAccountId: evmId,
       selectedEvmChainId: 1,
@@ -200,6 +202,20 @@ export function validateVaultPayload(payload: VaultPayload): void {
     ids.add(account.id);
   }
   if (!ids.has(payload.selectedAccountId)) throw new Error('Invalid vault contents');
+  if (payload.wallets !== undefined) {
+    if (!Array.isArray(payload.wallets) || !payload.wallets.length || payload.wallets.length > 100) throw new Error('Invalid wallet groups');
+    const walletIds = new Set<string>();
+    for (const w of payload.wallets) {
+      if (!w || typeof w.id !== 'string' || !w.id || w.id.length > 128 || walletIds.has(w.id) ||
+          typeof w.name !== 'string' || !w.name.trim() || w.name.length > 80 ||
+          typeof w.recoveryMnemonic !== 'string' || w.recoveryMnemonic.length > 512 ||
+          (w.recoveryMnemonic !== '' && !validateMnemonic(w.recoveryMnemonic, wordlist)) ||
+          !payload.accounts.some(a => a.walletId === w.id)) throw new Error('Invalid wallet groups');
+      walletIds.add(w.id);
+    }
+    if (payload.accounts.some(a => !a.walletId || !walletIds.has(a.walletId)) ||
+        payload.recoveryMnemonic !== payload.wallets[0].recoveryMnemonic) throw new Error('Invalid wallet groups');
+  } else if (payload.accounts.some(a => a.walletId !== undefined)) throw new Error('Invalid wallet groups');
 }
 
 function addressFromAccountKey(family: string, privateKey: string, derivationPath?: string): string {
@@ -266,6 +282,7 @@ function taggedHash(tag: string, message: Uint8Array): Uint8Array {
 }
 
 export function migrateLegacyBitcoinAddresses(payload: VaultPayload): boolean {
+  if (!payload.recoveryMnemonic) return false;
   const bitcoinAccounts = payload.accounts.filter((account) => account.family === 'bitcoin');
   if (bitcoinAccounts.length === 0) return false;
   const seed = mnemonicToSeedSync(payload.recoveryMnemonic);
@@ -379,7 +396,7 @@ export function deriveEd25519Path(seed: Uint8Array, path: string): Uint8Array {
 }
 
 /** Imported keys have no invented recovery phrase. Keep the original key backup. */
-export function createPrivateKeyVault(family: VaultPayload['accounts'][number]['family'], raw: string): VaultPayload {
+export function createPrivateKeyVault(family: VaultPayload['accounts'][number]['family'], raw: string, bitcoinAddressType: 'native-segwit' | 'taproot' = 'native-segwit'): VaultPayload {
   if (typeof raw !== 'string' || raw.length > 2048) throw new Error('Invalid private key');
   let key = raw.trim();
   let derivationPath: string | undefined;
@@ -409,7 +426,7 @@ export function createPrivateKeyVault(family: VaultPayload['accounts'][number]['
       if (!/^(0x)?[a-f\d]{64}$/i.test(key)) throw new Error('Use a 32-byte hex private key');
       key = `0x${key.replace(/^0x/i, '').toLowerCase()}`;
     }
-    if (family === 'bitcoin') derivationPath = BITCOIN_NATIVE_SEGWIT_PATH;
+    if (family === 'bitcoin') derivationPath = bitcoinAddressType === 'taproot' ? BITCOIN_TAPROOT_PATH : BITCOIN_NATIVE_SEGWIT_PATH;
   }
   const id = crypto.randomUUID();
   const payload: VaultPayload = { recoveryMnemonic: '', accounts: [{ id, name: `${family.toUpperCase()} imported`, family,
@@ -419,16 +436,57 @@ export function createPrivateKeyVault(family: VaultPayload['accounts'][number]['
   return payload;
 }
 
-export function mergeVaultAccounts(existing: VaultPayload, imported: VaultPayload): VaultPayload {
-  validateVaultPayload(existing);
-  validateVaultPayload(imported);
-  const accounts = [...existing.accounts];
-  for (const account of imported.accounts) {
-    if (!accounts.some(a => a.family === account.family && a.address === account.address)) accounts.push({ ...account, id: crypto.randomUUID() });
+/** Group legacy imports only when their exact keys are recoverable from the recorded root. */
+export function walletGroups(payload: VaultPayload) { return groupedVault(payload).wallets!; }
+export function groupedVault(payload: VaultPayload): VaultPayload {
+  if (payload.wallets) return { ...payload, wallets: payload.wallets.map(w => ({ ...w })), accounts: payload.accounts.map(a => ({ ...a })) };
+  const derived = payload.recoveryMnemonic ? createInitialVault(payload.recoveryMnemonic).accounts : [];
+  const matched = new Set(payload.accounts.filter(a => derived.some(d => d.family === a.family && d.address === a.address && d.privateKey === a.privateKey)).map(a => a.id));
+  if (payload.recoveryMnemonic) {
+    const seed = mnemonicToSeedSync(payload.recoveryMnemonic);
+    try {
+      for (const a of payload.accounts) {
+        if (matched.has(a.id) || !a.derivationPath) continue;
+        try {
+          if (a.family === 'evm' && HDNodeWallet.fromSeed(seed).derivePath(a.derivationPath).privateKey === a.privateKey) matched.add(a.id);
+          else if (a.family === 'solana') {
+            const secret = deriveEd25519Path(seed, a.derivationPath);
+            try { if (bs58.encode(Keypair.fromSeed(secret).secretKey) === a.privateKey) matched.add(a.id); } finally { secret.fill(0); }
+          }
+        } catch { /* Imported keys with unverified paths remain independent. */ }
+      }
+    } finally { seed.fill(0); }
   }
-  if (accounts.length === existing.accounts.length) throw new Error('These accounts are already imported');
-  // Preserve the original vault's recovery root; encrypted backups include all imported keys.
-  const payload = { ...existing, accounts, selectedAccountId: accounts[accounts.length - 1].id };
-  validateVaultPayload(payload);
-  return payload;
+  const belongs = (a: VaultPayload['accounts'][number]) => matched.has(a.id);
+  const rootAccount = payload.accounts.find(belongs);
+  // Never advertise unrelated imported keys as recoverable from the saved phrase.
+  const wallets: NonNullable<VaultPayload['wallets']> = [];
+  const accounts = payload.accounts.map(a => ({ ...a, walletId: rootAccount && belongs(a) ? rootAccount.id : a.id }));
+  if (rootAccount) wallets.push({ id: rootAccount.id, name: 'Wallet 1', recoveryMnemonic: payload.recoveryMnemonic });
+  for (const a of accounts) if (!wallets.some(w => w.id === a.walletId)) wallets.push({ id: a.walletId, name: rootAccount ? a.name : wallets.length === 0 ? 'Wallet 1' : a.name, recoveryMnemonic: '' });
+  if (payload.recoveryMnemonic && !rootAccount) throw new Error('Legacy recovery phrase cannot be matched to its accounts');
+  return { ...payload, wallets, accounts };
+}
+export function mergeVaultAccounts(existing: VaultPayload, imported: VaultPayload, name?: string): VaultPayload {
+  validateVaultPayload(existing); validateVaultPayload(imported);
+  const result = groupedVault(existing), source = groupedVault(imported);
+  if (name?.trim() && result.wallets!.some(w => w.name.toLowerCase() === name.trim().toLowerCase())) throw new Error('A wallet with this name already exists');
+  let firstNew: string | undefined;
+  for (const wallet of source.wallets!) {
+    const knownRoot = wallet.recoveryMnemonic ? result.wallets!.find(w => w.recoveryMnemonic === wallet.recoveryMnemonic) : undefined;
+    const walletId = knownRoot?.id ?? crypto.randomUUID();
+    const additions = source.accounts.filter(a => a.walletId === wallet.id && !result.accounts.some(b =>
+      b.family === a.family && b.address === a.address && (!wallet.recoveryMnemonic || b.walletId === walletId)))
+      .map(a => ({ ...a, id: crypto.randomUUID(), walletId }));
+    if (!additions.length) continue;
+    const walletName = name?.trim() || nextWalletName(result.wallets!);
+    if (walletName.length > 80) throw new Error('Wallet name is too long');
+    if (!knownRoot) result.wallets!.push({ ...wallet, id: walletId, name: source.wallets!.length === 1 || result.wallets!.some(w => w.name.toLowerCase() === wallet.name.toLowerCase()) ? walletName : wallet.name });
+    result.accounts.push(...additions);
+    firstNew ??= additions.find(a => a.family === 'evm')?.id ?? additions[0].id;
+  }
+  if (!firstNew) throw new Error('These accounts are already imported');
+  result.selectedAccountId = firstNew;
+  validateVaultPayload(result);
+  return result;
 }
