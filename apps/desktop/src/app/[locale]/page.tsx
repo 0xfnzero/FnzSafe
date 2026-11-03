@@ -1,5 +1,7 @@
 "use client";
 
+import { LoadingState, LoadingValue, RefreshStatus, EmptyState } from "@/components/LoadingState";
+import { OperationStatus } from "@/components/OperationStatus";
 import { EvmRpcEditor } from "@/components/EvmRpcEditor";
 import { NetworkEnvironmentSelector } from "@/components/NetworkEnvironmentSelector";
 
@@ -15,6 +17,7 @@ import { useTranslations } from '@/hooks/useTranslations';
 import desktopPackage from "../../../package.json";
 import {
   Key,
+  LoaderCircle,
   Lock,
   Download,
   Upload,
@@ -4224,6 +4227,10 @@ export default function Home() {
   const [evmSubmitResult, setEvmSubmitResult] = useState<DesktopEvmTransactionSubmitResult | null>(null);
   const [evmTransactionStatus, setEvmTransactionStatus] = useState<DesktopEvmTransactionStatus | null>(null);
   const [evmBusy, setEvmBusy] = useState(false);
+  const evmBusyRef = useRef(false);
+  const [evmActivity, setEvmActivity] = useState("desktopUi.evmPending");
+  const [proposalsRefreshing, setProposalsRefreshing] = useState(false);
+  const proposalsRefreshRef = useRef(false);
   const [evmError, setEvmError] = useState<string | null>(null);
   const [evmNewChain, setEvmNewChain] = useState({
     chainId: "",
@@ -4439,7 +4446,10 @@ export default function Home() {
     setEvmTokenContracts(loadStoredDesktopEvmTokens(activeEvmChain.chain_id, evmWallet.address));
   }, [activeEvmChain, evmWallet]);
 
-  const withEvmBusy = useCallback(async (run: () => Promise<void>) => {
+  const withEvmBusy = useCallback(async (label: string, run: () => Promise<void>) => {
+    if (evmBusyRef.current) return;
+    evmBusyRef.current = true;
+    setEvmActivity(label);
     setEvmBusy(true);
     setEvmError(null);
     try {
@@ -4450,7 +4460,7 @@ export default function Home() {
       setEvmError(message);
       toast.error(message);
     } finally {
-      setEvmBusy(false);
+      evmBusyRef.current = false; setEvmBusy(false);
     }
   }, []);
 
@@ -4523,7 +4533,7 @@ export default function Home() {
     });
   };
 
-  const addDesktopEvmToken = () => withEvmBusy(async () => {
+  const addDesktopEvmToken = () => withEvmBusy("features.unified-wallet.addingAsset", async () => {
     const contract = evmNewTokenContract.trim();
     if (!contract) return;
     if (!activeEvmChain || !evmWallet) {
@@ -4616,7 +4626,7 @@ export default function Home() {
     return snapshot;
   }, []);
 
-  const refreshEvmAssets = () => withEvmBusy(async () => {
+  const refreshEvmAssets = () => withEvmBusy("desktopUi.loadingAssets", async () => {
     if (!activeEvmChain || !evmWallet) throw new Error("Select a chain and wallet first");
     const requestId = evmAssetRequestIdRef.current + 1;
     evmAssetRequestIdRef.current = requestId;
@@ -4677,7 +4687,7 @@ export default function Home() {
     }
   }, [appPreferences, evmChainId, evmChains, evmWallet, loadEvmAssetSnapshot]);
 
-  const previewEvmPayment = () => withEvmBusy(async () => {
+  const previewEvmPayment = () => withEvmBusy("features.unified-wallet.previewing", async () => {
     if (!evmWallet) throw new Error("Select a wallet first");
     const assetContext = resolveEvmAssetSendContext(formData);
     if (!assetContext) throw new Error("Select an asset before creating a payment preview");
@@ -4721,7 +4731,7 @@ export default function Home() {
     setEvmTransactionStatus(null);
   });
 
-  const submitEvmPayment = (approved: boolean) => withEvmBusy(async () => {
+  const submitEvmPayment = (approved: boolean) => withEvmBusy("features.unified-wallet.sending", async () => {
     if (!evmPreview) throw new Error("Create a payment preview first");
     if (!approved) {
       setEvmPreview(null);
@@ -4813,7 +4823,7 @@ export default function Home() {
     }
   });
 
-  const refreshEvmTransactionStatus = () => withEvmBusy(async () => {
+  const refreshEvmTransactionStatus = () => withEvmBusy("features.evm-workbench.checkReceipt", async () => {
     if (!evmSubmitResult) throw new Error("Submit a transaction first");
     const response = await apiFetch("evm/transaction/status", {
       method: "POST",
@@ -7813,6 +7823,7 @@ export default function Home() {
   };
 
   const refreshWorkspaceProposals = async (multisig?: WorkspaceMultisig) => {
+    if (proposalsRefreshRef.current) return;
     const network = currentNetwork(effectiveNetwork);
     const targets = multisig ? [multisig] : workspace.multisigs.filter((item) => item.network === network);
     if (targets.length === 0) {
@@ -7820,6 +7831,7 @@ export default function Home() {
       return;
     }
 
+    proposalsRefreshRef.current = true; setProposalsRefreshing(true);
     try {
       const fetched: WorkspaceProposal[] = [];
       for (const item of targets) {
@@ -7875,7 +7887,7 @@ export default function Home() {
       toast.success(t("features.workspace.refreshSuccess"));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("features.workspace.refreshFailed"));
-    }
+    } finally { proposalsRefreshRef.current = false; setProposalsRefreshing(false); }
   };
 
   const handleWorkspaceProposalAction = async (
@@ -17843,10 +17855,10 @@ export default function Home() {
             key={action.id}
             type="button"
             onClick={openAction(action.id, action.preset)}
-            className="flex items-center gap-3 p-4 bg-white/5 border border-white/10 rounded-lg text-left hover:bg-white/10 transition-colors"
+            className="workspace-action-card"
           >
-            <span className="shrink-0 text-gray-300">{action.icon}</span>
-            <span className="min-w-0 text-sm font-medium">{action.title}</span>
+            <span className="workspace-action-icon">{action.icon}</span>
+            <span className="min-w-0 flex-1 text-sm font-medium">{action.title}</span><ChevronRight size={16} className="shrink-0 text-muted-foreground" />
           </button>
         ))}
       </div>
@@ -17919,6 +17931,7 @@ export default function Home() {
               {walletsLoading ? t("common.loading") : t("formUi.refreshWallets")}
             </button>
           </div>
+          {walletsLoading && (wallets.length === 0 ? <LoadingState label={t("desktopUi.loadingWallets")} /> : <RefreshStatus />)}
           <div className="grid gap-2 border-y border-white/10 py-3 sm:grid-cols-[minmax(0,18rem)_1fr] sm:items-end">
             <label className="min-w-0 space-y-1.5">
               <span className="block text-xs font-medium text-gray-300">
@@ -18146,7 +18159,7 @@ export default function Home() {
                         </p>
                         <p className="mt-0.5 truncate text-sm font-semibold text-white">
                           {walletBalanceLoading && walletBalance === "--"
-                            ? t("common.loading")
+                            ? <LoadingValue />
                             : `${walletBalance} ${selectedWalletNetworkSymbol}`}
                         </p>
                       </div>
@@ -18321,7 +18334,7 @@ export default function Home() {
 
     const renderWalletListPanel = () => {
       const renderChainViewTabs = () => (
-        <div className="inline-flex max-w-full overflow-x-auto rounded-lg border border-white/10 bg-white/5 p-1">
+        <div className="wallet-chain-tabs inline-flex max-w-full overflow-x-auto">
           {[
             { id: "all" as const, label: tf("features.wallet-list.chainViewAll", "All assets") },
             { id: "solana" as const, label: t("features.wallet-list.chainViewSolana") },
@@ -18414,8 +18427,8 @@ export default function Home() {
               </section>
             ) : (
               <>
-                <section className="overflow-hidden border-white/10 bg-transparent lg:rounded-xl lg:border lg:bg-black/50">
-                  <div className="rounded-2xl border border-white/10 bg-gradient-to-br from-emerald-500 to-sky-700 p-5 shadow-xl shadow-black/20 lg:rounded-none lg:border-0 lg:bg-none lg:p-4 lg:shadow-none">
+                <section className="wallet-summary-card overflow-hidden">
+                  <div className="p-5 lg:p-4">
                     <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                       <div className="flex min-w-0 items-center gap-3">
                         <WalletChainMark
@@ -18456,7 +18469,7 @@ export default function Home() {
                           </button>
                         </div>
                         <div className="mt-1 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
-                          <p className="max-w-full truncate text-4xl font-semibold tracking-normal lg:text-3xl">{evmNativeBalance}</p>
+                          <p className="max-w-full truncate text-4xl font-semibold tracking-normal lg:text-3xl">{evmBusy && evmNativeBalance === "--" ? <LoadingValue className="h-8 w-32" /> : evmNativeBalance}</p>
                           <p className="text-sm text-white/75 lg:text-gray-400">{activeEvmChain?.native_symbol || ""}</p>
                         </div>
                       </div>
@@ -18741,6 +18754,7 @@ export default function Home() {
           : null;
       const transactionsLoading = Boolean(currentTransactions?.loading);
 
+      if (!effectiveWallet && walletsLoading) return <LoadingState label={t("desktopUi.loadingWallets")} rows={3} />;
       if (!effectiveWallet) {
         const emptyTitle = walletsLoading
           ? t("features.wallet-list.loadingTitle")
@@ -18835,7 +18849,7 @@ export default function Home() {
               {renderChainViewTabs()}
             </div>
 
-            <section className="overflow-visible border-white/10 bg-transparent lg:rounded-lg lg:border lg:bg-black/50">
+            <section className="wallet-summary-card overflow-visible">
               <div className="rounded-lg border border-white/10 bg-zinc-900 p-5 lg:rounded-none lg:border-0 lg:p-4">
                 <div className="flex min-w-0 items-center gap-3">
                   <WalletAddressPopover
@@ -18949,8 +18963,8 @@ export default function Home() {
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             {renderChainViewTabs()}
           </div>
-          <section className="overflow-hidden border-white/10 bg-transparent lg:rounded-xl lg:border lg:bg-black/50">
-            <div className="rounded-2xl border border-white/10 bg-gradient-to-br from-blue-500 to-violet-700 p-5 shadow-xl shadow-black/20 lg:rounded-none lg:border-0 lg:bg-none lg:p-4 lg:shadow-none">
+          <section className="wallet-summary-card overflow-hidden">
+            <div className="p-5 lg:p-4">
               <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                 <div className="flex min-w-0 items-center gap-3">
                   <WalletChainMark logoUri={SOLANA_CHAIN_LOGO_URI} fallback="SOL" />
@@ -18978,6 +18992,7 @@ export default function Home() {
                     <button
                       type="button"
                       onClick={() => refreshCurrentWalletAssets(effectiveWallet)}
+                      disabled={assetsLoading}
                       className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-white/20 text-white hover:bg-white/30 lg:bg-white/10 lg:text-gray-300 lg:hover:bg-white/20"
                       title={t("features.wallet-list.refreshAssets")}
                       aria-label={t("features.wallet-list.refreshAssets")}
@@ -18986,7 +19001,7 @@ export default function Home() {
                     </button>
                   </div>
                   <div className="mt-1 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
-                    <p className="max-w-full truncate text-4xl font-semibold tracking-normal lg:text-3xl">{solBalance}</p>
+                    <p className="max-w-full truncate text-4xl font-semibold tracking-normal lg:text-3xl">{assetsLoading && solBalance === "--" ? <LoadingValue className="h-8 w-32" /> : solBalance}</p>
                     <p className="text-sm text-white/75 lg:text-gray-400">SOL</p>
                   </div>
                   {assets?.error && (
@@ -19100,6 +19115,7 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={() => void loadWalletAssets(effectiveWallet, { refresh: true, force: true })}
+                  disabled={assetsLoading}
                   className="inline-flex w-fit items-center gap-2 rounded-lg bg-white/10 px-3 py-2 text-xs hover:bg-white/20"
                 >
                   <RefreshCw className={`h-3.5 w-3.5 ${assetsLoading ? "animate-spin" : ""}`} />
@@ -19109,6 +19125,7 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={() => void loadWalletTransactions(effectiveWallet, "replace", { force: true })}
+                  disabled={transactionsLoading}
                   className="inline-flex w-fit items-center gap-2 rounded-lg bg-white/10 px-3 py-2 text-xs hover:bg-white/20"
                 >
                   <RefreshCw className={`h-3.5 w-3.5 ${transactionsLoading ? "animate-spin" : ""}`} />
@@ -19119,6 +19136,7 @@ export default function Home() {
 
             {walletOverviewTab === "assets" ? (
               <div className="space-y-2 lg:space-y-3">
+                {assetsLoading && (tokenAssets.length === 0 ? <LoadingState label={t("desktopUi.loadingAssets")} /> : <RefreshStatus />)}
                 <div className="space-y-3">
                   <div className="flex items-center justify-between gap-4 border-b border-white/10 bg-transparent px-1 py-3 lg:rounded-xl lg:border lg:bg-white/10 lg:p-4">
                     <div className="flex min-w-0 items-center gap-3">
@@ -19142,7 +19160,7 @@ export default function Home() {
                       </div>
                     </div>
                     <div className="text-right">
-                      <p className="text-lg font-semibold">{solBalance}</p>
+                      <p className="text-lg font-semibold">{assetsLoading && solBalance === "--" ? <LoadingValue className="h-8 w-32" /> : solBalance}</p>
                       <p className="hidden text-xs text-gray-500 lg:block">{effectiveRpcLabel}</p>
                     </div>
                   </div>
@@ -20098,6 +20116,7 @@ export default function Home() {
             <button
               type="button"
               onClick={() => void loadNonceAccounts(effectiveWallet, { force: true })}
+              disabled={!!nonceLoading}
               className="inline-flex items-center gap-2 rounded-lg bg-white/10 px-3 py-2 text-sm hover:bg-white/20"
             >
               <RefreshCw className={`h-4 w-4 ${nonceLoading ? "animate-spin" : ""}`} />
@@ -20122,6 +20141,7 @@ export default function Home() {
           {nonceError && (
             <p className="text-sm text-yellow-200">{nonceError}</p>
           )}
+          {nonceLoading && (currentNonceAccounts.length === 0 ? <LoadingState label={t("desktopUi.loadingNonce")} /> : <RefreshStatus />)}
           {currentNonceAccounts.length > 0 ? (
             <div className="space-y-3">
               {currentNonceAccounts.map((item) => (
@@ -20151,7 +20171,7 @@ export default function Home() {
                 </div>
               ))}
             </div>
-          ) : effectiveWallet && !nonceLoading ? (
+          ) : effectiveWallet && !nonceLoading && !nonceError ? (
             <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.03] p-6 text-center text-sm text-gray-400">
               {t("features.create-nonce.noSavedAccounts")}
             </div>
@@ -20876,6 +20896,7 @@ export default function Home() {
 
       return (
         <div className="space-y-4">
+          {isLoading && (items.length === 0 ? <LoadingState label={t("desktopUi.loadingTransactions")} rows={4} /> : <RefreshStatus label={t("desktopUi.loadingTransactions")} />)}
           {state?.error && (
             <p className="text-sm text-yellow-200">
               {state.error || errorFallback}
@@ -20898,7 +20919,7 @@ export default function Home() {
                     ? t("features.wallet-list.transactionTo", { address: shortAddress(transaction.counterparty) })
                     : shortSignature(transaction.signature));
                 return (
-                  <div key={transaction.signature} className="rounded-xl bg-white/10 p-4 hover:bg-white/15">
+                  <div key={transaction.signature} className="ui-transaction-row">
                     <div className="flex items-center gap-4">
                       <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-black/40 text-sm font-bold text-violet-200 ring-1 ring-white/10">
                         {failed ? "!" : transaction.action === "swap" ? <ArrowRightLeft className="h-5 w-5" /> : transaction.action === "receive" ? <Download className="h-5 w-5" /> : <Send className="h-5 w-5" />}
@@ -20960,12 +20981,10 @@ export default function Home() {
               })}
             </div>
           ))}
-          {!isLoading && items.length === 0 && (
-            <div className="rounded-lg border border-dashed border-white/10 bg-white/[0.03] p-6 text-center text-sm text-gray-400">
-              {emptyText}
-            </div>
+          {!isLoading && !state?.error && items.length === 0 && (
+            <EmptyState title={emptyText} />
           )}
-          {(isLoading || canLoadMore) && (
+          {((isLoading && items.length > 0) || canLoadMore) && (
             <button
               type="button"
               onClick={loadMore}
@@ -21162,13 +21181,14 @@ export default function Home() {
         <button
           type="button"
           onClick={() => void refreshWorkspaceProposals()}
+          disabled={proposalsRefreshing}
           className="px-3 py-2 bg-white/10 rounded-lg hover:bg-white/20 transition-colors"
         >
           {t("features.workspace.refreshProposals")}
         </button>
         <div className="space-y-3">
           <h3 className="text-sm font-semibold text-gray-300">{t("features.workspace.activeProposals")}</h3>
-          {activeProposals.length === 0 ? (
+          {proposalsRefreshing && activeProposals.length === 0 ? <LoadingState label={t("desktopUi.proposalsPending")} /> : activeProposals.length === 0 ? (
             <p className="text-xs text-gray-500">{t("features.workspace.emptyActiveProposals")}</p>
           ) : activeProposals.map((item) => renderProposalRecord(item, true))}
         </div>
@@ -21422,7 +21442,7 @@ export default function Home() {
           </div>
         </section>}
 
-        {isUnifiedEvmSend && <section className="max-w-2xl space-y-4 rounded-lg border border-white/10 bg-white/[0.03] p-4">
+        {isUnifiedEvmSend && <fieldset disabled={evmBusy} className="ui-send-form min-w-0 max-w-2xl space-y-5">
           <h3 className="text-lg font-semibold text-white">
             {evmAssetSendContext
               ? tf("features.evm-workbench.sendSelectedAsset", "Send {symbol}", { symbol: evmAssetSendContext.symbol })
@@ -21500,7 +21520,7 @@ export default function Home() {
                 disabled={evmBusy || !evmWallet || !evmRecipient.trim() || !evmAmount.trim()}
                 className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-white px-4 text-sm font-semibold text-black hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-40"
               >
-                <ShieldCheck className="h-4 w-4" />
+                {evmBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
                 {evmBusy
                   ? tf("features.unified-wallet.previewing", "Loading preview...")
                   : tf("features.evm-workbench.reviewTransaction", "Review transaction")}
@@ -21513,7 +21533,7 @@ export default function Home() {
                   disabled={evmBusy}
                   className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-emerald-500 px-4 text-sm font-semibold text-black hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  <Send className="h-4 w-4" />
+                  {evmBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                   {evmBusy
                     ? tf("features.unified-wallet.sending", "Sending...")
                     : tf("features.evm-workbench.confirmSubmit", "Confirm send")}
@@ -21578,7 +21598,7 @@ export default function Home() {
                 </div>
               )}
               <button type="button" onClick={refreshEvmTransactionStatus} disabled={evmBusy} className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-100 hover:bg-white/10 disabled:opacity-50">
-                <RefreshCw className="h-4 w-4" />
+                <RefreshCw className={`h-4 w-4 ${evmBusy ? "animate-spin" : ""}`} />
                 {tf("features.evm-workbench.checkReceipt", "Check transaction status")}
               </button>
               {evmTransactionStatus && (
@@ -21591,7 +21611,7 @@ export default function Home() {
               )}
             </div>
           )}
-        </section>}
+        </fieldset>}
           </>
         )}
       </div>
@@ -29610,7 +29630,7 @@ export default function Home() {
                   </p>
                   <p className="mt-2 text-3xl font-semibold">
                     {currentCashbackInfo?.loading
-                      ? "--"
+                      ? <LoadingValue className="h-8 w-32" />
                       : `${currentCashbackInfo?.uiAmountString ?? "0"} ${currentCashbackInfo?.asset ?? (selectedForm === "pumpswap-cashback" ? "WSOL" : "SOL")}`}
                   </p>
                 </div>
@@ -29713,12 +29733,13 @@ export default function Home() {
         : null;
 
     const isProgramInvokeForm = formId === "program-invoke" || formId === "program-invoke-standalone";
+    const isActionForm = !["wallet-list", "wallet-send", "wallet-receive", "wallet-asset-detail", "native-chain-send", "safe-multisig", "settings", "evm-workbench", "evm-contract-invoke", "program-invoke", "program-invoke-standalone", "dapp-store", "twitter-signals", "defillama-stats", "contract-tools", "program-workbench", "squads-workspace", "squads-proposals", "squads-programs", "wsol-workbench", "pump-workbench", "nonce-workbench", "program-close"].includes(formId);
     return (
       <div className={formId === "dapp-store" || formId === "twitter-signals" || formId === "defillama-stats"
         ? "h-full min-h-0"
         : isProgramInvokeForm
-          ? "space-y-4 xl:flex xl:min-h-0 xl:flex-1 xl:flex-col xl:space-y-0"
-          : "space-y-4"}>
+          ? "desktop-workspace space-y-4 xl:flex xl:min-h-0 xl:flex-1 xl:flex-col xl:space-y-0"
+          : formId === "safe-multisig" ? "space-y-4" : "desktop-workspace space-y-5"}>
         {showTokenActionHeader && (
           <div className="space-y-4 rounded-2xl border border-white/10 bg-white/5 p-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -29793,7 +29814,10 @@ export default function Home() {
             onRefresh={() => void loadWallets()}
           />
         )}
-        {renderFormBody()}
+        {isActionForm ? <fieldset className="workspace-form" disabled={loading} aria-busy={loading}>
+          {loading && <div className="ui-progress-track mb-5" aria-hidden="true"><span /></div>}
+          {renderFormBody()}
+        </fieldset> : renderFormBody()}
       </div>
     );
   };
@@ -29872,7 +29896,7 @@ export default function Home() {
     selectedForm === "program-invoke" ||
     selectedForm === "program-invoke-standalone" ||
     selectedForm === "evm-contract-invoke";
-  const showFormHeader = selectedForm !== "wallet-list" && !isBrowserWorkspaceForm;
+  const showFormHeader = selectedForm !== "wallet-list" && selectedForm !== "safe-multisig" && !isBrowserWorkspaceForm;
   const isWideWorkspaceForm = [
     "safe-multisig",
     "contract-tools",
@@ -29934,6 +29958,16 @@ export default function Home() {
       className="app-shell flex min-h-screen flex-col bg-black text-white lg:h-screen lg:flex-row"
       data-app-theme={appTheme}
     >
+      {!applicationLocked && <div className="desktop-activity-stack">
+        {loading && <OperationStatus label={t("common.operationPending")} />}
+        {evmBusy && <OperationStatus key={evmActivity} label={t(evmActivity)} />}
+        {settingsBusy && <OperationStatus label={t("desktopUi.settingsPending")} />}
+        {passwordConfirmationBusy && <OperationStatus label={t("desktopUi.authPending")} />}
+        {programSourceLoading && <OperationStatus label={t("desktopUi.programPending")} />}
+        {proposalsRefreshing && <OperationStatus label={t("desktopUi.proposalsPending")} />}
+        {(twitterAiBusy || twitterSignalCaptureBusy) && <OperationStatus label={t("desktopUi.researchPending")} />}
+        {(twitterAiKeyBusy || binanceAgentBusy || biometricBusyWalletId) && <OperationStatus label={t("desktopUi.connectionPending")} />}
+      </div>}
       {applicationLocked && effectiveWallet && (
         <div className="fixed inset-0 z-[400] flex items-center justify-center bg-zinc-950 px-4 text-white">
           <form
@@ -29982,7 +30016,7 @@ export default function Home() {
                 </span>
               )}
             </label>
-            <button type="submit" disabled={unlockBusy || !unlockPassword} className="h-11 w-full rounded-lg bg-white text-sm font-semibold text-black hover:bg-gray-200 disabled:opacity-40">{unlockBusy ? t("common.loading") : tf("features.settings.unlock", "解锁")}</button>
+            <button type="submit" disabled={unlockBusy || !unlockPassword} className="h-11 w-full rounded-lg bg-white text-sm font-semibold text-black hover:bg-gray-200 disabled:opacity-40">{unlockBusy ? <span className="inline-flex items-center gap-2"><LoaderCircle className="h-4 w-4 animate-spin" />{t("common.loading")}</span> : tf("features.settings.unlock", "解锁")}</button>
             {biometricConfiguredFor(effectiveWallet) && (
               <button type="button" onClick={() => void unlockWithBiometric()} disabled={unlockBusy} className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg border border-white/10 text-sm text-gray-200 hover:bg-white/10 disabled:opacity-40"><Fingerprint className="h-4 w-4" />Touch ID</button>
             )}
@@ -30183,7 +30217,7 @@ export default function Home() {
           <div className={contentContainerClass}>
             <div className={contentCardClass}>
               {showFormHeader && (
-                <div className="mb-5 shrink-0 flex flex-col gap-3 sm:flex-row sm:items-center">
+                <div className="workspace-header mb-6 shrink-0 flex flex-wrap items-center gap-3">
                   {selectedForm && (backTarget || defaultBackTarget(selectedForm)) && (
                     <button
                       type="button"
@@ -30194,7 +30228,8 @@ export default function Home() {
                       {t("common.back")}
                     </button>
                   )}
-                  <h2 className="min-w-0 break-words text-xl font-bold sm:text-2xl">
+                  <span className="workspace-header-icon" aria-hidden="true">{selectedForm === "settings" ? <Settings size={22} /> : selectedForm?.includes("transfer") || selectedForm?.includes("send") ? <Send size={22} /> : selectedForm?.includes("program") || selectedForm?.includes("contract") ? <FileJson2 size={22} /> : <Wallet size={22} />}</span>
+                  <h2 className="min-w-0 break-words text-xl font-semibold tracking-tight sm:text-2xl">
                     {selectedFormTitle}
                   </h2>
                 </div>
@@ -30539,7 +30574,7 @@ export default function Home() {
 	                    )}
 	                  </div>
 	                  {dappTransactionPreviewLoading && (
-	                    <p className="mt-2 text-xs text-sky-100/80">{t("common.loading")}</p>
+	                    <RefreshStatus label={t("common.loading")} />
 	                  )}
 	                  {dappTransactionPreviewError && (
 	                    <p className="mt-2 break-words text-xs text-red-200">{dappTransactionPreviewError}</p>
@@ -30626,7 +30661,7 @@ export default function Home() {
                     <span>{tf("features.dapp-store.transactionPreview", "交易预览")}</span>
                     {dappEvmSignPreview && <span>{dappEvmSignPreview.chain.name}</span>}
                   </div>
-                  {dappTransactionPreviewLoading && <p className="mt-2 text-xs text-sky-100/80">{t("common.loading")}</p>}
+                  {dappTransactionPreviewLoading && <RefreshStatus label={t("common.loading")} />}
                   {dappTransactionPreviewError && <p className="mt-2 break-words text-xs text-red-200">{dappTransactionPreviewError}</p>}
                   {dappEvmSignPreview && (
                     <div className="mt-2 space-y-2">

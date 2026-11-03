@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Boxes, CheckCircle2, RefreshCw, Search, ShieldCheck } from "lucide-react";
+import { LoadingState, RefreshStatus, EmptyState } from "./LoadingState";
 import { apiFetch } from "@/lib/apiFetch";
 import { chainDescriptorLogoUri, chainFamilyLogoUri } from "@/lib/chainMetadata";
 import {
@@ -192,8 +193,9 @@ export function ChainDirectory({ labels }: { labels: ChainDirectoryLabels }) {
           </button>
         </div>
       )}
+      {loading && chains.length > 0 && <RefreshStatus label={labels.loading} />}
       {loading && chains.length === 0 ? (
-        <p role="status" className="py-12 text-center text-sm text-gray-500">{labels.loading}</p>
+        <LoadingState label={labels.loading} layout="cards" rows={4} />
       ) : (
         <div className="overflow-hidden rounded-lg border border-white/10 bg-black/20">
           {visibleChains.map((chain, index) => {
@@ -226,7 +228,7 @@ export function ChainDirectory({ labels }: { labels: ChainDirectoryLabels }) {
               </div>
             );
           })}
-          {visibleChains.length === 0 && <p className="py-12 text-center text-sm text-gray-500">{labels.noResults}</p>}
+          {!error && visibleChains.length === 0 && <EmptyState title={labels.noResults} search />}
         </div>
       )}
     </section>

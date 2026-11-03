@@ -980,3 +980,64 @@ input[type="number"]::-webkit-inner-spin-button {
     0 18px 42px rgba(28, 35, 43, 0.14),
     inset 0 1px 0 rgba(255, 255, 255, 0.92) !important;
 }
+
+/* Persistent operation feedback remains visible even in long desktop forms. */
+.operation-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 15px 18px;
+  border: 1px solid #336a5b;
+  border-radius: 12px;
+  background: #152c27;
+  color: #beefde;
+}
+.app-operation-status {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 450;
+  width: min(420px, calc(100vw - 32px));
+  box-shadow: 0 8px 36px #00000030;
+}
+.app-shell[data-app-theme="light"] .operation-status {
+  background: #f0faf6;
+  color: #14674e;
+  border-color: #b6dccc;
+}
+.app-shell[data-app-theme="deep-sea"] .operation-status {
+  background: #102c32;
+  color: #b3eee2;
+  border-color: #285b65;
+}
+@media (prefers-reduced-motion: reduce) {
+  .operation-status .animate-spin { animation: none; }
+}
+
+/* Neutral desktop surfaces and readable semantic colors across all workspaces. */
+.app-shell { -webkit-font-smoothing: antialiased; }
+.app-shell[data-app-theme="dark"] {
+  --background: 222 22% 10%;
+  --card: 222 18% 12%;
+  --muted: 220 17% 16%;
+  --muted-foreground: 218 12% 66%;
+  --border: 220 15% 23%;
+}
+.app-shell[data-app-theme="dark"] .app-main-surface { background: #101319; }
+.app-shell[data-app-theme="dark"] .app-sidebar { background: #13171e; border-color: #272d38; }
+.app-shell[data-app-theme="dark"] .app-content-card:not(.app-dapp-card) { background: #181d26; border-color: #2a313d; }
+.app-shell[data-app-theme="light"] {
+  --background: 210 25% 98%;
+  --foreground: 218 28% 17%;
+  --card: 0 0% 100%;
+  --card-foreground: 218 28% 17%;
+  --muted: 214 25% 96%;
+  --muted-foreground: 217 14% 42%;
+  --border: 215 22% 88%;
+  --input: 215 22% 88%;
+}
+.app-shell[data-app-theme="light"] .app-content-card:not(.app-dapp-card) { box-shadow: 0 4px 24px rgba(28, 35, 43, .035); }
+.app-shell[data-app-theme="dark"] :where(button, a, input, textarea, select):focus-visible {
+  outline: 2px solid #63dbb0;
+  outline-offset: 3px;
+}

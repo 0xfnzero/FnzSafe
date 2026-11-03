@@ -9,8 +9,8 @@ import {
   type SafeAbiDraft, type SafeAbiValue, type SafeCallMetadata,
 } from "@/lib/safeAbi";
 
-const inputClass = "mt-1 w-full rounded-lg border border-white/15 bg-black/20 p-2.5 text-sm";
-const buttonClass = "rounded-lg border border-white/15 px-3 py-2 text-sm hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40";
+const inputClass = "safe-input";
+const buttonClass = "safe-button";
 type Translate = (key: string) => string;
 
 export function SafeContractCallBuilder({ draft, onChange, chainId, t }: {
@@ -45,7 +45,7 @@ export function SafeContractCallBuilder({ draft, onChange, chainId, t }: {
         if (project) load(project.abiJsonText, project.abiFileName, project.contractAddress);
       }}><option value="">{t("abiSelectProject")}</option>{projects.map(p => <option key={p.id} value={p.id}>{p.name} · {p.contractAddress}</option>)}</select>
     </label>}
-    <label className="block rounded-lg border border-dashed border-white/25 p-4 text-sm">
+    <label className="block rounded-lg border border-dashed border-border p-4 text-sm">
       <span className="block font-medium">{t("abiUpload")}</span>
       <span className="mb-3 mt-1 block text-xs text-muted-foreground">{t("abiFileHint")}</span>
       <input type="file" accept=".json,.abi,application/json" aria-label={t("abiUpload")} className="block w-full text-[0px] file:text-sm file:mr-3 file:rounded-md file:border-0 file:bg-emerald-500/15 file:px-3 file:py-2 file:text-emerald-400" onChange={e => {
@@ -95,7 +95,7 @@ function AbiField({ param, value, name, onChange, t }: { param: AbiParam; value:
   const error = safeAbiArgumentError(param, value);
   if (item || param.type === "tuple") {
     const values = Array.isArray(value) ? value : [];
-    return <fieldset className="min-w-0 space-y-3 rounded-lg border border-white/10 p-3">
+    return <fieldset className="min-w-0 space-y-3 rounded-lg border border-border p-3">
       <legend className="max-w-full break-words px-1 text-sm">{name} <span className="text-xs text-muted-foreground">{abiTypeLabel(param)}</span></legend>
       {values.map((v, index) => <div key={index} className="flex items-start gap-2">
         <div className="min-w-0 flex-1"><AbiField param={item?.param || param.components![index]} value={v} name={item ? `${name}[${index}]` : `${name}.${param.components![index].name || index}`} t={t} onChange={next => onChange(values.map((old, i) => i === index ? next : old))} /></div>

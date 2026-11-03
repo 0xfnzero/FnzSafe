@@ -1,5 +1,6 @@
 "use client";
 
+import { LoadingState } from "./LoadingState";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -519,10 +520,7 @@ export function DefiLlamaStatsPanel({
           </div>
 
           {loading && !current ? (
-            <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-black/20 px-3 py-8 text-sm text-gray-400">
-              <RefreshCw className="h-4 w-4 animate-spin" />
-              {labels.loading}
-            </div>
+            <LoadingState label={labels.loading} rows={5} />
           ) : filteredRows.length === 0 ? (
             <div className="rounded-lg border border-dashed border-white/10 bg-black/20 px-3 py-8 text-center text-sm text-gray-400">
               {labels.empty}

@@ -1,5 +1,6 @@
 "use client";
 
+import { EmptyState } from "./LoadingState";
 import type { ReactNode } from "react";
 import { ArrowLeft, ChevronRight, Search } from "lucide-react";
 import { matchesSettingsSearch, type SettingsSearchItem, type SettingsSection } from "@/lib/settingsCenter";
@@ -48,7 +49,7 @@ export function SettingsCenterLayout({
   return (
     <div className="mx-auto w-full max-w-5xl">
       {section === "root" ? (
-        <div className="mx-auto max-w-3xl space-y-5">
+        <div className="settings-home mx-auto space-y-6">
           <label className="relative block">
             <span className="sr-only">{searchPlaceholder}</span>
             <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" />
@@ -61,7 +62,7 @@ export function SettingsCenterLayout({
             />
           </label>
 
-          {groups.map((group) => {
+          <div className="settings-groups">{groups.map((group) => {
             const groupItems = visibleItems.filter((item) => item.group === group.id);
             if (groupItems.length === 0) return null;
             return (
@@ -69,39 +70,38 @@ export function SettingsCenterLayout({
                 <h3 id={`settings-group-${group.id}`} className="mb-2 px-1 text-xs font-semibold text-gray-500">
                   {group.title}
                 </h3>
-                <div className="divide-y divide-white/[0.08] overflow-hidden rounded-lg border border-white/10 bg-white/[0.035]">
+                <div className="settings-group-list">
                   {groupItems.map((item) => (
                     <button
                       key={item.id}
                       type="button"
                       onClick={() => onSectionChange(item.id)}
-                      className="group flex min-h-14 w-full items-center gap-3 px-3.5 py-3 text-left transition-colors hover:bg-white/[0.06] focus-visible:bg-white/[0.06] focus-visible:outline-none"
+                      className="settings-item group"
                     >
-                      <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-white/[0.06] text-gray-300">
+                      <span className="settings-item-icon">
                         {item.icon}
                       </span>
-                      <span className="min-w-0 flex-1 truncate text-sm font-medium text-gray-100">{item.title}</span>
-                      {item.summary && (
-                        <span className="hidden max-w-[45%] shrink-0 truncate text-xs text-gray-500 sm:block">
-                          {item.summary}
-                        </span>
-                      )}
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-semibold text-gray-100">{item.title}</span>
+                        {item.description && <span className="mt-1.5 block text-xs leading-relaxed text-gray-400">{item.description}</span>}
+                        {item.summary && <span className="mt-2 inline-block max-w-full truncate rounded-md bg-white/5 px-2 py-1 text-[11px] text-gray-400">{item.summary}</span>}
+                      </span>
                       <ChevronRight className="h-4 w-4 shrink-0 text-gray-600 transition-transform group-hover:translate-x-0.5 group-hover:text-gray-400" />
                     </button>
                   ))}
                 </div>
               </section>
             );
-          })}
+          })}</div>
 
-          {visibleItems.length === 0 && <div className="py-16 text-center text-sm text-gray-500">{noResultsLabel}</div>}
+          {visibleItems.length === 0 && <EmptyState title={noResultsLabel} search />}
         </div>
       ) : (
         <div className="space-y-4">
           <button
             type="button"
             onClick={() => onSectionChange("root")}
-            className="group inline-flex min-h-10 max-w-full items-center gap-3 rounded-lg px-2 text-left hover:bg-white/[0.05] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/10"
+            className="settings-section-header group flex min-h-14 w-full items-center gap-3 text-left"
             aria-label={backLabel}
           >
             <ArrowLeft className="h-4 w-4 shrink-0 text-gray-500 transition-transform group-hover:-translate-x-0.5 group-hover:text-gray-300" />

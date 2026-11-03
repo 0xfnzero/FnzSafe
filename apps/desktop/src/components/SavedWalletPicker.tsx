@@ -1,4 +1,4 @@
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, LoaderCircle } from "lucide-react";
 import {
   authFormsWithWallets,
   type FormState,
@@ -71,12 +71,16 @@ export function SavedWalletPicker({
             <button
               type="button"
               onClick={onRefresh}
-              className="px-3 py-1.5 bg-white/10 rounded text-xs hover:bg-white/20 transition-colors"
+              disabled={loading}
+              aria-busy={loading}
+              className="inline-flex items-center gap-2 px-3 py-1.5 bg-white/10 rounded text-xs hover:bg-white/20 transition-colors disabled:opacity-50"
             >
+              {loading && <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
               {loading ? t("common.loading") : t("formUi.refreshWallets")}
             </button>
           </div>
           <select
+            disabled={loading}
             value={formData.wallet_id || ""}
             onChange={(e) => {
               onFieldChange("wallet_id", e.target.value || undefined);

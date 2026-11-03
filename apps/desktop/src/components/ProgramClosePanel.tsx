@@ -1,5 +1,7 @@
 "use client";
 
+import { OperationStatus } from "./OperationStatus";
+import { LoadingState } from "./LoadingState";
 import { useRef, useState } from "react";
 import { useTranslations } from "@/hooks/useTranslations";
 import { apiFetch } from "@/lib/apiFetch";
@@ -52,6 +54,7 @@ export function ProgramClosePanel({ initiallyOpen = false, walletId, walletAddre
   const [acknowledged, setAcknowledged] = useState(false);
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
+  const [operation, setOperation] = useState<"discover" | "inspect" | "submit">("discover");
   const [error, setError] = useState("");
   const [receipt, setReceipt] = useState<Receipt | null>(null);
   const pending = useRef(false);
@@ -61,7 +64,7 @@ export function ProgramClosePanel({ initiallyOpen = false, walletId, walletAddre
   const discover = async () => {
     if (pending.current) return;
     pending.current = true;
-    setBusy(true); setError(""); setDiscovery(null); setPreview(null); setPassword("");
+    setOperation("discover"); setBusy(true); setError(""); setDiscovery(null); setPreview(null); setPassword("");
     setConfirmation(""); setAcknowledged(false); setReceipt(null);
     try {
       const result = await post<Discovery>("program/close/discover", {
@@ -79,7 +82,7 @@ export function ProgramClosePanel({ initiallyOpen = false, walletId, walletAddre
   const inspect = async () => {
     if (pending.current) return;
     pending.current = true;
-    setBusy(true); setPreview(null); setConfirmation(""); setAcknowledged(false); setError(""); setReceipt(null); setPassword("");
+    setOperation("inspect"); setBusy(true); setPreview(null); setConfirmation(""); setAcknowledged(false); setError(""); setReceipt(null); setPassword("");
     try {
       const result = await post<ProgramClosePreview>("program/close/preview", {
         wallet_id: walletId, program_id: programId.trim(), network, expected_genesis_hash: expectedGenesisHash,
@@ -96,7 +99,7 @@ export function ProgramClosePanel({ initiallyOpen = false, walletId, walletAddre
   const close = async () => {
     if (pending.current || !canConfirmProgramClose(preview, walletId, programId.trim(), confirmation, acknowledged)) return;
     pending.current = true;
-    setBusy(true); setError("");
+    setOperation("submit"); setBusy(true); setError("");
     try {
       const result = await post<Receipt>("program/close/submit", {
         preview_id: preview!.preview_id, wallet_id: walletId, confirmation_program_id: confirmation,
@@ -124,7 +127,9 @@ export function ProgramClosePanel({ initiallyOpen = false, walletId, walletAddre
   return (
     <details open={initiallyOpen} className="rounded-xl border border-red-400/20 bg-red-400/5 p-4">
       <summary className="cursor-pointer text-sm font-semibold text-red-200">{label("title")}</summary>
+      {busy && <OperationStatus floating label={`${label(operation)} · ${label("processing")}`} />}
       <div className="mt-4 space-y-3">
+        {busy && operation === "discover" && <LoadingState label={label("processing")} rows={2} />}
         <p className="text-sm text-red-200">{label("warning")}</p>
         <p className="break-all text-xs text-gray-400">{network} · {label("wallet")}: {walletAddress || "—"}</p>
         <p className="text-xs text-gray-400">{label("discoverHelp")}</p>

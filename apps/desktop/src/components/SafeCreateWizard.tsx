@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, Check, Plus, ShieldCheck, Trash2, UserRound } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, LoaderCircle, Plus, ShieldCheck, Trash2, UserRound } from "lucide-react";
 import { SafeAddress as CopyAddress } from "./SafeAddress";
 import { useTranslations } from "@/hooks/useTranslations";
 import { formatUintToDecimalAmount, isValidEvmAddress } from "@/lib/evmAbi";
@@ -14,9 +14,9 @@ export interface SafeCreationPreview { address: string; estimatedFee: string }
 export const emptySafeCreation = (): SafeCreationDraft => ({
   label: "", owners: [{ id: 1, name: "", address: "" }, { id: 2, name: "", address: "" }], threshold: 2,
 });
-const field = "w-full min-w-0 rounded-xl border border-border bg-background px-3 py-3 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 disabled:opacity-50";
-const secondary = "inline-flex items-center justify-center gap-2 rounded-xl border border-border px-4 py-3 text-sm font-medium hover:bg-muted focus-visible:ring-2 focus-visible:ring-emerald-500 disabled:cursor-not-allowed disabled:opacity-40";
-const primary = `${secondary.replace("hover:bg-muted", "")} border-transparent bg-emerald-500 text-black hover:bg-emerald-400`;
+const field = "safe-input";
+const secondary = "safe-button";
+const primary = "safe-button safe-button-primary";
 const card = "min-w-0 rounded-2xl border border-border bg-card";
 
 export function SafeCreateWizard({ chains, chainId, wallets, walletId, draft, preview, busy, onDraftChange, onChainChange, onWalletChange, onPrepare, onEdit, onConfirm, onCancel }: {
@@ -53,10 +53,10 @@ export function SafeCreateWizard({ chains, chainId, wallets, walletId, draft, pr
     <section className={`${card} overflow-hidden`} aria-label={t("create")}>
       <ol aria-label={t("creationSteps")} className="grid grid-cols-3 border-b border-border">
         {steps.map((key, index) => <li key={key} aria-current={step === index + 1 ? "step" : undefined}
-          className={`flex items-center gap-2 border-t-4 px-3 py-4 text-xs sm:px-5 ${step >= index + 1 ? "border-emerald-500" : "border-transparent text-muted-foreground"}`}>
+          className={`flex flex-col items-start gap-2 border-t-4 px-3 py-4 text-[11px] sm:flex-row sm:items-center sm:px-5 sm:text-xs ${step >= index + 1 ? "border-emerald-500" : "border-transparent text-muted-foreground"}`}>
           <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full ${step >= index + 1 ? "bg-emerald-500 text-black" : "bg-muted"}`}>
             {step > index + 1 ? <Check size={14} aria-hidden="true" /> : index + 1}
-          </span><span>{t(key)}</span>
+          </span><span className="min-w-0 break-words leading-relaxed">{t(key)}</span>
         </li>)}
       </ol>
       <header className="space-y-2 border-b border-border p-5 sm:p-7">
@@ -141,8 +141,8 @@ export function SafeCreateWizard({ chains, chainId, wallets, walletId, draft, pr
       <footer className="flex items-center justify-between gap-3 border-t border-border p-5 sm:px-7">
         <button className={secondary} disabled={busy} onClick={goBack}><ArrowLeft size={16} />{t(step === 1 ? "cancel" : "back")}</button>
         {step === 1 && <button className={primary} disabled={!validBasics || busy} onClick={() => setEditingStep(2)}>{t("next")}<ArrowRight size={16} /></button>}
-        {step === 2 && <button className={primary} disabled={!validBasics || !ownersComplete || !!error || busy} onClick={onPrepare}>{t(busy ? "estimating" : "reviewAndEstimate")}<ArrowRight size={16} /></button>}
-        {step === 3 && <button className={primary} disabled={busy} onClick={onConfirm}>{t("confirmCreate")}</button>}
+        {step === 2 && <button className={primary} disabled={!validBasics || !ownersComplete || !!error || busy} onClick={onPrepare}>{busy ? <LoaderCircle size={16} className="animate-spin" /> : <ArrowRight size={16} />}{t(busy ? "estimating" : "reviewAndEstimate")}</button>}
+        {step === 3 && <button className={primary} disabled={busy} onClick={onConfirm} aria-busy={busy}>{busy && <LoaderCircle size={16} className="animate-spin" />}{t(busy ? "submittingTransaction" : "confirmCreate")}</button>}
       </footer>
     </section>
     <aside className="space-y-4 xl:sticky xl:top-4" aria-label={t("accountPreview")}>

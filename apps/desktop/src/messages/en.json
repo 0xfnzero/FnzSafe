@@ -17,7 +17,10 @@
     "hide": "Hide password",
     "copiedToClipboard": "Copied to clipboard",
     "downloaded": "Downloaded {filename}",
-    "downloadedTo": "Downloaded to {path}"
+    "downloadedTo": "Downloaded to {path}",
+    "operationHint": "Your operation is in progress. This view will update automatically.",
+    "operationSlow": "This is taking longer than usual. Keep this page open and avoid submitting again.",
+    "operationPending": "Operation in progress"
   },
   "formUi": {
     "authMethod": "Authentication Method",
@@ -2630,7 +2633,42 @@
       "importPreview": "Review imported transaction",
       "importTransactionReady": "Unsigned proposal created from the imported transaction. Review it, then collect owner signatures. No transaction has been sent.",
       "importSeparateTransactions": "This file contains multiple transactions. Select one to import as an independent proposal. Each proposal is signed and executed separately; this does not execute an atomic batch.",
-      "selectImportedTransaction": "Select transaction"
+      "selectImportedTransaction": "Select transaction",
+      "workspaceSubtitle": "Manage multisig accounts and keep every transaction in view.",
+      "accountSubtitle": "Balances, signing policy, and transactions in one place.",
+      "savedLocally": "Locally saved accounts",
+      "searchAccounts": "Search by name or Safe address",
+      "noSearchResults": "No matching Safes",
+      "clearSearch": "Clear search",
+      "openAccount": "View account",
+      "loadingAccount": "Loading Safe account",
+      "loadingAccountHint": "Reading the on-chain balance, signing threshold, and owners.",
+      "readSlow": "The network is responding slowly. You can retry if the request times out.",
+      "readTimeout": "The network request timed out. Check your RPC connection and try again.",
+      "retry": "Try again",
+      "accountLoadFailed": "Unable to load this account",
+      "accountLoadFailedHint": "Account information could not be retrieved. Retry to continue.",
+      "refreshingAccount": "Refreshing account",
+      "checkingTransaction": "Validating transaction",
+      "preparingSignature": "Checking signing details",
+      "preparingExecution": "Estimating execution fee",
+      "preparingCreation": "Estimating deployment fee",
+      "creatingProposal": "Creating proposal",
+      "signingTransaction": "Signing transaction",
+      "submittingTransaction": "Submitting on-chain transaction",
+      "checkingReceipt": "Checking transaction receipt",
+      "readingFile": "Reading file",
+      "verifyingImport": "Verifying imported data",
+      "awaitingConfirmation": "Transaction submitted, awaiting confirmation",
+      "receiptHint": "Checking the receipt automatically. This view will update after confirmation.",
+      "receiptStopped": "Automatic checking has ended without a final result. Check the receipt manually before submitting anything again.",
+      "signatureProgress": "Signature progress",
+      "emptyAccountsHint": "Create a multisig account or add an existing Safe to get started.",
+      "emptyProposalsHint": "Transfer and contract call proposals will appear here.",
+      "localTransactionsHint": "Only proposals saved or imported on this device are shown.",
+      "members": "owners",
+      "nonceHintShort": "Next on-chain transaction number",
+      "signaturePolicy": "Signing policy"
     }
   },
   "errors": {
@@ -2651,5 +2689,21 @@
     "switch": "Switch Language",
     "en": "English",
     "zh": "中文"
+  },
+  "desktopUi": {
+    "refreshing": "Refreshing. Previously loaded data remains available.",
+    "loadingAssets": "Loading assets across networks",
+    "loadingTransactions": "Loading transaction history",
+    "loadingWallets": "Loading saved wallets",
+    "settingsPending": "Updating settings",
+    "evmPending": "Processing EVM operation",
+    "authPending": "Verifying wallet authorization",
+    "programPending": "Reading or building program",
+    "proposalsPending": "Syncing multisig proposals",
+    "researchPending": "Processing research task",
+    "connectionPending": "Connecting or verifying service",
+    "emptyAssetsHint": "Your assets will appear here after loading. Refresh or add a token to continue.",
+    "qrLoading": "Generating receive QR code",
+    "loadingNonce": "Loading nonce accounts"
   }
 }

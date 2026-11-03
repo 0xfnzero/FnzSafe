@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { OperationStatus } from "./OperationStatus";
 import { createPortal } from "react-dom";
 import {
   ArrowLeft,
+  LoaderCircle,
   FileJson2,
   FolderPlus,
   Pencil,
@@ -176,6 +178,8 @@ export function EvmContractInvokePanel({
   const [uintDecimalAmounts, setUintDecimalAmounts] = useState<Record<string, string>>({});
   const [uintDecimals, setUintDecimals] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
+  const [activeMode, setActiveMode] = useState<"call" | "send">("call");
+  const invokePendingRef = useRef(false);
   const [error, setError] = useState<string>();
   const [result, setResult] = useState<InvokeResult>();
   const [walletPickerTarget, setWalletPickerTarget] = useState<WalletPickerTarget | null>(null);
@@ -459,6 +463,7 @@ export function EvmContractInvokePanel({
   };
 
   const runInvoke = async (mode: "call" | "send") => {
+    if (invokePendingRef.current) return;
     if (!chain) {
       toast.error(tf("features.evm-contract-invoke.selectChain", "请先选择 EVM 网络"));
       return;
@@ -492,6 +497,8 @@ export function EvmContractInvokePanel({
       return;
     }
 
+    invokePendingRef.current = true;
+    setActiveMode(mode);
     setLoading(true);
     setResult(undefined);
     try {
@@ -551,6 +558,7 @@ export function EvmContractInvokePanel({
       setResult({ status: "failed", error: message, logs: [message] });
       toast.error(message);
     } finally {
+      invokePendingRef.current = false;
       setLoading(false);
     }
   };
@@ -954,7 +962,9 @@ export function EvmContractInvokePanel({
 
   // invoke view
   return (
-    <div className="space-y-4 xl:flex xl:min-h-0 xl:flex-1 xl:flex-col xl:space-y-0 xl:gap-4">
+    <div className="contract-invoke-workspace space-y-4 xl:flex xl:min-h-0 xl:flex-1 xl:flex-col xl:space-y-0 xl:gap-4">
+      {loading && <OperationStatus floating label={t(activeMode === "send" ? "features.evm-contract-invoke.sending" : "features.evm-contract-invoke.calling")} />}
+      <fieldset disabled={loading} aria-busy={loading} className="contents">
       <section className="shrink-0 space-y-3 rounded-lg border border-white/10 bg-white/[0.03] p-3">
         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
           <div className="min-w-0 space-y-1">
@@ -997,7 +1007,7 @@ export function EvmContractInvokePanel({
               disabled={loading || !abiJsonText}
               className="inline-flex min-h-9 items-center justify-center gap-2 rounded-lg bg-white/10 px-3 text-xs font-semibold text-gray-200 hover:bg-white/20 disabled:opacity-50"
             >
-              <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+              <RefreshCw className="h-3.5 w-3.5" />
               {tf("features.evm-contract-invoke.reloadAbi", "重新解析")}
             </button>
           </div>
@@ -1323,8 +1333,8 @@ export function EvmContractInvokePanel({
               onClick={() => void runInvoke("call")}
               className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-sky-400/90 px-4 text-sm font-semibold text-slate-950 hover:bg-sky-300 disabled:opacity-50"
             >
-              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-              {loading ? t("features.evm-contract-invoke.calling") : t("features.evm-contract-invoke.callButton")}
+              <RefreshCw className={`h-4 w-4 ${loading && activeMode === "call" ? "animate-spin" : ""}`} />
+              {loading && activeMode === "call" ? t("features.evm-contract-invoke.calling") : t("features.evm-contract-invoke.callButton")}
             </button>
             <button
               type="button"
@@ -1332,8 +1342,8 @@ export function EvmContractInvokePanel({
               onClick={() => void runInvoke("send")}
               className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-emerald-400/90 px-4 text-sm font-semibold text-slate-950 hover:bg-emerald-300 disabled:opacity-50"
             >
-              <Send className="h-4 w-4" />
-              {loading ? t("features.evm-contract-invoke.sending") : t("features.evm-contract-invoke.sendButton")}
+              {loading && activeMode === "send" ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              {loading && activeMode === "send" ? t("features.evm-contract-invoke.sending") : t("features.evm-contract-invoke.sendButton")}
             </button>
           </div>
 
@@ -1352,6 +1362,7 @@ export function EvmContractInvokePanel({
           </div>
         </section>
       </div>
+      </fieldset>
       {walletPickerPortal}
     </div>
   );

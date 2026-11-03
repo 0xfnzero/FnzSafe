@@ -3,8 +3,12 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import QRCode from "qrcode";
+import { LoadingState, LoadingValue, RefreshStatus, EmptyState } from "./LoadingState";
+import { OperationStatus } from "./OperationStatus";
+import { useTranslations } from "@/hooks/useTranslations";
 import {
   Check,
+  LoaderCircle,
   ChevronLeft,
   ChevronRight,
   Copy,
@@ -509,6 +513,8 @@ export function WalletReceivePanel({
   labels: UnifiedWalletLabels;
   onCopy: CopyHandler;
 }) {
+  const t = useTranslations();
+  const [qrReadyFor, setQrReadyFor] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [qrFailed, setQrFailed] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -526,13 +532,13 @@ export function WalletReceivePanel({
     const canvas = canvasRef.current;
     if (!canvas || !selectedAddress) return;
     let cancelled = false;
-    setQrFailed(false);
+    setQrFailed(false); setQrReadyFor("");
     void QRCode.toCanvas(canvas, selectedAddress, {
       width: 260,
       margin: 2,
       color: { dark: "#09090b", light: "#ffffff" },
       errorCorrectionLevel: "M",
-    }).catch(() => {
+    }).then(() => { if (!cancelled) setQrReadyFor(selectedAddress); }).catch(() => {
       if (!cancelled) setQrFailed(true);
     });
     return () => {
@@ -564,6 +570,7 @@ export function WalletReceivePanel({
             </div>
           </div>
           <div className={`mx-auto mt-6 w-fit rounded-lg bg-white p-3 ${qrFailed ? "hidden" : ""}`}>
+            {qrReadyFor !== selectedAddress && !qrFailed && <div className="flex h-12 items-center justify-center gap-2 text-xs text-gray-600" role="status"><LoaderCircle size={16} className="animate-spin" />{t("desktopUi.qrLoading")}</div>}
             <canvas ref={canvasRef} role="img" className="block aspect-square h-auto w-[260px] max-w-[calc(100vw-5rem)]" aria-label={`${displayName} ${labels.qrCode}`} />
           </div>
           {qrFailed && (
@@ -652,14 +659,14 @@ function AssetRow({ asset, labels, onSelect }: { asset: UnifiedWalletAsset; labe
       </div>
       <div className="shrink-0 text-right">
         <p className="max-w-32 truncate text-sm font-semibold text-white" title={asset.balance}>
-          {asset.loading ? "--" : asset.balance}
+          {asset.loading && asset.balance === "--" ? <LoadingValue /> : asset.balance}
         </p>
         <p className="mt-1 text-xs text-gray-500">{asset.tracked ? labels.tracked : labels.untracked}</p>
       </div>
       {onSelect && <ChevronRight className="h-4 w-4 shrink-0 text-gray-500" />}
     </>
   );
-  const className = "flex w-full min-w-0 items-center gap-3 border-b border-white/10 px-1 py-3 text-left transition-colors last:border-b-0 lg:rounded-lg lg:border lg:bg-white/[0.04] lg:px-4 lg:last:border-b";
+  const className = "ui-asset-row flex w-full min-w-0 items-center gap-3 text-left transition-colors";
   if (!onSelect) return <div className={className}>{content}</div>;
   return (
     <button
@@ -693,12 +700,13 @@ export function UnifiedAssetList({
   onRefresh: () => void;
   showHeader?: boolean;
 }) {
+  const t = useTranslations();
   const sortedAssets = useMemo(() => sortUnifiedAssets(assets, preferredChainId), [assets, preferredChainId]);
   return (
-    <section className="space-y-3">
+    <section className="unified-asset-list space-y-4" aria-busy={refreshing}>
       {showHeader && (
-        <div className="flex items-center justify-between gap-3">
-          <h3 className="text-sm font-semibold text-gray-200">{labels.allAssets}</h3>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h3 className="text-base font-semibold text-gray-200">{labels.allAssets}<span className="ml-2 rounded-md bg-white/5 px-2 py-1 text-xs text-muted-foreground">{assets.length}</span></h3>
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -728,9 +736,10 @@ export function UnifiedAssetList({
           {error}
         </p>
       )}
+      {refreshing && (sortedAssets.length === 0 ? <LoadingState label={t("desktopUi.loadingAssets")} /> : <RefreshStatus />)}
       <div className="space-y-2">
         {sortedAssets.map((asset) => <AssetRow key={asset.id} asset={asset} labels={labels} onSelect={onSelect} />)}
-        {sortedAssets.length === 0 && <p className="py-8 text-center text-sm text-gray-500">{labels.noAssets}</p>}
+        {!refreshing && !error && sortedAssets.length === 0 && <EmptyState title={labels.noAssets} description={t("desktopUi.emptyAssetsHint")} />}
       </div>
     </section>
   );
@@ -751,7 +760,7 @@ export function WalletAssetDetailPanel({
 }) {
   const tokenAddressLabel = asset.family === "solana" ? "Mint" : labels.tokenAddress;
   return (
-    <div className="mx-auto max-w-2xl space-y-5">
+    <div className="ui-asset-detail mx-auto max-w-2xl space-y-5">
       <section className="flex items-center gap-4 border-y border-white/10 py-5">
         <ChainMark item={asset} large />
         <div className="min-w-0 flex-1">
@@ -764,7 +773,7 @@ export function WalletAssetDetailPanel({
         <div className="min-w-0 text-right">
           <p className="text-xs text-gray-500">{labels.available}</p>
           <p className="mt-1 max-w-48 truncate text-lg font-semibold text-white" title={asset.balance}>
-            {asset.loading ? "--" : asset.balance} {asset.symbol}
+            {asset.loading && asset.balance === "--" ? <LoadingValue /> : asset.balance} {asset.symbol}
           </p>
         </div>
       </section>
@@ -908,6 +917,7 @@ export function NativeChainSendPanel({
   }, [asset.id, asset.derivationPath, sender, walletId]);
 
   const updateRecipient = (value: string) => {
+    if (busyRef.current) return;
     requestIdRef.current += 1;
     busyRef.current = false;
     setBusy(null);
@@ -917,6 +927,7 @@ export function NativeChainSendPanel({
     setError("");
   };
   const updateAmount = (value: string) => {
+    if (busyRef.current) return;
     requestIdRef.current += 1;
     busyRef.current = false;
     setBusy(null);
@@ -991,7 +1002,8 @@ export function NativeChainSendPanel({
   if (!family || !networkId) return null;
   const formattedFee = preview ? atomicToDecimalUnits(preview.fee_atomic, asset.decimals) : "--";
   return (
-    <div className="mx-auto max-w-2xl space-y-5">
+    <div className="ui-send-form mx-auto max-w-2xl space-y-5">
+      {busy && <OperationStatus floating label={busy === "preview" ? labels.previewing : labels.sending} />}
       <div className="flex items-center gap-3 border-b border-white/10 pb-4">
         <ChainMark item={asset} large />
         <div className="min-w-0">
@@ -999,7 +1011,7 @@ export function NativeChainSendPanel({
           <p className="mt-1 text-sm text-gray-400">{labels.available}: {asset.balance} {asset.symbol}</p>
         </div>
       </div>
-      <div className="grid gap-4 sm:grid-cols-2">
+      <fieldset disabled={busy !== null} className="grid min-w-0 gap-4 sm:grid-cols-2">
         <div className="space-y-1.5 text-sm text-gray-300 sm:col-span-2">
           <label htmlFor="native-chain-recipient">{labels.recipient}</label>
           <span className="flex min-w-0 gap-2">
@@ -1025,7 +1037,7 @@ export function NativeChainSendPanel({
             className="h-11 w-full rounded-lg border border-white/10 bg-black/40 px-3 text-sm text-white outline-none focus:ring-2 focus:ring-emerald-400/30"
           />
         </label>
-      </div>
+      </fieldset>
       {!preview && !transactionId && (
         <button
           type="button"
@@ -1038,7 +1050,7 @@ export function NativeChainSendPanel({
         </button>
       )}
       {preview && (
-        <div className="space-y-4 border-y border-white/10 py-4">
+        <div className="ui-send-review space-y-4">
           <p className="text-sm text-amber-100">{labels.reviewWarning}</p>
           <dl className="grid gap-x-5 gap-y-3 text-sm sm:grid-cols-2">
             <div><dt className="text-gray-500">{labels.amount}</dt><dd className="mt-1 text-white">{amount} {asset.symbol}</dd></div>
@@ -1065,7 +1077,7 @@ export function NativeChainSendPanel({
               disabled={busy !== null}
               className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-emerald-500 px-4 text-sm font-semibold text-black hover:bg-emerald-400 disabled:opacity-50"
             >
-              <Check className="h-4 w-4" />
+              {busy === "submit" ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
               {busy === "submit" ? labels.sending : labels.confirmSend}
             </button>
             <button type="button" onClick={() => setPreview(null)} disabled={busy !== null} className="h-11 rounded-lg border border-white/10 px-4 text-sm text-gray-200 hover:bg-white/10 disabled:opacity-50">
