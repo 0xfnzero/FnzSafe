@@ -4,7 +4,7 @@ The desktop sidebar’s **Safe EVM Multisig / Safe EVM 多签** page supports cr
 
 ## Desktop navigation
 
-The sidebar has a dedicated Safe EVM Multisig entry. Its landing view contains only saved Safe cards and entry actions. Each Safe opens an account summary and its own transaction list; selecting a transaction opens a separate detail view for signing, execution and export. Creating a Safe, adding an existing Safe, composing a transaction, and importing signatures each have a separate form view. Breadcrumbs and Back preserve the account/transaction hierarchy, including returning from signature import.
+The sidebar has a dedicated Safe EVM Multisig entry. Its landing view shows cached Safe cards, onchain discovery progress, and entry actions. Each Safe opens an account summary and its own transaction list; selecting a transaction opens a separate detail view for signing, execution and export. Creating a Safe, adding an existing Safe, composing a transaction, and importing signatures each have a separate form view. Breadcrumbs and Back preserve the account/transaction hierarchy, including returning from signature import.
 
 Native transfers hide calldata. Contract calls default to ABI-generated typed forms, with raw calldata available in advanced mode, while nonce overrides live under advanced settings. Transfer drafts are isolated by chain and Safe while the workspace is mounted. Network changes return to the account list. Input errors and disabled-action reasons are visible before submission. Signing and execution use a modal dialog with cancellation focused by default and Escape support. Safe creation uses a three-step wizard: basics, signers/threshold, and a full review page with deployment fee estimation and an explicit final create action.
 
@@ -17,7 +17,7 @@ The creation wizard follows Safe’s step-by-step interaction pattern, with a li
 1. Choose an EVM network and an unlocked saved EVM signer wallet. BNB Chain (56), BNB testnet (97), Ethereum (1), Sepolia (11155111), and other configured EVM networks use the same flow. Each network must have the supported canonical deployment; the backend checks chain ID and exact deployed code before use. Networks with different deployment bytecode, including zkSync-specific deployments, are rejected rather than silently treated as compatible.
 2. Create a new Safe with 2–50 distinct EOA owners and a threshold of at least two. Review the predicted address, owners, threshold and execution gas fee cap, then confirm. The creator pays gas; creation does not transfer assets into the Safe. Check the receipt to confirm deployment. Alternatively load an existing Safe 1.4.1 address.
 3. The account list is scoped to the network and selected wallet’s recorded creator/owner associations. “Show all saved Safes” includes other locally saved accounts. Loading an account refreshes owners, threshold, nonce and balance. Each Safe has its own list of proposals, signature counts, broadcast hashes and receipt status.
-4. Choose native transfer and enter the recipient and native amount; calldata is set to `0x`. For ERC-20 transfers or contract calls, supply the target contract and import its ABI to select a method and fill typed arguments, or use advanced raw calldata; native value is usually zero. This version supports CALL with zero Safe gas/refund fields, not delegatecall, batching, contract-owner signatures, or arbitrary imported Safe Transaction Service formats. Standard Safe Transaction Builder 1.0 files are supported by the transaction import screen. Inspect calldata independently when its meaning is not known. New proposals default to the earliest nonce at or after the current onchain nonce not reserved by a local proposal; the nonce field can be overridden. Future-nonce proposals may be signed and listed, but only the current onchain nonce can execute. Coordinate nonce allocation across installations.
+4. Choose native transfer and enter the recipient and native amount; calldata is set to `0x`. For ERC-20 transfers or contract calls, supply the target contract and import its ABI to select a method and fill typed arguments, or use advanced raw calldata; native value is usually zero. This version supports CALL and atomic CALL batches through the verified Safe 1.4.1 MultiSendCallOnly deployment, with zero Safe gas/refund fields. Arbitrary delegatecall, contract-owner signatures and arbitrary imported Safe Transaction Service formats remain unsupported. Standard Safe Transaction Builder 1.0 files are supported by the transaction import screen. Inspect calldata independently when its meaning is not known. New proposals default to the earliest nonce at or after the current onchain nonce not reserved by a local proposal; the nonce field can be overridden. Future-nonce proposals may be signed and listed, but only the current onchain nonce can execute. Coordinate nonce allocation across installations.
 5. Review and sign using an unlocked owner wallet. Export the proposal JSON. Other owners import that file, review/sign, then return their updated JSON. Import each file to merge signatures. The backend recomputes the EIP-712 hash, compares it to the real Safe’s `getTransactionHash`, recovers signers, rejects duplicate/non-owner signatures and checks the current Safe nonce. Imports must match the selected network.
 6. At threshold, preview execution, approve the gas fee cap and execute. The gas-paying EOA need not be an owner. Execution is simulated before sending. A fee increase above the approved execution gas cap requires a new preview; rollup data fees are outside this cap. Check the receipt: only the matching Safe `ExecutionSuccess` event confirms execution. Reverts and `ExecutionFailure` are failures; broadcasting alone is never success.
 
@@ -35,16 +35,19 @@ then asks the existing backend to prepare and verify the Safe transaction hash. 
 does not sign or broadcast. Continue with owner signatures and execution in the normal
 proposal screen. X404 scheduling and delayed execution files are imported separately.
 
-A file with multiple transactions displays a transaction selector: each selected entry
-is imported as an independent CALL proposal, not an atomic batch. Delegatecall and custom
-Safe gas/refund fields are rejected. Complete FnzSafe proposal exports remain accepted
+A file with multiple transactions is imported as one ordered atomic Safe batch, matching
+Safe Transaction Builder semantics. One nonce and one signature set cover the entire
+batch; a failing inner CALL reverts the batch. The UI previews every inner target,
+value and calldata. The backend independently rebuilds the payload and verifies the
+canonical MultiSendCallOnly 1.4.1 address and runtime before signing or executing.
+Arbitrary or nested delegatecall and custom Safe gas/refund fields are rejected. Complete FnzSafe proposal exports remain accepted
 by the same screen for signature exchange and merging.
 
 ## Persistence and scope
 
 Accounts and proposals (including collected signatures and broadcast hashes) live in desktop webview local storage, under `fnzsafe.safe-multisig.v1`. Private keys and passwords are never stored in these records or exported. Keys stay in the existing Rust wallet session and are loaded only after validation and explicit approval. API calls use the existing local API authentication/encrypted transport.
 
-There is no hosted relay or account/transaction indexer. Lists contain locally created/loaded/imported records, not automatically discovered historical transactions. Back up proposal exports; on another installation, load Safe addresses and import the files. Sharing a threshold-signed proposal gives its recipient the ability to execute that exact transaction. Competing proposals with the same nonce can coexist, but after one executes the others become stale and cannot execute. Owner associations and signature counts reflect the latest successful validation, not continuous background indexing.
+There is no hosted relay or transaction indexer. Selecting a wallet automatically scans `ProxyCreation` events from the verified canonical Safe 1.4.1 factory, newest first, using the selected network RPC. Each matching account is revalidated for exact proxy/singleton runtime, version and current ownership before being cached. This recovers accounts after clearing local storage, including on BSC testnet where the official Safe account indexer is unavailable. Scans use at most 50,000 blocks and five candidates per page, reduce the range for restrictive RPCs, and expose animated progress, pause/continue, restart and distinct failure states. The cursor resumes in the current mounted workspace; reopening starts at the newest block. Historical scans can take a long time on fast chains. An interrupted or partial scan does not mean that no Safes exist. Safes deployed through other factories still require adding their address. Existing names and proposal records are preserved. Discovery does not recover historical transactions or offchain data. Back up proposal exports; on another installation, allow account discovery (or load Safe addresses) and import the proposal files. Clearing local storage still loses local labels, unbroadcast proposals and collected signatures unless backed up. Sharing a threshold-signed proposal gives its recipient the ability to execute that exact transaction. Competing proposals with the same nonce can coexist, but after one executes the others become stale and cannot execute. Owner associations and signature counts reflect the latest successful validation, not continuous background indexing.
 
 Created Safes use the unmodified Safe 1.4.1 singleton, no setup delegatecall, no modules, no fallback handler and no setup payment. Existing accounts must use the exact SafeProxy runtime and Safe or SafeL2 1.4.1 singleton runtime. This is not a production deployment of an X404 governance configuration; time locks are configured separately.
 
@@ -75,7 +78,7 @@ ANVIL_BIN=/absolute/path/to/anvil \
 cargo test -p fnzero-safe-evm-services safe::tests -- --include-ignored
 ```
 
-The test starts an isolated loopback Anvil, installs the official singleton and factory runtimes at canonical addresses, and creates a real SafeProxy through the factory. It verifies a 2/2 lifecycle, recipient balances, contract calldata, owner/non-owner signing, insufficient signatures, duplicate signatures, tampering, replay rejection, reverting targets and unsupported deployments. Pinned runtime hashes are from the published `@safe-global/safe-contracts@1.4.1` artifacts and agree with [Safe’s deployment registry](https://github.com/safe-global/safe-deployments/tree/main/src/assets/v1.4.1).
+The test starts an isolated loopback Anvil, installs the official singleton and factory runtimes at canonical addresses, and creates a real SafeProxy through the factory. It verifies read-only account discovery for both owners with no key access, exclusion of a non-owner, a 2/2 lifecycle, recipient balances, contract calldata, owner/non-owner signing, insufficient signatures, duplicate signatures, tampering, replay rejection, reverting targets and unsupported deployments. Pinned runtime hashes are from the published `@safe-global/safe-contracts@1.4.1` artifacts and agree with [Safe’s deployment registry](https://github.com/safe-global/safe-deployments/tree/main/src/assets/v1.4.1).
 
 ## Repeatable UI verification
 
@@ -144,3 +147,31 @@ UI regression on a separate synthetic origin verified malformed tuple-file rejec
 
 
 Safe address copying is available in saved-account cards, the pending-creation view, the account detail, the proposal form, transaction details and creation review. Each control copies the full address, reports success or failure, and offers selectable text for manual copying. Clipboard fallback remains inside the active modal. Copying from a list card does not open the account. Verified in the native FnzSafe Dev shell by copying the saved BSC testnet Safe and pasting into the address field to check an exact match.
+
+Discovery UI regression: open the synthetic harness with `?empty=1` to start with no cached accounts. Verify automatic recovery, pause/restart, RPC failure/retry, and switching networks or owners while a discovery response is pending. No real wallet storage is touched.
+
+## Atomic batch verification (2026-11-03)
+
+The X404 direct, schedule and execute exports were parsed by the desktop importer without
+changing network, Safe, targets, amounts, bytes or order. Batch encoding was checked
+against ethers. An isolated Anvil deployment using actual Safe 1.4.1 and
+MultiSendCallOnly runtime verified two transfers with one nonce, whole-batch rollback
+(including a directly submitted reverting transaction), pre-key-access rejection of
+tampered inner calls/envelopes, and rejection of an altered batch runtime. No public-chain
+transaction was broadcast. Files are limited to 400 kB, batches to 100 calls, and the
+encoded batch calldata to 64 KiB.
+
+Desktop UI verification on a separate synthetic origin confirmed that both calls remain
+visible after import and produce one proposal with one nonce and a shared signature
+threshold. Execution stays disabled below the threshold. The synthetic route and proxy
+were removed after verification; no synthetic account was written to the native wallet.
+The 67 Rust tests (including the real-contract integration), 26 focused frontend tests,
+TypeScript, targeted ESLint and the sensitive-input check passed. This verifies local
+compatibility; the official Safe website still determines which networks its UI supports.
+
+
+## Browser extension 0.3.3
+
+The extension now also discovers canonical Safe 1.4.1 accounts for the current owner, with verified runtime code, paginated scan progress, pause/continue and cache-preserving error handling. Its navigation is account list → account details → proposal details; owners, creation and imports have separate views. Transaction Builder imports and signed atomic CALL-only batches use the same pure encoding and validation helpers as desktop. Anvil integration covers recovery for both owners, non-owner exclusion, wrong networks, two-owner signatures, tampered batches and execution balance changes.
+
+Both clients scan canonical factory history; they do not reconstruct offchain proposal files, signatures or user labels. Other factory deployments require manual address import. Pause/resume cursors live in the current mounted view; reopening starts from recent history. The extension remains a separately versioned preview distribution.

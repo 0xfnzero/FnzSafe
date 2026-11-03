@@ -1,11 +1,42 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { parseSafeProposal, mergeSafeProposals, loadSafeWorkspace } from './safeMultisig.ts';
+import { mergeDiscoveredSafes } from './safeMultisig.ts';
+import { nextDiscoveryCursor } from './safeDiscovery.ts';
 const base = {
   version: 1, chain_id: 97, safe_address: '0x' + '11'.repeat(20), to: '0x' + '22'.repeat(20),
   value: '100000000000000000000', data: '0x', nonce: '9007199254740993', safe_tx_hash: '0x' + 'aa'.repeat(32), signatures: [],
 };
 const signature = (owner, sig) => ({ owner: '0x' + owner.repeat(40), signature: '0x' + sig.repeat(130) });
+test('empty local cache recovers only current-owner Safes, without overwriting local metadata', () => {
+  const owner = base.to;
+  const account = {address:base.safe_address, chain_id:97, version:'1.4.1', owners:[owner], threshold:1,nonce:'0',balance_wei:'0'};
+  const recovered = mergeDiscoveredSafes(loadSafeWorkspace(null), [account], 97, owner.toUpperCase());
+  assert.equal(recovered.safes.length, 1);
+  const existing = {...recovered, safes:[{...recovered.safes[0],label:'Treasury',ownerLabels:{[owner]:'Alice'}}, {chainId:56,address:account.address,label:'Mainnet'}], proposals:[{proposal:base}]};
+  const repeated = mergeDiscoveredSafes(existing, [account, account], 97, owner);
+  assert.equal(repeated.safes.length, 2);
+  assert.equal(repeated.safes[0].label, 'Treasury');
+  assert.deepEqual(repeated.safes[0].ownerLabels, {[owner]:'Alice'});
+  assert.equal(repeated.proposals, existing.proposals);
+  for (const change of [{chain_id:56},{version:'1.3.0'},{owners:[base.safe_address]},{address:'0x123'},{owners:['bad',owner]}]) {
+    assert.throws(() => mergeDiscoveredSafes(existing,[{...account,...change}],97,owner));
+    assert.equal(existing.safes[0].label,'Treasury');
+  }
+});
+test('discovery resumes within a dense range, advances backwards without gaps, and completes only at genesis', () => {
+  const page = {accounts:[],from_block:50001,to_block:100000,latest_block:100000,next_before_block:100000,next_offset:5,block_span:50000,complete:false,unsupported:0};
+  const initial = {offset:0};
+  const next = nextDiscoveryCursor(page,initial);
+  assert.deepEqual(next,{before_block:100000,offset:5,block_span:50000});
+  assert.throws(() => nextDiscoveryCursor(page,next));
+  const older = nextDiscoveryCursor({...page,next_before_block:50000,next_offset:0},next);
+  assert.equal(older.before_block,50000);
+  assert.equal(nextDiscoveryCursor({...page,from_block:0,to_block:50000,next_before_block:null,next_offset:0,complete:true},older),null);
+  for (const bad of [{complete:true,next_before_block:null},{next_before_block:49999},{next_offset:-1},{to_block:99999},{block_span:0}]) {
+    assert.throws(() => nextDiscoveryCursor({...page,...bad},next));
+  }
+});
 test('preserves uint256 amounts and nonces beyond JS safe integer', () => {
   assert.deepEqual(parseSafeProposal(JSON.stringify(base)), base);
 });

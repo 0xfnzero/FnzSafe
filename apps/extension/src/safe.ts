@@ -1,6 +1,8 @@
 import { Contract, getAddress, getBytes, Interface, JsonRpcProvider, keccak256, recoverAddress, Signature, TypedDataEncoder, Wallet, ZeroAddress } from 'ethers';
 import type { ChainInfo } from './types';
 import { prepareTransaction, type PreparedTransaction } from './evm-transfers';
+import { safeBatchPayload, validateSafeBatch, type SafeBatchCall } from '../../desktop/src/lib/safeBatch';
+export { safeBatchPayload };
 
 export const SAFE_FACTORY = '0x4e1dcf7ad4e460cfd30791ccc4f9c8a4f820ec67';
 export const SAFE_SINGLETON = '0x41675c099f32341bf84bfc5382af534df5c7461a';
@@ -16,7 +18,7 @@ const abi = new Interface([
   'event ExecutionSuccess(bytes32 indexed txHash,uint256 payment)', 'event ExecutionFailure(bytes32 indexed txHash,uint256 payment)',
 ]);
 const factoryAbi = new Interface(['function createProxyWithNonce(address,bytes,uint256) returns(address)', 'event ProxyCreation(address indexed proxy,address singleton)']);
-export interface SafeProposal { version: 1; chain_id: number; safe_address: string; to: string; value: string; data: string; nonce: string; safe_tx_hash: string; signatures: Array<{ owner: string; signature: string }> }
+export interface SafeProposal { version: 1; chain_id: number; safe_address: string; to: string; value: string; data: string; nonce: string; safe_tx_hash: string; signatures: Array<{ owner: string; signature: string }>; batch?: SafeBatchCall[] }
 export interface SafeAccount { address: string; chain_id: number; version: string; owners: string[]; threshold: number; nonce: string; balance_wei: string }
 const safeTypes = { SafeTx: [
   { name: 'to', type: 'address' }, { name: 'value', type: 'uint256' }, { name: 'data', type: 'bytes' }, { name: 'operation', type: 'uint8' }, { name: 'safeTxGas', type: 'uint256' }, { name: 'baseGas', type: 'uint256' }, { name: 'gasPrice', type: 'uint256' }, { name: 'gasToken', type: 'address' }, { name: 'refundReceiver', type: 'address' }, { name: 'nonce', type: 'uint256' },
@@ -24,25 +26,29 @@ const safeTypes = { SafeTx: [
 const uint = (v: unknown): v is string => typeof v === 'string' && v.length <= 78 && /^(0|[1-9]\d*)$/.test(v) && BigInt(v) < 1n << 256n;
 const address = (v: unknown): v is string => typeof v === 'string' && /^0x[a-f\d]{40}$/i.test(v);
 export function parseProposal(raw: string): SafeProposal {
-  if (raw.length > 180000) throw new Error('Proposal exceeds size limit');
+  if (raw.length > 400000) throw new Error('Proposal exceeds size limit');
   const p = JSON.parse(raw) as SafeProposal;
-  const fields = ['version', 'chain_id', 'safe_address', 'to', 'value', 'data', 'nonce', 'safe_tx_hash', 'signatures'];
+  const fields = ['version', 'chain_id', 'safe_address', 'to', 'value', 'data', 'nonce', 'safe_tx_hash', 'signatures', 'batch'];
   if (!p || typeof p !== 'object' || Object.keys(p).some(k => !fields.includes(k)) || p.version !== 1 || !Number.isSafeInteger(p.chain_id) || p.chain_id <= 0 ||
     !address(p.safe_address) || !address(p.to) || !uint(p.value) || !uint(p.nonce) || typeof p.data !== 'string' || p.data.length > 131074 || !/^0x([a-f\d]{2})*$/i.test(p.data) ||
     typeof p.safe_tx_hash !== 'string' || !/^0x[a-f\d]{64}$/i.test(p.safe_tx_hash) || !Array.isArray(p.signatures) || p.signatures.length > 50 ||
     p.signatures.some(s => !s || Object.keys(s).some(k => k !== 'owner' && k !== 'signature') || !address(s.owner) || typeof s.signature !== 'string' || !/^0x[a-f\d]{130}$/i.test(s.signature))) throw new Error('Invalid Safe proposal format');
   if (p.to.toLowerCase() === ZeroAddress || p.safe_address.toLowerCase() === ZeroAddress) throw new Error('Zero address is not allowed');
+  validateSafeBatch(p);
   return p;
 }
 function txFields(p: SafeProposal) {
-  return { to: p.to, value: p.value, data: p.data, operation: 0, safeTxGas: 0, baseGas: 0, gasPrice: 0, gasToken: ZeroAddress, refundReceiver: ZeroAddress, nonce: p.nonce };
+  return { to: p.to, value: p.value, data: p.data, operation: p.batch ? 1 : 0, safeTxGas: 0, baseGas: 0, gasPrice: 0, gasToken: ZeroAddress, refundReceiver: ZeroAddress, nonce: p.nonce };
 }
 export function proposalHash(p: SafeProposal): string {
   return TypedDataEncoder.hash({ chainId: p.chain_id, verifyingContract: p.safe_address }, safeTypes, txFields(p));
 }
-function txArgs(p: SafeProposal): unknown[] { return [p.to, p.value, p.data, 0, 0, 0, 0, ZeroAddress, ZeroAddress]; }
+function txArgs(p: SafeProposal): unknown[] { return [p.to, p.value, p.data, p.batch ? 1 : 0, 0, 0, 0, ZeroAddress, ZeroAddress]; }
 async function requireCode(provider: JsonRpcProvider, address: string, hashes: string[]) {
   if (!hashes.includes(keccak256(await provider.getCode(address)))) throw new Error('Verified Safe 1.4.1 deployment unavailable: contract code mismatch');
+}
+export async function verifySafeFactory(provider: JsonRpcProvider) {
+  await requireCode(provider, SAFE_FACTORY, [FACTORY_HASH]);
 }
 export async function safeAccount(provider: JsonRpcProvider, chain: ChainInfo, input: string): Promise<SafeAccount> {
   if (BigInt(await provider.send('eth_chainId', [])) !== BigInt(chain.chainId!)) throw new Error('Wrong Safe network');
@@ -71,6 +77,7 @@ export function verifySignatures(p: SafeProposal, owners: string[]): SafeProposa
 export async function validateProposal(provider: JsonRpcProvider, chain: ChainInfo, raw: SafeProposal): Promise<{ proposal: SafeProposal; account: SafeAccount }> {
   const p = parseProposal(JSON.stringify(raw));
   if (p.chain_id !== chain.chainId) throw new Error('Proposal is for another network');
+  if (p.batch) await requireCode(provider, p.to, ['0xecd5bd14a08c5d2122379900b2f272bdf107a7e92423c10dd5fe3254386c9939']);
   const account = await safeAccount(provider, chain, p.safe_address);
   if (BigInt(p.nonce) < BigInt(account.nonce)) throw new Error('Safe nonce already consumed');
   const onchain = await new Contract(p.safe_address, abi, provider).getTransactionHash(...txArgs(p), p.nonce);
@@ -79,9 +86,10 @@ export async function validateProposal(provider: JsonRpcProvider, chain: ChainIn
   for (const signature of proposal.signatures) if (await provider.getCode(signature.owner) !== '0x') throw new Error('Contract owner signatures are not supported');
   return { proposal, account };
 }
-export async function propose(provider: JsonRpcProvider, chain: ChainInfo, safe: string, to: string, value: string, data: string, nonce?: string): Promise<SafeProposal> {
+export async function propose(provider: JsonRpcProvider, chain: ChainInfo, safe: string, to: string, value: string, data: string, nonce?: string, batch?: SafeBatchCall[]): Promise<SafeProposal> {
   const account = await safeAccount(provider, chain, safe);
   const p: SafeProposal = { version: 1, chain_id: chain.chainId!, safe_address: account.address, to: getAddress(to), value, data, nonce: nonce || account.nonce, safe_tx_hash: '0x' + '00'.repeat(32), signatures: [] };
+  if (batch !== undefined) p.batch = batch;
   parseProposal(JSON.stringify(p));
   p.safe_tx_hash = proposalHash(p);
   return (await validateProposal(provider, chain, p)).proposal;

@@ -8,7 +8,8 @@ import { ContractFactory, HDNodeWallet, JsonRpcProvider, Wallet } from 'ethers';
 import { evmChain } from '../src/chains';
 import { evmProvider, validateRpc } from '../src/rpc';
 import { prepareTransaction, sendPrepared, tokenAsset, transferRequest } from '../src/evm-transfers';
-import { SAFE_FACTORY, SAFE_SINGLETON, prepareSafeCreation, safeAccount, propose, signProposal, prepareSafeExecution, safeReceipt, validateProposal } from '../src/safe';
+import { SAFE_FACTORY, SAFE_SINGLETON, prepareSafeCreation, safeAccount, propose, signProposal, prepareSafeExecution, safeReceipt, validateProposal, safeBatchPayload } from '../src/safe';
+import { discoverSafes } from '../src/safe-discovery';
 const artifacts = process.env.SAFE_ARTIFACTS_DIR;
 const binary = process.env.ANVIL_BIN;
 if (!artifacts || !binary) throw new Error('Set SAFE_ARTIFACTS_DIR to Safe 1.4.1 artifacts/contracts and ANVIL_BIN to Anvil');
@@ -33,11 +34,20 @@ try {
   const singleton = JSON.parse(await readFile(join(artifacts, 'Safe.sol/Safe.json'), 'utf8'));
   await provider.send('anvil_setCode', [SAFE_FACTORY, factory.deployedBytecode]);
   await provider.send('anvil_setCode', [SAFE_SINGLETON, singleton.deployedBytecode]);
+  const multisend = JSON.parse(await readFile(join(artifacts, 'libraries/MultiSendCallOnly.sol/MultiSendCallOnly.json'), 'utf8'));
+  await provider.send('anvil_setCode',['0x9641d764fc13c8b624c04430c7356c1c7c8102e2',multisend.deployedBytecode]);
   const created = await prepareSafeCreation(provider, chain, owner.address, [owner.address, other.address], 2, '1001');
   const creationHash = await sendPrepared(provider, new Wallet(owner.privateKey), created.transaction, guard);
   await mined(creationHash);
   assert.equal(await safeReceipt(provider, creationHash, created.address), 'confirmed');
   assert.equal((await safeAccount(provider, chain, created.address)).threshold, 2);
+  for (const signer of [owner.address,other.address,'0x1111111111111111111111111111111111111111']) {
+    const found = await discoverSafes(provider,chain,signer,{offset:0});
+    assert.equal(found.complete,true);
+    assert.equal(found.accounts.length,signer.startsWith('0x1111')?0:1);
+    if(found.accounts.length)assert.equal(found.accounts[0].address,created.address);
+  }
+  await assert.rejects(discoverSafes(provider,{...chain,chainId:97},owner.address,{offset:0}),/network/);
   const fund = await owner.connect(provider).sendTransaction({ to: created.address, value: 10n ** 18n }); await mined(fund.hash);
   let proposal = await propose(provider, chain, created.address, other.address, '1000000000000000', '0x');
   proposal = await signProposal(provider, chain, proposal, new Wallet(owner.privateKey), guard);
@@ -49,6 +59,17 @@ try {
   assert.equal(await safeReceipt(provider, hash, created.address, proposal.safe_tx_hash), 'confirmed');
   assert.equal((await safeAccount(provider, chain, created.address)).nonce, '1');
   await assert.rejects(prepareSafeExecution(provider, chain, owner.address, proposal), /consumed/);
+  const calls=[{to:other.address,value:'11',data:'0x'},{to:other.address,value:'13',data:'0x'}];
+  const payload=safeBatchPayload(calls);
+  let batch=await propose(provider,chain,created.address,payload.to,payload.value,payload.data,'1',calls);
+  batch=await signProposal(provider,chain,batch,new Wallet(owner.privateKey),guard);
+  batch=await signProposal(provider,chain,batch,new Wallet(other.privateKey),guard);
+  await assert.rejects(validateProposal(provider,chain,{...batch,batch:[{...calls[0],value:'12'},calls[1]]}));
+  const beforeBalance=BigInt(await provider.send('eth_getBalance',[other.address,'latest']));
+  const batchExec=await prepareSafeExecution(provider,chain,owner.address,batch);
+  const batchHash=await sendPrepared(provider,new Wallet(owner.privateKey),batchExec,guard);await mined(batchHash);
+  assert.equal(await safeReceipt(provider,batchHash,created.address,batch.safe_tx_hash),'confirmed');
+  assert.equal(BigInt(await provider.send('eth_getBalance',[other.address,'latest']))-beforeBalance,24n);
   const tokenFixture = JSON.parse(await readFile(new URL('./fixtures/TestToken.json', import.meta.url), 'utf8'));
   const token = await new ContractFactory(tokenFixture.abi, tokenFixture.bytecode, owner.connect(provider)).deploy(owner.address); await mined(token.deploymentTransaction()!.hash);
   const asset = await tokenAsset(provider, chain, owner.address, await token.getAddress());

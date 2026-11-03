@@ -2,7 +2,7 @@ import {isValidEvmAddress, parseAbiJson} from "./evmAbi.ts";
 import {buildSafeAbiCall, MAX_ARRAY_ITEMS, type SafeAbiValue} from "./safeAbi.ts";
 import {parseSafeProposal, type SafeProposal} from "./safeMultisig.ts";
 
-export const MAX_SAFE_IMPORT_BYTES = 180_000;
+export const MAX_SAFE_IMPORT_BYTES = 400_000;
 export interface SafeImportedTransaction { to: string; value: string; data: string }
 export interface SafeTransactionFile {
   kind: "transactions"; chainId: number; safeAddress?: string; transactions: SafeImportedTransaction[];

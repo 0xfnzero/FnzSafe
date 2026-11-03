@@ -9,17 +9,20 @@ import { emptySafeAbiDraft, resolveSafeAbiDraft, verifiedSafeCall, type SafeAbiD
 import { SafeAddress } from "./SafeAddress";
 import { SafeCreateWizard, emptySafeCreation, type SafeCreationDraft } from "./SafeCreateWizard";
 import { useTranslations } from "@/hooks/useTranslations";
+import { useSafeDiscovery } from "@/hooks/useSafeDiscovery";
 import { apiFetch } from "@/lib/apiFetch";
 import { parseDecimalAmountToUint, formatUintToDecimalAmount } from "@/lib/evmAbi";
 import {
-  assertSafeProposalMatches, loadSafeWorkspace, mergeSafeProposals, sameSafeProposal, SAFE_STORAGE_KEY,
+  assertSafeProposalMatches, loadSafeWorkspace, mergeSafeProposals, mergeDiscoveredSafes, sameSafeProposal, SAFE_STORAGE_KEY, type SafeDiscoveryPage,
   safesForWallet, proposalsForSafe, nextSafeNonce, safeProposalState, validateSafeCreation, validateSafeTransfer, type SafeAccount, type SafeProposal, type SafeProposalRecord, type SafeRecord, type SafeWorkspace,
 } from "@/lib/safeMultisig";
+import {safeBatchPayload} from "@/lib/safeBatch";
 import {MAX_SAFE_IMPORT_BYTES, parseSafeImport, safeImportTarget, type SafeTransactionFile} from "@/lib/safeTransactionImport";
 import type { EvmContractChainConfig, EvmContractSavedWallet } from "./EvmContractInvokePanel";
 
 export type SafeUiCommand = { kind: string; [key: string]: unknown };
 export type SafeUiResult = {
+  discovery?: SafeDiscoveryPage;
   account?: SafeAccount; proposal?: SafeProposal; address?: string;
   gas_limit?: string; estimated_fee_wei?: string; transaction_hash?: string; status?: string;
 };
@@ -80,7 +83,6 @@ export function SafeMultisigPanel({ chains, wallets, initialChainId, initialWall
   const [exchange, setExchange] = useState("");
   const [transactionImport,setTransactionImport]=useState<SafeTransactionFile>();
   const [importAddress,setImportAddress]=useState("");
-  const [importIndex,setImportIndex]=useState(0);
   const [review, setReview] = useState<Review>();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const feedbackRef = useRef<HTMLDivElement>(null);
@@ -180,14 +182,26 @@ export function SafeMultisigPanel({ chains, wallets, initialChainId, initialWall
     const pending = service({ chain, walletId: wallet?.id || "", walletAddress: wallet?.evm_address || "", command, approved, maxFeeWei });
     // Bound read-only waits. Never timeout or automatically retry an approved write:
     // it may have been broadcast even when its response has not reached the UI.
-    if (approved || !["account", "validate", "prepare_create", "prepare_execute", "receipt"].includes(command.kind)) return pending;
+    if (approved || !["discover", "account", "validate", "prepare_create", "prepare_execute", "receipt"].includes(command.kind)) return pending;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       return await Promise.race([pending, new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(t("readTimeout"))), 30_000);
+        timer = setTimeout(() => reject(new Error(t("readTimeout"))), command.kind === "discover" ? 90_000 : 30_000);
       })]);
     } finally { clearTimeout(timer); }
   }, [chain, wallet, service, t]);
+  const discovery = useSafeDiscovery({
+    scope: JSON.stringify([chain, wallet?.evm_address?.toLowerCase()]),
+    enabled: storageReady && !!chain && !!wallet?.evm_address,
+    request: async cursor => {
+      const result = await request({ kind: "discover", ...cursor });
+      if (!result.discovery) throw new Error(t("invalidResponse"));
+      return result.discovery;
+    },
+    onAccounts: accounts => {
+      if (accounts.length) persist(previous => mergeDiscoveredSafes(previous, accounts, chainId, wallet!.evm_address!));
+    },
+  });
   async function run(action: () => Promise<void>, label = "working") {
     if (lock.current) return;
     reviewTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -234,7 +248,7 @@ export function SafeMultisigPanel({ chains, wallets, initialChainId, initialWall
     if(file.kind==="transactions") {
       if(file.chainId!==chainId)throw new Error(t("wrongNetwork"));
       if(file.safeAddress&&backView!=="accounts"&&account&&file.safeAddress.toLowerCase()!==account.address.toLowerCase())throw new Error(t("wrongImportSafe"));
-      setTransactionImport(file);setImportIndex(0);setImportAddress(file.safeAddress||account?.address||"");
+      setTransactionImport(file);setImportAddress(file.safeAddress||account?.address||"");
       setMessage(t("importPreview"));return;
     }
     const imported=file.proposal;
@@ -252,13 +266,13 @@ export function SafeMultisigPanel({ chains, wallets, initialChainId, initialWall
     let target;
     try{target=safeImportTarget(transactionImport,chainId,importAddress.trim());}catch(e){throw new Error(t(e instanceof Error?e.message:"invalidTransactionFile"));}
     if(backView!=="accounts"&&account&&account.address.toLowerCase()!==target.toLowerCase())throw new Error(t("wrongImportSafe"));
-    const transaction=transactionImport.transactions[importIndex];
+    const transaction=transactionImport.transactions.length>1?safeBatchPayload(transactionImport.transactions):transactionImport.transactions[0];
     if(!transaction)throw new Error(t("invalidTransactionFile"));
     const current=await request({kind:"account",address:target});
     if(!current.account||current.account.chain_id!==chainId||current.account.address.toLowerCase()!==target.toLowerCase())throw new Error(t("invalidResponse"));
-    const expected={chain_id:chainId,safe_address:target,...transaction,
+    const expected: Pick<SafeProposal,"chain_id"|"safe_address"|"to"|"value"|"data"|"nonce"|"batch">={chain_id:chainId,safe_address:target,...transaction,
       nonce:nextSafeNonce(current.account.nonce,proposalsForSafe(workspaceRef.current.proposals,chainId,target))};
-    const result=await request({kind:"propose",address:target,to:expected.to,value:expected.value,data:expected.data,nonce:expected.nonce});
+    const result=await request({kind:"propose",address:target,to:expected.to,value:expected.value,data:expected.data,nonce:expected.nonce,batch:expected.batch});
     if(!result.proposal||!result.account||result.account.chain_id!==chainId||result.account.address.toLowerCase()!==target.toLowerCase())throw new Error(t("invalidResponse"));
     assertSafeProposalMatches(result.proposal,expected);
     if(result.proposal.signatures.length)throw new Error(t("invalidResponse"));
@@ -446,6 +460,26 @@ export function SafeMultisigPanel({ chains, wallets, initialChainId, initialWall
     </dialog>}
     <fieldset disabled={blocked || !storageReady || (!chain && view !== "create")} className="space-y-5" aria-busy={busy}>
       {view === "accounts" && <>
+        {wallet && <section className="safe-discovery space-y-3 rounded-2xl border border-border bg-muted/30 p-4" aria-label={t("syncAccounts")}>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-sm font-semibold"><RefreshCw size={17} className={discovery.status === "running" ? "animate-spin" : ""} aria-hidden="true" />{t(`discovery.${discovery.status}`)}</div>
+            <div className="flex gap-2">
+              {discovery.status === "running" ? <button className={buttonClass} onClick={discovery.pause}>{t("pauseDiscovery")}</button> :
+                <button className={buttonClass} onClick={() => void discovery.start(discovery.status === "complete" || discovery.status === "idle")}>{t(discovery.status === "paused" || discovery.status === "error" ? "resumeDiscovery" : "syncAccounts")}</button>}
+              {["paused", "error"].includes(discovery.status) && discovery.page && <button className={buttonClass} onClick={() => void discovery.start(true)}>{t("restartDiscovery")}</button>}
+            </div>
+          </div>
+          <p className="text-xs leading-relaxed text-muted-foreground">{t("discoveryHint")}</p>
+          {discovery.status === "running" && !discovery.page && <div className="safe-skeleton h-1.5 w-full" role="progressbar" aria-label={t("discoveringAccounts")} />}
+          {discovery.page && <>
+            <div className="h-1.5 overflow-hidden rounded-full bg-muted" role="progressbar" aria-label={t("discoveryProgress")} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.floor(100 * (discovery.page.latest_block - (discovery.page.next_before_block ?? -1)) / (discovery.page.latest_block + 1))}>
+              <div className="h-full rounded-full bg-emerald-500 transition-all duration-500" style={{ width: `${Math.max(0.5, 100 * (discovery.page.latest_block - (discovery.page.next_before_block ?? -1)) / (discovery.page.latest_block + 1))}%` }} />
+            </div>
+            <p className="text-xs tabular-nums text-muted-foreground" role="status">{t("discoveryRange")}: {discovery.page.from_block.toLocaleString()}–{discovery.page.to_block.toLocaleString()} · {t("discoveryFound")}: {discovery.count}</p>
+          </>}
+          {discovery.error && <p role="alert" className="text-sm text-amber-500">{t("discoveryFailed")} {discovery.error}</p>}
+          {discovery.unsupported > 0 && <p className="text-xs text-muted-foreground">{t("discoveryUnsupported")}</p>}
+        </section>}
         <div className="flex flex-wrap items-center justify-between gap-4">
           <span className="text-sm text-muted-foreground">{t("savedLocally")} <span className="safe-count ml-2">{safes.length}</span></span>
           <div className="flex flex-wrap gap-2">
@@ -461,9 +495,10 @@ export function SafeMultisigPanel({ chains, wallets, initialChainId, initialWall
           <label className="flex shrink-0 items-center gap-2 text-sm text-muted-foreground"><input type="checkbox" className="h-4 w-4 accent-emerald-500" checked={showAll} onChange={e => setShowAll(e.target.checked)} />{t("showAll")}</label>
         </div>
         {!storageReady && !storageError && <AccountSkeleton />}
-        {storageReady && visibleSafes.length === 0 && <div className="safe-empty">
+        {storageReady && visibleSafes.length === 0 && discovery.status === "running" && !search.trim() && <AccountSkeleton />}
+        {storageReady && visibleSafes.length === 0 && (discovery.status !== "running" || !!search.trim()) && <div className="safe-empty">
           <ShieldCheck size={32} className="mb-3 text-muted-foreground" aria-hidden="true" />
-          <h3 className="font-semibold">{t(search.trim() ? "noSearchResults" : "noAccounts")}</h3>
+          <h3 className="font-semibold">{t(search.trim() ? "noSearchResults" : discovery.status === "complete" ? "noDiscoveredAccounts" : "noAccounts")}</h3>
           <p className="mt-2 max-w-md text-sm text-muted-foreground">{t("emptyAccountsHint")}</p>
           {search.trim() && <button className={`${buttonClass} mt-4`} onClick={() => setSearch("")}>{t("clearSearch")}</button>}
         </div>}
@@ -531,7 +566,7 @@ export function SafeMultisigPanel({ chains, wallets, initialChainId, initialWall
         {proposals.length === 0 && <div className="safe-empty"><FileJson2 size={30} className="mb-3 text-muted-foreground" /><h4 className="font-medium">{t("noProposals")}</h4><p className="mt-2 text-sm text-muted-foreground">{t("emptyProposalsHint")}</p></div>}
         <div className="space-y-3">{proposals.map(r => <button className="safe-transaction-row" key={r.proposal.safe_tx_hash} onClick={() => selectRecord(r)}>
           <span className="safe-icon"><ArrowUpRight size={20} /></span>
-          <span className="min-w-0 flex-1"><span className="flex flex-wrap items-center gap-3"><span className="font-semibold">{formatUintToDecimalAmount(r.proposal.value, 18)} {chain?.native_symbol}</span><span className="text-xs text-muted-foreground">#{r.proposal.nonce}</span></span>
+          <span className="min-w-0 flex-1"><span className="flex flex-wrap items-center gap-3"><span className="font-semibold">{r.proposal.batch?`${t("batchTransaction")} (${r.proposal.batch.length})`:`${formatUintToDecimalAmount(r.proposal.value, 18)} ${chain?.native_symbol}`}</span><span className="text-xs text-muted-foreground">#{r.proposal.nonce}</span></span>
             <span className="mt-1.5 block break-all font-mono text-xs text-muted-foreground">{r.proposal.to}</span></span>
           <span className="space-y-2 text-right"><StatusBadge state={safeProposalState(r, account)} label={t(`transactionState.${safeProposalState(r, account)}`)} /><span className="block text-xs text-muted-foreground">{t("signatures")} {r.proposal.signatures.length}/{account.threshold}</span></span>
           <ChevronRight size={16} className="shrink-0 text-muted-foreground" />
@@ -599,15 +634,12 @@ export function SafeMultisigPanel({ chains, wallets, initialChainId, initialWall
           <h3 className="font-semibold">{t("importPreview")}</h3>
           <p className="text-sm">{t("network")}: {chain?.name} · {transactionImport.chainId}</p>
           <label className="block text-sm">{t("safeAddress")}<input className={inputClass} value={importAddress} readOnly={!!transactionImport.safeAddress} onChange={e=>setImportAddress(e.target.value)} placeholder="0x…"/></label>
-          {transactionImport.transactions.length>1&&<>
-            <p className="text-sm text-amber-400">{t("importSeparateTransactions")}</p>
-            <label className="block text-sm">{t("selectImportedTransaction")}<select className={inputClass} value={importIndex} onChange={e=>setImportIndex(Number(e.target.value))}>
-              {transactionImport.transactions.map((transaction,index)=><option key={index} value={index}>{index+1}. {transaction.to}</option>)}
-            </select></label>
-          </>}
-          <p className="break-all text-sm">{t("recipient")}: {transactionImport.transactions[importIndex].to}</p>
-          <p className="break-all text-sm">{t("amount")}: {formatUintToDecimalAmount(transactionImport.transactions[importIndex].value,18)} {chain?.native_symbol} ({transactionImport.transactions[importIndex].value} wei)</p>
-          <label className="block text-sm">{t("calldata")}<textarea className={`${inputClass} font-mono`} rows={4} readOnly value={transactionImport.transactions[importIndex].data}/></label>
+          {transactionImport.transactions.length>1&&<p className="text-sm">{t("importAtomicBatch")}</p>}
+          {transactionImport.transactions.map((transaction,index)=><div key={index} className="space-y-2 rounded-lg border border-border p-3">
+            <p className="break-all text-sm">{index+1}. {t("recipient")}: {transaction.to}</p>
+            <p className="break-all text-sm">{t("amount")}: {formatUintToDecimalAmount(transaction.value,18)} {chain?.native_symbol} ({transaction.value} wei)</p>
+            <label className="block text-sm">{t("calldata")}<textarea className={`${inputClass} font-mono`} rows={3} readOnly value={transaction.data}/></label>
+          </div>)}
           <button className={primaryClass} disabled={!/^0x[0-9a-fA-F]{40}$/.test(importAddress.trim())} onClick={()=>void run(importTransaction, "creatingProposal")}>{t("propose")}</button>
         </section>}
       </div>}
@@ -630,11 +662,12 @@ function StatusBadge({ state, label }: { state: string; label: string }) {
 function ProposalDetails({ proposal: p, call, t, symbol }: { proposal: SafeProposal; call?: SafeCallMetadata; t: ReturnType<typeof useTranslations>; symbol?: string }) {
   const verified = verifiedSafeCall(call, p);
   return <div className="space-y-3">
+    {p.batch&&<section className="space-y-3 rounded-lg border border-border p-3"><p>{t("importAtomicBatch")}</p>{p.batch.map((transaction,index)=><div key={index} className="space-y-1 break-all text-sm"><p>{index+1}. {transaction.to}</p><p>{formatUintToDecimalAmount(transaction.value,18)} {symbol} ({transaction.value} wei)</p><code className="block max-h-32 overflow-auto text-xs">{transaction.data}</code></div>)}</section>}
     {verified ? <SafeCallSummary call={verified} t={t} /> : p.data !== "0x" && <p className="text-sm text-amber-400">{t("abiRawSummary")}</p>}
     <dl className="safe-detail-grid text-sm break-all">
     <div><dt className="text-muted-foreground">{t("safeAddress")}</dt><dd><SafeAddress address={p.safe_address} /></dd></div>
-    <div><dt className="text-muted-foreground">{t("recipient")}</dt><dd><SafeAddress address={p.to} /></dd></div>
-    <div><dt className="text-muted-foreground">{t("amount")}</dt><dd>{formatUintToDecimalAmount(p.value, 18)} {symbol}</dd></div>
+    <div><dt className="text-muted-foreground">{t(p.batch?"batchExecutor":"recipient")}</dt><dd><SafeAddress address={p.to} /></dd></div>
+    <div><dt className="text-muted-foreground">{t(p.batch?"batchEnvelopeAmount":"amount")}</dt><dd>{formatUintToDecimalAmount(p.value, 18)} {symbol}</dd></div>
     <div><dt className="text-muted-foreground">{t("amountWei")}</dt><dd>{p.value}</dd></div>
     <div><dt className="text-muted-foreground">Nonce</dt><dd>{p.nonce}</dd></div>
     <div><dt className="text-muted-foreground">{t("calldata")}</dt><dd className="max-h-40 overflow-auto font-mono text-xs">{p.data}</dd></div>

@@ -5,6 +5,10 @@ import { ensureDeviceWallet, hasDeviceWallet, loadDeviceWallet, saveDeviceWallet
 import { displaySignedMessage } from './message-preview';
 import { tokenAsset, transferRequest, prepareTransaction, signPrepared, sendPrepared, type PreparedTransaction } from './evm-transfers';
 import { safeAccount, parseProposal, validateProposal, propose, signProposal, mergeProposals, prepareSafeCreation, prepareSafeExecution, safeReceipt, type SafeProposal } from './safe';
+import { discoverSafes } from './safe-discovery';
+import { parseSafeImport, safeImportTarget } from './safe-import';
+import { safeBatchPayload } from '../../desktop/src/lib/safeBatch';
+import { nextSafeNonce } from '../../desktop/src/lib/safeMultisig';
 import bs58 from 'bs58';
 import nacl from 'tweetnacl';
 import {
@@ -121,21 +125,33 @@ async function recordActivity(input: Omit<ActivityRecord, 'status' | 'createdAt'
   const records = await activity();
   await chrome.storage.local.set({ walletActivity: [{ ...input, status: 'pending', createdAt: Date.now() }, ...records.filter(r => r.hash !== input.hash)].slice(0, 200) });
 }
-interface SafeWorkspace { safes: Array<{ chainId: number; address: string }>; proposals: SafeProposal[] }
+interface SafeWorkspace { safes: Array<{ chainId: number; address: string; owners?: string[] }>; proposals: SafeProposal[] }
 async function safeWorkspace(): Promise<SafeWorkspace> {
   const saved = (await chrome.storage.local.get('safeWorkspace')).safeWorkspace;
   return saved && Array.isArray(saved.safes) && Array.isArray(saved.proposals) ? saved : { safes: [], proposals: [] };
 }
-async function rememberSafe(chainId: number, address: string) {
-  const workspace = await safeWorkspace();
-  if (!workspace.safes.some(s => s.chainId === chainId && s.address.toLowerCase() === address.toLowerCase())) workspace.safes.push({ chainId, address });
-  if (workspace.safes.length > 100) throw new Error('Maximum 100 saved Safes');
-  await chrome.storage.local.set({ safeWorkspace: workspace });
+let safeWrites: Promise<unknown> = Promise.resolve();
+function updateSafeWorkspace(update: (workspace: SafeWorkspace) => Promise<void> | void) {
+  const pending = safeWrites.then(async () => {
+    const workspace = await safeWorkspace();
+    await update(workspace);
+    await chrome.storage.local.set({ safeWorkspace: workspace });
+  });
+  safeWrites = pending.catch(() => {});
+  return pending;
+}
+async function rememberSafe(chainId: number, address: string, owners?: string[]) {
+  await updateSafeWorkspace(workspace => {
+    const existing = workspace.safes.find(s => s.chainId === chainId && s.address.toLowerCase() === address.toLowerCase());
+    if (existing) { if (owners) existing.owners = owners; }
+    else workspace.safes.push({ chainId, address, ...(owners ? {owners} : {}) });
+    if (workspace.safes.length > 100) throw new Error('Maximum 100 saved Safes');
+  });
 }
 async function saveSafeProposal(proposal: SafeProposal) {
-  const workspace = await safeWorkspace();
-  workspace.proposals = [proposal, ...workspace.proposals.filter(p => p.chain_id !== proposal.chain_id || p.safe_tx_hash.toLowerCase() !== proposal.safe_tx_hash.toLowerCase())].slice(0, 200);
-  await chrome.storage.local.set({ safeWorkspace: workspace });
+  await updateSafeWorkspace(workspace => {
+    workspace.proposals = [proposal, ...workspace.proposals.filter(p => p.chain_id !== proposal.chain_id || p.safe_tx_hash.toLowerCase() !== proposal.safe_tx_hash.toLowerCase())].slice(0, 200);
+  });
 }
 function tokenStorageKey(chain: string, address: string) { return `watchedTokens:${chain}:${address.toLowerCase()}`; }
 
@@ -436,13 +452,28 @@ async function openApproval(item: PendingRequest): Promise<void> {
   pending.set(item.request.id, item);
   item.timeoutId = setTimeout(() => rejectPending(item.request.id, 'Wallet confirmation timed out'), 5 * 60_000);
   try {
+    // Anchor to the requesting tab, not a different window the user focused meanwhile.
+    const sourceWindowId = item.port.sender?.tab?.windowId;
+    const sourceWindow = await (sourceWindowId === undefined
+      ? chrome.windows.getLastFocused({ windowTypes: ['normal'] })
+      : chrome.windows.get(sourceWindowId)).catch(() => undefined);
+    const width = Math.min(380, sourceWindow?.width || 380);
+    const height = Math.min(680, sourceWindow?.height || 680);
+    if (pending.get(item.request.id) !== item) return;
     const popup = await chrome.windows.create({
       url: chrome.runtime.getURL(`approval.html?id=${encodeURIComponent(item.request.id)}`),
       type: 'popup',
-      width: 420,
-      height: 680,
+      width,
+      height,
+      ...(sourceWindow?.left !== undefined && sourceWindow.width !== undefined
+        ? { left: sourceWindow.left + sourceWindow.width - width } : {}),
+      ...(sourceWindow?.top !== undefined ? { top: sourceWindow.top } : {}),
       focused: true,
     });
+    if (pending.get(item.request.id) !== item) {
+      if (popup.id !== undefined) await chrome.windows.remove(popup.id).catch(() => undefined);
+      return;
+    }
     item.windowId = popup.id;
   } catch (error) {
     removePending(item.request.id);
@@ -852,7 +883,7 @@ chrome.runtime.onConnect.addListener((port) => {
 });
 
 let uiMutation: Promise<unknown> = Promise.resolve();
-const SERIAL_UI_ACTIONS = new Set(['SELECT_WALLET_ACCOUNT', 'SET_AUTO_LOCK', 'CREATE_WALLET', 'OPEN_WALLET', 'PROTECT_DEFAULT_WALLET', 'CONFIRM_BACKUP', 'CREATE_VAULT', 'IMPORT_ACCOUNTS', 'IMPORT_TOKEN', 'SET_RPC', 'SET_NETWORK', 'SET_ACTIVE_ACCOUNT', 'SET_ENHANCED_ASSET_DETECTION', 'SAFE_IMPORT', 'SAFE_PROPOSE', 'SAFE_ACCOUNT', 'EXECUTE_REVIEW', 'REFRESH_ACTIVITY', 'SEND_NATIVE']);
+const SERIAL_UI_ACTIONS = new Set(['SELECT_WALLET_ACCOUNT', 'SET_AUTO_LOCK', 'CREATE_WALLET', 'OPEN_WALLET', 'PROTECT_DEFAULT_WALLET', 'CONFIRM_BACKUP', 'CREATE_VAULT', 'IMPORT_ACCOUNTS', 'IMPORT_TOKEN', 'SET_RPC', 'SET_NETWORK', 'SET_ACTIVE_ACCOUNT', 'SET_ENHANCED_ASSET_DETECTION', 'SAFE_IMPORT', 'SAFE_IMPORT_TRANSACTIONS', 'SAFE_PROPOSE', 'SAFE_ACCOUNT', 'EXECUTE_REVIEW', 'REFRESH_ACTIVITY', 'SEND_NATIVE']);
 
 chrome.runtime.onMessage.addListener((message: Record<string, unknown>, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id || !sender.url || ![chrome.runtime.getURL('popup.html'), chrome.runtime.getURL('approval.html')].includes(sender.url.split('?')[0])) {
@@ -957,6 +988,8 @@ async function handleUiMessage(message: Record<string, unknown>): Promise<unknow
       if (!unlockedVault) throw new Error('Unlock the wallet first');
       return safeWorkspace();
     }
+    case 'SAFE_DISCOVER':
+    case 'SAFE_IMPORT_TRANSACTIONS':
     case 'SAFE_ACCOUNT':
     case 'SAFE_PROPOSE':
     case 'SAFE_IMPORT':
@@ -968,10 +1001,41 @@ async function handleUiMessage(message: Record<string, unknown>): Promise<unknow
       const chain = configuredChain(evmChain(state.evmChainId), state.rpcOverrides ?? {});
       const provider = await evmProvider(chain);
       try {
+        if (message.type === 'SAFE_DISCOVER') {
+          const page = await discoverSafes(provider, chain, account.address, {
+            before_block: message.before_block as number | undefined,
+            offset: message.offset === undefined ? 0 : message.offset as number,
+            block_span: message.block_span as number | undefined,
+          });
+          await assertSigningContext(context);
+          await updateSafeWorkspace(async workspace => {
+            await assertSigningContext(context);
+            for (const info of page.accounts) {
+              const existing = workspace.safes.find(s => s.chainId === chain.chainId && s.address.toLowerCase() === info.address.toLowerCase());
+              if (existing) existing.owners = info.owners;
+              else workspace.safes.push({chainId:chain.chainId!,address:info.address,owners:info.owners});
+            }
+            if (workspace.safes.length > 100) throw new Error('Maximum 100 saved Safes');
+          });
+          return page;
+        }
+        if (message.type === 'SAFE_IMPORT_TRANSACTIONS') {
+          const file = parseSafeImport(String(message.file));
+          if (file.kind !== 'transactions') throw new Error('Invalid Safe transaction file');
+          const target = safeImportTarget(file, chain.chainId!, String(message.address || ''));
+          const info = await safeAccount(provider, chain, target);
+          const queued = (await safeWorkspace()).proposals.filter(p => p.chain_id === chain.chainId && p.safe_address.toLowerCase() === target.toLowerCase()).map(proposal => ({proposal}));
+          const nonce = nextSafeNonce(info.nonce, queued);
+          const payload = file.transactions.length > 1 ? safeBatchPayload(file.transactions) : {...file.transactions[0],batch:undefined};
+          const proposal = await propose(provider,chain,target,payload.to,payload.value,payload.data,nonce,payload.batch);
+          await assertSigningContext(context);
+          await saveSafeProposal(proposal); await rememberSafe(chain.chainId!, info.address, info.owners);
+          return proposal;
+        }
         if (message.type === 'SAFE_ACCOUNT') {
           const info = await safeAccount(provider, chain, String(message.address));
           await assertSigningContext(context);
-          await rememberSafe(chain.chainId!, info.address);
+          await rememberSafe(chain.chainId!, info.address, info.owners);
           return info;
         }
         if (message.type === 'SAFE_PREPARE_CREATE') {

@@ -2,11 +2,32 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Wallet } from 'ethers';
 import { mergeProposals, parseProposal, proposalHash, verifySignatures, type SafeProposal } from '../src/safe';
+import { safeBatchPayload } from '../src/safe';
+import { parseSafeProposal } from '../../desktop/src/lib/safeMultisig';
+import { parseSafeImport } from '../../desktop/src/lib/safeTransactionImport';
 const wallets = [new Wallet('0x' + '01'.padStart(64, '0')), new Wallet('0x' + '02'.padStart(64, '0'))];
 function fixture(): SafeProposal {
   const p: SafeProposal = { version: 1, chain_id: 1, safe_address: '0x' + '11'.repeat(20), to: wallets[0].address, value: '1000000000000000001', data: '0x', nonce: '0', safe_tx_hash: '', signatures: [] };
   p.safe_tx_hash = proposalHash(p); return p;
 }
+test('desktop and extension exchange the same signed CALL-only batch without losing calls', () => {
+  const batch=[{to:wallets[0].address,value:'1',data:'0x'},{to:wallets[1].address,value:'0',data:'0xaabb'}];
+  const p={...fixture(),...safeBatchPayload(batch)};
+  p.safe_tx_hash=proposalHash(p);
+  p.signatures=wallets.map(w=>({owner:w.address,signature:w.signingKey.sign(p.safe_tx_hash).serialized}));
+  const roundTrip=parseProposal(JSON.stringify(parseSafeProposal(JSON.stringify(p))));
+  assert.equal(verifySignatures(roundTrip,wallets.map(w=>w.address)).signatures.length,2);
+  assert.deepEqual(roundTrip.batch,batch);
+  for(const patch of [{value:'1'},{to:wallets[0].address},{batch:[{...batch[0],value:'2'},batch[1]]},{batch:null},{batch:[{...batch[0],operation:1},batch[1]]}]) {
+    assert.throws(()=>parseProposal(JSON.stringify({...p,...patch})));
+  }
+  const imported=parseSafeImport(JSON.stringify({version:'1.0',chainId:'1',transactions:batch}));
+  assert.equal(imported.kind,'transactions');
+  if(imported.kind==='transactions')assert.deepEqual(safeBatchPayload(imported.transactions),safeBatchPayload(batch));
+  const large={...fixture(),...safeBatchPayload([{...batch[0],data:'0x'+'ab'.repeat(50000)},batch[1]])};
+  large.safe_tx_hash=proposalHash(large);
+  assert.deepEqual(parseProposal(JSON.stringify(parseSafeProposal(JSON.stringify(large)))).batch,large.batch);
+});
 test('Safe proposals reject delegatecall/refund extensions, malformed uints and oversized calldata', () => {
   const p = fixture(); assert.deepEqual(parseProposal(JSON.stringify(p)), p);
   for (const patch of [{ operation: 1 }, { value: '-1' }, { nonce: '01' }, { value: (1n << 256n).toString() }, { data: '0xf' }, { signatures: null }]) assert.throws(() => parseProposal(JSON.stringify({ ...p, ...patch })));

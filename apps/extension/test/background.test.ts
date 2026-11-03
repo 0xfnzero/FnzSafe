@@ -201,10 +201,17 @@ test('DApp network switching requires approval; unknown networks return 4902 wit
   let opened: (id: string) => void = () => {};
   let popupCount = 0;
   Object.assign(chrome.windows, {
-    async create(options: { url: string }) { popupCount++; opened(new URL(options.url).searchParams.get('id')!); return { id: 123 }; },
+    async get(id: number) { assert.equal(id, 321); return { left: -1280, top: 20, width: 1200, height: 640 }; },
+    async create(options: chrome.windows.CreateData) {
+      assert.equal(options.width, 380);
+      assert.equal(options.height, 640, 'confirmation fits a shorter browser window');
+      assert.equal(options.left, -460, 'keep the popup on the requesting monitor, aligned right');
+      assert.equal(options.top, 20);
+      popupCount++; opened(new URL(options.url as string).searchParams.get('id')!); return { id: 123 };
+    },
     async remove() {},
   });
-  connectListener({ name: 'fnzsafe-provider', sender: { url: 'https://network-test.example/', frameId: 0 },
+  connectListener({ name: 'fnzsafe-provider', sender: { url: 'https://network-test.example/', frameId: 0, tab: { windowId: 321 } },
     onMessage: { addListener(fn: typeof providerListener) { providerListener = fn; } }, onDisconnect: noopEvent,
     postMessage(message: any) { respond(message); }, disconnect() {} });
   function provider(method: string, params: any[] = []) {

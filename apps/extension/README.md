@@ -1,4 +1,4 @@
-# FnzSafe Chrome Extension 0.3.2
+# FnzSafe Chrome Extension 0.3.3
 
 Manifest V3 wallet extension for EVM and Solana. Bitcoin and TRON support key recovery and address display; transaction signing and broadcasting for these families remain disabled.
 
@@ -16,7 +16,7 @@ Load `apps/extension/dist` as an unpacked extension from `chrome://extensions`. 
 
 ## Appearance
 
-Choose **Light**, **Dark** or **System** from the header or Settings → Appearance. The choice is stored locally and shared by the wallet and DApp confirmation windows. System follows the OS appearance. Toolbar icons use a dedicated crop of the existing artwork, with native 16/32/48/128 pixel assets, so desktop transparent margins do not shrink the visible toolbar mark. Both palettes distinguish the page background, balance card, asset panel, controls and selected navigation. Searchable account/network panels, local receive QR codes, token details, token-specific sending, copy feedback and keyboard focus handling are included.
+Choose **Light**, **Dark** or **System** from the header or Settings → Appearance & language. The choice is stored locally and shared by the wallet and DApp confirmation windows. System follows the OS appearance. Toolbar icons use a dedicated crop of the existing artwork, with native 16/32/48/128 pixel assets, so desktop transparent margins do not shrink the visible toolbar mark. Both palettes distinguish the page background, balance card, asset panel, controls and selected navigation. Searchable account/network panels, local receive QR codes, token details, token-specific sending, copy feedback and keyboard focus handling are included.
 
 ## First open and wallet protection
 
@@ -63,19 +63,23 @@ Manual validation for 0.3.0 used public test accounts in Chrome for Testing: one
 
 Create or open a verified Safe 1.4.1 account on the selected EVM network. Creation supports 2–50 EOA owners and a threshold of at least two. Proposals can send native assets or contain explicit contract calldata; export/import JSON to collect and merge owner signatures. Proposal hashes use the desktop-compatible format and are checked locally and on-chain. Execution requires the threshold and current nonce, simulates the transaction, and checks Safe execution events in its receipt.
 
-Only verified canonical Safe deployments, EIP-712 EOA signatures and CALL operations with zero gas refunds are supported. Smart-contract owner signatures, delegate calls and a hosted transaction service are not supported. Raw contract calldata must be independently understood before signing.
+Safe navigation is organized as account list → account details → proposal details. Creation, address import, proposals and Transaction Builder imports each have a focused page with a back action. Account details separate proposals from owners. Settings likewise uses grouped entries with dedicated appearance, security, RPC, privacy, connections and backup pages.
+
+On opening Safe, the extension scans canonical Safe 1.4.1 factory history from newest to oldest and verifies current ownership before caching accounts. Clearing the local Safe cache no longer requires remembering each address. Scans show progress and support pause, continue and retry; RPC errors retain existing accounts. Scanning may take time on large histories, resumes only within the current mounted view, and does not recover offchain proposals, signatures or labels. Other factories require adding an address.
+
+Transaction Builder JSON imports support one CALL or a reviewed atomic CALL-only batch using the verified canonical MultiSendCallOnly deployment. Desktop and extension share batch encoding and proposal validation. Only verified canonical Safe deployments, EIP-712 EOA signatures and zero gas refunds are supported. Arbitrary delegate calls, smart-contract owner signatures and a hosted transaction service are not supported. Raw contract calldata must be independently understood before signing.
 
 ## Installation
 
-Version 0.3.2 is an extension preview release. Passkey enrollment has been confirmed by the user; the user also confirmed locking and successfully unlocking the same wallet with the Passkey. The password path remains available.
+Version 0.3.3 is an extension preview release. Passkey enrollment has been confirmed by the user; the user also confirmed locking and successfully unlocking the same wallet with the Passkey. The password path remains available.
 
-Download and extract `FnzSafe-extension-0.3.2.zip` from **Assets** on the [latest combined Release](https://github.com/0xfnzero/FnzSafe/releases/latest). The same compiled artifact is also available under `extension-v0.3.2`. GitHub's automatic Source code downloads are not installable extension packages. End users do not need Node or a build tool. In Chrome, open `chrome://extensions`, enable Developer mode and choose **Load unpacked**, then select the extracted directory containing `manifest.json`. Keep that directory in place. When updating an existing unpacked installation, replace its files in the same directory and use Reload; changing the path changes the extension ID and can break Passkey access. This is an unpacked developer distribution, not a Chrome Web Store listing; updates are manual.
+Download and extract `FnzSafe-extension-0.3.3.zip` from **Assets** on the [latest combined Release](https://github.com/0xfnzero/FnzSafe/releases/latest). The same compiled artifact is also available under `extension-v0.3.3`. GitHub's automatic Source code downloads are not installable extension packages. End users do not need Node or a build tool. In Chrome, open `chrome://extensions`, enable Developer mode and choose **Load unpacked**, then select the extracted directory containing `manifest.json`. Keep that directory in place. When updating an existing unpacked installation, replace its files in the same directory and use Reload; changing the path changes the extension ID and can break Passkey access. This is an unpacked developer distribution, not a Chrome Web Store listing; updates are manual.
 
 For local development, load `dist` after building. Use a separate Chrome profile and public test accounts for development; never fund fixture accounts on a public network.
 
 ## Reproducible validation
 
-`npm test` covers RPC validation and redaction, plaintext recovery, encrypted backup formats, Safe signatures/proposals, vault migration, default-wallet persistence and protection migration, mocked Passkey PRF validation, DApp permission/security boundaries and serialized background imports. The current suite contains 72 passing tests, including multiple mnemonic roots, legacy import grouping, failed-write preservation, scoped exports, encrypted backup restoration, locale completeness, atomic account/network selection and idle-lock settings. The desktop compatibility fixtures were produced independently by the Rust implementation:
+`npm test` covers RPC validation and redaction, plaintext recovery, encrypted backup formats, Safe signatures/proposals, vault migration, default-wallet persistence and protection migration, mocked Passkey PRF validation, DApp permission/security boundaries and serialized background imports. The current suite contains 73 passing tests, including multiple mnemonic roots, legacy import grouping, failed-write preservation, scoped exports, encrypted backup restoration, locale completeness, atomic account/network selection and idle-lock settings. The desktop compatibility fixtures were produced independently by the Rust implementation:
 
 ```bash
 # Run from the repository root (requires the usual Rust/OpenSSL build dependencies).
@@ -93,7 +97,7 @@ SAFE_ARTIFACTS_DIR=/absolute/path/to/package/build/artifacts/contracts \
   npm run test:safe-local
 ```
 
-The test starts an ephemeral local chain, installs verified Safe runtime code, creates/funds a Safe, executes a 2/2 transaction, checks its receipt, rejects replay/code tampering and transfers a six-decimal ERC-20. It requires no public-chain funds. `test/fixtures/TestToken.json` is compiled from the adjacent Solidity source with solc 0.8.24. For manual UI testing, run `scripts/local-test-chain.mjs` with the same environment variables; it serves a disposable RPC at `127.0.0.1:18545` and the test DApp at `127.0.0.1:18777`. Stop it with Ctrl-C.
+The test starts an ephemeral local chain, installs verified Safe runtime code, creates/funds a Safe, executes a 2/2 transaction, checks its receipt, rejects replay/code tampering and transfers a six-decimal ERC-20. It also tests owner-based recovery, wrong-network rejection, desktop-compatible batch signatures, batch tamper rejection and atomic execution. It requires no public-chain funds. `test/fixtures/TestToken.json` is compiled from the adjacent Solidity source with solc 0.8.24. For manual UI testing, run `scripts/local-test-chain.mjs` with the same environment variables; it serves a disposable RPC at `127.0.0.1:18545` and the test DApp at `127.0.0.1:18777`. Stop it with Ctrl-C.
 
 Before the visual redesign, release validation also exercised plaintext recovery, account import, persisted custom RPC, ERC-20 sending, Safe creation/proposal/signature merge/execution, DApp connect/sign/send/reject, Solana message signing and locked-wallet re-review in Chrome for Testing. The final design was checked in Chrome and Chrome for Testing: light/dark themes and persistence, side-panel layout, first-open wallet creation and restart persistence, account/network search and switching, receive QR/copy feedback, and token-specific send selection. Passkey/password protection choices were inspected, and the user subsequently confirmed successful Passkey enrollment. The agent did not enter credentials or perform the user verification. Public-network Solana transfers and every supported EVM network were not exercised end-to-end.
 

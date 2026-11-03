@@ -1,14 +1,15 @@
 "use client";
 
 import {useState} from "react";
-import {useTranslations} from "next-intl";
+import {useTranslations} from "@/hooks/useTranslations";
 
 export function EvmRpcEditor({rpcUrl, defaultRpcUrl, onSave}: {
   rpcUrl: string;
   defaultRpcUrl?: string;
   onSave: (url: string) => Promise<void>;
 }) {
-  const t = useTranslations("features.settings");
+  const translate = useTranslations();
+  const t = (key: string) => translate(`features.settings.${key}`);
   const [url, setUrl] = useState(rpcUrl);
   const [visible, setVisible] = useState(false);
   const [busy, setBusy] = useState(false);

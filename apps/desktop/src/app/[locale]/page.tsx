@@ -3891,7 +3891,7 @@ export default function Home() {
   const [rpcProfiles, setRpcProfiles] = useState<RpcProfile[]>(DEFAULT_RPC_PROFILES);
   const [selectedRpcId, setSelectedRpcId] = useState(defaultRpcProfileId(DEFAULT_NETWORK));
   const [settingsNetwork, setSettingsNetwork] = useState<AppNetwork>(DEFAULT_NETWORK);
-  const [settingsSection, setSettingsSection] = useState<SettingsSection>("root");
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("preferences");
   const [settingsSearch, setSettingsSearch] = useState("");
   const [appPreferences, setAppPreferences] = useState<AppPreferences>(DEFAULT_APP_PREFERENCES);
   const [settingsStoreLoaded, setSettingsStoreLoaded] = useState(false);
@@ -9019,6 +9019,7 @@ export default function Home() {
         walletPublicKey: walletAddress ?? null,
         walletFamily: walletFamily ?? null,
         network: dappNetwork,
+        evmRpcUrl: evmMode ? activeEvmChain?.rpc_url : null,
         x: bounds.x,
         y: bounds.y,
         width: bounds.width,
@@ -11925,7 +11926,6 @@ export default function Home() {
     setMobileMenuOpen(false);
     clearForm();
     if (formId === "settings") {
-      setSettingsSection("root");
       setSettingsSearch("");
     }
     if (formId === "program-deploy") {
@@ -23591,7 +23591,7 @@ export default function Home() {
             title={t("features.settings.title")}
             searchPlaceholder={t("features.settings.searchPlaceholder")}
             noResultsLabel={t("features.settings.searchNoResults")}
-            backLabel={t("features.settings.backToSettings")}
+            clearSearchLabel={t("desktopUi.clearSearch")}
           >
 
                 {settingsSection === "preferences" && (
@@ -23603,11 +23603,15 @@ export default function Home() {
                       </div>
                       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-3">
                         <span className="text-sm text-gray-300">{t("app.themeStyle")}</span>
-                        {renderThemeSwitcher(true)}
+                        <div className="settings-appearance-options" role="group" aria-label={t("app.themeStyle")}>
+                          {themeOptions.map((option) => <button key={option.id} type="button" aria-pressed={appTheme === option.id} onClick={() => selectAppTheme(option.id)}>
+                            {option.icon}<span>{option.label}</span>
+                          </button>)}
+                        </div>
                       </div>
                       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-3">
                         <span className="text-sm text-gray-300">{tf("features.settings.language", "语言")}</span>
-                        <LanguageSwitcher />
+                        <LanguageSwitcher compact={false} />
                       </div>
                     </section>
                     <section className="space-y-3 rounded-lg border border-white/10 bg-white/[0.035] p-4">
@@ -29739,6 +29743,7 @@ export default function Home() {
         ? "h-full min-h-0"
         : isProgramInvokeForm
           ? "desktop-workspace space-y-4 xl:flex xl:min-h-0 xl:flex-1 xl:flex-col xl:space-y-0"
+          : formId === "settings" ? "desktop-workspace settings-workspace"
           : formId === "safe-multisig" ? "space-y-4" : "desktop-workspace space-y-5"}>
         {showTokenActionHeader && (
           <div className="space-y-4 rounded-2xl border border-white/10 bg-white/5 p-4">
@@ -29896,7 +29901,8 @@ export default function Home() {
     selectedForm === "program-invoke" ||
     selectedForm === "program-invoke-standalone" ||
     selectedForm === "evm-contract-invoke";
-  const showFormHeader = selectedForm !== "wallet-list" && selectedForm !== "safe-multisig" && !isBrowserWorkspaceForm;
+  const isSettingsWorkspace = selectedForm === "settings";
+  const showFormHeader = !isSettingsWorkspace && selectedForm !== "wallet-list" && selectedForm !== "safe-multisig" && !isBrowserWorkspaceForm;
   const isWideWorkspaceForm = [
     "safe-multisig",
     "contract-tools",
@@ -29913,14 +29919,18 @@ export default function Home() {
     "squads-prepare-upgrade-buffer",
     "squads-program-upgrade",
   ].includes(selectedForm || "");
-  const contentContainerClass = isBrowserWorkspaceForm
+  const contentContainerClass = isSettingsWorkspace
+    ? "settings-page-frame"
+    : isBrowserWorkspaceForm
     ? "flex h-full min-h-0 w-full flex-col p-0"
     : isProgramInvokeWorkspace
     ? "mx-auto w-full max-w-[1760px] p-3 sm:p-4 lg:p-5 2xl:max-w-[1900px] xl:flex xl:h-full xl:min-h-0 xl:flex-col"
     : isWideWorkspaceForm
     ? "mx-auto w-full max-w-[1760px] p-3 space-y-3 sm:p-4 lg:p-5 lg:space-y-4 2xl:max-w-[1900px]"
     : "max-w-5xl mx-auto p-3 space-y-3 sm:p-4 lg:p-8 lg:space-y-4";
-  const contentCardClass = isBrowserWorkspaceForm
+  const contentCardClass = isSettingsWorkspace
+    ? "app-content-card app-settings-card"
+    : isBrowserWorkspaceForm
     ? "app-content-card app-dapp-card flex h-full min-h-0 flex-col overflow-hidden bg-black/40"
     : isProgramInvokeWorkspace
     ? "app-content-card bg-black/40 backdrop-blur-xl rounded-xl border border-white/10 p-3 sm:p-4 lg:rounded-2xl lg:p-6 xl:flex xl:h-full xl:min-h-0 xl:flex-col xl:overflow-hidden"
@@ -30205,12 +30215,16 @@ export default function Home() {
       <div className={`app-main-surface min-w-0 flex-1 bg-gradient-to-br from-black via-purple-950 to-black ${
         isBrowserWorkspaceForm
           ? "overflow-hidden"
+          : isSettingsWorkspace
+            ? "overflow-y-auto lg:overflow-hidden"
           : isProgramInvokeWorkspace
             ? "overflow-y-auto xl:overflow-hidden"
             : "overflow-y-auto"
       }`}>
         <div className={isBrowserWorkspaceForm
           ? "flex h-full min-h-0 flex-col"
+          : isSettingsWorkspace
+            ? "min-h-full lg:h-full lg:min-h-0"
           : isProgramInvokeWorkspace
             ? "min-h-full overflow-y-auto xl:flex xl:h-full xl:min-h-0 xl:flex-col xl:overflow-hidden"
             : "min-h-full overflow-y-auto"}>

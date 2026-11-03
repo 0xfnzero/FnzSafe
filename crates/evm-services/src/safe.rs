@@ -1,10 +1,13 @@
 //! Safe 1.4.1 EOA multisig, independent of the hosted Safe Transaction Service.
-//! All amounts/nonces are decimal strings. Only CALL, zero refund and zero
-//! Safe gas fields are supported; exported proposals cannot enable delegatecall.
+//! All amounts/nonces are decimal strings. Refund and Safe gas fields are zero.
+//! Batches delegate only to the verified canonical MultiSendCallOnly runtime.
 use super::*;
 use k256::ecdsa::VerifyingKey;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+mod batch;
+mod discovery;
+pub use batch::SafeBatchCall;
 
 pub const FACTORY: &str = "0x4e1dcf7ad4e460cfd30791ccc4f9c8a4f820ec67";
 pub const SINGLETON: &str = "0x41675c099f32341bf84bfc5382af534df5c7461a";
@@ -34,6 +37,8 @@ pub struct SafeProposal {
     pub nonce: String,
     pub safe_tx_hash: String,
     pub signatures: Vec<SafeSignature>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch: Option<Vec<SafeBatchCall>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,6 +55,14 @@ pub struct SafeAccount {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SafeCommand {
+    Discover {
+        #[serde(default)]
+        before_block: Option<u64>,
+        #[serde(default)]
+        offset: usize,
+        #[serde(default)]
+        block_span: Option<u64>,
+    },
     Account {
         address: String,
     },
@@ -70,6 +83,8 @@ pub enum SafeCommand {
         data: String,
         #[serde(default)]
         nonce: Option<String>,
+        #[serde(default)]
+        batch: Option<Vec<SafeBatchCall>>,
     },
     Validate {
         proposal: SafeProposal,
@@ -289,14 +304,14 @@ fn creation_data(
     ))
 }
 
-// SafeTx fields are fixed to CALL with zero gas/refund values. Reconstructing
+// SafeTx gas/refund fields are fixed to zero. Reconstructing
 // both hashes locally prevents imported JSON from hiding additional authority.
 fn tx_args(proposal: &SafeProposal, last: [u8; 32]) -> EvmResult<Vec<u8>> {
     let mut args = Vec::new();
     args.extend(address_word(&proposal.to)?);
     args.extend(word(&proposal.value)?);
     args.extend(number(320));
-    args.extend(number(0)); // CALL
+    args.extend(number(usize::from(proposal.batch.is_some()))); // verified batch or CALL
     args.extend(number(0)); // safeTxGas
     args.extend(number(0)); // baseGas
     args.extend(number(0)); // gasPrice
@@ -315,7 +330,8 @@ pub fn proposal_hash(proposal: &SafeProposal) -> EvmResult<[u8; 32]> {
     tx.extend(address_word(&proposal.to)?);
     tx.extend(word(&proposal.value)?);
     tx.extend(keccak256(&hex_data_to_bytes(&proposal.data)?));
-    for _ in 0..4 {
+    tx.extend(number(usize::from(proposal.batch.is_some())));
+    for _ in 0..3 {
         tx.extend(number(0));
     }
     tx.extend(address_word(ZERO)?);
@@ -343,6 +359,7 @@ fn canonical_proposal(chain: &EvmChainConfig, proposal: &SafeProposal) -> EvmRes
         return Err(invalid("Safe calldata exceeds 64 KiB"));
     }
     p.data = hex_bytes(&hex_data_to_bytes(&p.data)?);
+    batch::validate(&p)?;
     let hash = hex_bytes(&proposal_hash(&p)?);
     if !p.safe_tx_hash.eq_ignore_ascii_case(&hash) {
         return Err(invalid("Safe transaction hash does not match proposal"));
@@ -402,6 +419,7 @@ fn validate_proposal(
     p: &SafeProposal,
 ) -> EvmResult<(SafeProposal, SafeAccount)> {
     let mut p = canonical_proposal(chain, p)?;
+    batch::verify_runtime(chain, &p)?;
     let info = account(chain, &p.safe_address)?;
     if decimal_cmp(&p.nonce, &info.nonce)? == std::cmp::Ordering::Less {
         return Err(invalid(
@@ -490,6 +508,17 @@ where
     validate_chain(&req.chain)?;
     validate_rpc_chain_id(&req.chain)?;
     match &req.command {
+        SafeCommand::Discover {
+            before_block,
+            offset,
+            block_span,
+        } => discovery::discover(
+            &req.chain,
+            &req.wallet_address,
+            *before_block,
+            *offset,
+            *block_span,
+        ),
         SafeCommand::Account { address } => Ok(json!({"account": account(&req.chain, address)?})),
         SafeCommand::PrepareCreate {
             owners,
@@ -546,6 +575,7 @@ where
             value,
             data,
             nonce,
+            batch,
         } => {
             let info = account(&req.chain, address)?;
             let mut proposal = SafeProposal {
@@ -562,6 +592,7 @@ where
                     .unwrap_or(info.nonce),
                 safe_tx_hash: String::new(),
                 signatures: vec![],
+                batch: batch.clone(),
             };
             if data.len() > MAX_DATA * 2 + 2 {
                 return Err(invalid("Safe calldata exceeds 64 KiB"));
@@ -719,6 +750,7 @@ mod tests {
             value: "123".into(),
             data: "0x123456".into(),
             nonce: "0".into(),
+            batch: None,
             safe_tx_hash: String::new(),
             signatures: vec![],
         };
@@ -858,6 +890,7 @@ mod tests {
         for (name, address, subdir) in [
             ("Safe", SINGLETON, ""),
             ("SafeProxyFactory", FACTORY, "proxies/"),
+            ("MultiSendCallOnly", batch::MULTISEND, "libraries/"),
         ] {
             let artifact: Value = serde_json::from_slice(
                 &std::fs::read(dir.join(format!("{subdir}{name}.sol/{name}.json"))).unwrap(),
@@ -940,6 +973,29 @@ mod tests {
         .unwrap();
         assert_eq!(receipt["status"], "confirmed");
         assert_eq!(receipt["account"]["threshold"], 2);
+        // Discovery must recover a fresh installation without reading a key,
+        // and must not associate an unrelated EOA with the same Safe.
+        for signer in [0, 1, 2] {
+            let found = handle(
+                request(
+                    SafeCommand::Discover {
+                        before_block: None,
+                        offset: 0,
+                        block_span: None,
+                    },
+                    signer,
+                    false,
+                ),
+                || panic!("discovery accessed a key"),
+            )
+            .unwrap();
+            assert_eq!(found["discovery"]["complete"], true);
+            let accounts = found["discovery"]["accounts"].as_array().unwrap();
+            assert_eq!(accounts.len(), usize::from(signer < 2));
+            if signer < 2 {
+                assert_eq!(accounts[0]["address"], address);
+            }
+        }
         rpc_call(
             &chain,
             "anvil_setBalance",
@@ -953,6 +1009,7 @@ mod tests {
                 value: "17".into(),
                 data: "0x".into(),
                 nonce: None,
+                batch: None,
             },
             0,
             false,
@@ -1029,6 +1086,7 @@ mod tests {
                 value: "0".into(),
                 data: "0x".into(),
                 nonce: Some("1".into()),
+                batch: None,
             },
             0,
             false,
@@ -1085,6 +1143,7 @@ mod tests {
                 value: "0".into(),
                 data: calldata("proxyCreationCode()", &[]),
                 nonce: None,
+                batch: None,
             },
             0,
             false,
@@ -1121,6 +1180,7 @@ mod tests {
                         value: case["value"].as_str().unwrap().into(),
                         data: case["data"].as_str().unwrap().into(),
                         nonce: None,
+                        batch: None,
                     },
                     0,
                     false,
@@ -1201,6 +1261,7 @@ mod tests {
                         value: value.into(),
                         data,
                         nonce: None,
+                        batch: None,
                     },
                     0,
                     false,
@@ -1241,6 +1302,7 @@ mod tests {
                 value: "0".into(),
                 data: "0xdeadbeef".into(),
                 nonce: None,
+                batch: None,
             },
             0,
             false,
@@ -1258,6 +1320,122 @@ mod tests {
             account(&chain, &address).unwrap().nonce,
             nonce_before_revert
         );
+        // Official MultiSendCallOnly executes from the Safe, consumes one nonce,
+        // and rolls back all preceding calls when a later target reverts.
+        let before_batch = account(&chain, &address).unwrap();
+        let calls = vec![
+            SafeBatchCall {
+                to: owners[2].clone(),
+                value: "7".into(),
+                data: "0x".into(),
+            },
+            SafeBatchCall {
+                to: owners[2].clone(),
+                value: "11".into(),
+                data: "0x".into(),
+            },
+        ];
+        let propose_batch = |calls: Vec<SafeBatchCall>| SafeCommand::Propose {
+            address: address.clone(),
+            to: batch::MULTISEND.into(),
+            value: "0".into(),
+            data: batch::encode(&calls).unwrap(),
+            nonce: None,
+            batch: Some(calls),
+        };
+        let result = run(propose_batch(calls.clone()), 0, false).unwrap();
+        let mut batched: SafeProposal = serde_json::from_value(result["proposal"].clone()).unwrap();
+        // A changed inner recipient, value, operation interpretation or envelope is rejected before key access.
+        for mode in 0..4 {
+            let mut changed = batched.clone();
+            match mode {
+                0 => changed.batch.as_mut().unwrap()[0].to = owners[1].clone(),
+                1 => changed.batch.as_mut().unwrap()[0].value = "8".into(),
+                2 => changed.batch = None,
+                _ => changed.to = owners[2].clone(),
+            }
+            assert!(handle(
+                request(SafeCommand::Sign { proposal: changed }, 0, true),
+                || panic!("tampered batch accessed a key")
+            )
+            .is_err());
+        }
+        for signer in 0..2 {
+            batched = serde_json::from_value(
+                run(SafeCommand::Sign { proposal: batched }, signer, true).unwrap()["proposal"]
+                    .clone(),
+            )
+            .unwrap();
+        }
+        let batch_hash = batched.safe_tx_hash.clone();
+        let sent = run(SafeCommand::Execute { proposal: batched }, 0, true).unwrap();
+        rpc_call(&chain, "evm_mine", json!([])).unwrap();
+        assert_eq!(
+            run(
+                SafeCommand::Receipt {
+                    address: address.clone(),
+                    transaction_hash: sent["transaction_hash"].as_str().unwrap().into(),
+                    safe_tx_hash: Some(batch_hash)
+                },
+                0,
+                false
+            )
+            .unwrap()["status"],
+            "confirmed"
+        );
+        let after_batch = account(&chain, &address).unwrap();
+        assert_eq!(
+            after_batch.nonce,
+            decimal_add(&before_batch.nonce, "1").unwrap()
+        );
+        assert_eq!(
+            decimal_add(&after_batch.balance_wei, "18").unwrap(),
+            before_batch.balance_wei
+        );
+        let mut failing = calls.clone();
+        failing[1] = SafeBatchCall {
+            to: FACTORY.into(),
+            value: "0".into(),
+            data: "0xdeadbeef".into(),
+        };
+        let result = run(propose_batch(failing), 0, false).unwrap();
+        let mut failing: SafeProposal = serde_json::from_value(result["proposal"].clone()).unwrap();
+        for signer in 0..2 {
+            failing = serde_json::from_value(
+                run(SafeCommand::Sign { proposal: failing }, signer, true).unwrap()["proposal"]
+                    .clone(),
+            )
+            .unwrap();
+        }
+        assert!(handle(
+            request(
+                SafeCommand::Execute {
+                    proposal: failing.clone()
+                },
+                0,
+                true
+            ),
+            || panic!("reverting batch accessed a key")
+        )
+        .is_err());
+        // Broadcast the signed reverting payload directly on the isolated node to prove EVM rollback,
+        // independently of the application's simulation guard.
+        rpc_call(&chain, "anvil_impersonateAccount", json!([owners[0]])).unwrap();
+        let raw = rpc_call(&chain,"eth_sendTransaction",json!([{"from":owners[0],"to":address,"data":execution_data(&failing,2).unwrap(),"gas":"0x2dc6c0"}])).unwrap();
+        rpc_call(&chain, "evm_mine", json!([])).unwrap();
+        let receipt = rpc_call(&chain, "eth_getTransactionReceipt", json!([raw])).unwrap();
+        assert_eq!(receipt["status"], "0x0");
+        rpc_call(&chain, "anvil_stopImpersonatingAccount", json!([owners[0]])).unwrap();
+        assert_eq!(account(&chain, &address).unwrap().nonce, after_batch.nonce);
+        assert_eq!(
+            account(&chain, &address).unwrap().balance_wei,
+            after_batch.balance_wei
+        );
+        rpc_call(&chain, "anvil_setCode", json!([batch::MULTISEND, "0x00"])).unwrap();
+        assert!(handle(request(propose_batch(calls), 0, false), || panic!(
+            "untrusted batch runtime accessed a key"
+        ))
+        .is_err());
         // Fail closed when the chain has no trusted factory.
         rpc_call(&chain, "anvil_setCode", json!([FACTORY, "0x00"])).unwrap();
         assert!(account(&chain, &address).is_err());

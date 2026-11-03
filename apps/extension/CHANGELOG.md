@@ -1,5 +1,15 @@
 # Extension changelog
 
+## 0.3.3 — 2026-11-03
+
+- Recover Safe 1.4.1 accounts from canonical factory history after local cache loss, with verified current ownership, progress, pause/continue and actionable errors.
+- Organize multisig as account list, account details and individual proposal operations. Separate owners from proposals, put advanced fields behind disclosure, and show immediate loading skeletons and spinners.
+- Group settings into wallet management and preferences, with dedicated appearance/language, security, RPC, privacy, sites and backup pages. Preserve password/Passkey authorization and add pending/error feedback.
+- Import Transaction Builder files as single calls or verified atomic CALL-only batches. Share batch encoding and validation with desktop, with per-call review before signatures or execution.
+- Anchor DApp approval windows to the requesting browser window and clean up approvals that expire while opening.
+
+Validation: 73 automated tests, TypeScript checking, production build, official-contract Anvil recovery/batch integration, and synthetic browser checks of Safe navigation, loading feedback, settings navigation and light/dark themes.
+
 ## 0.3.2 — 2026-11-03
 
 - Default the extension's Solana mainnet RPC to API-key-free PublicNode, after the official endpoint returned HTTP 403 for browser-origin requests. Keep official devnet and desktop defaults unchanged; preserve explicit custom RPC settings.

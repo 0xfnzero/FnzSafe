@@ -87,14 +87,62 @@
 .ui-progress-track > span { display: block; width: 35%; height: 100%; border-radius: 99px; background: var(--ui-accent, #64dcb4); animation: ui-progress 1.8s ease-in-out infinite; }
 .desktop-activity-stack { position: fixed; z-index: 450; bottom: 24px; right: 24px; width: min(420px, calc(100vw - 32px)); display: grid; gap: 10px; max-height: 50vh; overflow-y: auto; }
 .desktop-activity-stack .operation-status { box-shadow: 0 8px 30px #00000020; }
-.settings-home { max-width: 1080px; }
-.settings-groups { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); align-items: start; gap: 24px; }
-.settings-group-list { overflow: hidden; background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: 14px; }
-.settings-item { display: flex; align-items: flex-start; gap: 14px; width: 100%; padding: 18px; text-align: left; border-bottom: 1px solid var(--ui-border); }
-.settings-item:last-child { border-bottom: 0; }
-.settings-item:hover { background: var(--ui-hover); }
-.settings-item-icon { display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px; flex-shrink: 0; border-radius: 11px; color: var(--ui-accent); background: var(--ui-tint); }
-.settings-section-header { border-bottom: 1px solid var(--ui-border); padding-bottom: 18px; }
+/* Settings use a persistent desktop navigation pane and independently scrolling content. */
+.settings-page-frame { width: 100%; max-width: 1520px; margin: 0 auto; padding: 24px; }
+.app-settings-card { overflow: hidden; border: 1px solid var(--ui-border); border-radius: 12px; background: var(--ui-surface); }
+.settings-layout { display: grid; grid-template-columns: 216px minmax(0, 1fr); min-height: 0; }
+.settings-navigation { min-width: 0; min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--ui-border); background: var(--ui-inset); }
+.settings-navigation-header { padding: 20px 14px 10px; }
+.settings-navigation-header h2 { margin: 0 0 16px 8px; color: var(--ui-ink); font-size: 18px; font-weight: 600; }
+.settings-search { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 9px; border: 1px solid var(--ui-border); border-radius: 7px; color: var(--ui-muted); background: var(--ui-surface); }
+.settings-search:focus-within { outline: 2px solid var(--ui-accent); outline-offset: 2px; }
+.app-shell .settings-search input { width: 100%; min-width: 0; height: 100%; padding: 0; border: 0; border-radius: 0; background: transparent !important; font-size: 12px; outline: none; box-shadow: none; }
+.settings-search input::-webkit-search-cancel-button { display: none; }
+.settings-search button { display: flex; padding: 2px; border-radius: 4px; }
+.settings-navigation-list { padding: 0 10px 14px; min-height: 0; }
+.settings-navigation-group + .settings-navigation-group { margin-top: 12px; }
+.settings-navigation-group-title { margin: 6px 10px; font-size: 11px; font-weight: 600; letter-spacing: .025em; color: var(--ui-muted); }
+.settings-navigation-item { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 34px; margin: 2px 0; padding: 7px 10px; border-radius: 6px; color: var(--ui-ink); text-align: left; font-size: 13px; line-height: 1.4; }
+.settings-navigation-item:hover { background: var(--ui-hover); }
+.settings-navigation-item[aria-current="page"] { color: var(--ui-accent); background: var(--ui-tint); font-weight: 600; box-shadow: inset 2px 0 var(--ui-accent); }
+.settings-navigation-icon { display: inline-flex; flex-shrink: 0; color: var(--ui-muted); }
+.settings-navigation-item[aria-current="page"] .settings-navigation-icon { color: inherit; }
+.settings-search-empty { padding: 16px 10px; color: var(--ui-muted); font-size: 12px; line-height: 1.6; }
+.settings-detail { min-width: 0; min-height: 0; padding: 28px 32px; }
+.settings-detail-inner { max-width: 880px; margin: 0 auto; }
+.settings-detail-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 22px; margin-bottom: 24px; border-bottom: 1px solid var(--ui-border); }
+.settings-detail-header h2 { font-size: 20px; font-weight: 600; color: var(--ui-ink); }
+.settings-detail-header p { margin-top: 6px; font-size: 12px; line-height: 1.6; color: var(--ui-muted); }
+.settings-detail-summary { flex-shrink: 0; max-width: 40%; padding: 4px 8px; border: 1px solid var(--ui-border); border-radius: 6px; font-size: 11px; line-height: 1.5; color: var(--ui-muted); overflow-wrap: anywhere; }
+.settings-content-body { min-width: 0; }
+.settings-appearance-options { display: inline-flex; flex-wrap: wrap; gap: 3px; padding: 3px; border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-inset); }
+.settings-appearance-options button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 32px; padding: 5px 12px; border-radius: 5px; font-size: 12px; color: var(--ui-muted); }
+.settings-appearance-options button:hover { color: var(--ui-ink); background: var(--ui-hover); }
+.settings-appearance-options button[aria-pressed="true"] { color: var(--ui-accent); background: var(--ui-surface); box-shadow: 0 1px 4px #0000001a; }
+
+@media (min-width: 1024px) {
+  .settings-page-frame { height: 100%; }
+  .app-settings-card, .settings-workspace, .settings-layout { height: 100%; min-height: 0; }
+  .settings-navigation-list, .settings-detail { overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+}
+@media (max-width: 1199px) {
+  .settings-page-frame { padding: 16px; }
+  .settings-layout { grid-template-columns: 190px minmax(0, 1fr); }
+  .settings-detail { padding: 24px; }
+}
+@media (max-width: 639px) {
+  .settings-page-frame { padding: 12px; }
+  .settings-layout { grid-template-columns: minmax(0, 1fr); }
+  .settings-navigation { border-right: 0; border-bottom: 1px solid var(--ui-border); }
+  .settings-navigation-header { padding: 14px 14px 8px; }
+  .settings-navigation-header h2 { margin: 0 0 10px; }
+  .settings-navigation-list { max-height: 180px; overflow-y: auto; }
+  .settings-navigation-group-title { display: none; }
+  .settings-navigation-group, .settings-navigation-group > div { display: contents; }
+  .settings-navigation-item { display: inline-flex; width: auto; margin-right: 4px; }
+  .settings-detail { padding: 20px 16px; }
+  .settings-detail-summary { display: none; }
+}
 .contract-invoke-workspace { gap: 18px; }
 .contract-invoke-workspace section { border-radius: 14px; }
 .app-shell[data-app-theme] .desktop-workspace :is(.text-gray-400, .text-gray-500, .text-gray-600) { color: var(--ui-muted) !important; }
@@ -103,7 +151,6 @@
 @keyframes ui-shimmer { to { transform: translateX(100%); } }
 @keyframes ui-progress { 0% { transform: translateX(-110%); } 100% { transform: translateX(390%); } }
 @media (max-width: 760px) {
-  .settings-groups { grid-template-columns: minmax(0,1fr); }
   .ui-send-form, .ui-asset-detail, .unified-asset-list { padding: 16px; }
   .ui-asset-row { flex-wrap: wrap; gap: 12px; }
 }

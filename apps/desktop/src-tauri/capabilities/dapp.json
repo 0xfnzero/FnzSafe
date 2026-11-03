@@ -43,6 +43,7 @@
     "allow-submit-dapp-connect-request",
     "allow-poll-dapp-connect-request",
     "allow-submit-dapp-sign-request",
-    "allow-poll-dapp-sign-request"
+    "allow-poll-dapp-sign-request",
+    "allow-dapp-evm-rpc"
   ]
 }

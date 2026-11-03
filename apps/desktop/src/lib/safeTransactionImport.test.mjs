@@ -35,10 +35,10 @@ test('rejects unsupported operations, refunds, malformed quantities, calldata an
  }
  for(const patch of [{version:1},{version:'2.0'},{chainId:97},{chainId:'97.1'},{chainId:'9007199254740993'},{transactions:[]},{transactions:[null]},{transactions:Array(101).fill(tx)}])assert.throws(()=>parse({...file,...patch}));
  assert.throws(()=>parseSafeImport('{'));
- assert.throws(()=>parseSafeImport(' '.repeat(180001)));
+ assert.throws(()=>parseSafeImport(' '.repeat(400001)));
 });
 
-test('validates every transaction and preserves file order without pretending it is an atomic batch',()=>{
+test('validates every transaction and preserves file order for subsequent atomic batch construction',()=>{
  const transactions=[tx,{...tx,to:safe,value:'9007199254740993',data:'0x'}];
  assert.deepEqual(parse({...file,transactions}).transactions,transactions.map(({to,value,data})=>({to,value,data})));
  assert.throws(()=>parse({...file,transactions:[tx,{...tx,operation:1}]}));

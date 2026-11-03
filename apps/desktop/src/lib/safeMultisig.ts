@@ -1,5 +1,6 @@
 import { isValidEvmAddress } from "./evmAbi.ts";
 import type { SafeCallMetadata } from "./safeAbi.ts";
+import {validateSafeBatch, type SafeBatchCall} from "./safeBatch.ts";
 
 /** Public proposal format. Never includes RPC credentials, wallet IDs or secrets. */
 export interface SafeSignature { owner: string; signature: string }
@@ -13,6 +14,7 @@ export interface SafeProposal {
   nonce: string;
   safe_tx_hash: string;
   signatures: SafeSignature[];
+  batch?: SafeBatchCall[];
 }
 export interface SafeAccount {
   address: string; chain_id: number; version: string; owners: string[];
@@ -36,6 +38,26 @@ export interface SafeProposalRecord {
   proposal: SafeProposal; transactionHash?: string; status?: string; call?: SafeCallMetadata;
 }
 export interface SafeWorkspace { safes: SafeRecord[]; proposals: SafeProposalRecord[] }
+export interface SafeDiscoveryPage {
+  accounts: SafeAccount[];
+  from_block: number; to_block: number; latest_block: number;
+  next_before_block: number | null; next_offset: number; block_span: number;
+  complete: boolean; unsupported: number;
+}
+/** Discovery must never replace names, proposals or entries on another chain. */
+export function mergeDiscoveredSafes(workspace: SafeWorkspace, accounts: SafeAccount[], chainId: number, owner: string): SafeWorkspace {
+  const safes = [...workspace.safes];
+  for (const account of accounts) {
+    if (account.chain_id !== chainId || account.version !== "1.4.1" || !isValidEvmAddress(account.address) ||
+      !Array.isArray(account.owners) || account.owners.some(o => !isValidEvmAddress(o)) ||
+      !account.owners.some(o => o.toLowerCase() === owner.toLowerCase())) throw new Error("Invalid Safe discovery response");
+    const index = safes.findIndex(s => s.chainId === chainId && s.address.toLowerCase() === account.address.toLowerCase());
+    const old = safes[index];
+    const record = { ...old, chainId, address: account.address, label: old?.label || "", owners: account.owners };
+    if (index < 0) safes.push(record); else safes[index] = record;
+  }
+  return { ...workspace, safes };
+}
 export const SAFE_STORAGE_KEY = "fnzsafe.safe-multisig.v1";
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const HASH = /^0x[0-9a-fA-F]{64}$/;
@@ -44,9 +66,9 @@ function uint(value: unknown): value is string {
   return typeof value === "string" && value.length <= 78 && UINT256.test(value) && BigInt(value) < (BigInt(1) << BigInt(256));
 }
 export function parseSafeProposal(raw: string): SafeProposal {
-  if (raw.length > 180_000) throw new Error("Proposal exceeds the size limit");
+  if (raw.length > 400_000) throw new Error("Proposal exceeds the size limit");
   const p = JSON.parse(raw) as SafeProposal;
-  const fields = ["version", "chain_id", "safe_address", "to", "value", "data", "nonce", "safe_tx_hash", "signatures"];
+  const fields = ["version", "chain_id", "safe_address", "to", "value", "data", "nonce", "safe_tx_hash", "signatures", "batch"];
   if (!p || typeof p !== "object" || Object.keys(p).some(key => !fields.includes(key)) ||
     p.version !== 1 || !Number.isSafeInteger(p.chain_id) || p.chain_id <= 0 ||
     !ADDRESS.test(p.safe_address) || !ADDRESS.test(p.to) || !uint(p.value) || !uint(p.nonce) ||
@@ -56,6 +78,7 @@ export function parseSafeProposal(raw: string): SafeProposal {
       !ADDRESS.test(s.owner) || !/^0x[0-9a-fA-F]{130}$/.test(s.signature))) {
     throw new Error("Invalid Safe proposal format");
   }
+  validateSafeBatch(p);
   return p;
 }
 export function sameSafeProposal(a: SafeProposal, b: SafeProposal): boolean {
@@ -63,11 +86,11 @@ export function sameSafeProposal(a: SafeProposal, b: SafeProposal): boolean {
     a.safe_tx_hash.toLowerCase() === b.safe_tx_hash.toLowerCase();
 }
 /** A response must describe exactly the transaction the user supplied/reviewed. */
-export function assertSafeProposalMatches(actual: SafeProposal, expected: Pick<SafeProposal, "chain_id" | "safe_address" | "to" | "value" | "data" | "nonce"> & { safe_tx_hash?: string }): void {
+export function assertSafeProposalMatches(actual: SafeProposal, expected: Pick<SafeProposal, "chain_id" | "safe_address" | "to" | "value" | "data" | "nonce" | "batch"> & { safe_tx_hash?: string }): void {
   parseSafeProposal(JSON.stringify(actual));
   if (actual.chain_id !== expected.chain_id || actual.safe_address.toLowerCase() !== expected.safe_address.toLowerCase() ||
     actual.to.toLowerCase() !== expected.to.toLowerCase() || actual.value !== expected.value || actual.nonce !== expected.nonce ||
-    actual.data.toLowerCase() !== expected.data.toLowerCase() ||
+    actual.data.toLowerCase() !== expected.data.toLowerCase() || !!actual.batch !== !!expected.batch ||
     (expected.safe_tx_hash !== undefined && actual.safe_tx_hash.toLowerCase() !== expected.safe_tx_hash.toLowerCase())) {
     throw new Error("Safe transaction response does not match the requested transaction");
   }
@@ -75,7 +98,7 @@ export function assertSafeProposalMatches(actual: SafeProposal, expected: Pick<S
 /** The backend cryptographically checks every signature after merging. */
 export function mergeSafeProposals(a: SafeProposal, b: SafeProposal): SafeProposal {
   if (!sameSafeProposal(a, b) || a.to.toLowerCase() !== b.to.toLowerCase() ||
-    a.value !== b.value || a.nonce !== b.nonce || a.data.toLowerCase() !== b.data.toLowerCase()) {
+    a.value !== b.value || a.nonce !== b.nonce || a.data.toLowerCase() !== b.data.toLowerCase() || !!a.batch !== !!b.batch) {
     throw new Error("Cannot merge different Safe transactions");
   }
   const signatures = new Map<string, SafeSignature>();

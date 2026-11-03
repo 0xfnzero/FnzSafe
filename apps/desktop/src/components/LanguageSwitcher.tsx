@@ -3,13 +3,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, usePathname, useRouter } from 'next/navigation';
 import { locales, localeNames, type Locale } from '@/i18n/config';
-import { Globe2, Languages } from 'lucide-react';
+import { ChevronDown, Globe2, Languages } from 'lucide-react';
 
 function LocaleIcon({ locale }: { locale: Locale }) {
   return locale === 'zh' ? <Languages className="h-4 w-4" /> : <Globe2 className="h-4 w-4" />;
 }
 
-export default function LanguageSwitcher() {
+export default function LanguageSwitcher({ compact = true }: { compact?: boolean }) {
   const params = useParams();
   const locale = (params?.locale as string) || 'en';
   const router = useRouter();
@@ -51,16 +51,17 @@ export default function LanguageSwitcher() {
       <button
         type="button"
         onClick={() => setOpen((nextOpen) => !nextOpen)}
-        className="app-language-menu-button inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-gray-200 transition-colors hover:bg-white/10 hover:text-white"
+        className={`app-language-menu-button inline-flex h-10 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-gray-200 transition-colors hover:bg-white/10 hover:text-white ${compact ? "w-10" : "min-w-36 gap-2 px-3 text-sm"}`}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={localeNames[locale as Locale]}
         title={localeNames[locale as Locale]}
       >
         <LocaleIcon locale={locale as Locale} />
+        {!compact && <><span className="flex-1 text-left">{localeNames[locale as Locale]}</span><ChevronDown className="h-3.5 w-3.5" aria-hidden="true" /></>}
       </button>
       {open && (
-      <div className="absolute bottom-full left-0 z-50 mb-2 w-40">
+      <div role="menu" className={`absolute bottom-full z-50 mb-2 w-40 ${compact ? "left-0" : "right-0"}`}>
         <div className="app-language-menu bg-black/90 backdrop-blur-xl rounded-lg border border-white/10 shadow-xl overflow-hidden">
           {locales.map((loc) => (
             <button type="button"

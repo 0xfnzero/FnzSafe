@@ -20,6 +20,7 @@ export default function SafeMultisigHarness() {
   const receipts = useRef<Record<string, { address: string; proposal?: SafeProposal; done?: boolean }>>({});
   const serial = useRef(3);
   useEffect(() => {
+    if (new URLSearchParams(location.search).has("empty")) localStorage.setItem(SAFE_STORAGE_KEY, JSON.stringify({safes:[],proposals:[]}));
     if (!localStorage.getItem(SAFE_STORAGE_KEY)) localStorage.setItem(SAFE_STORAGE_KEY, JSON.stringify({
       safes: [{ chainId: 97, address: safeA, label: "Treasury Alpha", owners: [ownerA, ownerB], createdBy: ownerA },
         { chainId: 97, address: safeB, label: "Operations Beta", owners: [ownerA, ownerB], createdBy: ownerA }],
@@ -28,6 +29,12 @@ export default function SafeMultisigHarness() {
     setReady(true);
   }, []);
   const service: SafeUiService = async ({chain, command: c, walletAddress, approved}) => {
+    if (c.kind === "discover") {
+      await new Promise(resolve => setTimeout(resolve, 900));
+      if (fail.current) { fail.current=false; throw new Error("Simulated discovery RPC failure"); }
+      const matches = chain.chain_id === 97 && [ownerA,ownerB].includes(walletAddress) ? [makeAccount(safeA),makeAccount(safeB)] : [];
+      return {discovery:{accounts:matches,from_block:0,to_block:100,latest_block:100,next_before_block:null,next_offset:0,block_span:50000,complete:true,unsupported:0}};
+    }
     await new Promise(resolve => setTimeout(resolve, 180));
     if (fail.current) { fail.current = false; throw new Error("Simulated RPC unavailable. Retry the read."); }
     const info = (address: string) => {
@@ -48,7 +55,7 @@ export default function SafeMultisigHarness() {
       const data = substitute.current ? "0xdeadbeef" : c.data as string;
       substitute.current = false;
       return {account:info(c.address as string), proposal:{...proposal(c.nonce as string),
-        safe_address:c.address as string, chain_id:chain.chain_id, to:c.to as string, value:c.value as string, data,
+        safe_address:c.address as string, chain_id:chain.chain_id, to:c.to as string, value:c.value as string, data, batch:c.batch as SafeProposal["batch"],
         safe_tx_hash:`0x${(++serial.current).toString(16).padStart(64,"0")}`}};
     }
     if (c.kind === "receipt") {

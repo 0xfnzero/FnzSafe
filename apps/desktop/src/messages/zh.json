@@ -2435,7 +2435,7 @@
       "signer": "签名 / 支付 Gas 的钱包",
       "selectWallet": "选择已保存的 EVM 钱包",
       "unlockHint": "签名或发送前，请先在 FnzSafe 解锁所选钱包。本页面不要求输入私钥。",
-      "accounts": "已保存的 Safe 账户",
+      "accounts": "Safe 多签钱包",
       "safeAddress": "Safe 地址",
       "load": "加载 / 刷新 Safe",
       "create": "创建多签钱包",
@@ -2488,7 +2488,7 @@
         "unverified": "回执未能验证此 Safe 操作"
       },
       "showAll": "显示当前网络全部已保存的 Safe",
-      "noAccounts": "暂无匹配账户。创建或导入后将按创建者和签名人关联显示。",
+      "noAccounts": "本地尚无匹配的 Safe，链上扫描尚未完成",
       "noProposals": "此 Safe 暂无本地提案。可创建提案或导入其他签名人的文件。",
       "estimatedFee": "本次批准的最高执行 Gas 费（不含 L2 附加费）",
       "retryFailed": "核验后重试失败交易",
@@ -2636,7 +2636,7 @@
       "selectImportedTransaction": "选择交易",
       "workspaceSubtitle": "集中管理多签账户，清晰掌握每一笔交易。",
       "accountSubtitle": "查看余额、签名成员与待处理交易。",
-      "savedLocally": "本地保存的账户",
+      "savedLocally": "已缓存的账户",
       "searchAccounts": "搜索名称或 Safe 地址",
       "noSearchResults": "没有找到匹配的 Safe",
       "clearSearch": "清除搜索",
@@ -2663,12 +2663,36 @@
       "receiptHint": "正在自动查询回执，链上确认后将更新状态。",
       "receiptStopped": "自动查询已结束，仍未确认最终结果。请手动查询回执，避免重复提交。",
       "signatureProgress": "签名进度",
-      "emptyAccountsHint": "创建新的多签账户，或添加已有 Safe 开始管理。",
+      "emptyAccountsHint": "选择钱包后自动从链上恢复；也可通过 Safe 地址添加。未广播的提案和签名仍需从备份导入。",
       "emptyProposalsHint": "发起转账或合约调用后，交易提案会显示在这里。",
       "localTransactionsHint": "仅显示本机保存或导入的提案。",
       "members": "位成员",
       "nonceHintShort": "下一笔链上交易序号",
-      "signaturePolicy": "签名策略"
+      "signaturePolicy": "签名策略",
+      "syncAccounts": "同步链上 Safe",
+      "pauseDiscovery": "暂停扫描",
+      "resumeDiscovery": "继续扫描",
+      "restartDiscovery": "从最新区块重扫",
+      "discoveringAccounts": "正在发现链上 Safe…",
+      "discoveryHint": "从最近区块向历史扫描 Safe 1.4.1 官方工厂，核对当前所有者后自动保存。历史较长时可暂停；已找到的账户可立即使用。其它工厂部署的 Safe 请通过地址添加。",
+      "discoverySlow": "正在分段读取链上创建记录。公共 RPC 可能较慢，已保存的账户不受影响。",
+      "discoveryProgress": "链上历史扫描进度",
+      "discoveryRange": "已处理区块",
+      "discoveryFound": "本次找到",
+      "discoveryFailed": "链上扫描未完成，不能据此判断没有 Safe。可继续重试或切换 RPC。",
+      "discoveryUnsupported": "扫描中跳过了不兼容的合约；当前仅支持已验证的 Safe 1.4.1。",
+      "noDiscoveredAccounts": "扫描范围内未找到当前钱包持有的兼容 Safe",
+      "discovery": {
+        "idle": "选择钱包以同步链上 Safe",
+        "running": "正在扫描链上 Safe",
+        "paused": "链上扫描已暂停",
+        "complete": "官方工厂历史扫描完成",
+        "error": "链上扫描中断"
+      },
+      "importAtomicBatch": "这些调用将作为一笔 Safe 批量交易按顺序原子执行；任意一笔失败，整批回滚。",
+      "batchTransaction": "批量交易",
+      "batchExecutor": "批量执行合约",
+      "batchEnvelopeAmount": "外层交易金额"
     }
   },
   "errors": {
@@ -2704,6 +2728,7 @@
     "connectionPending": "正在连接或验证服务",
     "emptyAssetsHint": "资产加载完成后会显示在这里，你也可以刷新或添加代币。",
     "qrLoading": "正在生成收款二维码",
-    "loadingNonce": "正在读取 Nonce 账户"
+    "loadingNonce": "正在读取 Nonce 账户",
+    "clearSearch": "清除搜索"
   }
 }

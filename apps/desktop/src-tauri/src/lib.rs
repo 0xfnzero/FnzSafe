@@ -28,6 +28,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 mod app_store;
 mod browser_profile;
+mod evm_dapp_rpc;
 mod research_store;
 mod secure_input;
 
@@ -96,6 +97,7 @@ struct DappSession {
     wallet_public_key: String,
     network: String,
     opened_at_ms: u64,
+    evm_rpc: Option<std::sync::Arc<evm_dapp_rpc::ReadRpc>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -3224,9 +3226,10 @@ fn evm_dapp_provider_script(wallet_address: &str, network: &str) -> Result<Strin
   let connected = false;
   let connectionPromise = null;
 
-  function providerError(code, message) {
+  function providerError(code, message, data) {
     const error = new Error(message);
     error.code = code;
+    if (data !== undefined) error.data = data;
     return error;
   }
   function emit(event, value) {
@@ -3337,6 +3340,14 @@ fn evm_dapp_provider_script(wallet_address: &str, network: &str) -> Result<Strin
         case "eth_signTransaction":
           if (!connected) await requestConnection();
           return requestSignature(method, params);
+        case "eth_blockNumber": case "eth_gasPrice": case "eth_maxPriorityFeePerGas":
+        case "eth_feeHistory": case "eth_getBalance": case "eth_getCode":
+        case "eth_getTransactionCount": case "eth_getTransactionReceipt":
+        case "eth_getTransactionByHash": case "eth_getBlockByNumber": case "eth_getBlockByHash":
+        case "eth_call": case "eth_estimateGas": case "eth_getLogs": case "eth_getStorageAt":
+          try { return await tauriInvoke("dapp_evm_rpc_request", { method, params }); }
+          catch (error) { throw providerError(Number.isInteger(error?.code) ? error.code : -32603,
+            error?.message || "FnzSafe RPC request failed", error?.data); }
         default:
           throw providerError(4200, "Unsupported FnzSafe provider method: " + method);
       }
@@ -3931,6 +3942,7 @@ async fn dapp_open_tab(
     wallet_public_key: Option<String>,
     wallet_family: Option<String>,
     network: String,
+    evm_rpc_url: Option<String>,
     x: f64,
     y: f64,
     width: f64,
@@ -3979,6 +3991,16 @@ async fn dapp_open_tab(
     {
         return Err("invalid EVM dapp network".to_string());
     }
+    let evm_rpc = if wallet_family == "evm" {
+        Some(evm_dapp_rpc::ReadRpc::new(
+            evm_rpc_url
+                .as_deref()
+                .ok_or("EVM RPC is required for connected DApp tabs")?,
+            &network,
+        )?)
+    } else {
+        None
+    };
     let app_id = dapp
         .as_ref()
         .map(|value| value.id.to_string())
@@ -4169,6 +4191,7 @@ async fn dapp_open_tab(
                     wallet_public_key,
                     network: network.clone(),
                     opened_at_ms: now_ms(),
+                    evm_rpc,
                 },
             );
             log::info!(
@@ -5751,6 +5774,69 @@ fn dapp_poll_connect_request(
 }
 
 #[tauri::command]
+async fn dapp_evm_rpc_request(
+    webview: DesktopWebview,
+    state: tauri::State<'_, DappBridgeState>,
+    method: String,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, evm_dapp_rpc::RpcError> {
+    use evm_dapp_rpc::RpcError;
+    ensure_dapp_connections_active(state.inner())
+        .map_err(|_| RpcError::new(4100, "Wallet is locked"))?;
+    evm_dapp_rpc::validate_request(&method, &params)?;
+    let label = webview.label();
+    if dapp_tab_id_from_label(label).is_none() {
+        return Err(RpcError::new(4100, "RPC requires an active DApp tab"));
+    }
+    let (rpc, opened_at, origin) = {
+        let sessions = state
+            .sessions
+            .lock()
+            .map_err(|_| RpcError::new(-32603, "Session unavailable"))?;
+        let session = sessions
+            .get(label)
+            .ok_or_else(|| RpcError::new(4100, "DApp session is closed"))?;
+        if session.wallet_family != "evm"
+            || now_ms().saturating_sub(session.opened_at_ms) > 12 * 60 * 60 * 1000
+        {
+            return Err(RpcError::new(4100, "EVM DApp session expired"));
+        }
+        let origin = dapp_session_request_url(&session.url)
+            .ok_or_else(|| RpcError::new(4100, "Invalid DApp origin"))?
+            .origin();
+        (
+            session
+                .evm_rpc
+                .clone()
+                .ok_or_else(|| RpcError::new(4900, "Wallet RPC is not configured"))?,
+            session.opened_at_ms,
+            origin,
+        )
+    };
+    let result = rpc.request(&method, params).await;
+    // Do not return an old account/network's result after closing, reopening or locking a tab.
+    ensure_dapp_connections_active(state.inner())
+        .map_err(|_| RpcError::new(4100, "Wallet is locked"))?;
+    let sessions = state
+        .sessions
+        .lock()
+        .map_err(|_| RpcError::new(-32603, "Session unavailable"))?;
+    if !sessions.get(label).is_some_and(|s| {
+        s.opened_at_ms == opened_at
+            && s.evm_rpc
+                .as_ref()
+                .is_some_and(|current| std::sync::Arc::ptr_eq(current, &rpc))
+            && dapp_session_request_url(&s.url).is_some_and(|url| url.origin() == origin)
+    }) {
+        return Err(RpcError::new(
+            4100,
+            "DApp session changed; reconnect the wallet",
+        ));
+    }
+    result
+}
+
+#[tauri::command]
 fn dapp_submit_sign_request(
     webview: DesktopWebview,
     app: DesktopAppHandle,
@@ -6896,6 +6982,7 @@ pub fn run() {
             dapp_submit_connect_request,
             dapp_poll_connect_request,
             dapp_submit_sign_request,
+            dapp_evm_rpc_request,
             dapp_poll_sign_request,
             dapp_pending_sign_request,
             dapp_pending_connect_request,
@@ -7556,6 +7643,7 @@ mod tests {
             wallet_public_key: "wallet-a".to_string(),
             network: "mainnet".to_string(),
             opened_at_ms: now_ms(),
+            evm_rpc: None,
         };
 
         assert!(dapp_session_matches_permission(
@@ -7739,6 +7827,7 @@ mod tests {
             wallet_public_key: wallet_public_key.to_string(),
             network: "mainnet".to_string(),
             opened_at_ms: now_ms(),
+            evm_rpc: None,
         };
         {
             let mut sessions = state.sessions.lock().unwrap();
@@ -7764,6 +7853,7 @@ mod tests {
                 wallet_public_key: "wallet-a".to_string(),
                 network: "mainnet".to_string(),
                 opened_at_ms: now_ms(),
+                evm_rpc: None,
             },
         );
 
@@ -7792,6 +7882,7 @@ mod tests {
                 wallet_public_key: "wallet-a".to_string(),
                 network: "mainnet".to_string(),
                 opened_at_ms: now_ms(),
+                evm_rpc: None,
             },
         );
 
@@ -7816,6 +7907,7 @@ mod tests {
                 wallet_public_key: "wallet-a".to_string(),
                 network: "mainnet".to_string(),
                 opened_at_ms: now_ms(),
+                evm_rpc: None,
             },
         );
         assert!(ensure_dapp_connections_active(&state).is_err());
@@ -7951,6 +8043,7 @@ mod tests {
             wallet_public_key: "11111111111111111111111111111111".to_string(),
             network: "mainnet".to_string(),
             opened_at_ms: now_ms(),
+            evm_rpc: None,
         };
         let target = "https://app.uniswap.org/swap".parse().unwrap();
 

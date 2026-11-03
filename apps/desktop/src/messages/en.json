@@ -2435,7 +2435,7 @@
       "signer": "Signer / gas-paying wallet",
       "selectWallet": "Select a saved EVM wallet",
       "unlockHint": "Unlock the selected wallet in FnzSafe before signing or sending. This page never requests a private key.",
-      "accounts": "Saved Safe accounts",
+      "accounts": "Safe multisig wallets",
       "safeAddress": "Safe address",
       "load": "Load / refresh Safe",
       "create": "Create multisig wallet",
@@ -2488,7 +2488,7 @@
         "unverified": "Receipt does not verify this Safe operation"
       },
       "showAll": "Show all saved Safes on this network",
-      "noAccounts": "No matching accounts. Created and imported Safes are associated with their creator and owners.",
+      "noAccounts": "No matching cached Safes; onchain discovery is not complete",
       "noProposals": "No local proposals for this Safe. Create one or import a co-signer’s file.",
       "estimatedFee": "Approved execution gas fee cap (excludes L2 surcharges)",
       "retryFailed": "Validate failed transaction for retry",
@@ -2636,7 +2636,7 @@
       "selectImportedTransaction": "Select transaction",
       "workspaceSubtitle": "Manage multisig accounts and keep every transaction in view.",
       "accountSubtitle": "Balances, signing policy, and transactions in one place.",
-      "savedLocally": "Locally saved accounts",
+      "savedLocally": "Cached accounts",
       "searchAccounts": "Search by name or Safe address",
       "noSearchResults": "No matching Safes",
       "clearSearch": "Clear search",
@@ -2663,12 +2663,36 @@
       "receiptHint": "Checking the receipt automatically. This view will update after confirmation.",
       "receiptStopped": "Automatic checking has ended without a final result. Check the receipt manually before submitting anything again.",
       "signatureProgress": "Signature progress",
-      "emptyAccountsHint": "Create a multisig account or add an existing Safe to get started.",
+      "emptyAccountsHint": "Select a wallet to recover accounts from chain, or add a Safe by address. Unbroadcast proposals and signatures must still be imported from a backup.",
       "emptyProposalsHint": "Transfer and contract call proposals will appear here.",
       "localTransactionsHint": "Only proposals saved or imported on this device are shown.",
       "members": "owners",
       "nonceHintShort": "Next on-chain transaction number",
-      "signaturePolicy": "Signing policy"
+      "signaturePolicy": "Signing policy",
+      "syncAccounts": "Sync onchain Safes",
+      "pauseDiscovery": "Pause scan",
+      "resumeDiscovery": "Continue scan",
+      "restartDiscovery": "Restart from latest block",
+      "discoveringAccounts": "Discovering onchain Safes…",
+      "discoveryHint": "Scan the canonical Safe 1.4.1 factory from newest to oldest, verify current owners, and cache matching accounts. Pause anytime; recovered accounts are available immediately. Add Safes deployed by other factories by address.",
+      "discoverySlow": "Reading creation history in batches. Public RPCs may be slow; cached accounts remain available.",
+      "discoveryProgress": "Onchain history scan progress",
+      "discoveryRange": "Processed blocks",
+      "discoveryFound": "Found this scan",
+      "discoveryFailed": "The scan is incomplete; this does not mean there are no Safes. Continue to retry or change RPC.",
+      "discoveryUnsupported": "Incompatible contracts were skipped. Only verified Safe 1.4.1 accounts are supported.",
+      "noDiscoveredAccounts": "No compatible Safes owned by this wallet were found in the scanned history",
+      "discovery": {
+        "idle": "Select a wallet to sync onchain Safes",
+        "running": "Scanning onchain Safes",
+        "paused": "Onchain scan paused",
+        "complete": "Canonical factory history scan complete",
+        "error": "Onchain scan interrupted"
+      },
+      "importAtomicBatch": "These calls execute in order as one atomic Safe transaction. If any call fails, the entire batch reverts.",
+      "batchTransaction": "Batch transaction",
+      "batchExecutor": "Batch executor",
+      "batchEnvelopeAmount": "Outer transaction value"
     }
   },
   "errors": {
@@ -2704,6 +2728,7 @@
     "connectionPending": "Connecting or verifying service",
     "emptyAssetsHint": "Your assets will appear here after loading. Refresh or add a token to continue.",
     "qrLoading": "Generating receive QR code",
-    "loadingNonce": "Loading nonce accounts"
+    "loadingNonce": "Loading nonce accounts",
+    "clearSearch": "Clear search"
   }
 }

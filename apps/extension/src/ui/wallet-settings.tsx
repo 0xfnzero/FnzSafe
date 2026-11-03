@@ -1,6 +1,7 @@
 import { t } from './i18n';
 import { unlockWithPasskey } from '../passkey';
 import { useEffect, useState } from 'react';
+import { LoaderCircle } from 'lucide-react';
 import { api, type WalletStatus } from './api';
 import type { WalletImport } from '../import-wallet';
 
@@ -31,12 +32,13 @@ export function ImportFields({ value, onChange }: { value: WalletImport; onChang
     {error && <p className="error">{t(error)}</p>}
   </>;
 }
-export function RecoverySettings({ status, onRefresh }: { status: WalletStatus; onRefresh: () => Promise<void> }) {
-  const [mode, setMode] = useState<'import' | 'export' | null>(null);
+export function RecoverySettings({ status, onRefresh, initialMode, onClose, onBusyChange }: { status: WalletStatus; onRefresh: () => Promise<void>; initialMode?: 'import' | 'export'; onClose?: () => void; onBusyChange?: (busy: boolean) => void }) {
+  const [mode, setMode] = useState<'import' | 'export' | null>(initialMode ?? null);
   const [value, setValue] = useState(emptyImport);
   const [password, setPassword] = useState('');
   const [backupPassword, setBackupPassword] = useState('');
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
+  useEffect(() => { onBusyChange?.(busy); return () => onBusyChange?.(false); }, [busy, onBusyChange]);
   async function submit(e: React.FormEvent) {
     e.preventDefault(); setBusy(true); setError('');
     try {
@@ -48,7 +50,7 @@ export function RecoverySettings({ status, onRefresh }: { status: WalletStatus; 
         const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'fnzsafe-extension-backup.json'; anchor.click();
         setTimeout(() => URL.revokeObjectURL(url), 10000);
       }
-      setMode(null); setValue(emptyImport());
+      setMode(initialMode ?? null); setValue(emptyImport()); onClose?.();
     } catch (e) { setError(e instanceof Error ? e.message : 'Wallet operation failed'); }
     finally { setBusy(false); setPassword(''); setBackupPassword(''); }
   }
@@ -61,21 +63,24 @@ export function RecoverySettings({ status, onRefresh }: { status: WalletStatus; 
         {status.passkey && mode === 'export' && <label>{t("Backup file password")}<input type="password" minLength={10} value={backupPassword} onChange={e => setBackupPassword(e.target.value)} required autoComplete="new-password" /><span className="fine-print">{t("Choose a separate password so this file can be restored without your Passkey.")}</span></label>}
         {status.passkey && <p className="fine-print">{t("Your Passkey will be verified before this operation.")}</p>}
         {error && <p className="error">{t(error)}</p>}
-        <div className="modal-actions"><button type="button" disabled={busy} onClick={() => { setMode(null); setValue(emptyImport()); setPassword(''); }}>{t("Cancel")}</button><button disabled={busy}>{busy ? t("Working...") : mode === 'import' ? t("Import accounts") : t("Download backup")}</button></div>
+        <div className="modal-actions"><button type="button" disabled={busy} onClick={() => { setMode(initialMode ?? null); setValue(emptyImport()); setPassword(''); setBackupPassword(''); onClose?.(); }}>{t("Cancel")}</button><button disabled={busy}>{busy ? <><LoaderCircle size={15} className="spin" /> {t("Working...")}</> : mode === 'import' ? t("Import accounts") : t("Download backup")}</button></div>
       </form>}
   </section>;
 }
-export function RpcSettings({ status, onRefresh }: { status: WalletStatus; onRefresh: () => Promise<void> }) {
+export function RpcSettings({ status, onRefresh, onBusyChange }: { status: WalletStatus; onRefresh: () => Promise<void>; onBusyChange?: (busy: boolean) => void }) {
   const [key, setKey] = useState(`evm:${status.settings.evmChainId}`);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { onBusyChange?.(busy); return () => onBusyChange?.(false); }, [busy, onBusyChange]);
   const chain = status.chains.find(c => c.key === key)!;
   return <section className="settings-panel"><h3>{t("Network RPC")}</h3>
-    <label>{t("RPC network")}<select value={key} onChange={e => setKey(e.target.value)}>{status.chains.filter(c => c.rpcUrl).map(c => <option key={c.key} value={c.key}>{c.name}</option>)}</select></label>
-    <RpcEditor key={key} chainKey={key} initial={chain.rpcUrl!} onRefresh={onRefresh} />
+    <label>{t("RPC network")}<select disabled={busy} value={key} onChange={e => setKey(e.target.value)}>{status.chains.filter(c => c.rpcUrl).map(c => <option key={c.key} value={c.key}>{c.name}</option>)}</select></label>
+    <RpcEditor key={key} chainKey={key} initial={chain.rpcUrl!} onRefresh={onRefresh} onBusyChange={setBusy} />
   </section>;
 }
-function RpcEditor({ chainKey, initial, onRefresh }: { chainKey: string; initial: string; onRefresh: () => Promise<void> }) {
+function RpcEditor({ chainKey, initial, onRefresh, onBusyChange }: { chainKey: string; initial: string; onRefresh: () => Promise<void>; onBusyChange: (busy: boolean) => void }) {
   const [url, setUrl] = useState(initial), [visible, setVisible] = useState(false), [busy, setBusy] = useState(false), [message, setMessage] = useState('');
   useEffect(() => setUrl(initial), [initial]);
+  useEffect(() => { onBusyChange(busy); return () => onBusyChange(false); }, [busy, onBusyChange]);
   async function save(reset = false) {
     setBusy(true); setMessage('');
     try { await api({ type: 'SET_RPC', key: chainKey, url, reset }); await onRefresh(); setMessage('RPC saved'); }
@@ -87,6 +92,6 @@ function RpcEditor({ chainKey, initial, onRefresh }: { chainKey: string; initial
     <button type="button" onClick={() => setVisible(!visible)}>{visible ? t("Hide URL") : t("Show URL")}</button>
     <p className="fine-print">{t("The endpoint must match this network. Custom endpoints do not fall back to public providers. Token discovery uses a separate index service.")}</p>
     {message && <p role="status">{t(message)}</p>}
-    <div className="modal-actions"><button type="button" disabled={busy} onClick={() => void save(true)}>{t("Restore default")}</button><button disabled={busy}>{busy ? t("Verifying...") : t("Verify & save")}</button></div>
+    <div className="modal-actions"><button type="button" disabled={busy} onClick={() => void save(true)}>{t("Restore default")}</button><button disabled={busy}>{busy ? <><LoaderCircle size={15} className="spin" /> {t("Verifying...")}</> : t("Verify & save")}</button></div>
   </form>;
 }

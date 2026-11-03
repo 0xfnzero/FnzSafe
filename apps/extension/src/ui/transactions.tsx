@@ -4,10 +4,12 @@ import { useEffect, useState } from 'react';
 import type { PreparedTransaction } from '../evm-transfers';
 import { api } from './api';
 import { useDialogFocus } from './dialog-focus';
+import type { SafeProposal } from '../safe';
 export interface TransactionReview { id: string; kind: string; network: string; chainId: number; transaction?: PreparedTransaction; details: Record<string, unknown> }
 export function ReviewDialog({ review, onClose, onDone }: { review: TransactionReview; onClose: () => void; onDone: (result: { hash?: string; proposal?: unknown; address?: string }) => Promise<void> | void }) {
   const [checked, setChecked] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const ref = useDialogFocus<HTMLFormElement>(() => { if (!busy) onClose(); });
+  const proposal = review.details.proposal as SafeProposal | undefined;
   return <div className="modal-backdrop"><form ref={ref} className="modal transaction-review" role="dialog" aria-modal="true" aria-label={t("Review transaction")} onSubmit={async e => {
     e.preventDefault(); if (!checked) return; setBusy(true); setError('');
     try { const result = await api<{ hash?: string; proposal?: unknown; address?: string }>({ type: 'EXECUTE_REVIEW', id: review.id }); await onDone(result); }
@@ -19,6 +21,7 @@ export function ReviewDialog({ review, onClose, onDone }: { review: TransactionR
       {review.transaction && <><dt>{t("Signing account")}</dt><dd>{review.transaction.from}</dd><dt>{t("Contract / recipient")}</dt><dd>{review.transaction.to}</dd><dt>{t("Value (wei)")}</dt><dd>{review.transaction.value}</dd><dt>{t("Maximum network fee (wei)")}</dt><dd>{review.transaction.maxFeeWei}</dd><dt>{t("Account nonce")}</dt><dd>{review.transaction.nonce}</dd></>}
     </dl>
     <h3>{t("Transaction details")}</h3><pre className="review-data">{JSON.stringify(review.details, null, 2)}</pre>
+    {proposal?.batch && <div className="safe-batch"><strong>{t('Batch · {count} calls',{count:proposal.batch.length})}</strong>{proposal.batch.map((call,index)=><div key={index}><span>{index+1}. <code>{call.to}</code></span><small>{call.value} wei</small><code>{call.data}</code></div>)}</div>}
     {review.transaction?.data !== '0x' && review.transaction && <details><summary>{t("Full transaction calldata")}</summary><pre className="review-data">{review.transaction.data}</pre></details>}
     {review.kind === 'safe-sign' && <p>{t("Signing authorizes this exact Safe transaction. Any executor can submit it once the threshold is reached.")}</p>}
     <label className="check-label"><input type="checkbox" checked={checked} onChange={e => setChecked(e.target.checked)} />{t("I reviewed the network, addresses, amount and transaction data.")}</label>

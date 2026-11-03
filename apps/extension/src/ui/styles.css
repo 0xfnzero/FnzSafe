@@ -59,6 +59,20 @@ svg { flex-shrink: 0; }
 .theme-control select { border: 0; border-radius: 0; box-shadow: none; padding: 0 12px 0 0; background: transparent; width: 62px; font-size: 10px; cursor: pointer; }
 .center-state { min-height: 430px; display: grid; place-content: center; justify-items: center; gap: 8px; padding: 28px; color: var(--muted); text-align: center; }
 .spin { animation: spin 1s linear infinite; }
+.safe-controls { border:0; margin:0; padding:0; min-width:0; }
+.safe-sync-heading { display:flex; align-items:center; gap:8px; }
+.safe-sync-heading strong { flex:1; font-size:12px; }
+.safe-sync-heading button { padding:6px 10px; min-height:34px; font-size:11px; }
+.safe-sync progress { display:block; width:100%; height:6px; accent-color:var(--accent); }
+.safe-loading-bar { height:5px; border-radius:4px; background:var(--accent-soft); animation:pulse 1.4s ease-in-out infinite alternate; }
+.safe-operation { display:flex; align-items:center; gap:10px; padding:12px; margin:12px 0; background:var(--accent-soft); color:var(--accent); border-radius:12px; }
+.saved-safes.safe-cards { display:grid; gap:8px; margin:14px 0; }
+.safe-cards > button { display:flex; align-items:center; gap:10px; width:100%; padding:14px; text-align:left; background:var(--surface); }
+.safe-cards > button > span { flex:1; display:grid; gap:4px; }
+.safe-cards small { color:var(--muted); font-weight:400; }
+.safe-batch { display:grid; gap:10px; margin:12px 0; padding:12px; border-radius:10px; background:var(--surface-2); }
+.safe-batch > div { display:grid; gap:4px; border-top:1px solid var(--border); padding-top:8px; }
+@media (prefers-reduced-motion:reduce) { .spin,.safe-loading-bar,.token-skeleton i { animation:none !important; } }
 @keyframes spin { to { transform: rotate(360deg); } }
 .eyebrow { display: block; color: var(--accent); font-size: 9px; font-weight: 700; letter-spacing: 1.8px; }
 .onboarding { padding: 28px 24px 8px; text-align: center; }
@@ -412,3 +426,61 @@ body { width: 100%; min-width: 320px; min-height: 100%; background: var(--bg); f
 .wallet-picker-sheet .wallet-browser-columns { flex:1; height:auto; min-height:160px; }
 .wallet-create-name { margin:12px 0 0; font-size:11px; flex-shrink:0; }.wallet-create-name input { margin-top:5px; padding:10px 12px; font-size:13px; }
 .wallet-picker-sheet .wallet-browser-actions { margin-top:10px; flex-shrink:0; }.wallet-picker-sheet .wallet-browser > .fine-print { flex-shrink:0; margin-bottom:0; }
+
+/* Focused extension flows: one task per page, shared navigation and spacing. */
+.flow-header { display:flex; align-items:center; gap:10px; margin:0 0 22px; }
+.flow-header > div { flex:1; min-width:0; }
+.flow-header h2 { font-size:21px; outline:none; }
+.flow-header p { margin:5px 0 0; font-size:12px; }
+.flow-header > svg { color:var(--accent); }
+.flow-header .icon-button { background:var(--surface); border-color:var(--border); }
+.flow-actions { display:grid; grid-template-columns:1fr 1fr; gap:9px; margin:16px 0; }
+.flow-actions > button { display:flex; align-items:center; justify-content:center; gap:6px; min-height:44px; padding:10px 8px; font-size:12px; }
+.list-heading { display:flex; align-items:center; justify-content:space-between; margin-top:22px; }
+.list-heading h3 { margin:0; }.list-heading h3 span { font-size:11px; font-weight:500; color:var(--muted); margin-left:5px; }
+.text-button { display:flex; align-items:center; gap:5px; border:0; background:transparent; color:var(--accent); padding:6px 0; min-height:34px; font-size:12px; }
+.safe-filter { margin-top:12px; font-size:11px; color:var(--muted); }
+.safe-filter input { width:15px; height:15px; }
+.flow-form { margin:0; padding:18px; background:var(--surface); border:1px solid var(--border); border-radius:16px; }
+.flow-form > p { margin:0 0 3px; font-size:12px; }.flow-form small { color:var(--muted); font-weight:400; }
+.safe-account-summary { padding:18px; border:1px solid var(--hero-border); border-radius:18px; background:var(--hero); display:grid; gap:16px; }
+.safe-account-summary > code { font-size:11px; line-height:1.7; overflow-wrap:anywhere; }
+.safe-account-summary > strong { font-size:24px; font-weight:650; overflow-wrap:anywhere; }
+.safe-account-summary > div { display:flex; align-items:center; justify-content:space-between; font-size:12px; color:var(--muted); }
+.flow-tabs { display:flex; border-bottom:1px solid var(--border); gap:20px; margin:22px 0 16px; }
+.flow-tabs > button { border:0; border-bottom:2px solid transparent; border-radius:0; padding:10px 2px; color:var(--muted); background:transparent; }
+.flow-tabs > button[aria-selected="true"] { border-bottom-color:var(--accent); color:var(--accent); }
+.owner-row { display:flex; align-items:center; gap:10px; padding:14px 0; border-top:1px solid var(--border); }
+.owner-row > span { width:24px; height:24px; display:grid; place-items:center; flex-shrink:0; color:var(--accent); background:var(--accent-soft); border-radius:50%; font-size:11px; }
+.owner-row code { font-size:11px; overflow-wrap:anywhere; }
+.proposal-list { display:grid; gap:10px; }
+.proposal-list > button { display:flex; align-items:center; gap:10px; text-align:left; padding:15px 12px; }
+.proposal-list > button > span { display:grid; flex:1; gap:5px; min-width:0; }
+.proposal-list small { color:var(--muted); font-weight:400; font-size:11px; }
+.advanced-fields { border-top:1px solid var(--border); padding-top:14px; }
+.advanced-fields summary,.sync-details summary { color:var(--muted); cursor:pointer; font-size:11px; }
+.advanced-fields[open] summary { margin-bottom:15px; }.advanced-fields label { margin:12px 0; }
+.sync-details { margin-top:10px; }.safe-sync progress { margin-top:10px; }
+.safe-flow .settings-panel code,.safe-batch code { overflow-wrap:anywhere; word-break:break-word; }
+.safe-flow .safe-controls > .secondary-wide { margin-top:12px; }
+.settings-flow .group-label { margin:22px 0 9px; }
+.settings-menu { background:var(--surface); border:1px solid var(--border); border-radius:16px; overflow:hidden; }
+.settings-menu > button { display:flex; align-items:center; gap:11px; width:100%; border:0; border-radius:0; text-align:left; padding:13px 12px; min-height:68px; }
+.settings-menu > button + button { border-top:1px solid var(--border); }
+.settings-menu > button > span:not(.setting-icon) { flex:1; min-width:0; display:grid; gap:4px; }
+.settings-menu strong { font-size:12px; }.settings-menu small { color:var(--muted); font-size:10px; font-weight:400; line-height:1.4; }
+.settings-menu > button > svg { color:var(--muted); }
+.setting-icon { display:grid; place-items:center; width:34px; height:34px; border-radius:11px; background:var(--accent-soft); color:var(--accent); }
+.setting-icon svg { width:18px; height:18px; }
+.setting-toggle,.protection-status { display:flex; align-items:center; gap:14px; }
+.setting-toggle > div,.protection-status > div { flex:1; }.setting-toggle h3 { margin:0; }
+.protection-status > svg { color:var(--accent); }.protection-status p { font-size:11px; }
+.toggle-switch { width:42px; height:25px; min-height:25px; padding:3px; flex-shrink:0; border:0; border-radius:20px; background:var(--muted); }
+.toggle-switch > span { display:block; width:19px; height:19px; border-radius:50%; background:white; transition:transform .18s; }
+.toggle-switch[aria-checked=true] { background:var(--accent); }.toggle-switch[aria-checked=true] > span { transform:translateX(17px); }
+.connected-site-list { display:grid; gap:10px; margin:16px 0; }
+.connected-site-list > div { display:flex; align-items:center; gap:10px; padding:13px; border:1px solid var(--border); border-radius:13px; background:var(--surface); }
+.connected-site-list > div > span { flex:1; min-width:0; display:grid; gap:4px; }.connected-site-list strong { font-size:12px; overflow-wrap:anywhere; }.connected-site-list small { font-size:10px; color:var(--muted); }
+.settings-flow .success-note { display:flex; align-items:center; gap:6px; color:var(--success); }
+.settings-flow .modal-actions button { display:flex; align-items:center; justify-content:center; gap:5px; }
+@media (prefers-reduced-motion:reduce) { .toggle-switch > span { transition:none; } }

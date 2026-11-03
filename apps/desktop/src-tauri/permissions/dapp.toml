@@ -121,3 +121,8 @@ commands.allow = ["dapp_pending_sign_request", "dapp_pending_connect_request"]
 identifier = "allow-pause-dapp-connections"
 description = "Pause all active DApp sessions when the application locks or disconnect one exact authorized session."
 commands.allow = ["dapp_pause_connections", "dapp_resume_connections", "dapp_disconnect_connection", "dapp_disconnect_wallet"]
+
+[[permission]]
+identifier = "allow-dapp-evm-rpc"
+description = "Allow read-only EVM RPC through the endpoint bound by the trusted wallet window. Signing and broadcasting remain separate."
+commands.allow = ["dapp_evm_rpc_request"]
