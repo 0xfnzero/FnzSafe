@@ -1,5 +1,5 @@
 import { t } from './i18n';
-import { unlockWithPasskey } from '../passkey';
+import { unlockWithPasskey } from './passkey-client';
 import { useEffect, useState } from 'react';
 import { LoaderCircle } from 'lucide-react';
 import { api, type WalletStatus } from './api';
@@ -35,6 +35,7 @@ export function ImportFields({ value, onChange }: { value: WalletImport; onChang
 export function RecoverySettings({ status, onRefresh, initialMode, onClose, onBusyChange }: { status: WalletStatus; onRefresh: () => Promise<void>; initialMode?: 'import' | 'export'; onClose?: () => void; onBusyChange?: (busy: boolean) => void }) {
   const [mode, setMode] = useState<'import' | 'export' | null>(initialMode ?? null);
   const [value, setValue] = useState(emptyImport);
+  const [name, setName] = useState(status.suggestedWalletName);
   const [password, setPassword] = useState('');
   const [backupPassword, setBackupPassword] = useState('');
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
@@ -43,7 +44,7 @@ export function RecoverySettings({ status, onRefresh, initialMode, onClose, onBu
     e.preventDefault(); setBusy(true); setError('');
     try {
       const authorization = status.passkey ? await unlockWithPasskey(status.passkey) : password;
-      if (mode === 'import') { await api({ type: 'IMPORT_ACCOUNTS', password: authorization, import: value }); await onRefresh(); }
+      if (mode === 'import') { await api({ type: 'IMPORT_ACCOUNTS', password: authorization, import: value, ...(value.kind !== 'encrypted' ? { name } : {}) }); await onRefresh(); }
       else {
         const backup = await api({ type: 'EXPORT_BACKUP', password: authorization, backupPassword });
         const url = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' }));
@@ -55,9 +56,12 @@ export function RecoverySettings({ status, onRefresh, initialMode, onClose, onBu
     finally { setBusy(false); setPassword(''); setBackupPassword(''); }
   }
   return <section className="settings-panel"><h3>{t("Recovery & backup")}</h3>
-    {!mode ? <div className="modal-actions"><button onClick={() => setMode('import')}>{t("Import accounts")}</button><button onClick={() => setMode('export')}>{t("Export encrypted backup")}</button></div> :
+    {!mode ? <div className="modal-actions"><button onClick={() => { setName(status.suggestedWalletName); setMode('import'); }}>{t("Import accounts")}</button><button onClick={() => setMode('export')}>{t("Export encrypted backup")}</button></div> :
       <form onSubmit={submit}>
-        {mode === 'import' && <ImportFields value={value} onChange={setValue} />}
+        {mode === 'import' && <>
+          {value.kind !== 'encrypted' && <label>{t('Wallet name')}<input value={name} maxLength={80} disabled={busy} placeholder={status.suggestedWalletName} autoComplete="off" onChange={e => setName(e.target.value)} /></label>}
+          <ImportFields value={value} onChange={setValue} />
+        </>}
         {mode === 'export' && <p>{t("This backup includes every imported account. Keep its wallet password separately.")}</p>}
         {!status.passkey && <label>{t("Current wallet password")}<input type="password" value={password} onChange={e => setPassword(e.target.value)} required autoComplete="current-password" /></label>}
         {status.passkey && mode === 'export' && <label>{t("Backup file password")}<input type="password" minLength={10} value={backupPassword} onChange={e => setBackupPassword(e.target.value)} required autoComplete="new-password" /><span className="fine-print">{t("Choose a separate password so this file can be restored without your Passkey.")}</span></label>}

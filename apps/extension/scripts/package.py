@@ -11,7 +11,7 @@ version = json.loads((extension / "package.json").read_text())["version"]
 manifest = json.loads((dist / "manifest.json").read_text())
 if manifest["version"] != version:
     raise SystemExit("Manifest/package version mismatch; rebuild before packaging.")
-required = {"manifest.json", "popup.html", "approval.html", "styles.css",
+required = {"manifest.json", "popup.html", "approval.html", "passkey.html", "passkey.js", "styles.css",
             manifest["background"]["service_worker"]}
 required.update(manifest["icons"].values())
 required.update(manifest["action"]["default_icon"].values())

@@ -1,4 +1,4 @@
-# FnzSafe Chrome Extension 0.3.8
+# FnzSafe Chrome Extension 0.3.9
 
 Manifest V3 wallet extension for EVM and Solana. Bitcoin and TRON support key recovery and address display; transaction signing and broadcasting for these families remain disabled.
 
@@ -33,6 +33,8 @@ Passkeys are scoped to the extension ID. Keep the installation path stable for u
 - Restore a plaintext BIP-39 phrase or import an individual EVM/TRON hex key, Solana base58 key / seed hex / JSON key array, or Bitcoin mainnet compressed WIF / hex key. Bitcoin imports can select Native SegWit or Taproot; encrypted extension key exports preserve the original address type.
 - Restore extension encrypted backups, standard Web3 keystore v3, and supported FnzSafe desktop password-only key/mnemonic backups. Desktop custom derivation paths are preserved. Hardware-backed, social/MPC and other desktop backup schemes are not supported.
 - Settings can append accounts to the existing encrypted vault and export an encrypted backup after password or Passkey verification. New mnemonic imports retain their own root and wallet group. Imported keys remain separate from mnemonic wallets.
+- Plaintext private-key and recovery-phrase imports have an editable wallet name. Names are saved with the encrypted wallet, limited to 80 characters, and checked for duplicates; encrypted backup imports use the existing recovery flow without this name override.
+- Passkey setup, unlock, import and export use a separate window centered within the available screen. Choose **Continue with Passkey** there to open the browser-owned prompt. Successful verification closes the window and resumes the original operation; closing or cancelling returns control to the wallet. Existing Passkeys keep the same extension origin and do not need enrollment again.
 - Configure HTTPS RPC endpoints per EVM network and Solana cluster, with chain ID / genesis verification. HTTP is allowed only for localhost testing. Reset restores the built-in endpoint. Custom endpoints do not silently fall back to another provider.
 - Add ERC-20 contracts directly, read decimals and balances through the selected RPC, preview native/ERC-20 transfers, and check local submission receipts in Activity.
 - Robinhood automatic token discovery remains unavailable (Issue #8). Custom RPC plus manual token import is a workaround, not a repair of the external indexer.
@@ -71,15 +73,15 @@ Transaction Builder JSON imports support one CALL or a reviewed atomic CALL-only
 
 ## Installation
 
-Version 0.3.8 is an extension preview release. Passkey enrollment has been confirmed by the user; the user also confirmed locking and successfully unlocking the same wallet with the Passkey. The password path remains available.
+Version 0.3.9 is an extension preview release. Passkey enrollment has been confirmed by the user; the user also confirmed locking and successfully unlocking the same wallet with the Passkey. The password path remains available.
 
-Download and extract `FnzSafe-extension-0.3.8.zip` from **Assets** on the [latest combined Release](https://github.com/0xfnzero/FnzSafe/releases/latest). The same compiled artifact is also available under `extension-v0.3.8`. GitHub's automatic Source code downloads are not installable extension packages. End users do not need Node or a build tool. In Chrome, open `chrome://extensions`, enable Developer mode and choose **Load unpacked**, then select the extracted directory containing `manifest.json`. Keep that directory in place. When updating an existing unpacked installation, replace its files in the same directory and use Reload; changing the path changes the extension ID and can break Passkey access. This is an unpacked developer distribution, not a Chrome Web Store listing; updates are manual.
+Download and extract `FnzSafe-extension-0.3.9.zip` from **Assets** on the [latest combined Release](https://github.com/0xfnzero/FnzSafe/releases/latest). The same compiled artifact is also available under `extension-v0.3.9`. GitHub's automatic Source code downloads are not installable extension packages. End users do not need Node or a build tool. In Chrome, open `chrome://extensions`, enable Developer mode and choose **Load unpacked**, then select the extracted directory containing `manifest.json`. Keep that directory in place. When updating an existing unpacked installation, replace its files in the same directory and use Reload; changing the path changes the extension ID and can break Passkey access. This is an unpacked developer distribution, not a Chrome Web Store listing; updates are manual.
 
 For local development, load `dist` after building. Use a separate Chrome profile and public test accounts for development; never fund fixture accounts on a public network.
 
 ## Reproducible validation
 
-`npm test` covers RPC validation and redaction, plaintext recovery, encrypted backup formats, Safe signatures/proposals, vault migration, default-wallet persistence and protection migration, mocked Passkey PRF validation, DApp permission/security boundaries and serialized background imports. The current suite contains 73 passing tests, including multiple mnemonic roots, legacy import grouping, failed-write preservation, scoped exports, encrypted backup restoration, locale completeness, atomic account/network selection and idle-lock settings. The desktop compatibility fixtures were produced independently by the Rust implementation:
+`npm test` covers RPC validation and redaction, plaintext recovery, encrypted backup formats, Safe signatures/proposals, vault migration, default-wallet persistence and protection migration, mocked Passkey PRF validation, DApp permission/security boundaries and serialized background imports. The current suite contains 77 passing tests, including multiple mnemonic roots, named imports and failed-write preservation, scoped exports, encrypted backup restoration, locale completeness, atomic account/network selection, idle-lock settings, and Passkey window sender validation and cancellation. The desktop compatibility fixtures were produced independently by the Rust implementation:
 
 ```bash
 # Run from the repository root (requires the usual Rust/OpenSSL build dependencies).
@@ -88,6 +90,8 @@ cargo run --release -p fnzero-safe-app-services --example extension_recovery_fix
 ```
 
 The fixture password is `local-fixture-password`; all fixture keys and phrases are public test data. Regenerating uses randomized encryption salts/nonces.
+
+`npm run test:e2e:import-passkey` exercises Passkey setup, window placement, cancellation/retry, named private-key import, and unlock/name persistence in a disposable Chrome profile. Set `FNZSAFE_E2E_CHROME` to a Chrome for Testing executable and optionally `FNZSAFE_E2E_SCREENSHOT_DIR` to save screenshots. WebAuthn responses are mocked; real Google Password Manager/device verification and its native dialog appearance require manual validation. No existing browser profile or funded wallet is used.
 
 For the optional integration test, install Foundry's Anvil and obtain the official Safe 1.4.1 artifacts from `@safe-global/safe-contracts`. Set `SAFE_ARTIFACTS_DIR` to the package's `build/artifacts/contracts` directory:
 

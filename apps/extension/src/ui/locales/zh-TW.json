@@ -501,5 +501,19 @@
   "No matching Safes found. You can still add one by address.": "找不到相符的 Safe，也可以直接依地址新增。",
   "Enter a valid Safe address": "請輸入有效的 Safe 地址",
   "Only this address is checked. No history scan is performed.": "僅驗證此地址，不掃描鏈上歷史。",
-  "Verify & add Safe": "驗證並新增 Safe"
+  "Verify & add Safe": "驗證並新增 Safe",
+  "Wallet name": "錢包名稱",
+  "Verify Passkey": "驗證 Passkey",
+  "Continue with Passkey": "繼續驗證 Passkey",
+  "Continue here to open your browser’s Passkey prompt. This window will close after verification and your wallet will continue automatically.": "點擊繼續，在此視窗完成瀏覽器的 Passkey 驗證。驗證成功後視窗會自動關閉，並繼續原來的錢包操作。",
+  "Your browser will ask you to create a Passkey, then verify it once.": "瀏覽器會先建立 Passkey，再驗證一次。",
+  "Complete the Passkey prompt in your browser.": "請完成瀏覽器中的 Passkey 驗證。",
+  "Passkey verification was cancelled. You can try again.": "已取消 Passkey 驗證，你可以重試。",
+  "Passkey request expired. Return to your wallet and try again.": "驗證請求已失效，請返回錢包重新發起。",
+  "Passkey verification was cancelled": "已取消 Passkey 驗證",
+  "Passkey verification timed out": "Passkey 驗證逾時，請重試",
+  "Unable to open Passkey window": "無法開啟 Passkey 驗證視窗，請重試",
+  "Passkey verification is already in progress": "已有 Passkey 驗證正在進行",
+  "Passkey verification failed": "Passkey 驗證失敗",
+  "Invalid Passkey response": "Passkey 驗證結果無效，請重試"
 }

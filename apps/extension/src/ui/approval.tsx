@@ -1,6 +1,6 @@
 import { useWalletActivity } from './session-activity';
 import { t, useLocale } from './i18n';
-import { unlockWithPasskey } from '../passkey';
+import { unlockWithPasskey } from './passkey-client';
 import type { WalletStatus } from './api';
 import { ThemeControl } from './theme';
 import { useEffect, useState } from 'react';

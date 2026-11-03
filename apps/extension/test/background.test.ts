@@ -27,16 +27,21 @@ function send(message: Record<string, unknown>, url = 'chrome-extension://fixtur
 test('background rejects website callers and serializes imports without losing existing wallet secrets', async () => {
   assert.equal((await send({ type: 'STATUS' }, 'https://dapp.example/')).ok, false);
   assert.equal((await send({ type: 'CREATE_VAULT', password: 'fixture-password', mnemonic: 'test test test test test test test test test test test junk' })).ok, true);
-  const imported = await Promise.all(['1', '2'].map(key => send({ type: 'IMPORT_ACCOUNTS', password: 'fixture-password', import: { kind: 'privateKey', family: 'evm', text: key.padStart(64, '0') } })));
+  const imported = await Promise.all(['1', '2'].map(key => send({ type: 'IMPORT_ACCOUNTS', password: 'fixture-password', name: `  Imported key ${key}  `, import: { kind: 'privateKey', family: 'evm', text: key.padStart(64, '0') } })));
   assert.ok(imported.every(r => r.ok));
   const exported = await send({ type: 'EXPORT_BACKUP', password: 'fixture-password' });
   const payload = await decryptVault(exported.result, 'fixture-password');
   assert.equal(payload.accounts.length, 7);
+  assert.deepEqual(payload.wallets!.slice(1).map(w => w.name), ['Imported key 1', 'Imported key 2']);
   assert.equal(payload.recoveryMnemonic, 'test test test test test test test test test test test junk');
   const status = await send({ type: 'STATUS' });
   assert.equal(JSON.stringify(status).includes('privateKey'), false);
   assert.equal(JSON.stringify(status).includes('test test'), false);
   const before = JSON.stringify(storage.encryptedVault);
+  for (const name of ['imported key 1', 'x'.repeat(81), 42]) {
+    assert.equal((await send({ type: 'IMPORT_ACCOUNTS', password: 'fixture-password', name, import: { kind: 'privateKey', family: 'evm', text: '3'.padStart(64, '0') } })).ok, false);
+    assert.equal(JSON.stringify(storage.encryptedVault), before);
+  }
   assert.equal((await send({ type: 'IMPORT_ACCOUNTS', password: 'incorrect-password', import: { kind: 'privateKey', family: 'evm', text: '3'.padStart(64, '0') } })).ok, false);
   assert.equal(JSON.stringify(storage.encryptedVault), before);
   await send({ type: 'LOCK' });
@@ -44,6 +49,7 @@ test('background rejects website callers and serializes imports without losing e
   assert.equal((await send({ type: 'STATUS' })).result.accounts.length, 0);
   await send({ type: 'UNLOCK', password: 'fixture-password' });
   assert.equal((await send({ type: 'STATUS' })).result.accounts.length, 7);
+  assert.deepEqual((await send({ type: 'STATUS' })).result.wallets.slice(1).map((w: any) => w.name), ['Imported key 1', 'Imported key 2']);
   await send({ type: 'LOCK' });
 });
 

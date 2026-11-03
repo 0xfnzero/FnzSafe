@@ -6,7 +6,7 @@ import { Fingerprint, Lock, RefreshCw, ShieldCheck } from 'lucide-react';
 import { ThemeControl } from './theme';
 import { WalletHome } from './wallet-home';
 import { api, type WalletStatus } from './api';
-import { unlockWithPasskey } from '../passkey';
+import { unlockWithPasskey } from './passkey-client';
 
 function Popup() {
   useLocale(); useWalletActivity();

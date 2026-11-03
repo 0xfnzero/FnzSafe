@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ArrowLeft, Fingerprint, KeyRound } from 'lucide-react';
 import { api, type WalletStatus } from './api';
-import { createWalletPasskey } from '../passkey';
+import { createWalletPasskey } from './passkey-client';
 import { BackupManager } from './backup-manager';
 import { t } from './i18n';
 

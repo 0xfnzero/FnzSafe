@@ -1,6 +1,7 @@
 import { nextWalletName } from './wallet-names';
 import { encryptSecretBackup } from './secret-backup';
 import { validatePasskeyConfig } from './passkey';
+import { registerPasskeyWindows } from './passkey-broker';
 import { ensureDeviceWallet, hasDeviceWallet, loadDeviceWallet, saveDeviceWallet, removeDeviceWallet } from './device-vault';
 import { displaySignedMessage } from './message-preview';
 import { tokenAsset, transferRequest, prepareTransaction, signPrepared, sendPrepared, type PreparedTransaction } from './evm-transfers';
@@ -848,6 +849,7 @@ async function handleProviderRequest(request: ProviderRequest, origin: string): 
   throw new Error(`Unsupported provider method: ${request.method}`);
 }
 
+registerPasskeyWindows();
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== 'fnzsafe-provider') return;
   const origin = safeProviderOrigin(port.sender?.url);
@@ -1223,8 +1225,9 @@ async function handleUiMessage(message: Record<string, unknown>): Promise<unknow
       if (!stored) throw new Error('Wallet not found');
       const generation = contextRevision;
       const existing = (await decryptVaultWithMigration(stored, password)).payload;
+      if (message.name !== undefined && (typeof message.name !== 'string' || message.name.length > 80)) throw new Error('Wallet name is too long');
       const imported = await importWallet(message.import as WalletImport);
-      const merged = mergeVaultAccounts(existing, imported);
+      const merged = mergeVaultAccounts(existing, imported, message.name as string | undefined);
       const encrypted = await encryptVault(merged, password);
       const session = await protectVaultInMemory(merged, password, true);
       try {

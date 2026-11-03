@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Copy, Download, ShieldCheck } from 'lucide-react';
 import QRCode from 'qrcode';
 import { api, compact, type WalletStatus } from './api';
-import { unlockWithPasskey } from '../passkey';
+import { unlockWithPasskey } from './passkey-client';
 import { splitBackupSecret } from '../secret-backup';
 
 type ExportResult = { value: string; address?: string; derivationPath?: string };

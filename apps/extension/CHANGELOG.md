@@ -1,5 +1,13 @@
 # Extension changelog
 
+## 0.3.9 Preview — 2026-11-04
+
+- Add editable wallet names to plaintext private-key and recovery-phrase imports, with duplicate/length validation and encrypted persistence.
+- Open the import form directly from the wallet switcher and retain its input when Passkey verification is cancelled.
+- Move Passkey setup, unlock, import, export and approval verification into a centered window, with cancellation, timeout and one-use result handling. Existing Passkeys retain their extension origin.
+- Include the new verification page in the compiled ZIP. Publish alongside rebuilt desktop 0.6.9, retaining its wallet import, balance refresh and DApp fixes.
+- Validate with 77 unit tests, TypeScript checking and an isolated browser flow with mocked WebAuthn. Native Google/device prompts are outside the mock test coverage.
+
 ## 0.3.8 Preview — 2026-11-03
 
 - Rebuild from the same release commit as desktop 0.6.8, which clarifies private-key import passwords and prevents reimport from bypassing the local wallet password.

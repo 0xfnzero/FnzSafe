@@ -18,11 +18,11 @@ function verifyResponse(credential: PublicKeyCredential, challenge: Uint8Array, 
   const expected = btoa(String.fromCharCode(...challenge)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
   if (data.type !== type || data.challenge !== expected || data.origin !== origin || data.crossOrigin === true) throw new Error('Passkey response does not match this wallet request');
 }
-export async function unlockWithPasskey(config: PasskeyConfig): Promise<string> {
+export async function unlockWithPasskey(config: PasskeyConfig, signal?: AbortSignal): Promise<string> {
   validatePasskeyConfig(config, location.hostname);
   if (!navigator.credentials || !window.PublicKeyCredential) throw new Error('Passkeys are unavailable in this browser');
   const challenge = crypto.getRandomValues(new Uint8Array(32));
-  const credential = await navigator.credentials.get({ publicKey: {
+  const credential = await navigator.credentials.get({ signal, publicKey: {
     challenge, rpId: config.rpId, timeout: 60000, userVerification: 'required',
     allowCredentials: [{ id: unhex(config.credentialId), type: 'public-key' }],
     extensions: { prf: { eval: { first: unhex(config.salt) } } } as AuthenticationExtensionsClientInputs,
@@ -31,11 +31,11 @@ export async function unlockWithPasskey(config: PasskeyConfig): Promise<string> 
   verifyResponse(credential, challenge, 'webauthn.get', location.origin);
   return secret(credential);
 }
-export async function createWalletPasskey(): Promise<{ config: PasskeyConfig; password: string }> {
+export async function createWalletPasskey(signal?: AbortSignal): Promise<{ config: PasskeyConfig; password: string }> {
   if (!navigator.credentials || !window.PublicKeyCredential) throw new Error('Passkeys are unavailable in this browser');
   const challenge = crypto.getRandomValues(new Uint8Array(32));
   const salt = crypto.getRandomValues(new Uint8Array(32));
-  const credential = await navigator.credentials.create({ publicKey: {
+  const credential = await navigator.credentials.create({ signal, publicKey: {
     challenge, rp: { id: location.hostname, name: 'FnzSafe Wallet' },
     user: { id: crypto.getRandomValues(new Uint8Array(32)), name: 'FnzSafe wallet', displayName: 'FnzSafe wallet' },
     pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
@@ -47,6 +47,6 @@ export async function createWalletPasskey(): Promise<{ config: PasskeyConfig; pa
   verifyResponse(credential, challenge, 'webauthn.create', location.origin);
   const config = validatePasskeyConfig({ credentialId: hex(new Uint8Array(credential.rawId)), salt: hex(salt), rpId: location.hostname }, location.hostname);
   // Always prove that an assertion can reproduce a PRF before changing storage.
-  const password = await unlockWithPasskey(config);
+  const password = await unlockWithPasskey(config, signal);
   return { config, password };
 }

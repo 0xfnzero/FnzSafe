@@ -14,6 +14,7 @@ await Promise.all([
   cp(resolve(root, 'manifest.json'), resolve(dist, 'manifest.json')),
   cp(resolve(root, 'popup.html'), resolve(dist, 'popup.html')),
   cp(resolve(root, 'approval.html'), resolve(dist, 'approval.html')),
+  cp(resolve(root, 'passkey.html'), resolve(dist, 'passkey.html')),
   cp(resolve(root, 'src/ui/styles.css'), resolve(dist, 'styles.css')),
   // Toolbar icons have their own crop; desktop app padding makes 16px icons too small.
   cp(resolve(root, 'icons'), resolve(dist, 'icons'), { recursive: true }),
@@ -27,6 +28,7 @@ const options = {
     inpage: resolve(root, 'src/inpage.ts'),
     popup: resolve(root, 'src/ui/popup.tsx'),
     approval: resolve(root, 'src/ui/approval.tsx'),
+    passkey: resolve(root, 'src/ui/passkey.tsx'),
   },
   outdir: dist,
   bundle: true,
