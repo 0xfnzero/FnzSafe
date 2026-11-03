@@ -1,5 +1,11 @@
 # Extension changelog
 
+## 0.3.6 Preview — 2026-11-03
+
+- Rebuild the compiled Chrome extension alongside desktop 0.6.6, which fixes a native DApp deadlock after wallet switching.
+- Preserve manual Safe discovery, address-based Safe import, and Safe creation. No automatic chain scanning is introduced.
+- Both release pages include the desktop installer, extension ZIP, and SHA-256 checksums.
+
 ## 0.3.5 — 2026-11-03
 
 - Rebuild alongside desktop 0.6.5 for the combined release. Keep discovery opt-in, address-based Safe addition, and the 0.3.4 interaction fixes.

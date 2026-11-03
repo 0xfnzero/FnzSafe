@@ -31,7 +31,7 @@
 
 [Download the latest release](https://github.com/0xfnzero/FnzSafe/releases/latest)
 
-Download desktop installers and the compiled Chrome extension **0.3.5** ZIP from **Assets** on the same Release page. Extract `FnzSafe-extension-*.zip`, open `chrome://extensions`, enable Developer mode, and choose **Load unpacked** with the directory containing `manifest.json`. No Node installation or compilation is needed. Do not use GitHub's automatic Source code downloads. Keep the installation directory stable when updating to preserve the extension ID and Passkey. See [extension documentation](apps/extension/README.md).
+Download desktop installers and the compiled Chrome extension **0.3.6** ZIP from **Assets** on the same Release page. Extract `FnzSafe-extension-*.zip`, open `chrome://extensions`, enable Developer mode, and choose **Load unpacked** with the directory containing `manifest.json`. No Node installation or compilation is needed. Do not use GitHub's automatic Source code downloads. Keep the installation directory stable when updating to preserve the extension ID and Passkey. See [extension documentation](apps/extension/README.md).
 
 FnzSafe is an open-source multi-chain wallet for Solana and EVM-compatible networks, with experimental Bitcoin and TRON account adapters. Bitcoin and TRON currently support account derivation and address validation, not transfers or broadcasting. It combines a Tauri desktop wallet, a Flutter mobile wallet, and a Rust wallet SDK/CLI. Private keys remain in encrypted local keystores while wallet operations, dApps, crypto signals, and market research share one working surface.
 

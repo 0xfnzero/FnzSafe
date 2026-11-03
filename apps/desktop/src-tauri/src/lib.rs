@@ -184,7 +184,10 @@ struct DappPollResponse {
 
 struct DappBridgeState {
     paused: AtomicBool,
-    webview_visibility: Mutex<()>,
+    // CEF can dispatch IPC reentrantly while add_child waits on the UI thread.
+    // Every command taking this gate must be async: neither the UI thread nor
+    // runtime workers may block waiting for another webview operation to finish.
+    webview_visibility: tokio::sync::Mutex<()>,
     active_tab_label: Mutex<Option<String>>,
     sessions: Mutex<HashMap<String, DappSession>>,
     requests: Mutex<HashMap<String, DappPendingRequest>>,
@@ -198,7 +201,7 @@ impl Default for DappBridgeState {
             // initial API request completes. Keep native DApp surfaces closed
             // until that wallet security state has been resolved explicitly.
             paused: AtomicBool::new(true),
-            webview_visibility: Mutex::new(()),
+            webview_visibility: tokio::sync::Mutex::new(()),
             active_tab_label: Mutex::new(None),
             sessions: Mutex::new(HashMap::new()),
             requests: Mutex::new(HashMap::new()),
@@ -4161,10 +4164,7 @@ async fn dapp_open_tab(
         builder = builder.initialization_script(&init_script);
     }
 
-    let _visibility = state
-        .webview_visibility
-        .lock()
-        .map_err(|_| "dapp webview visibility lock poisoned".to_string())?;
+    let _visibility = state.webview_visibility.lock().await;
     ensure_dapp_connections_active(state.inner())?;
     if let Some(existing) = app.get_webview(&label) {
         existing
@@ -4243,6 +4243,7 @@ async fn dapp_navigate_tab(
     tab_id: String,
     url: String,
 ) -> Result<(), String> {
+    let _visibility = state.webview_visibility.lock().await;
     let label = dapp_tab_label(&tab_id)?;
     let url = parse_dapp_browser_url(&url)?;
     let dapp_session = state
@@ -4267,10 +4268,6 @@ async fn dapp_navigate_tab(
     let webview = app
         .get_webview(&label)
         .ok_or_else(|| "dapp tab is not open".to_string())?;
-    let _visibility = state
-        .webview_visibility
-        .lock()
-        .map_err(|_| "dapp webview visibility lock poisoned".to_string())?;
     ensure_dapp_connections_active(state.inner())?;
     webview
         .navigate(url)
@@ -4284,14 +4281,11 @@ async fn dapp_reload_tab(
     state: tauri::State<'_, DappBridgeState>,
     tab_id: String,
 ) -> Result<(), String> {
+    let _visibility = state.webview_visibility.lock().await;
     let label = dapp_tab_label(&tab_id)?;
     let webview = app
         .get_webview(&label)
         .ok_or_else(|| "dapp tab is not open".to_string())?;
-    let _visibility = state
-        .webview_visibility
-        .lock()
-        .map_err(|_| "dapp webview visibility lock poisoned".to_string())?;
     ensure_dapp_connections_active(state.inner())?;
     webview
         .reload()
@@ -4366,10 +4360,7 @@ async fn dapp_set_active_tab(
     width: f64,
     height: f64,
 ) -> Result<(), String> {
-    let _visibility = state
-        .webview_visibility
-        .lock()
-        .map_err(|_| "dapp webview visibility lock poisoned".to_string())?;
+    let _visibility = state.webview_visibility.lock().await;
     ensure_dapp_connections_active(state.inner())?;
     let active_label = tab_id.as_deref().map(dapp_tab_label).transpose()?;
     let fomo_background_label = dapp_tab_label(FOMO_ALERTS_TAB_ID)?;
@@ -4427,10 +4418,7 @@ async fn dapp_close_tab(
     tab_id: String,
 ) -> Result<(), String> {
     let label = dapp_tab_label(&tab_id)?;
-    let _visibility = state
-        .webview_visibility
-        .lock()
-        .map_err(|_| "dapp webview visibility lock poisoned".to_string())?;
+    let _visibility = state.webview_visibility.lock().await;
     if let Some(webview) = app.get_webview(&label) {
         webview
             .close()
@@ -4473,10 +4461,7 @@ async fn dapp_request_tab_text(
     let run_in_background = background.unwrap_or(false);
     let original_bounds = run_in_background.then(|| webview.bounds().ok()).flatten();
     {
-        let _visibility = state
-            .webview_visibility
-            .lock()
-            .map_err(|_| "dapp webview visibility lock poisoned".to_string())?;
+        let _visibility = state.webview_visibility.lock().await;
         ensure_dapp_connections_active(state.inner())?;
         if run_in_background {
             let staging_bounds = Rect {
@@ -4853,10 +4838,7 @@ async fn dapp_request_tab_text(
     .await;
 
     if run_in_background {
-        let _visibility = state
-            .webview_visibility
-            .lock()
-            .map_err(|_| "dapp webview visibility lock poisoned".to_string())?;
+        let _visibility = state.webview_visibility.lock().await;
         let active_tab_label = state
             .active_tab_label
             .lock()
@@ -6134,14 +6116,11 @@ fn ensure_dapp_result_pending(
 }
 
 #[tauri::command]
-fn dapp_pause_connections(
+async fn dapp_pause_connections(
     app: DesktopAppHandle,
     state: tauri::State<'_, DappBridgeState>,
 ) -> Result<(), String> {
-    let _visibility = state
-        .webview_visibility
-        .lock()
-        .map_err(|_| "dapp webview visibility lock poisoned".to_string())?;
+    let _visibility = state.webview_visibility.lock().await;
     pause_dapp_connections(state.inner())?;
     let mut first_error = None;
     for (label, webview) in app.webviews() {
@@ -6169,14 +6148,11 @@ fn pause_dapp_connections(state: &DappBridgeState) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn dapp_resume_connections(
+async fn dapp_resume_connections(
     app: DesktopAppHandle,
     state: tauri::State<'_, DappBridgeState>,
 ) -> Result<(), String> {
-    let _visibility = state
-        .webview_visibility
-        .lock()
-        .map_err(|_| "dapp webview visibility lock poisoned".to_string())?;
+    let _visibility = state.webview_visibility.lock().await;
     let active_label = state
         .active_tab_label
         .lock()
@@ -7098,6 +7074,60 @@ mod tests {
             url,
             "http://127.0.0.1:3841/api/wallets/wallet-1/multichain-accounts?bitcoin_address_type=taproot+%26+preferred"
         );
+    }
+
+    #[test]
+    fn dapp_webview_queue_yields_and_preserves_order_under_contention() {
+        // Model the captured CEF deadlock: an open operation owns the gate
+        // while the event loop receives resume/reload/visibility requests.
+        // Even with one runtime thread, a heartbeat must run and release the
+        // open operation; all queued operations must then finish in order.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let state = std::sync::Arc::new(DappBridgeState::default());
+            let opening = state.webview_visibility.lock().await;
+            let completed = std::sync::Arc::new(Mutex::new(Vec::new()));
+            let mut queued = Vec::new();
+            for index in 0..64 {
+                let state = state.clone();
+                let completed = completed.clone();
+                queued.push(tokio::spawn(async move {
+                    let _operation = state.webview_visibility.lock().await;
+                    completed.lock().unwrap().push(index);
+                }));
+                // Let each task reach the gate before enqueueing the next.
+                tokio::task::yield_now().await;
+            }
+            assert!(completed.lock().unwrap().is_empty());
+            tokio::time::timeout(Duration::from_secs(1), async {
+                tokio::task::yield_now().await;
+                drop(opening);
+                for task in queued {
+                    task.await.unwrap();
+                }
+            })
+            .await
+            .expect("contended webview operations must not block event processing");
+            assert_eq!(*completed.lock().unwrap(), (0..64).collect::<Vec<_>>());
+        });
+    }
+
+    #[test]
+    fn dapp_webview_commands_never_dispatch_synchronously_on_cef_ui_thread() {
+        // A synchronous Tauri handler runs inside the CEF IPC callback. Merely
+        // moving other webview commands to workers does not prevent reentrant
+        // deadlocks: pause/resume must also use async command dispatch.
+        let source = include_str!("lib.rs");
+        for command in [
+            "dapp_open_tab", "dapp_navigate_tab", "dapp_reload_tab",
+            "dapp_set_active_tab", "dapp_close_tab", "dapp_request_tab_text",
+            "dapp_pause_connections", "dapp_resume_connections",
+        ] {
+            assert!(source.contains(&format!("async fn {command}(")), "{command} must dispatch asynchronously");
+        }
     }
 
     #[test]
