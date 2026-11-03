@@ -14181,9 +14181,25 @@ export default function Home() {
     passwordPrompt?.kind === "form" && passwordPrompt.formId === "program-upgrade";
   const isLongRunningProgramPasswordPrompt =
     isProgramDeploymentPasswordPrompt || isProgramUpgradePasswordPrompt;
+  const isPlaintextImportPasswordPrompt =
+    passwordPrompt?.kind === "create-password" &&
+    (passwordPrompt.formId === "import-mnemonic" ||
+      (passwordPrompt.formId === "import-keystore" &&
+        (passwordPrompt.formState.importType === "private_key" ||
+          passwordPrompt.formState.importType === "mnemonic")));
+  const isKeystoreImportPasswordPrompt =
+    passwordPrompt?.kind === "create-password" &&
+    passwordPrompt.formId === "import-keystore" &&
+    !isPlaintextImportPasswordPrompt;
 
   const passwordPromptTitle =
-    passwordPrompt?.kind === "rotate-bitcoin-account"
+    isPlaintextImportPasswordPrompt
+      ? t(wallets.length > 0
+        ? "features.import-keystore.encryptExistingTitle"
+        : "features.import-keystore.encryptNewTitle")
+      : isKeystoreImportPasswordPrompt
+      ? t("features.import-keystore.decryptTitle")
+      : passwordPrompt?.kind === "rotate-bitcoin-account"
       ? t("features.settings.rotateBitcoinTitle")
       : passwordPrompt?.kind === "export-bundle"
       ? t("features.settings.exportBundleTitle")
@@ -14207,7 +14223,13 @@ export default function Home() {
         ? t("formUi.masterPasswordPromptTitle")
       : t("formUi.confirmPasswordTitle");
   const passwordPromptHint =
-    passwordPrompt?.kind === "rotate-bitcoin-account"
+    isPlaintextImportPasswordPrompt
+      ? t(wallets.length > 0
+        ? "features.import-keystore.plaintextExistingHint"
+        : "features.import-keystore.plaintextHint")
+      : isKeystoreImportPasswordPrompt
+      ? t("features.import-keystore.decryptHint")
+      : passwordPrompt?.kind === "rotate-bitcoin-account"
       ? t("features.settings.rotateBitcoinHint")
       : passwordPrompt?.kind === "export-bundle"
       ? t("features.settings.exportBundleHint")
@@ -14231,7 +14253,9 @@ export default function Home() {
         ? t("formUi.masterPasswordPromptHint")
       : t("formUi.confirmPasswordHint");
   const passwordPromptButton =
-    passwordPrompt?.kind === "rotate-bitcoin-account"
+    isPlaintextImportPasswordPrompt
+      ? t("features.import-keystore.encryptButton")
+      : passwordPrompt?.kind === "rotate-bitcoin-account"
       ? t("features.settings.rotateBitcoinButton")
       : passwordPrompt?.kind === "export-bundle"
       ? t("features.settings.exportBundleButton")
@@ -24547,7 +24571,9 @@ export default function Home() {
                 />
                 <p className="mt-1 text-xs leading-relaxed text-gray-500">{t("features.import-mnemonic.derivationPathHint")}</p>
               </div>}
-              <p className="text-xs text-gray-400">{t("features.import-keystore.plaintextHint")}</p>
+              <p className="text-xs text-gray-400">{t(wallets.length > 0
+                ? "features.import-keystore.plaintextExistingHint"
+                : "features.import-keystore.plaintextHint")}</p>
             </>}
             <button type="button"
               onClick={() => requestCreatePasswordSubmit("import-keystore")}
@@ -30947,6 +30973,10 @@ export default function Home() {
                       <label htmlFor="wallet-password-prompt" className="text-sm font-medium">
                         {showMigrationPasswords
                           ? t("features.settings.migrateCurrentPassword")
+                          : isPlaintextImportPasswordPrompt
+                          ? t("features.import-keystore.localPassword")
+                          : isKeystoreImportPasswordPrompt
+                          ? t("features.import-keystore.backupPassword")
                           : t("formUi.walletPassword")}
                       </label>
                       {isLongRunningProgramPasswordPrompt && (
@@ -30976,7 +31006,11 @@ export default function Home() {
                         }
                       }}
                       className="w-full rounded-lg border border-white/10 bg-black/40 px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-white/20"
-                      placeholder={t("formUi.placeholderKeystorePassword")}
+                      placeholder={t(isPlaintextImportPasswordPrompt
+                        ? wallets.length > 0
+                          ? "features.import-keystore.existingPasswordPlaceholder"
+                          : "features.import-keystore.newPasswordPlaceholder"
+                        : "formUi.placeholderKeystorePassword")}
                     />
                   </div>
                 )}

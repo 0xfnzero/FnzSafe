@@ -1,5 +1,11 @@
 # Extension changelog
 
+## 0.3.8 Preview — 2026-11-03
+
+- Rebuild from the same release commit as desktop 0.6.8, which clarifies private-key import passwords and prevents reimport from bypassing the local wallet password.
+- Preserve existing extension behavior, including manual Safe discovery and wallet recovery.
+- Both release pages include the desktop installer, compiled extension ZIP, and SHA-256 checksums.
+
 ## 0.3.7 Preview — 2026-11-03
 
 - Rebuild alongside desktop 0.6.7, which fixes DApp switching deadlocks and preserves cached wallet balances during background refresh.

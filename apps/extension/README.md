@@ -1,4 +1,4 @@
-# FnzSafe Chrome Extension 0.3.7
+# FnzSafe Chrome Extension 0.3.8
 
 Manifest V3 wallet extension for EVM and Solana. Bitcoin and TRON support key recovery and address display; transaction signing and broadcasting for these families remain disabled.
 
@@ -71,9 +71,9 @@ Transaction Builder JSON imports support one CALL or a reviewed atomic CALL-only
 
 ## Installation
 
-Version 0.3.7 is an extension preview release. Passkey enrollment has been confirmed by the user; the user also confirmed locking and successfully unlocking the same wallet with the Passkey. The password path remains available.
+Version 0.3.8 is an extension preview release. Passkey enrollment has been confirmed by the user; the user also confirmed locking and successfully unlocking the same wallet with the Passkey. The password path remains available.
 
-Download and extract `FnzSafe-extension-0.3.7.zip` from **Assets** on the [latest combined Release](https://github.com/0xfnzero/FnzSafe/releases/latest). The same compiled artifact is also available under `extension-v0.3.7`. GitHub's automatic Source code downloads are not installable extension packages. End users do not need Node or a build tool. In Chrome, open `chrome://extensions`, enable Developer mode and choose **Load unpacked**, then select the extracted directory containing `manifest.json`. Keep that directory in place. When updating an existing unpacked installation, replace its files in the same directory and use Reload; changing the path changes the extension ID and can break Passkey access. This is an unpacked developer distribution, not a Chrome Web Store listing; updates are manual.
+Download and extract `FnzSafe-extension-0.3.8.zip` from **Assets** on the [latest combined Release](https://github.com/0xfnzero/FnzSafe/releases/latest). The same compiled artifact is also available under `extension-v0.3.8`. GitHub's automatic Source code downloads are not installable extension packages. End users do not need Node or a build tool. In Chrome, open `chrome://extensions`, enable Developer mode and choose **Load unpacked**, then select the extracted directory containing `manifest.json`. Keep that directory in place. When updating an existing unpacked installation, replace its files in the same directory and use Reload; changing the path changes the extension ID and can break Passkey access. This is an unpacked developer distribution, not a Chrome Web Store listing; updates are manual.
 
 For local development, load `dist` after building. Use a separate Chrome profile and public test accounts for development; never fund fixture accounts on a public network.
 

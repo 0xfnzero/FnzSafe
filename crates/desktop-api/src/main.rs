@@ -6964,6 +6964,96 @@ mod wallet_recovery_tests {
 
     #[tokio::test]
     #[ignore = "Run with FNZERO_SAFE_DB_PATH pointing to an isolated temporary database"]
+    async fn plaintext_import_uses_local_password_and_preserves_existing_wallets() {
+        assert!(std::env::var("FNZERO_SAFE_DB_PATH")
+            .unwrap()
+            .contains("fnzsafe-recovery-test"));
+        assert!(list_wallets().await.unwrap().0.wallets.is_empty());
+        let local_password = "recovery-test-password";
+        let other_password = "external-wallet-password";
+        let first_key = format!("{:064x}", 1);
+        let recovered = recover_chain_keystore(&recovery_request(
+            "evm", "private_key", &first_key, None,
+        ))
+        .unwrap();
+        let first = save_keystore_wallet(Json(SaveKeystoreWalletRequest {
+            keystore_json: recovered.keystore_json,
+            password: local_password.into(),
+            name: Some("Existing wallet".into()),
+        }))
+        .await
+        .unwrap()
+        .0
+        .wallet;
+        assert_eq!(
+            first.evm_address.as_deref(),
+            Some("0x7e5f4552091a69125d5dfcb7b8c2659029395bdf")
+        );
+        let original = wallet_store::find(&first.id).unwrap();
+
+        // Reimporting the only wallet must not silently change its local password.
+        let mut duplicate = recovery_request("evm", "private_key", &first_key, None);
+        duplicate.password = other_password.into();
+        let duplicate = recover_chain_keystore(&duplicate).unwrap();
+        assert!(save_keystore_wallet(Json(SaveKeystoreWalletRequest {
+            keystore_json: duplicate.keystore_json,
+            password: other_password.into(),
+            name: Some("Must not replace".into()),
+        }))
+        .await
+        .is_err());
+        let unchanged = wallet_store::find(&first.id).unwrap();
+        assert_eq!(unchanged.keystore_json, original.keystore_json);
+        assert_eq!(unchanged.name, original.name);
+
+        // This test key could be exported from any EVM wallet. Its source password
+        // has no role in deriving the address; storage uses FnzSafe's password.
+        let second_key = format!("0x{:064x}", 2);
+        let mut request = recovery_request("evm", "private_key", &second_key, None);
+        request.password = other_password.into();
+        let recovered = recover_chain_keystore(&request).unwrap();
+        assert!(save_keystore_wallet(Json(SaveKeystoreWalletRequest {
+            keystore_json: recovered.keystore_json,
+            password: other_password.into(),
+            name: None,
+        }))
+        .await
+        .is_err());
+        assert_eq!(list_wallets().await.unwrap().0.wallets.len(), 1);
+        request.password = local_password.into();
+        let recovered = recover_chain_keystore(&request).unwrap();
+        let second = save_keystore_wallet(Json(SaveKeystoreWalletRequest {
+            keystore_json: recovered.keystore_json,
+            password: local_password.into(),
+            name: Some("Imported external wallet".into()),
+        }))
+        .await
+        .unwrap()
+        .0
+        .wallet;
+        assert_eq!(
+            second.evm_address.as_deref(),
+            Some("0x2b5ad5c4795c026514f8317c7a215e218dccd6cf")
+        );
+        assert_ne!(first.id, second.id);
+        assert_eq!(list_wallets().await.unwrap().0.wallets.len(), 2);
+        assert_eq!(
+            wallet_store::find(&first.id).unwrap().keystore_json,
+            original.keystore_json
+        );
+        wallet_session_vault().lock_all().unwrap();
+        for (wallet_id, scalar) in [(&first.id, 1), (&second.id, 2)] {
+            let stored = wallet_store::find(wallet_id).unwrap();
+            let key = evm_private_key_from_saved_wallet(&stored, local_password)
+                .unwrap()
+                .unwrap();
+            assert_eq!(hex::encode(key.as_slice()), format!("{scalar:064x}"));
+            assert!(evm_private_key_from_saved_wallet(&stored, other_password).is_err());
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "Run with FNZERO_SAFE_DB_PATH pointing to an isolated temporary database"]
     async fn imported_accounts_survive_save_lock_and_unlock() {
         assert!(std::env::var("FNZERO_SAFE_DB_PATH")
             .unwrap()
@@ -7719,10 +7809,9 @@ async fn save_keystore_wallet(
             .map_err(|error| ApiError {
                 message: format!("keystore 校验失败: {error}"),
             })?;
-        require_unified_password_for_existing_wallets(
-            &req.password,
-            Some(&keypair.pubkey().to_string()),
-        )?;
+        // Import is not a password-change operation. Include an existing wallet
+        // with the same identity so reimport cannot bypass its local password.
+        require_unified_password_for_existing_wallets(&req.password, None)?;
         let keystore_json = if version == KeystoreVersion::LegacyV1 {
             let migrated = KeyManager::keypair_to_encrypted_json(&keypair, &req.password).map_err(
                 |error| ApiError {
