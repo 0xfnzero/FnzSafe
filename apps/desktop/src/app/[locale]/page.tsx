@@ -83,6 +83,7 @@ import {
   LogOut,
   Languages,
 } from "lucide-react";
+import { createWalletBalanceRefresh } from "@/lib/walletBalanceRefresh";
 import LanguageSwitcher from '@/components/LanguageSwitcher';
 import { AiSkillMarket } from "@/components/AiSkillMarket";
 import { FieldHelp } from "@/components/FieldHelp";
@@ -3920,6 +3921,15 @@ export default function Home() {
   const [walletMultichainAccountsByWallet, setWalletMultichainAccountsByWallet] = useState<Record<string, WalletMultichainAccountsState>>({});
   const [walletNativeBalances, setWalletNativeBalances] = useState<Record<string, WalletNativeBalanceState>>({});
   const [walletEvmBalances, setWalletEvmBalances] = useState<Record<string, WalletEvmBalanceState>>({});
+  const walletSolRequestsRef = useRef(createWalletBalanceRefresh<string>());
+  const walletSolBalanceContextRef = useRef("");
+  const walletAccountRequestsRef = useRef(createWalletBalanceRefresh<WalletMultichainAccount[]>());
+  const walletNativeRequestsRef = useRef(createWalletBalanceRefresh<WalletNativeBalanceState>());
+  const walletEvmRequestsRef = useRef(createWalletBalanceRefresh<WalletEvmBalanceState>());
+  useEffect(() => {
+    const queues = [walletSolRequestsRef.current, walletAccountRequestsRef.current, walletNativeRequestsRef.current, walletEvmRequestsRef.current];
+    return () => queues.forEach((queue) => queue.clear());
+  }, []);
   const [nativeBalanceRefreshNonce, setNativeBalanceRefreshNonce] = useState(0);
   const [walletAccountBalanceRefreshNonce, setWalletAccountBalanceRefreshNonce] = useState(0);
   const [newRpcName, setNewRpcName] = useState("");
@@ -6586,84 +6596,49 @@ export default function Home() {
 
   const loadCachedWalletSolBalances = useCallback(async (walletList: SavedWallet[]) => {
     if (walletList.length === 0) {
+      walletSolRequestsRef.current.clear();
       setWalletSolBalanceCache({});
       return;
     }
-    const cachedEntries = await Promise.all(
-      walletList.map(async (wallet) => {
-        try {
-          const response = await apiFetch("wallet/assets", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              address: wallet.public_key,
-              network: effectiveRpcRequest,
-              refresh: false,
-            }),
-          });
-          const data = await response.json();
-          if (!response.ok || data.updated_at == null) {
-            return null;
+    // Only a different network invalidates the displayed balances. A failed
+    // refresh on the same network must leave the last successful values intact.
+    if (walletSolBalanceContextRef.current !== effectiveRpcRequest) {
+      walletSolBalanceContextRef.current = effectiveRpcRequest;
+      setWalletSolBalanceCache({});
+    }
+    await walletSolRequestsRef.current.refresh({
+      selectedWalletId: effectiveWalletId,
+      contextKey: effectiveRpcRequest,
+      refreshKey: String(walletAccountBalanceRefreshNonce),
+      targets: walletList.filter((wallet) => !wallet.private_key_family).map((wallet) => ({
+        key: wallet.public_key, walletId: wallet.id, identity: wallet.public_key,
+        load: async () => {
+          if (walletAccountBalanceRefreshNonce === 0) {
+            try {
+              const response = await apiFetch("wallet/assets", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ address: wallet.public_key, network: effectiveRpcRequest, refresh: false }),
+              });
+              const data = await response.json();
+              if (response.ok && data.updated_at != null && data.sol_balance != null) return String(data.sol_balance);
+            } catch {
+              // A missing local snapshot can fall back to a balance request.
+            }
           }
-          return [wallet.public_key, String(data.sol_balance ?? "0")] as const;
-        } catch {
-          return null;
-        }
-      }),
-    );
-
-    const fromCache = new Map<string, string>();
-    for (const entry of cachedEntries) {
-      if (entry) fromCache.set(entry[0], entry[1]);
-    }
-    const live = walletAssetsRef.current;
-    if (
-      live &&
-      live.network === effectiveNetwork &&
-      live.solBalance &&
-      live.solBalance !== "--" &&
-      !fromCache.has(live.address)
-    ) {
-      fromCache.set(live.address, live.solBalance);
-    }
-
-    setWalletSolBalanceCache(Object.fromEntries(fromCache));
-
-    const missing = walletList.filter((wallet) => !fromCache.has(wallet.public_key));
-    if (missing.length === 0) return;
-
-    const fetchedEntries = await Promise.all(
-      missing.map(async (wallet) => {
-        try {
           const response = await apiFetch("wallet/balance", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              address: wallet.public_key,
-              network: effectiveRpcRequest,
-            }),
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ address: wallet.public_key, network: effectiveRpcRequest }),
           });
           const data = await response.json();
-          if (!response.ok || data.balance == null) return null;
-          return [wallet.public_key, String(data.balance)] as const;
-        } catch {
-          return null;
-        }
-      }),
-    );
-
-    setWalletSolBalanceCache((prev) => {
-      let changed = false;
-      const next = { ...prev };
-      for (const entry of fetchedEntries) {
-        if (!entry) continue;
-        if (next[entry[0]] === entry[1]) continue;
-        next[entry[0]] = entry[1];
-        changed = true;
-      }
-      return changed ? next : prev;
+          if (!response.ok || data.balance == null) throw new Error(data.error || "Unable to load SOL balance");
+          return String(data.balance);
+        },
+      })),
+      onStart: () => {},
+      onSuccess: ({ key }, balance) => setWalletSolBalanceCache((previous) => ({ ...previous, [key]: balance })),
+      onError: () => {}, // Keep the last balance; a later selection or manual refresh can retry.
     });
-  }, [effectiveNetwork, effectiveRpcRequest]);
+  }, [effectiveRpcRequest, effectiveWalletId, walletAccountBalanceRefreshNonce]);
 
   const loadWalletTransactions = useCallback(async (
     wallet?: SavedWallet,
@@ -6945,10 +6920,6 @@ export default function Home() {
     })();
     setVisibleTokenCount(TOKEN_ASSET_PAGE_SIZE);
   }, [effectiveWallet, effectiveRpcRequest, loadWalletAssets, loadWalletTransactions, loadNonceAccounts]);
-
-  useEffect(() => {
-    setWalletSolBalanceCache({});
-  }, [effectiveNetwork, effectiveRpcRequest]);
 
   useEffect(() => {
     void loadCachedWalletSolBalances(wallets);
@@ -12129,148 +12100,95 @@ export default function Home() {
   });
 
   useEffect(() => {
-    if (applicationLocked) {
-      setWalletMultichainAccountsByWallet({});
-      setWalletNativeBalances({});
-      return;
-    }
+    if (applicationLocked) return;
     const mnemonicWallets = wallets.filter((wallet) => wallet.secret_type === "mnemonic" || wallet.private_key_family === "bitcoin" || wallet.private_key_family === "tron");
     if (mnemonicWallets.length === 0) {
       setWalletMultichainAccountsByWallet({});
       return;
     }
-    const controller = new AbortController();
-    setWalletMultichainAccountsByWallet((previous) => Object.fromEntries(mnemonicWallets.map((wallet) => [
-      wallet.id,
-      {
+    void walletAccountRequestsRef.current.refresh({
+      selectedWalletId: "",
+      contextKey: bitcoinAddressType,
+      refreshKey: String(walletAccountBalanceRefreshNonce),
+      targets: mnemonicWallets.map((wallet) => ({
+        key: wallet.id,
         walletId: wallet.id,
-        accounts: previous[wallet.id]?.accounts ?? [],
-        loading: true,
-      },
-    ])));
-    void (async () => {
-      const entries = await Promise.all(mnemonicWallets.map(async (wallet) => {
-        try {
+        identity: JSON.stringify([wallet.public_key, wallet.secret_type, wallet.private_key_family]),
+        load: async () => {
           const response = await apiFetch(
             `wallets/${encodeURIComponent(wallet.id)}/multichain-accounts`,
-            {
-              method: "GET",
-              cache: "no-store",
-              signal: controller.signal,
-            },
+            { method: "GET", cache: "no-store" },
             { bitcoin_address_type: bitcoinAddressType },
           );
           const data = await response.json();
           const accounts = parseWalletMultichainAccounts(data?.accounts);
-          if (!response.ok || !accounts) {
-            throw new Error(data?.error || "Unable to load multi-chain accounts");
-          }
-          return [wallet.id, { walletId: wallet.id, accounts, loading: false }] as const;
-        } catch (error) {
-          return [wallet.id, {
-            walletId: wallet.id,
-            accounts: [],
-            loading: false,
-            error: errorMessage(error, "Unable to load multi-chain accounts"),
-          }] as const;
-        }
-      }));
-      if (!controller.signal.aborted) setWalletMultichainAccountsByWallet(Object.fromEntries(entries));
-    })();
-    return () => controller.abort();
-  }, [applicationLocked, bitcoinAddressType, wallets]);
+          if (!response.ok || !accounts) throw new Error(data?.error || "Unable to load multi-chain accounts");
+          return accounts;
+        },
+      })),
+      onStart: ({ key }) => setWalletMultichainAccountsByWallet((previous) => ({
+        ...previous,
+        [key]: { walletId: key, accounts: previous[key]?.accounts ?? [], loading: true },
+      })),
+      onSuccess: ({ key }, accounts) => setWalletMultichainAccountsByWallet((previous) => ({
+        ...previous, [key]: { walletId: key, accounts, loading: false },
+      })),
+      onError: ({ key }, error) => setWalletMultichainAccountsByWallet((previous) => ({
+        ...previous,
+        [key]: { walletId: key, accounts: previous[key]?.accounts ?? [], loading: false, error: errorMessage(error, "Unable to load multi-chain accounts") },
+      })),
+    });
+  }, [applicationLocked, bitcoinAddressType, walletAccountBalanceRefreshNonce, wallets]);
 
   useEffect(() => {
     if (applicationLocked || !effectiveWallet) return;
     const loadAllWallets = selectedForm === "settings" && settingsSection === "accounts";
     const targets = Object.values(walletMultichainAccountsByWallet)
-      .filter((state) => loadAllWallets || state.walletId === effectiveWallet.id)
-      .flatMap((state) => state.accounts.map((account) => ({ walletId: state.walletId, account })));
-    if (targets.length === 0) {
-      setWalletNativeBalances({});
-      return;
-    }
-    const controller = new AbortController();
-    setWalletNativeBalances((previous) => Object.fromEntries(targets.map(({ walletId, account }) => {
-      const key = nativeBalanceKey(walletId, account.chain_id);
-      const prior = previous[key];
-      return [key, {
-        walletId,
-        chainId: account.chain_id,
-        address: account.address,
-        symbol: account.symbol,
-        decimals: account.family === "bitcoin" ? 8 : 6,
-        balanceAtomic: prior?.address === account.address ? prior.balanceAtomic : "",
-        loading: true,
-      }];
-    })));
-    void (async () => {
-      const entries = await Promise.all(targets.map(async ({ walletId, account }) => {
-        const key = nativeBalanceKey(walletId, account.chain_id);
-        try {
+      .filter((state) => !state.loading && (loadAllWallets || state.walletId === effectiveWallet.id))
+      .flatMap((state) => state.accounts
+        .filter((account) => !loadAllWallets || account.chain_id === currentWalletNetwork)
+        .map((account) => ({ walletId: state.walletId, account })));
+    const initial = Object.fromEntries(targets.map(({ walletId, account }) => [nativeBalanceKey(walletId, account.chain_id), {
+      walletId, chainId: account.chain_id, address: account.address, symbol: account.symbol,
+      decimals: account.family === "bitcoin" ? 8 : 6, balanceAtomic: "", loading: true,
+    }]));
+    void walletNativeRequestsRef.current.refresh({
+      selectedWalletId: effectiveWallet.id,
+      contextKey: loadAllWallets ? currentWalletNetwork : "portfolio",
+      refreshKey: `${nativeBalanceRefreshNonce}:${walletAccountBalanceRefreshNonce}`,
+      targets: targets.map(({ walletId, account }) => ({
+        key: nativeBalanceKey(walletId, account.chain_id), walletId,
+        identity: JSON.stringify(account),
+        load: async () => {
           const action = account.family === "bitcoin" ? "bitcoin/balance" : "tron/account";
           const response = await apiFetch(`wallets/${encodeURIComponent(walletId)}/${action}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              chain_id: account.chain_id,
-              address: account.address,
-              derivation_path: account.derivation_path,
-            }),
-            signal: controller.signal,
+            body: JSON.stringify({ chain_id: account.chain_id, address: account.address, derivation_path: account.derivation_path }),
           });
           const data = await response.json();
           const decimals = account.family === "bitcoin" ? 8 : 6;
-          if (
-            !response.ok
-            || data?.chain_id !== account.chain_id
-            || data?.address !== account.address
-            || data?.symbol !== account.symbol
-            || data?.decimals !== decimals
-            || typeof data?.balance_atomic !== "string"
-            || !/^\d+$/.test(data.balance_atomic)
-          ) throw new Error(data?.error || "Unable to load native balance");
-          return [key, {
-            walletId,
-            chainId: account.chain_id,
-            address: account.address,
-            symbol: account.symbol,
-            decimals,
-            balanceAtomic: data.balance_atomic,
-            loading: false,
-          }] as const;
-        } catch (error) {
-          return [key, {
-            walletId,
-            chainId: account.chain_id,
-            address: account.address,
-            symbol: account.symbol,
-            decimals: account.family === "bitcoin" ? 8 : 6,
-            balanceAtomic: "",
-            loading: false,
-            error: errorMessage(error, "Unable to load native balance"),
-          }] as const;
-        }
-      }));
-      if (!controller.signal.aborted) setWalletNativeBalances(Object.fromEntries(entries));
-    })();
-    return () => controller.abort();
-  }, [
-    applicationLocked,
-    effectiveWallet,
-    nativeBalanceRefreshNonce,
-    selectedForm,
-    settingsSection,
-    walletAccountBalanceRefreshNonce,
-    walletMultichainAccountsByWallet,
-  ]);
+          if (!response.ok || data?.chain_id !== account.chain_id || data?.address !== account.address
+            || data?.symbol !== account.symbol || data?.decimals !== decimals
+            || typeof data?.balance_atomic !== "string" || !/^\d+$/.test(data.balance_atomic)) {
+            throw new Error(data?.error || "Unable to load native balance");
+          }
+          return { ...initial[nativeBalanceKey(walletId, account.chain_id)], balanceAtomic: data.balance_atomic, loading: false };
+        },
+      })),
+      onStart: ({ key }) => setWalletNativeBalances((previous) => ({
+        ...previous,
+        [key]: { ...initial[key], balanceAtomic: previous[key]?.address === initial[key].address ? previous[key].balanceAtomic : "" },
+      })),
+      onSuccess: ({ key }, value) => setWalletNativeBalances((previous) => ({ ...previous, [key]: value })),
+      onError: ({ key }, error) => setWalletNativeBalances((previous) => ({
+        ...previous, [key]: { ...previous[key], loading: false, error: errorMessage(error, "Unable to load native balance") },
+      })),
+    });
+  }, [applicationLocked, currentWalletNetwork, effectiveWallet, nativeBalanceRefreshNonce, selectedForm, settingsSection, walletAccountBalanceRefreshNonce, walletMultichainAccountsByWallet]);
 
   useEffect(() => {
-    if (applicationLocked) {
-      setWalletEvmBalances({});
-      return;
-    }
-    if (selectedForm !== "settings" || settingsSection !== "accounts") return;
+    if (applicationLocked || selectedForm !== "settings" || settingsSection !== "accounts") return;
     const chainIdMatch = currentWalletNetwork.match(/^evm:([1-9]\d*)$/);
     const chainId = Number(chainIdMatch?.[1]);
     const chain = evmChains.find((item) => (
@@ -12281,60 +12199,30 @@ export default function Home() {
       const address = wallet.evm_address?.trim();
       return address ? [{ wallet, address }] : [];
     });
-    const controller = new AbortController();
-    setWalletEvmBalances((previous) => {
-      const next = { ...previous };
-      for (const { wallet, address } of targets) {
-        const key = evmBalanceKey(wallet.id, chain.chain_id);
-        const prior = previous[key];
-        next[key] = {
-          walletId: wallet.id,
-          chainId: chain.chain_id,
-          address,
-          balanceWei: prior?.address.toLowerCase() === address.toLowerCase() ? prior.balanceWei : "",
-          loading: true,
-        };
-      }
-      return next;
-    });
-    void (async () => {
-      const entries = await Promise.all(targets.map(async ({ wallet, address }) => {
-        const key = evmBalanceKey(wallet.id, chain.chain_id);
-        try {
+    const initial = Object.fromEntries(targets.map(({ wallet, address }) => [evmBalanceKey(wallet.id, chain.chain_id), {
+      walletId: wallet.id, chainId: chain.chain_id, address, balanceWei: "", loading: true,
+    }]));
+    void walletEvmRequestsRef.current.refresh({
+      selectedWalletId: effectiveWalletId,
+      contextKey: JSON.stringify(chain),
+      refreshKey: String(walletAccountBalanceRefreshNonce),
+      targets: targets.map(({ wallet, address }) => ({
+        key: evmBalanceKey(wallet.id, chain.chain_id), walletId: wallet.id, identity: address.toLowerCase(),
+        load: async () => {
           const snapshot = await loadEvmAssetSnapshot(chain, address, [], false);
-          return [key, {
-            walletId: wallet.id,
-            chainId: chain.chain_id,
-            address,
-            balanceWei: snapshot.native_balance_wei,
-            loading: false,
-          }] as const;
-        } catch (error) {
-          return [key, {
-            walletId: wallet.id,
-            chainId: chain.chain_id,
-            address,
-            balanceWei: "",
-            loading: false,
-            error: errorMessage(error, "Unable to load EVM balance"),
-          }] as const;
-        }
-      }));
-      if (controller.signal.aborted) return;
-      setWalletEvmBalances((previous) => ({ ...previous, ...Object.fromEntries(entries) }));
-    })();
-    return () => controller.abort();
-  }, [
-    applicationLocked,
-    appPreferences,
-    currentWalletNetwork,
-    evmChains,
-    loadEvmAssetSnapshot,
-    selectedForm,
-    settingsSection,
-    walletAccountBalanceRefreshNonce,
-    wallets,
-  ]);
+          return { ...initial[evmBalanceKey(wallet.id, chain.chain_id)], balanceWei: snapshot.native_balance_wei, loading: false };
+        },
+      })),
+      onStart: ({ key }) => setWalletEvmBalances((previous) => ({
+        ...previous,
+        [key]: { ...initial[key], balanceWei: previous[key]?.address.toLowerCase() === initial[key].address.toLowerCase() ? previous[key].balanceWei : "" },
+      })),
+      onSuccess: ({ key }, value) => setWalletEvmBalances((previous) => ({ ...previous, [key]: value })),
+      onError: ({ key }, error) => setWalletEvmBalances((previous) => ({
+        ...previous, [key]: { ...previous[key], loading: false, error: errorMessage(error, "Unable to load EVM balance") },
+      })),
+    });
+  }, [applicationLocked, appPreferences, currentWalletNetwork, effectiveWalletId, evmChains, loadEvmAssetSnapshot, selectedForm, settingsSection, walletAccountBalanceRefreshNonce, wallets]);
 
   const walletChainAddresses = useMemo<WalletChainAddress[]>(() => (
     effectiveWallet

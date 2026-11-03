@@ -1,5 +1,11 @@
 # Extension changelog
 
+## 0.3.7 Preview — 2026-11-03
+
+- Rebuild alongside desktop 0.6.7, which fixes DApp switching deadlocks and preserves cached wallet balances during background refresh.
+- Retain manual Safe discovery, address-based import, and Safe creation.
+- Include both compiled clients and checksums on both release pages.
+
 ## 0.3.6 Preview — 2026-11-03
 
 - Rebuild the compiled Chrome extension alongside desktop 0.6.6, which fixes a native DApp deadlock after wallet switching.
