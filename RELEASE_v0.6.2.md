@@ -14,7 +14,28 @@ Download `FnzSafe_0.6.2_aarch64.dmg` for macOS Apple Silicon and drag FnzSafe in
 
 The application is ad-hoc signed. It does not have an Apple Developer ID signature and is not notarized. After verifying the source, the first launch may require approval in System Settings → Privacy & Security.
 
-This release packages the desktop application only. No updated browser extension, Intel Mac, Windows, Linux, or mobile installer is included. SDK crates retain their independent versions.
+## Chrome extension — 0.3.2 Preview
+
+The desktop installer and compiled browser extension are both available in **Assets** below:
+
+- `FnzSafe_0.6.2_aarch64.dmg`: desktop application for macOS Apple Silicon; verify with `SHA256SUMS`.
+- `FnzSafe-extension-0.3.2.zip`: compiled Chrome extension; verify with `SHA256SUMS-0.3.2.txt`.
+
+Extension installation:
+
+1. Download `FnzSafe-extension-0.3.2.zip` from Assets, not GitHub's automatic Source code archives.
+2. Extract it into a permanent folder.
+3. Open `chrome://extensions` and enable **Developer mode**.
+4. Click **Load unpacked** and choose the folder containing `manifest.json`.
+5. Pin FnzSafe from Chrome's extensions menu.
+
+No Node installation, source build, or terminal commands are required for users. Standard Chrome restricts off-store CRX installation, so this release provides the compiled ZIP for Load unpacked. It is not a Chrome Web Store installation or an automatic updater.
+
+For updates, replace files in the same folder, click **Reload**, refresh DApp tabs, and unlock the wallet. Keep the path stable to preserve the extension ID and Passkey scope.
+
+The extension includes multichain wallet creation, localized light/dark UI, encrypted backups, Safe multisig, isolated provider routing, BNB Testnet, and API-key-free PublicNode as its Solana mainnet default. Desktop RPC defaults are separate. Validation: 72 automated tests, type checking, production build, and browser checks of Uniswap approval routing, X404 connection/network switching, and Solana balance refresh.
+
+The extension asset was added from the independently versioned [`extension-v0.3.2`](https://github.com/0xfnzero/FnzSafe/releases/tag/extension-v0.3.2) build, commit `6535abf64956bfb4fe261e52906cbac17f052d57`. Desktop binaries and the existing `v0.6.2` tag are unchanged. SDK crates retain their independent versions. Intel Mac, Windows, Linux and mobile installers are not included here.
 
 ## Validation
 

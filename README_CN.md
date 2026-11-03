@@ -31,7 +31,7 @@
 
 [下载最新版本](https://github.com/0xfnzero/FnzSafe/releases/latest)
 
-Chrome 浏览器扩展 **0.2.0** 已支持明文/加密恢复、自定义 RPC 校验、手动添加 ERC-20 和 Safe 多签。安装、功能范围与测试说明见 [扩展文档](apps/extension/README.md)。
+桌面安装包和已编译的 Chrome 扩展 **0.3.2** ZIP 均可从同一 Release 的 **Assets** 下载。扩展 ZIP 解压后，在 `chrome://extensions` 开启开发者模式，点击“加载已解压的扩展程序”，选择包含 `manifest.json` 的目录；无需 Node 或编译。请下载 `FnzSafe-extension-*.zip`，不要下载 GitHub 自动生成的 Source code。更新时保留安装目录以维持扩展 ID 和 Passkey。详见 [扩展文档](apps/extension/README.md)。
 
 FnzSafe 是一个开源多链钱包，支持 Solana 和 EVM 兼容网络，并提供实验性的 Bitcoin 与 TRON 账户适配器。Bitcoin 和 TRON 当前只支持账户派生与地址校验，尚不支持转账和广播。项目由 Tauri 桌面钱包、Flutter 移动钱包和 Rust 钱包 SDK/CLI 组成；私钥保存在本地加密 Keystore 中，钱包操作、DApp、加密货币信号和市场研究集中在同一个工作界面内。
 
@@ -133,7 +133,10 @@ cargo run -p fnzero-safe-core --features full -- start
 
 产物会复制到 `release/<platform>/`。
 
+桌面打包目标也会编译并打包扩展（需要 Node 22–24 和 Python 3）。发布时将桌面安装包、`release/extension/FnzSafe-extension-*.zip` 及对应校验文件上传到同一个 Release 的 Assets；桌面与扩展保留独立版本号。
+
 ```bash
+make package-extension
 make package-macos
 make package-windows
 make package-ios

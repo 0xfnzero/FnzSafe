@@ -6,6 +6,7 @@ ROOT_DIR := $(CURDIR)
 RELEASE_DIR := $(ROOT_DIR)/release
 MOBILE_DIR := $(ROOT_DIR)/apps/mobile
 DESKTOP_DIR := $(ROOT_DIR)/apps/desktop
+EXTENSION_DIR := $(ROOT_DIR)/apps/extension
 ANDROID_RELEASE_DIR := $(RELEASE_DIR)/android
 IOS_RELEASE_DIR := $(RELEASE_DIR)/ios
 MACOS_RELEASE_DIR := $(RELEASE_DIR)/macos
@@ -16,14 +17,15 @@ TAURI_WINDOWS_TARGET ?= x86_64-pc-windows-msvc
 ANDROID_JAVA_HOME ?= $(shell if [[ -d /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home ]]; then echo /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home; fi)
 ANDROID_ENV := $(if $(ANDROID_JAVA_HOME),JAVA_HOME="$(ANDROID_JAVA_HOME)" PATH="$(ANDROID_JAVA_HOME)/bin:$$PATH",)
 
-.PHONY: help dev stop build-macos package package-android package-ios package-macos package-windows prepare-release-dir cleanup-macos-dmg-mounts
+.PHONY: help dev stop build-macos package package-android package-ios package-macos package-windows package-extension prepare-release-dir cleanup-macos-dmg-mounts
 
 help:
 	@echo "FnzSafe commands"
 	@echo "  make dev              Start the desktop dev app; old local dev processes are stopped first"
 	@echo "  make stop             Stop all local FnzSafe development processes"
 	@echo "  make build-macos      Local unsigned macOS desktop build (no Developer ID / notarization)"
-	@echo "  make package          Build Android, iOS, macOS, and Windows packages into ./release"
+	@echo "  make package          Build desktop, mobile, and compiled extension packages into ./release"
+	@echo "  make package-extension Build the compiled Chrome extension ZIP into ./release/extension"
 	@echo "  make package-android  Build Android APK/AAB into ./release/android"
 	@echo "  make package-ios      Build iOS app/IPA into ./release/ios"
 	@echo "  make package-macos    Signed+notarized macOS release into ./release/macos"
@@ -57,7 +59,7 @@ cleanup-macos-dmg-mounts:
 build-macos: cleanup-macos-dmg-mounts
 	cd "$(DESKTOP_DIR)" && npm run desktop:build
 
-package: package-android package-ios package-macos package-windows
+package: package-extension package-android package-ios package-macos package-windows
 
 prepare-release-dir:
 	mkdir -p "$(RELEASE_DIR)"
@@ -105,7 +107,7 @@ package-ios: prepare-release-dir
 		exit 1; \
 	fi
 
-package-macos: cleanup-macos-dmg-mounts
+package-macos: package-extension cleanup-macos-dmg-mounts
 	mkdir -p "$(MACOS_RELEASE_DIR)"
 	cd "$(DESKTOP_DIR)" && node scripts/macos-release.cjs preflight
 	cd "$(DESKTOP_DIR)" && npm run desktop:build
@@ -125,7 +127,7 @@ package-macos: cleanup-macos-dmg-mounts
 	fi
 	cd "$(DESKTOP_DIR)" && node scripts/macos-release.cjs verify "$(MACOS_RELEASE_DIR)"
 
-package-windows:
+package-windows: package-extension
 	mkdir -p "$(WINDOWS_RELEASE_DIR)"
 	cd "$(DESKTOP_DIR)" && npm run tauri -- build --target "$(TAURI_WINDOWS_TARGET)"
 	@copied=0; \
@@ -141,3 +143,7 @@ package-windows:
 		echo "No Windows desktop package artifacts were found." >&2; \
 		exit 1; \
 	fi
+
+# Desktop releases include a compiled extension ZIP, ready for Load unpacked.
+package-extension:
+	cd "$(EXTENSION_DIR)" && npm ci && npm run package

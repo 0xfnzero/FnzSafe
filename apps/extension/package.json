@@ -17,7 +17,8 @@
     "test:e2e:arc": "node test/arc.e2e.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
-    "test:safe-local": "node --import tsx test/safe-local.integration.ts"
+    "test:safe-local": "node --import tsx test/safe-local.integration.ts",
+    "package": "npm run build && python3 scripts/package.py"
   },
   "dependencies": {
     "@noble/curves": "^1.9.7",
