@@ -1,6 +1,6 @@
 [package]
 name = "fnzero-safe-desktop-api"
-version = "0.6.9"
+version = "0.6.10"
 edition = "2021"
 rust-version = "1.89"
 license = "MIT"
@@ -53,7 +53,7 @@ spl-token = "6.0"
 spl-token-interface = "2.0"
 uuid = { version = "1", features = ["v4"] }
 aes-gcm = "0.10"
-aws-lc-rs = { version = "=1.17.3", default-features = false, features = ["non-fips"] }
+aws-lc-rs = { version = "=1.19.0", default-features = false, features = ["non-fips"] }
 base64 = "0.22"
 bip39 = { version = "2", features = ["rand", "zeroize"] }
 bincode = "1.3"

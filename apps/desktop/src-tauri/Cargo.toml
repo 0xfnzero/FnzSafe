@@ -1,6 +1,6 @@
 [package]
 name = "fnzero-safe-desktop"
-version = "0.6.9"
+version = "0.6.10"
 description = "FnzSafe — Tauri desktop shell"
 authors = ["you"]
 license = "MIT"
@@ -41,7 +41,7 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 tempfile = "3"
 time = "0.3"
 cookie = "0.18"
-aws-lc-rs = { version = "=1.17.3", default-features = false, features = ["non-fips", "prebuilt-nasm"] }
+aws-lc-rs = { version = "=1.19.0", default-features = false, features = ["non-fips", "prebuilt-nasm"] }
 base64 = "0.22"
 bs58 = { version = "0.5", features = ["check"] }
 bitcoin = "0.32"
@@ -53,12 +53,13 @@ rfd = "0.15"
 tokio = { version = "1", features = ["time", "rt", "sync"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
 block2 = "0.6.2"
 objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSGraphics", "NSView"] }
 objc2-foundation = "0.3.2"
 objc2-local-authentication = "0.3.2"
-security-framework = { version = "3.5", features = ["OSX_10_13"] }
+security-framework = { version = "3.5", features = ["OSX_10_15"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_UI_WindowsAndMessaging"] }

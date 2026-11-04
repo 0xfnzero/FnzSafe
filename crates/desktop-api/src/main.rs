@@ -160,7 +160,11 @@ const PUMPFUN_PARAM_RETRY_DELAY_MS: u64 = 75;
 const PUMP_SELL_SUBMIT_TIMEOUT_SECS: u64 = 8;
 const MAX_NONCE_BATCH_COUNT: u8 = 20;
 const MAX_WALLET_TRANSACTION_HISTORY: usize = 100;
-const WALLET_SESSION_IDLE_TTL: Duration = Duration::from_secs(65 * 60);
+static WALLET_SESSION_IDLE_SECONDS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(15 * 60);
+fn wallet_session_idle_ttl() -> Duration {
+    Duration::from_secs(WALLET_SESSION_IDLE_SECONDS.load(std::sync::atomic::Ordering::Acquire))
+}
 const WALLET_SESSION_MAX_LIFETIME: Duration = Duration::from_secs(8 * 60 * 60);
 const WALLET_SESSION_CLEANUP_INTERVAL: Duration = Duration::from_secs(15);
 const PASSWORD_ATTEMPT_FREE_FAILURES: u32 = 3;
@@ -817,7 +821,7 @@ fn cache_saved_wallet_session(
             &wallet.id,
             &wallet.public_key,
             &secrets,
-            WALLET_SESSION_IDLE_TTL,
+            wallet_session_idle_ttl(),
             WALLET_SESSION_MAX_LIFETIME,
         )
         .map_err(|message| ApiError { message })?;
@@ -867,7 +871,7 @@ fn require_unified_password_for_existing_wallets(
 ) -> Result<(), ApiError> {
     let wallets = wallet_store::load().map_err(|message| ApiError { message })?;
     let candidates = wallets.into_iter().filter(|wallet| {
-        !excluded_public_key.is_some_and(|public_key| public_key == wallet.public_key)
+        excluded_public_key.is_none_or(|public_key| public_key != wallet.public_key)
     });
     let mut candidates = candidates.peekable();
     if candidates.peek().is_none() {
@@ -1224,6 +1228,16 @@ fn validate_password(value: &str, field: &str) -> Result<(), ApiError> {
     if value.len() > MAX_PASSWORD_BYTES {
         return Err(ApiError {
             message: format!("{field}长度不能超过 {MAX_PASSWORD_BYTES} 字节"),
+        });
+    }
+    Ok(())
+}
+
+fn validate_new_password(value: &str, field: &str) -> Result<(), ApiError> {
+    validate_password(value, field)?;
+    if value.chars().count() < 10 {
+        return Err(ApiError {
+            message: format!("{field}至少需要 10 个字符"),
         });
     }
     Ok(())
@@ -2183,6 +2197,29 @@ async fn require_local_origin(headers: HeaderMap, request: Request, next: Next) 
     next.run(request).await
 }
 
+// Domain-separated capability: possession never authorizes signing, export or mutation.
+fn ai_wallet_read_token(master: &str) -> String {
+    let key = aws_lc_rs::hmac::Key::new(aws_lc_rs::hmac::HMAC_SHA256, master.as_bytes());
+    aws_lc_rs::hmac::sign(&key, b"FnzSafe/ai/wallet-session-read/v1")
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn token_allows_api_request(provided: &str, master: &str, method: &Method, path: &str) -> bool {
+    if constant_time_eq(provided, master) {
+        return true;
+    }
+    let read_token = Zeroizing::new(ai_wallet_read_token(master));
+    if !constant_time_eq(provided, &read_token) || method != Method::GET {
+        return false;
+    }
+    path.strip_prefix("/api/wallets/")
+        .and_then(|path| path.strip_suffix("/session"))
+        .is_some_and(|id| id.len() == 32 && id.bytes().all(|byte| byte.is_ascii_hexdigit()))
+}
+
 async fn require_api_token(headers: HeaderMap, request: Request, next: Next) -> Response {
     let path = request.uri().path();
     if !path.starts_with("/api/")
@@ -2196,7 +2233,7 @@ async fn require_api_token(headers: HeaderMap, request: Request, next: Next) -> 
 
     let provided = local_api_token_from_headers(&headers);
     if !provided
-        .map(|provided| constant_time_eq(provided, expected))
+        .map(|provided| token_allows_api_request(provided, expected, request.method(), path))
         .unwrap_or(false)
     {
         return (
@@ -4295,6 +4332,10 @@ async fn main() -> anyhow::Result<()> {
             "/api/wallets/{wallet_id}/verify-password/",
             post(verify_wallet_password),
         )
+        .route(
+            "/api/wallet/session/activity",
+            post(wallet_session_activity),
+        )
         .route("/api/wallets/unlock-all", post(unlock_all_wallets))
         .route("/api/wallets/unlock-all/", post(unlock_all_wallets))
         .route(
@@ -4657,6 +4698,123 @@ mod password_security_tests {
     use super::*;
 
     #[test]
+    fn ai_wallet_capability_cannot_sign_export_unlock_or_mutate() {
+        let master = "public-test-master-token";
+        let token = ai_wallet_read_token(master);
+        assert_eq!(
+            token,
+            "f9dd581688b170f64f8293247152f216679198db5af88dcd598f85a1e813c226"
+        );
+        let session = format!("/api/wallets/{}/session", "a".repeat(32));
+        assert!(token_allows_api_request(
+            &token,
+            master,
+            &Method::GET,
+            &session
+        ));
+        for method in [Method::POST, Method::PUT, Method::DELETE, Method::PATCH] {
+            assert!(!token_allows_api_request(&token, master, &method, &session));
+        }
+        for path in [
+            "/api/automation/token/sell",
+            "/api/wallets",
+            "/api/wallets/export",
+            "/api/wallets/lock-all",
+            "/api/wallets/../session",
+            "/api/wallets/%2e%2e/session",
+            "/api/wallets/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/session/",
+            "/api/wallets/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/export",
+        ] {
+            assert!(!token_allows_api_request(
+                &token,
+                master,
+                &Method::GET,
+                path
+            ));
+            assert!(!token_allows_api_request(
+                &token,
+                master,
+                &Method::POST,
+                path
+            ));
+        }
+        assert!(!token_allows_api_request(
+            "invalid",
+            master,
+            &Method::GET,
+            &session
+        ));
+        assert!(!token_allows_api_request(
+            &token,
+            "another-master",
+            &Method::GET,
+            &session
+        ));
+        assert!(token_allows_api_request(
+            master,
+            master,
+            &Method::POST,
+            "/api/wallets/lock-all"
+        ));
+    }
+
+    #[tokio::test]
+    async fn ai_capability_is_enforced_by_the_http_middleware() {
+        use tower::ServiceExt;
+        let session = format!("/api/wallets/{}/session", "a".repeat(32));
+        // Stub handlers: exercise the real auth layer without touching wallets or RPC.
+        let router = Router::new()
+            .route(&session, get(|| async { StatusCode::NO_CONTENT }))
+            .route(
+                "/api/automation/token/sell",
+                post(|| async { StatusCode::NO_CONTENT }),
+            )
+            .route(
+                "/api/wallets/export",
+                get(|| async { StatusCode::NO_CONTENT }),
+            )
+            .route_layer(middleware::from_fn(require_api_token));
+        let readonly = ai_wallet_read_token(local_api_token());
+        for (method, path, token, expected) in [
+            (
+                Method::GET,
+                session.as_str(),
+                readonly.as_str(),
+                StatusCode::NO_CONTENT,
+            ),
+            (
+                Method::POST,
+                "/api/automation/token/sell",
+                readonly.as_str(),
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                Method::GET,
+                "/api/wallets/export",
+                readonly.as_str(),
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                Method::POST,
+                "/api/automation/token/sell",
+                local_api_token(),
+                StatusCode::NO_CONTENT,
+            ),
+        ] {
+            let request = Request::builder()
+                .method(method)
+                .uri(path)
+                .header(API_TOKEN_HEADER, token)
+                .body(Body::empty())
+                .unwrap();
+            assert_eq!(
+                router.clone().oneshot(request).await.unwrap().status(),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn password_attempt_backoff_is_bounded_and_exponential() {
         for failures in 0..=PASSWORD_ATTEMPT_FREE_FAILURES {
             assert_eq!(password_attempt_delay(failures), None);
@@ -4673,6 +4831,10 @@ mod password_security_tests {
 
     #[test]
     fn wallet_passwords_have_a_bounded_utf8_byte_length() {
+        assert!(validate_password("old", "密码").is_ok());
+        assert!(validate_new_password("old", "密码").is_err());
+        assert!(validate_new_password("1234567890", "密码").is_ok());
+        assert!(validate_new_password(&"密".repeat(10), "密码").is_ok());
         assert!(validate_password(&"a".repeat(MAX_PASSWORD_BYTES), "密码").is_ok());
         assert!(validate_password(&"a".repeat(MAX_PASSWORD_BYTES + 1), "密码").is_err());
         assert!(validate_password(&"密".repeat(MAX_PASSWORD_BYTES / 3), "密码").is_ok());
@@ -6388,7 +6550,7 @@ async fn encrypt_key(
 ) -> Result<Json<EncryptKeyResponse>, ApiError> {
     require_direct_secret_input_enabled()?;
     require_nonempty(req.secret_key.trim(), "私钥")?;
-    validate_password(req.password.as_str(), "密码")?;
+    validate_new_password(req.password.as_str(), "密码")?;
     let encrypted = KeyManager::encrypt_with_password(&req.secret_key, &req.password)
         .map_err(|e| ApiError { message: e })?;
     Ok(Json(EncryptKeyResponse {
@@ -6399,7 +6561,7 @@ async fn encrypt_key(
 async fn create_encrypted_key(
     Json(req): Json<CreateEncryptedKeyRequest>,
 ) -> Result<Json<CreateEncryptedKeyResponse>, ApiError> {
-    validate_password(req.password.as_str(), "密码")?;
+    validate_new_password(req.password.as_str(), "密码")?;
     let keypair = KeyManager::generate_keypair();
     let private_key = keypair.to_base58_string();
     let encrypted = KeyManager::encrypt_with_password(&private_key, &req.password)
@@ -6528,7 +6690,7 @@ struct ImportMnemonicKeystoreResponse {
 async fn create_keystore(
     Json(mut req): Json<CreateKeystoreRequest>,
 ) -> Result<Json<CreateKeystoreResponse>, ApiError> {
-    validate_password(req.password.as_str(), "密码")?;
+    validate_new_password(req.password.as_str(), "密码")?;
     let name = validate_optional_label(req.name.take(), "钱包名称")?;
     let response = run_keystore_task(move || {
         let keypair = KeyManager::generate_keypair();
@@ -6547,7 +6709,7 @@ async fn create_keystore(
 async fn create_mnemonic_keystore(
     Json(mut req): Json<CreateMnemonicKeystoreRequest>,
 ) -> Result<Json<CreateMnemonicKeystoreResponse>, ApiError> {
-    validate_password(req.password.as_str(), "密码")?;
+    validate_new_password(req.password.as_str(), "密码")?;
     let name = validate_optional_label(req.name.take(), "钱包名称")?;
     let derivation_path_label = normalize_mnemonic_derivation_path(req.derivation_path.as_deref())?;
     let response = run_keystore_task(move || {
@@ -6583,7 +6745,7 @@ async fn create_mnemonic_keystore(
 async fn import_mnemonic_keystore(
     Json(mut req): Json<ImportMnemonicKeystoreRequest>,
 ) -> Result<Json<ImportMnemonicKeystoreResponse>, ApiError> {
-    validate_password(req.password.as_str(), "密码")?;
+    validate_new_password(req.password.as_str(), "密码")?;
     let name = validate_optional_label(req.name.take(), "钱包名称")?;
     let mnemonic = Zeroizing::new(normalize_mnemonic_phrase(&req.mnemonic)?);
     let derivation_path_label = normalize_mnemonic_derivation_path(req.derivation_path.as_deref())?;
@@ -6648,7 +6810,12 @@ fn recovery_metadata(keystore: &str, family: &str, path: Option<&str>) -> Result
 }
 
 fn recover_chain_keystore(req: &RecoverWalletRequest) -> Result<CreateKeystoreResponse, ApiError> {
-    validate_password(&req.password, "密码")?;
+    if req.material_type == "keystore" {
+        // An existing encrypted backup must remain readable with its original password.
+        validate_password(&req.password, "密码")?;
+    } else {
+        validate_new_password(&req.password, "密码")?;
+    }
     let name =
         validate_optional_label(req.name.clone(), "钱包名称")?.unwrap_or_else(|| "Wallet".into());
     let family = req.family.as_str();
@@ -6942,7 +7109,7 @@ fn keypair_from_recovery_private_key(input: &str) -> Result<Keypair, ApiError> {
 async fn import_private_key_keystore(
     Json(mut req): Json<ImportPrivateKeyKeystoreRequest>,
 ) -> Result<Json<CreateKeystoreResponse>, ApiError> {
-    validate_password(req.password.as_str(), "密码")?;
+    validate_new_password(req.password.as_str(), "密码")?;
     require_nonempty(req.private_key.trim(), "私钥")?;
     let name = validate_optional_label(req.name.take(), "钱包名称")?;
     let response = run_keystore_task(move || {
@@ -6972,10 +7139,9 @@ mod wallet_recovery_tests {
         let local_password = "recovery-test-password";
         let other_password = "external-wallet-password";
         let first_key = format!("{:064x}", 1);
-        let recovered = recover_chain_keystore(&recovery_request(
-            "evm", "private_key", &first_key, None,
-        ))
-        .unwrap();
+        let recovered =
+            recover_chain_keystore(&recovery_request("evm", "private_key", &first_key, None))
+                .unwrap();
         let first = save_keystore_wallet(Json(SaveKeystoreWalletRequest {
             keystore_json: recovered.keystore_json,
             password: local_password.into(),
@@ -7677,7 +7843,7 @@ async fn create_universal_wallet(
         validate_optional_label(Some(req.name.clone()), "钱包名称")?.ok_or_else(|| ApiError {
             message: "钱包名称不能为空".to_string(),
         })?;
-    validate_password(req.password.as_str(), "密码")?;
+    validate_new_password(req.password.as_str(), "密码")?;
     let password = Zeroizing::new(std::mem::take(&mut req.password));
     let (response, wallet_id, public_key, session_secrets) = run_keystore_task(move || {
         require_unified_password_for_existing_wallets(&password, None)?;
@@ -7754,7 +7920,7 @@ async fn create_universal_wallet(
             &wallet_id,
             &public_key,
             &session_secrets,
-            WALLET_SESSION_IDLE_TTL,
+            wallet_session_idle_ttl(),
             WALLET_SESSION_MAX_LIFETIME,
         )
         .map_err(|message| ApiError { message })?;
@@ -7898,7 +8064,7 @@ async fn save_keystore_wallet(
             &wallet_id,
             &public_key,
             &session_secrets,
-            WALLET_SESSION_IDLE_TTL,
+            wallet_session_idle_ttl(),
             WALLET_SESSION_MAX_LIFETIME,
         )
         .map_err(|message| ApiError { message })?;
@@ -7986,20 +8152,13 @@ fn export_private_key_keystore(
         })
         .map_err(api_error_from_app_service)?;
         validate_universal_evm_identity(&wallet.keystore_json, &existing_evm)?;
-        let exported =
-            app_services::evm_wallet_export_private_key(app_services::EvmExportPrivateKeyRequest {
+        let reencrypted = app_services::evm_wallet_export_private_key_keystore(
+            app_services::EvmUnlockWalletRequest {
                 keystore_json: evm_keystore_json,
                 password: password.to_string(),
-            })
-            .map_err(api_error_from_app_service)?;
-        let private_key = Zeroizing::new(exported.private_key_hex);
-        let reencrypted =
-            app_services::evm_wallet_import_private_key(app_services::EvmImportPrivateKeyRequest {
-                name: wallet.name.clone(),
-                private_key_hex: private_key.to_string(),
-                password: password.to_string(),
-            })
-            .map_err(api_error_from_app_service)?;
+            },
+        )
+        .map_err(api_error_from_app_service)?;
         if !existing_evm
             .address
             .eq_ignore_ascii_case(&reencrypted.wallet.address)
@@ -8122,14 +8281,14 @@ async fn verify_wallet_password(
             &wallet_id,
             &public_key,
             &session_secrets,
-            WALLET_SESSION_IDLE_TTL,
+            wallet_session_idle_ttl(),
             WALLET_SESSION_MAX_LIFETIME,
         )
         .map_err(|message| ApiError { message })?;
     Ok(Json(VerifyWalletPasswordResponse {
         verified: true,
         public_key,
-        session_expires_in_seconds: WALLET_SESSION_IDLE_TTL.as_secs(),
+        session_expires_in_seconds: wallet_session_idle_ttl().as_secs(),
     }))
 }
 
@@ -8268,7 +8427,7 @@ async fn unlock_all_wallets_inner(
             &wallet_id,
             &public_key,
             &secrets,
-            WALLET_SESSION_IDLE_TTL,
+            wallet_session_idle_ttl(),
             WALLET_SESSION_MAX_LIFETIME,
         ) {
             let _ = wallet_session_vault().lock_all();
@@ -8278,7 +8437,7 @@ async fn unlock_all_wallets_inner(
     Ok(Json(UnlockAllWalletsResponse {
         verified: true,
         unlocked_wallets,
-        session_expires_in_seconds: WALLET_SESSION_IDLE_TTL.as_secs(),
+        session_expires_in_seconds: wallet_session_idle_ttl().as_secs(),
     }))
 }
 
@@ -8310,6 +8469,33 @@ async fn lock_wallet_session(
         status: "locked",
         locked_sessions: usize::from(locked),
     }))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WalletSessionActivityRequest {
+    idle_minutes: Option<u64>,
+}
+
+fn activity_idle_ttl(minutes: Option<u64>) -> Result<Duration, ApiError> {
+    match minutes {
+        Some(minutes @ (1 | 5 | 15 | 30 | 60)) => Ok(Duration::from_secs(minutes * 60)),
+        None => Ok(WALLET_SESSION_MAX_LIFETIME),
+        _ => Err(ApiError {
+            message: "不支持的自动锁定时间".into(),
+        }),
+    }
+}
+
+async fn wallet_session_activity(
+    Json(req): Json<WalletSessionActivityRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let ttl = activity_idle_ttl(req.idle_minutes)?;
+    wallet_session_vault()
+        .touch_all(ttl)
+        .map_err(|message| ApiError { message })?;
+    WALLET_SESSION_IDLE_SECONDS.store(ttl.as_secs(), std::sync::atomic::Ordering::Release);
+    Ok(Json(serde_json::json!({"status":"ok"})))
 }
 
 async fn lock_all_wallet_sessions(
@@ -8963,7 +9149,7 @@ async fn change_wallet_password(
 ) -> Result<Json<SaveKeystoreWalletResponse>, ApiError> {
     validate_wallet_id(&wallet_id)?;
     validate_password(&req.current_password, "当前钱包密码")?;
-    validate_password(&req.new_password, "新钱包密码")?;
+    validate_new_password(&req.new_password, "新钱包密码")?;
     if req.new_password.chars().count() < 10 {
         return Err(ApiError {
             message: "新钱包密码至少需要 10 个字符".to_string(),
@@ -9028,7 +9214,7 @@ async fn adopt_unified_wallet_password(
 ) -> Result<Json<SaveKeystoreWalletResponse>, ApiError> {
     validate_wallet_id(&wallet_id)?;
     validate_password(&req.current_password, "历史钱包密码")?;
-    validate_password(&req.new_password, "FnzSafe 统一钱包密码")?;
+    validate_new_password(&req.new_password, "FnzSafe 统一钱包密码")?;
     let current_password = Zeroizing::new(std::mem::take(&mut req.current_password));
     let new_password = Zeroizing::new(std::mem::take(&mut req.new_password));
     let wallet = wallet_store::find(&wallet_id).map_err(|message| ApiError { message })?;
@@ -9067,7 +9253,7 @@ async fn migrate_wallet_keystore(
 ) -> Result<Json<SaveKeystoreWalletResponse>, ApiError> {
     validate_wallet_id(&wallet_id)?;
     validate_password(&req.current_password, "当前钱包密码")?;
-    validate_password(&req.new_password, "新钱包密码")?;
+    validate_new_password(&req.new_password, "新钱包密码")?;
     let wallet = wallet_store::find(&wallet_id).map_err(|message| ApiError { message })?;
     let updated = run_keystore_task(move || {
         if KeyManager::keystore_version(&wallet.keystore_json).map_err(|error| ApiError {
@@ -13795,6 +13981,8 @@ struct ExternalSignInstructionPreview {
     program_id: String,
     account_count: usize,
     data_bytes: usize,
+    details: Vec<(String, String)>,
+    warnings: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -13922,16 +14110,11 @@ fn decode_external_versioned_transaction(
     })
 }
 
-fn external_sign_program_label<'a>(
+fn external_sign_program_label(
     program_id: &str,
-    known_programs: &'a [ExternalSignKnownProgram],
-) -> &'a str {
-    if let Some(program) = known_programs
-        .iter()
-        .find(|program| program.program_id.trim() == program_id && !program.label.trim().is_empty())
-    {
-        return program.label.trim();
-    }
+    _known_programs: &[ExternalSignKnownProgram],
+) -> &'static str {
+    // Caller-provided names are descriptions, never evidence of program identity.
     match program_id {
         "11111111111111111111111111111111" => "System Program",
         SPL_TOKEN_PROGRAM_ID => "SPL Token",
@@ -13948,16 +14131,131 @@ fn external_sign_program_label<'a>(
 fn external_sign_instruction_preview(
     index: usize,
     program_id: String,
-    account_count: usize,
-    data_bytes: usize,
+    accounts: Vec<String>,
+    data: &[u8],
     known_programs: &[ExternalSignKnownProgram],
 ) -> ExternalSignInstructionPreview {
     let label = external_sign_program_label(&program_id, known_programs);
+    let mut details = vec![
+        ("指令全部账户".into(), accounts.join(", ")),
+        ("指令数据（hex）".into(), hex::encode(data)),
+    ];
+    if let Some(description) = known_programs
+        .iter()
+        .find(|p| p.program_id.trim() == program_id && !p.label.trim().is_empty())
+    {
+        details.push((
+            "DApp 描述（未验证）".into(),
+            description.label.trim().into(),
+        ));
+    }
+    let account = |position: usize| {
+        accounts
+            .get(position)
+            .cloned()
+            .unwrap_or_else(|| "缺少账户".into())
+    };
+    let amount = |offset: usize| {
+        data.get(offset..offset + 8)
+            .and_then(|b| b.try_into().ok())
+            .map(u64::from_le_bytes)
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "无效金额".into())
+    };
+    let mut warnings = Vec::new();
+    let mut decoded = false;
+    if program_id == "11111111111111111111111111111111"
+        && data.len() == 12
+        && data[..4] == [2, 0, 0, 0]
+    {
+        decoded = true;
+        details.extend([
+            ("操作".into(), "SOL 转账".into()),
+            ("付款账户".into(), account(0)),
+            ("接收账户".into(), account(1)),
+            ("金额（lamports）".into(), amount(4)),
+        ]);
+    } else if matches!(
+        program_id.as_str(),
+        SPL_TOKEN_PROGRAM_ID | SPL_TOKEN_2022_PROGRAM_ID
+    ) {
+        let tag = data.first().copied();
+        if matches!(tag, Some(3 | 4)) && data.len() == 9
+            || matches!(tag, Some(12 | 13)) && data.len() == 10
+        {
+            decoded = true;
+            let checked = matches!(tag, Some(12 | 13));
+            let approval = matches!(tag, Some(4 | 13));
+            details.extend([
+                (
+                    "操作".into(),
+                    if approval {
+                        "代币授权".into()
+                    } else {
+                        "代币转账".into()
+                    },
+                ),
+                ("来源代币账户".into(), account(0)),
+                (
+                    if approval {
+                        "被授权方".into()
+                    } else {
+                        "接收代币账户".into()
+                    },
+                    account(if checked { 2 } else { 1 }),
+                ),
+                ("金额（最小单位）".into(), amount(1)),
+            ]);
+            if checked {
+                details.extend([
+                    ("Mint".into(), account(1)),
+                    ("请求的小数位".into(), data[9].to_string()),
+                ]);
+            } else {
+                warnings.push("未提供 Mint 与小数位，请核对代币账户".into());
+            }
+            if approval {
+                warnings.push("此操作授权第三方支配账户中的代币".into());
+            }
+        } else if tag == Some(6)
+            && (data.len() == 3 && data[2] == 0 || data.len() == 35 && data[2] == 1)
+        {
+            decoded = true;
+            let authority = if data[2] == 0 {
+                "撤销权限".into()
+            } else {
+                bs58::encode(&data[3..]).into_string()
+            };
+            details.extend([
+                ("操作".into(), "更改代币权限".into()),
+                ("账户".into(), account(0)),
+                ("权限类型".into(), data[1].to_string()),
+                ("新权限持有人".into(), authority),
+            ]);
+            warnings.push("更改权限可能永久失去账户或 Mint 的控制权".into());
+        } else if tag == Some(9) && data.len() == 1 {
+            decoded = true;
+            details.extend([
+                ("操作".into(), "关闭代币账户".into()),
+                ("账户".into(), account(0)),
+                ("租金接收方".into(), account(1)),
+            ]);
+            warnings.push("此操作关闭代币账户并转出租金余额".into());
+        } else if tag == Some(5) && data.len() == 1 {
+            decoded = true;
+            details.push(("操作".into(), "撤销代币授权".into()));
+        }
+    }
+    if !decoded {
+        warnings.push("此指令未完整解释，可能转移资产或更改权限".into());
+    }
     ExternalSignInstructionPreview {
         index,
         program_id: format!("{} ({})", program_id, label),
-        account_count,
-        data_bytes,
+        account_count: accounts.len(),
+        data_bytes: data.len(),
+        details,
+        warnings,
     }
 }
 
@@ -14000,8 +14298,18 @@ fn preview_external_legacy_transaction(
             external_sign_instruction_preview(
                 index,
                 program_id,
-                instruction.accounts.len(),
-                instruction.data.len(),
+                instruction
+                    .accounts
+                    .iter()
+                    .map(|i| {
+                        message
+                            .account_keys
+                            .get(*i as usize)
+                            .map(ToString::to_string)
+                            .unwrap_or_else(|| format!("未解析地址表账户 #{i}"))
+                    })
+                    .collect(),
+                &instruction.data,
                 known_programs,
             )
         })
@@ -14023,6 +14331,18 @@ fn preview_external_legacy_transaction(
     {
         warnings.push("交易包含未识别 program，请确认 DApp 来源和指令意图".to_string());
     }
+
+    for instruction in &instructions {
+        warnings.extend(
+            instruction
+                .warnings
+                .iter()
+                .map(|warning| format!("指令 {}：{}", instruction.index, warning)),
+        );
+    }
+    warnings.push(
+        "此预览未模拟链上状态变化；已识别程序也可能调用其他程序，请核对全部指令和账户".into(),
+    );
 
     ExternalSignTransactionPreviewResponse {
         status: "success".to_string(),
@@ -14077,8 +14397,17 @@ fn preview_external_versioned_transaction(
             external_sign_instruction_preview(
                 index,
                 program_id,
-                instruction.accounts.len(),
-                instruction.data.len(),
+                instruction
+                    .accounts
+                    .iter()
+                    .map(|i| {
+                        static_accounts
+                            .get(*i as usize)
+                            .map(ToString::to_string)
+                            .unwrap_or_else(|| format!("未解析地址表账户 #{i}"))
+                    })
+                    .collect(),
+                &instruction.data,
                 known_programs,
             )
         })
@@ -14108,6 +14437,18 @@ fn preview_external_versioned_transaction(
     {
         warnings.push("交易包含未识别 program，请确认 DApp 来源和指令意图".to_string());
     }
+
+    for instruction in &instructions {
+        warnings.extend(
+            instruction
+                .warnings
+                .iter()
+                .map(|warning| format!("指令 {}：{}", instruction.index, warning)),
+        );
+    }
+    warnings.push(
+        "此预览未模拟链上状态变化；已识别程序也可能调用其他程序，请核对全部指令和账户".into(),
+    );
 
     ExternalSignTransactionPreviewResponse {
         status: "success".to_string(),
@@ -14485,6 +14826,12 @@ async fn external_sign_message(
             ),
         });
     }
+
+    fnzero_safe_app_services::validate_solana_message_bytes(&message_bytes).map_err(|error| {
+        ApiError {
+            message: error.to_string(),
+        }
+    })?;
 
     let signature = signing_keypair
         .try_sign_message(&message_bytes)
@@ -15246,6 +15593,113 @@ mod generic_program_deployment_policy_tests {
         let signature = Signature::try_from(signature_bytes.as_slice()).unwrap();
         assert!(signature.verify(signer.pubkey().as_ref(), b"fnzero wallet binding test"));
         assert_eq!(response.message_base64, message_base64);
+    }
+
+    #[test]
+    fn instruction_preview_discloses_transfer_and_uninterpreted_bytes() {
+        let mut data = vec![2, 0, 0, 0];
+        data.extend_from_slice(&42_u64.to_le_bytes());
+        let result = external_sign_instruction_preview(
+            0,
+            "11111111111111111111111111111111".into(),
+            vec!["source".into(), "recipient".into()],
+            &data,
+            &[],
+        );
+        assert!(result
+            .details
+            .contains(&("接收账户".into(), "recipient".into())));
+        assert!(result
+            .details
+            .contains(&("金额（lamports）".into(), "42".into())));
+        for length in 0..12 {
+            let result = external_sign_instruction_preview(
+                0,
+                "11111111111111111111111111111111".into(),
+                vec![],
+                &data[..length],
+                &[],
+            );
+            assert!(!result.warnings.is_empty());
+        }
+        let mut approval = vec![4];
+        approval.extend_from_slice(&u64::MAX.to_le_bytes());
+        let result = external_sign_instruction_preview(
+            0,
+            SPL_TOKEN_PROGRAM_ID.into(),
+            vec!["token".into(), "delegate".into()],
+            &approval,
+            &[],
+        );
+        assert!(result
+            .details
+            .contains(&("被授权方".into(), "delegate".into())));
+        assert!(result.warnings.iter().any(|w| w.contains("授权")));
+    }
+
+    #[test]
+    fn caller_program_labels_never_establish_trusted_identity() {
+        let unknown = "SysvarRent111111111111111111111111111111111";
+        let labels = vec![ExternalSignKnownProgram {
+            program_id: unknown.into(),
+            label: "System Program".into(),
+        }];
+        assert_eq!(
+            external_sign_program_label(unknown, &labels),
+            "Unknown Program"
+        );
+        let overridden = vec![ExternalSignKnownProgram {
+            program_id: "11111111111111111111111111111111".into(),
+            label: "Untrusted label".into(),
+        }];
+        assert_eq!(
+            external_sign_program_label("11111111111111111111111111111111", &overridden),
+            "System Program"
+        );
+    }
+
+    #[test]
+    fn activity_policy_matches_ui_options_and_keeps_absolute_lifetime_bound() {
+        for minutes in [1, 5, 15, 30, 60] {
+            assert_eq!(
+                activity_idle_ttl(Some(minutes)).unwrap(),
+                Duration::from_secs(minutes * 60)
+            );
+        }
+        for minutes in [0, 2, 61, u64::MAX] {
+            assert!(activity_idle_ttl(Some(minutes)).is_err());
+        }
+        assert_eq!(
+            activity_idle_ttl(None).unwrap(),
+            WALLET_SESSION_MAX_LIFETIME
+        );
+    }
+
+    #[tokio::test]
+    async fn external_sign_message_rejects_transaction_message_bytes() {
+        std::env::set_var(ALLOW_DIRECT_SECRET_INPUT_ENV, "true");
+        let signer = Keypair::new();
+        let message = solana_sdk::message::Message::new(&[], Some(&signer.pubkey()));
+        let result = external_sign_message(Json(ExternalSignMessageRequest {
+            wallet: WalletAuthRequest {
+                wallet_id: None,
+                private_key: None,
+                secret_key: Some(signer.to_base58_string()),
+                keystore_json: None,
+                encrypted_key: None,
+                password: None,
+            },
+            required_signer: signer.pubkey().to_string(),
+            message_base64: BASE64.encode(message.serialize()),
+            request_id: Some("fixture-message-denied".into()),
+            expires_at: None,
+        }))
+        .await;
+        assert!(result
+            .err()
+            .unwrap()
+            .message
+            .contains("transaction approval"));
     }
 
     #[test]

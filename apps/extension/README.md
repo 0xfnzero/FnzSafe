@@ -1,4 +1,4 @@
-# FnzSafe Chrome Extension 0.3.9
+# FnzSafe Chrome Extension 0.3.10
 
 Manifest V3 wallet extension for EVM and Solana. Bitcoin and TRON support key recovery and address display; transaction signing and broadcasting for these families remain disabled.
 
@@ -12,11 +12,13 @@ npm run build
 npm run package  # compiled ZIP and checksum in release/extension; requires Python 3
 ```
 
-Load `apps/extension/dist` as an unpacked extension from `chrome://extensions`. Chrome 114 or newer is required. Click the toolbar icon to open the wallet in the side panel.
+Load `apps/extension/dist` as an unpacked extension from `chrome://extensions`. Chrome 116 or newer is required. Click the toolbar icon to open the wallet in the side panel.
 
 ## Appearance
 
 Choose **Light**, **Dark** or **System** from the header or Settings → Appearance & language. The choice is stored locally and shared by the wallet and DApp confirmation windows. System follows the OS appearance. Toolbar icons use a dedicated crop of the existing artwork, with native 16/32/48/128 pixel assets, so desktop transparent margins do not shrink the visible toolbar mark. Both palettes distinguish the page background, balance card, asset panel, controls and selected navigation. Searchable account/network panels, local receive QR codes, token details, token-specific sending, copy feedback and keyboard focus handling are included.
+
+The toolbar badge counts DApp requests awaiting confirmation or currently being processed. Open the wallet to see **Pending requests** and use **Review** to focus a confirmation window. Completed, rejected, expired, disconnected and failed-to-open requests clear automatically. This count does not represent transactions awaiting on-chain confirmations or Safe proposals waiting for other owners. A worker restart clears requests tied to old provider connections.
 
 ## First open and wallet protection
 
@@ -53,6 +55,8 @@ Manual validation for 0.3.1 confirmed Uniswap opens the FnzSafe approval window 
 
 The wallet picker has wallet-name tabs on the left and per-network addresses on the right. Each row has independent copy and select controls; selection updates the account and network together. New wallets use one BIP-39 phrase for EVM, Solana, Bitcoin (Taproot and Native SegWit) and TRON. Creation is immediate, with no forced phrase display or backup confirmation. The name field is prefilled with the next sequential Wallet number and can be edited before creation. Previously imported private keys are grouped separately when they cannot be recovered from the recorded mnemonic's supported paths.
 
+In the wallet picker, use the pencil next to the selected wallet name to rename it. Save/cancel controls are separate from the new-wallet name field. Names must be nonempty, at most 80 characters and unique (case-insensitive). Renaming preserves IDs, addresses, keys and account/network selection, persists in both device-bound and protected vaults, and needs no extra authentication while already unlocked.
+
 Settings → Language offers English, Simplified Chinese, Traditional Chinese and automatic browser detection. Language and appearance persist across wallet and approval windows. Addresses, user names, token names and raw transaction data are not translated.
 
 **Backup & export** targets the active wallet's mnemonic or a selected chain private key. It supports encrypted JSON files/strings, plaintext, locally generated QR codes, and ordered plaintext fragments. Password/Passkey verification is required before export. Results clear on exit, lock detection or after 90 seconds. Fragments are simple ordered pieces, not Shamir shares; all pieces are required. Mnemonic fragments keep whole words.
@@ -73,15 +77,15 @@ Transaction Builder JSON imports support one CALL or a reviewed atomic CALL-only
 
 ## Installation
 
-Version 0.3.9 is an extension preview release. Passkey enrollment has been confirmed by the user; the user also confirmed locking and successfully unlocking the same wallet with the Passkey. The password path remains available.
+Version 0.3.10 is an extension preview release. Existing Passkey enrollment and unlock were previously confirmed by the user; that historical check does not replace real-device validation of this build. The password path remains available.
 
-Download and extract `FnzSafe-extension-0.3.9.zip` from **Assets** on the [latest combined Release](https://github.com/0xfnzero/FnzSafe/releases/latest). The same compiled artifact is also available under `extension-v0.3.9`. GitHub's automatic Source code downloads are not installable extension packages. End users do not need Node or a build tool. In Chrome, open `chrome://extensions`, enable Developer mode and choose **Load unpacked**, then select the extracted directory containing `manifest.json`. Keep that directory in place. When updating an existing unpacked installation, replace its files in the same directory and use Reload; changing the path changes the extension ID and can break Passkey access. This is an unpacked developer distribution, not a Chrome Web Store listing; updates are manual.
+Download and extract `FnzSafe-extension-0.3.10.zip` from **Assets** on the [latest combined Release](https://github.com/0xfnzero/FnzSafe/releases/latest). The same compiled artifact is also available under `extension-v0.3.10`. GitHub's automatic Source code downloads are not installable extension packages. End users do not need Node or a build tool. In Chrome, open `chrome://extensions`, enable Developer mode and choose **Load unpacked**, then select the extracted directory containing `manifest.json`. Keep that directory in place. When updating an existing unpacked installation, replace its files in the same directory and use Reload; changing the path changes the extension ID and can break Passkey access. This is an unpacked developer distribution, not a Chrome Web Store listing; updates are manual.
 
 For local development, load `dist` after building. Use a separate Chrome profile and public test accounts for development; never fund fixture accounts on a public network.
 
 ## Reproducible validation
 
-`npm test` covers RPC validation and redaction, plaintext recovery, encrypted backup formats, Safe signatures/proposals, vault migration, default-wallet persistence and protection migration, mocked Passkey PRF validation, DApp permission/security boundaries and serialized background imports. The current suite contains 77 passing tests, including multiple mnemonic roots, named imports and failed-write preservation, scoped exports, encrypted backup restoration, locale completeness, atomic account/network selection, idle-lock settings, and Passkey window sender validation and cancellation. The desktop compatibility fixtures were produced independently by the Rust implementation:
+`npm test` covers RPC validation and redaction, plaintext recovery, encrypted backup formats, Safe signatures/proposals, vault migration, default-wallet persistence and protection migration, mocked Passkey PRF validation, DApp permission/security boundaries and serialized background imports. The current suite contains 98 tests, including multiple mnemonic roots, named imports and failed-write preservation, scoped exports, encrypted backup restoration, locale completeness, atomic account/network selection, idle-lock settings, and Passkey window sender validation and cancellation. The desktop compatibility fixtures were produced independently by the Rust implementation:
 
 ```bash
 # Run from the repository root (requires the usual Rust/OpenSSL build dependencies).
@@ -91,7 +95,7 @@ cargo run --release -p fnzero-safe-app-services --example extension_recovery_fix
 
 The fixture password is `local-fixture-password`; all fixture keys and phrases are public test data. Regenerating uses randomized encryption salts/nonces.
 
-`npm run test:e2e:import-passkey` exercises Passkey setup, window placement, cancellation/retry, named private-key import, and unlock/name persistence in a disposable Chrome profile. Set `FNZSAFE_E2E_CHROME` to a Chrome for Testing executable and optionally `FNZSAFE_E2E_SCREENSHOT_DIR` to save screenshots. WebAuthn responses are mocked; real Google Password Manager/device verification and its native dialog appearance require manual validation. No existing browser profile or funded wallet is used.
+`npm run test:e2e:import-passkey` exercises Passkey setup, window placement, cancellation/retry, named private-key import, renaming with cancel/duplicate checks, unlock/name persistence, and real Chrome badge changes (2 → 1 → empty) with request navigation in a disposable Chrome profile. Set `FNZSAFE_E2E_CHROME` to a Chrome for Testing executable and optionally `FNZSAFE_E2E_SCREENSHOT_DIR` to save screenshots. WebAuthn responses are mocked; real Google Password Manager/device verification and its native dialog appearance require manual validation. No existing browser profile or funded wallet is used.
 
 For the optional integration test, install Foundry's Anvil and obtain the official Safe 1.4.1 artifacts from `@safe-global/safe-contracts`. Set `SAFE_ARTIFACTS_DIR` to the package's `build/artifacts/contracts` directory:
 
@@ -125,3 +129,15 @@ Before the visual redesign, release validation also exercised plaintext recovery
 This implementation follows public wallet interaction conventions such as EIP-1193 and EIP-6963. It does not copy MetaMask source code, branding, or visual assets.
 
 The time-limited in-memory vault reduces exposure but cannot guarantee JavaScript string zeroization. Hardware-backed or native isolated signing remains a required hardening step before treating the extension as suitable for high-value custody.
+
+## Security fixes in the working tree (2026-11-05)
+
+- Protection completes only after the old device vault is removed and its absence is verified. An interrupted cleanup is retried on worker startup, open and unlock; failures keep signing locked and retain the encrypted recovery copy.
+- Solana `signMessage` rejects serialized transaction messages. Transaction confirmations decode common SOL/token transfers, spending approvals and authority changes, display every transaction in a batch, and attempt unsigned simulation before approval. Unknown instructions and unresolved lookup addresses require explicit risk acknowledgement; simulation is not a safety verdict.
+- Backup copying uses a dedicated offscreen document and the `offscreen`, `clipboardRead`, and `clipboardWrite` permissions. It checks clipboard ownership before clearing after 15 seconds, on hiding backup content, and on lock. Closing the wallet UI does not stop the timer. No backup is persisted by the clipboard helper. Cleanup failures are reported; browser shutdown, OS clipboard history and synchronization are outside this cleanup guarantee.
+
+## Security changes in 0.3.10
+
+Pending signing requests retain their approved account/network context through execution. Locking, switching accounts or revoking permissions cancels stale work. Delayed unlocks cannot override a lock, and recovery exports check the session again immediately before returning secrets. Permission writes are serialized so revocation cannot be undone by an older connection approval. EIP-712 previews and signatures use the same validated schema and payload; unsigned extra fields and inconsistent types are rejected.
+
+Existing wallets are retained during an in-place update. Keep the unpacked installation directory and extension ID, reload the extension and unlock normally; do not remove the extension or clear its storage. This version requests clipboard cleanup permissions, including clipboard read/write, to clear copied backups when possible.

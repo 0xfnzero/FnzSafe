@@ -48,11 +48,12 @@ test('decodes and flags NFT operator approval', () => {
 
 test('typed data enforces chain binding and identifies unlimited permits', () => {
   assert.throws(
-    () => inspectTypedData(JSON.stringify({ primaryType: 'Permit', domain: { chainId: 10 }, message: {} }), 1),
+    () => inspectTypedData(JSON.stringify({ primaryType: 'Permit', domain: { chainId: 10 }, types: { Permit: [{ name: 'value', type: 'uint256' }] }, message: { value: '1' } }), 1),
     /does not match selected chain/,
   );
   const inspection = inspectTypedData(JSON.stringify({
     primaryType: 'Permit',
+    types: { Permit: [{ name: 'spender', type: 'address' }, { name: 'value', type: 'uint256' }] },
     domain: { name: 'Token', chainId: 1, verifyingContract: token },
     message: { spender, value: securityConstants.MAX_UINT256.toString() },
   }), 1);
@@ -100,4 +101,39 @@ test('Arc automatic fees preserve higher quotes and explicit caps', async () => 
   const explicit = { ...transaction, maxFeePerGas: 40_000_000_000n };
   assert.equal(await prepareArcFees(explicit, 5042, low), explicit);
   assert.equal(await prepareArcFees(transaction, 1, low), transaction);
+});
+
+
+test('typed-data preview rejects unsigned amount overrides and false primaryType labels', () => {
+  const payload = { primaryType: 'Receipt', domain: { chainId: 1 }, types: { Receipt: [{ name: 'amount', type: 'uint256' }] }, message: { amount: '100' } };
+  const inspection = inspectTypedData(payload, 1);
+  assert.equal(inspection.details.find(d => d.label === 'Amount (raw)')?.value, '100');
+  assert.equal(inspection.payload.message.amount, '100');
+  assert.throws(() => inspectTypedData({ ...payload, message: { ...payload.message, value: '1' } }, 1), /unsigned fields/);
+  assert.throws(() => inspectTypedData({ ...payload, primaryType: 'Login' }, 1), /primaryType/);
+  assert.throws(() => inspectTypedData({ ...payload, types: { ...payload.types, EIP712Domain: [] } }, 1), /domain schema/);
+});
+
+test('nested typed-data arrays cannot hide unsigned or missing fields', () => {
+  const payload = {
+    primaryType: 'Batch', domain: { chainId: 1 },
+    types: { Batch: [{ name: 'items', type: 'Item[]' }], Item: [{ name: 'amount', type: 'uint256' }] },
+    message: { items: [{ amount: '3' }, { amount: '4' }] },
+  };
+  assert.deepEqual(inspectTypedData(payload, 1).payload.message, payload.message);
+  assert.throws(() => inspectTypedData({ ...payload, message: { items: [{ amount: '3', value: '1' }] } }, 1), /unsigned fields/);
+  assert.throws(() => inspectTypedData({ ...payload, message: { items: [{}] } }, 1), /missing/);
+  assert.throws(() => inspectTypedData({ ...payload, types: { ...payload.types, Batch: [{ name: 'items', type: 'Item[2]' }] }, message: { items: [{ amount: '3' }] } }, 1), /array/);
+});
+
+test('preview and signer hash the same normalized EIP-712 payload', async () => {
+  const { TypedDataEncoder, Wallet, verifyTypedData } = await import('ethers');
+  const payload = { primaryType: 'Receipt', domain: { name: 'Offline fixture', chainId: 1 }, types: { Receipt: [{ name: 'amount', type: 'uint256' }] }, message: { amount: '0x64' } };
+  const inspection = inspectTypedData(payload, 1);
+  const canonical = inspection.payload;
+  assert.equal(inspection.details.find(d => d.label === 'Signing digest')?.value, TypedDataEncoder.hash(payload.domain, payload.types, payload.message));
+  const wallet = new Wallet('0x' + '11'.repeat(32)); // Public, unfunded test fixture only.
+  const signature = await wallet.signTypedData(canonical.domain, canonical.types, canonical.message);
+  assert.equal(verifyTypedData(payload.domain, payload.types, payload.message, signature), wallet.address);
+  assert.equal(inspection.details.find(d => d.label === 'Amount (raw)')?.value, '100');
 });

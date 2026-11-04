@@ -2,6 +2,8 @@
 import hashlib
 import io
 import json
+from html.parser import HTMLParser
+from urllib.parse import urlsplit
 from pathlib import Path
 import zipfile
 
@@ -11,7 +13,7 @@ version = json.loads((extension / "package.json").read_text())["version"]
 manifest = json.loads((dist / "manifest.json").read_text())
 if manifest["version"] != version:
     raise SystemExit("Manifest/package version mismatch; rebuild before packaging.")
-required = {"manifest.json", "popup.html", "approval.html", "passkey.html", "passkey.js", "styles.css",
+required = {"manifest.json", "popup.html", "popup.js", "approval.html", "approval.js", "passkey.html", "passkey.js", "clipboard.html", "clipboard.js", "styles.css",
             manifest["background"]["service_worker"]}
 required.update(manifest["icons"].values())
 required.update(manifest["action"]["default_icon"].values())
@@ -19,6 +21,20 @@ for script in manifest["content_scripts"]:
     required.update(script["js"])
 files = {p.relative_to(dist).as_posix(): p.read_bytes()
          for p in sorted(dist.rglob("*")) if p.is_file()}
+class AssetReferences(HTMLParser):
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        reference = attributes.get("src") if tag == "script" else attributes.get("href") if tag == "link" and attributes.get("rel") == "stylesheet" else None
+        if reference:
+            url = urlsplit(reference)
+            if url.scheme or url.netloc or url.path.startswith("/") or ".." in Path(url.path).parts:
+                raise SystemExit("Extension UI must reference local bundled assets.")
+            required.add(url.path)
+
+for name, data in files.items():
+    if name.endswith(".html"):
+        AssetReferences().feed(data.decode("utf-8"))
+
 if not required.issubset(files) or any(name.endswith(".map") for name in files):
     raise SystemExit("Incomplete or development build; run npm run build first.")
 output = extension.parents[1] / "release" / "extension"

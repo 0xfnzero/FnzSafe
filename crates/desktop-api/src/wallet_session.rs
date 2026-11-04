@@ -85,8 +85,8 @@ impl WalletSessionSecrets {
         ));
         encoded.extend_from_slice(SESSION_PAYLOAD_MAGIC);
         encoded.push(SESSION_PAYLOAD_VERSION);
-        let flags = u8::from(self.evm_private_key.is_some()) * SESSION_PAYLOAD_EVM_FLAG
-            | u8::from(self.mnemonic.is_some()) * SESSION_PAYLOAD_MNEMONIC_FLAG;
+        let flags = (u8::from(self.evm_private_key.is_some()) * SESSION_PAYLOAD_EVM_FLAG)
+            | (u8::from(self.mnemonic.is_some()) * SESSION_PAYLOAD_MNEMONIC_FLAG);
         encoded.push(flags);
         encoded.extend_from_slice(self.solana_keypair.as_ref());
         if let Some(private_key) = self.evm_private_key.as_ref() {
@@ -339,6 +339,25 @@ impl WalletSessionVault {
             .is_some())
     }
 
+    /// Refresh only live sessions after trusted wallet UI activity. Expired
+    /// sessions are removed, never resurrected by a delayed activity request.
+    pub fn touch_all(&self, idle_ttl: Duration) -> Result<(), String> {
+        if idle_ttl.is_zero() {
+            return Err("wallet idle timeout must be positive".into());
+        }
+        let now = Instant::now();
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| "wallet session vault lock is poisoned")?;
+        sessions.retain(|_, session| !session.expired(now));
+        for session in sessions.values_mut() {
+            session.last_used_at = now;
+            session.idle_ttl = idle_ttl.min(session.max_lifetime);
+        }
+        Ok(())
+    }
+
     pub fn lock_all(&self) -> Result<usize, String> {
         let mut sessions = self
             .sessions
@@ -521,5 +540,34 @@ mod tests {
         wrong_version[SESSION_PAYLOAD_MAGIC.len()] = SESSION_PAYLOAD_VERSION + 1;
         assert!(WalletSessionSecrets::decode(&wrong_version).is_err());
         assert!(WalletSessionSecrets::decode(&encoded[..encoded.len() - 1]).is_err());
+    }
+    #[test]
+    fn trusted_activity_updates_idle_policy_without_reviving_expired_or_locked_sessions() {
+        let vault = WalletSessionVault::default();
+        vault
+            .unlock("live", "pubkey", &secrets(1, false), IDLE, MAX)
+            .unwrap();
+        vault
+            .unlock("expired", "pubkey", &secrets(2, false), IDLE, MAX)
+            .unwrap();
+        vault
+            .sessions
+            .lock()
+            .unwrap()
+            .get_mut("expired")
+            .unwrap()
+            .last_used_at = Instant::now() - Duration::from_secs(31);
+        vault.touch_all(Duration::from_secs(45)).unwrap();
+        assert!(vault.status("expired").unwrap().is_none());
+        assert_eq!(
+            vault.sessions.lock().unwrap()["live"].idle_ttl,
+            Duration::from_secs(45)
+        );
+        vault.touch_all(Duration::from_secs(3600)).unwrap();
+        assert_eq!(vault.sessions.lock().unwrap()["live"].idle_ttl, MAX);
+        vault.lock_all().unwrap();
+        vault.touch_all(IDLE).unwrap();
+        assert!(vault.status("live").unwrap().is_none());
+        assert!(vault.touch_all(Duration::ZERO).is_err());
     }
 }

@@ -8,7 +8,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-bip32 = { version = "0.5", features = ["secp256k1"] }
+bip32 = { version = "0.6", features = ["secp256k1", "alloc"] }
 bip39 = { version = "2", features = ["zeroize"] }
 bitcoin = { version = "0.32", features = ["serde"] }
 base64 = "0.22"

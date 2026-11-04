@@ -497,3 +497,19 @@ body.passkey-page { width: 100%; min-width: 0; min-height: 100vh; }
 .passkey-card > button { width: 100%; margin-top: 12px; }
 .passkey-progress { display: flex; align-items: center; justify-content: center; gap: 8px; }
 @media (max-height: 560px) { .passkey-card { margin: 8px auto; padding: 16px; } }
+
+.wallet-name-heading { display:flex; align-items:center; gap:6px; }
+.wallet-name-heading h3 { flex:1; min-width:0; }
+.wallet-name-heading .icon-button { flex-shrink:0; }
+.wallet-rename-form label { margin:0; font-size:11px; }
+.wallet-rename-form input { min-width:0; padding:8px; font-size:13px; }
+.wallet-rename-form .modal-actions { gap:6px; margin-top:8px; }
+.wallet-rename-form .modal-actions button { padding:8px; min-width:0; font-size:12px; }
+.pending-requests { margin:10px 0; padding:12px; border:1px solid var(--border); border-radius:14px; background:var(--surface-2); }
+.pending-requests summary { cursor:pointer; font-size:13px; font-weight:600; }
+.request-count { display:inline-grid; place-items:center; min-width:22px; height:22px; padding:0 5px; margin-right:7px; border-radius:7px; background:#2563eb; color:white; }
+.pending-request { display:flex; align-items:center; gap:8px; padding:10px 0 0; }
+.pending-request > div { flex:1; min-width:0; display:grid; gap:3px; }
+.pending-request strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
+.pending-request small { color:var(--muted); font-size:11px; }
+.pending-request button { flex-shrink:0; font-size:12px; padding:7px 10px; }

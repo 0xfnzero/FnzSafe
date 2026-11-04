@@ -1349,6 +1349,8 @@ interface DappTransactionInstructionPreview {
   program_id: string;
   account_count: number;
   data_bytes: number;
+  details: [string, string][];
+  warnings: string[];
 }
 
 interface DappTransactionPreview {
@@ -1373,6 +1375,7 @@ interface DappEvmSignPreview {
   app_url: string;
   method: string;
   summary: string;
+  details: [string, string][];
   warnings: string[];
 }
 
@@ -3915,6 +3918,9 @@ export default function Home() {
   const [unlockPasswordVisible, setUnlockPasswordVisible] = useState(false);
   const [unlockError, setUnlockError] = useState<string | null>(null);
   const [unlockBusy, setUnlockBusy] = useState(false);
+  const [securityLockState, setSecurityLockState] = useState<"locked" | "locking" | "failed" | "stopped">("locked");
+  const securityLockPendingRef = useRef(false);
+  const securityLockEpochRef = useRef(0);
   const autoLockDeadlineRef = useRef<number | null>(null);
   const [currentWalletId, setCurrentWalletId] = useState("");
   const [currentWalletNetwork, setCurrentWalletNetwork] = useState("solana");
@@ -3964,6 +3970,7 @@ export default function Home() {
   const [dappCategory, setDappCategory] = useState<DappCategoryId>("trend");
   const [dappSignBusy, setDappSignBusy] = useState(false);
   const [dappTransactionPreview, setDappTransactionPreview] = useState<DappTransactionPreview | null>(null);
+  const [dappRiskAcknowledged, setDappRiskAcknowledged] = useState(false);
   const [dappEvmSignPreview, setDappEvmSignPreview] = useState<DappEvmSignPreview | null>(null);
   const [dappTransactionPreviewError, setDappTransactionPreviewError] = useState<string | null>(null);
   const [dappTransactionPreviewLoading, setDappTransactionPreviewLoading] = useState(false);
@@ -4981,13 +4988,11 @@ export default function Home() {
   }, []);
 
   const lockApplication = useCallback(() => {
-    if (wallets.length === 0) return;
+    if (wallets.length === 0 || securityLockPendingRef.current) return;
+    securityLockPendingRef.current = true;
+    securityLockEpochRef.current++;
+    setSecurityLockState("locking");
     applicationLockedRef.current = true;
-    void apiFetch("wallet/session/lock-all", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    }).catch(() => undefined);
     clearPasswordPromptSecrets();
     setPasswordPrompt(null);
     setExportedPrivateKey(null);
@@ -5020,9 +5025,26 @@ export default function Home() {
     programKeypairBytesRef.current = null;
     setFormData((previous) => stripSensitiveFormFields(previous) as FormState);
     setApplicationLocked(true);
-    if (isTauriWebview()) {
-      void enqueueDappConnectionOperation(() => invoke("dapp_pause_connections")).catch(() => undefined);
-    }
+    void (async () => {
+      try {
+        if (isTauriWebview()) {
+          const status = await invoke<string>("lock_wallet_security_state");
+          if (status !== "locked" && status !== "backend-stopped") throw new Error("锁定状态未确认");
+          setSecurityLockState(status === "backend-stopped" ? "stopped" : "locked");
+          if (status === "backend-stopped") setUnlockError("后端未响应，已终止后端以清除密钥。请重新启动 FnzSafe 后解锁。");
+        } else {
+          const response = await apiFetch("wallet/session/lock-all", {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: "{}", signal: AbortSignal.timeout(6000),
+          });
+          const result = await response.json();
+          if (!response.ok || result.status !== "locked") throw new Error("后端未确认锁定");
+          setSecurityLockState("locked");
+        }
+      } catch (error) {
+        setSecurityLockState("failed");
+        setUnlockError(errorMessage(error, "无法确认后端已锁定，请重试或关闭应用及后端。"));
+      } finally { securityLockPendingRef.current = false; }
+    })();
   }, [clearPasswordPromptSecrets, wallets.length]);
 
   useEffect(() => {
@@ -5032,9 +5054,17 @@ export default function Home() {
       autoLockDeadlineRef.current = null;
       return;
     }
+    let lastBackendActivity = 0;
     const resetDeadline = () => {
-      if (applicationLocked) return;
+      if (applicationLocked || applicationLockedRef.current) return;
       autoLockDeadlineRef.current = nextAutoLockDeadline(Date.now(), appPreferences.autoLockMinutes);
+      if (Date.now() - lastBackendActivity >= 5000) {
+        lastBackendActivity = Date.now();
+        void apiFetch("wallet/session/activity", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ idle_minutes: appPreferences.autoLockMinutes }),
+        }).catch(() => undefined);
+      }
     };
     const checkDeadline = () => {
       if (!applicationLocked && hasAutoLockExpired(autoLockDeadlineRef.current, Date.now())) {
@@ -5098,7 +5128,8 @@ export default function Home() {
   }, [applicationLocked, currentWalletId, lockApplication]);
 
   const unlockWithPassword = useCallback(async () => {
-    if (wallets.length === 0 || !unlockPassword) return;
+    if (wallets.length === 0 || !unlockPassword || securityLockPendingRef.current || securityLockState !== "locked") return;
+    const securityEpoch = securityLockEpochRef.current;
     setUnlockError(null);
     setUnlockBusy(true);
     try {
@@ -5115,6 +5146,7 @@ export default function Home() {
           tf("features.settings.unlockInconsistent", "部分历史钱包尚未使用统一密码，请先完成密码迁移"),
         ));
       }
+      if (securityEpoch !== securityLockEpochRef.current) throw new Error("解锁已被后续锁定取消");
       // Clear the lock gate before resume so deferred connect/sign events are shown.
       applicationLockedRef.current = false;
       try {
@@ -5139,7 +5171,7 @@ export default function Home() {
     } finally {
       setUnlockBusy(false);
     }
-  }, [appPreferences.autoLockMinutes, tf, unlockPassword, wallets]);
+  }, [appPreferences.autoLockMinutes, tf, unlockPassword, wallets, securityLockState]);
 
   const saveAddressBookEntry = useCallback(async () => {
     if (!addressBookEditor) return;
@@ -5486,7 +5518,8 @@ export default function Home() {
   }, [biometricStatusFor, refreshBiometricWalletStatus, supportsBiometricWallet, t]);
 
   const unlockWithBiometric = useCallback(async () => {
-    if (!effectiveWallet) return;
+    if (!effectiveWallet || securityLockPendingRef.current || securityLockState !== "locked") return;
+    const securityEpoch = securityLockEpochRef.current;
     setUnlockError(null);
     setUnlockBusy(true);
     try {
@@ -5498,6 +5531,7 @@ export default function Home() {
           tf("features.settings.unlockInconsistent", "部分历史钱包尚未使用统一密码，请先完成密码迁移"),
         ));
       }
+      if (securityEpoch !== securityLockEpochRef.current) throw new Error("解锁已被后续锁定取消");
       // Clear the lock gate before resume so deferred connect/sign events are shown.
       applicationLockedRef.current = false;
       try {
@@ -5520,7 +5554,7 @@ export default function Home() {
     } finally {
       setUnlockBusy(false);
     }
-  }, [appPreferences.autoLockMinutes, effectiveWallet, tf, unlockAllWithBiometricNative, wallets.length]);
+  }, [appPreferences.autoLockMinutes, effectiveWallet, tf, unlockAllWithBiometricNative, wallets.length, securityLockState]);
 
   const deleteBiometricWalletPassword = useCallback(async (wallet: SavedWallet, options: { quiet?: boolean } = {}) => {
     if (!isTauriWebview()) return;
@@ -5606,6 +5640,7 @@ export default function Home() {
         width: 0,
         height: 0,
       }).catch(() => {});
+      setDappRiskAcknowledged(false);
       setDappSignRequest(request);
       setDappTransactionPreview(null);
       setDappEvmSignPreview(null);
@@ -5618,16 +5653,16 @@ export default function Home() {
           : tf("features.dapp-store.transactionRequestToast", "DApp 发起了交易签名请求"),
       );
     };
-    void listen<DappConnectRequestEvent>("dapp://connect-request", (event) => {
-      showConnectRequest(event.payload);
+    void listen<DappConnectRequestEvent>("dapp://connect-request", () => {
+      void reconcilePendingRequests();
     }).then((cleanup) => {
       if (cancelled) cleanup();
       else unlistenConnect = cleanup;
     }).catch(() => {
       // The web build has no Tauri event bridge.
     });
-    void listen<DappSignRequestEvent>("dapp://sign-request", (event) => {
-      showSignRequest(event.payload);
+    void listen<DappSignRequestEvent>("dapp://sign-request", () => {
+      void reconcilePendingRequests();
     }).then((cleanup) => {
       if (cancelled) cleanup();
       else unlisten = cleanup;
@@ -11674,8 +11709,10 @@ export default function Home() {
   };
 
   const approveDappSignRequest = async () => {
-    const request = dappSignRequest;
-    if (!request) return;
+    const displayedRequest = dappSignRequest;
+    if (!displayedRequest) return;
+    let request: DappSignRequestEvent = displayedRequest;
+    if (!request || applicationLockedRef.current || dappSignBusy) return;
     const isEvmRequest = request.wallet_family === "evm";
     const wallet = wallets.find((item) => isEvmRequest
       ? item.evm_address?.toLowerCase() === request.wallet_public_key.toLowerCase()
@@ -11699,11 +11736,18 @@ export default function Home() {
         return;
       }
     }
+    if ((isEvmRequest || !isMessageSignature) && (isEvmRequest ? dappEvmSignPreview?.warnings.length : dappTransactionPreview?.warnings.length) && !dappRiskAcknowledged) {
+      toast.error("请先阅读并确认签名风险提示"); return;
+    }
     const shouldSubmit = request.method === "sendTransaction"
       || request.method === "signAndSendTransaction"
       || request.method === "eth_sendTransaction";
     setDappSignBusy(true);
+    let claimed = false;
     try {
+      request = await invoke<DappSignRequestEvent>("dapp_claim_sign_request", { requestId: request.request_id, expected: request });
+      claimed = true;
+      if (applicationLockedRef.current) throw new Error("应用已锁定，请重新发起请求");
       const response = isEvmRequest
         ? await apiFetch("evm/dapp/submit", {
           method: "POST",
@@ -11770,6 +11814,9 @@ export default function Home() {
       setDappPreviewDetailsOpen(false);
       if (shouldSubmit) refreshWalletAfterMutation(wallet);
     } catch (error) {
+      // A claimed request is never retried: a broadcast may already have happened.
+      if (claimed) await resolveDappSignRequest(request, { approved: false, error: "Signing failed or was cancelled; request approval again" }).catch(() => undefined);
+      setDappSignRequest(null);
       toast.error(
         errorMessage(
           error,
@@ -29904,7 +29951,7 @@ export default function Home() {
           >
             <div className="text-center">
               <div className="mx-auto inline-flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-white/[0.06]"><Lock className="h-5 w-5" /></div>
-              <h2 className="mt-4 text-xl font-semibold">{tf("features.settings.lockedTitle", "FnzSafe 已锁定")}</h2>
+              <h2 className="mt-4 text-xl font-semibold">{securityLockState === "locking" ? "正在锁定密钥…" : securityLockState === "failed" ? "锁定尚未确认" : tf("features.settings.lockedTitle", "FnzSafe 已锁定")}</h2>
               <p className="mt-1 text-sm text-gray-500">{tf("features.settings.unlockHint", "输入统一钱包密码以解锁全部钱包")}</p>
             </div>
             <label className="block text-sm text-gray-300">
@@ -29941,9 +29988,10 @@ export default function Home() {
                 </span>
               )}
             </label>
-            <button type="submit" disabled={unlockBusy || !unlockPassword} className="h-11 w-full rounded-lg bg-white text-sm font-semibold text-black hover:bg-gray-200 disabled:opacity-40">{unlockBusy ? <span className="inline-flex items-center gap-2"><LoaderCircle className="h-4 w-4 animate-spin" />{t("common.loading")}</span> : tf("features.settings.unlock", "解锁")}</button>
+            <button type="submit" disabled={unlockBusy || !unlockPassword || securityLockState !== "locked"} className="h-11 w-full rounded-lg bg-white text-sm font-semibold text-black hover:bg-gray-200 disabled:opacity-40">{unlockBusy ? <span className="inline-flex items-center gap-2"><LoaderCircle className="h-4 w-4 animate-spin" />{t("common.loading")}</span> : tf("features.settings.unlock", "解锁")}</button>
+            {securityLockState === "failed" && <button type="button" onClick={lockApplication} className="h-11 w-full rounded-lg border border-red-400/40">重试锁定</button>}
             {biometricConfiguredFor(effectiveWallet) && (
-              <button type="button" onClick={() => void unlockWithBiometric()} disabled={unlockBusy} className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg border border-white/10 text-sm text-gray-200 hover:bg-white/10 disabled:opacity-40"><Fingerprint className="h-4 w-4" />Touch ID</button>
+              <button type="button" onClick={() => void unlockWithBiometric()} disabled={unlockBusy || securityLockState !== "locked"} className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg border border-white/10 text-sm text-gray-200 hover:bg-white/10 disabled:opacity-40"><Fingerprint className="h-4 w-4" />Touch ID</button>
             )}
           </form>
         </div>
@@ -30531,6 +30579,7 @@ export default function Home() {
 	                          {dappTransactionPreview.warnings.map((warning) => (
 	                            <p key={warning} className="text-xs text-amber-100">{warning}</p>
 	                          ))}
+                          <label className="mt-2 flex items-start gap-2 text-xs text-amber-100"><input type="checkbox" checked={dappRiskAcknowledged} onChange={event => setDappRiskAcknowledged(event.target.checked)} />我已核对全部指令、账户和风险提示</label>
 	                        </div>
 	                      )}
 		                      <button
@@ -30554,12 +30603,13 @@ export default function Home() {
 		                          <div className="space-y-1">
 		                            <span className="text-xs text-sky-100/60">{tf("features.dapp-store.programs", "Programs")}</span>
 		                            <div className="flex flex-wrap gap-1.5">
-		                              {dappTransactionPreview.instructions.slice(0, 6).map((instruction) => (
+		                              {dappTransactionPreview.instructions.map((instruction) => (
 		                                <code
 		                                  key={`${instruction.index}-${instruction.program_id}`}
 		                                  className="max-w-full rounded bg-black/30 px-2 py-1 text-[11px] text-sky-50/90"
 		                                >
 		                                  #{instruction.index} {instruction.program_id} · {instruction.account_count} acc · {instruction.data_bytes} bytes
+                                          {instruction.details?.map(([label, value]) => <span className="block whitespace-pre-wrap break-all" key={label}>{label}: {value}</span>)}
 		                                </code>
 		                              ))}
 		                            </div>
@@ -30574,7 +30624,7 @@ export default function Home() {
 		                            <div>
 		                              <span className="text-sky-100/60">{tf("features.dapp-store.writableAccounts", "Writable accounts")}</span>
 		                              <code className="mt-1 block max-h-16 overflow-auto whitespace-pre-wrap break-all text-[11px] text-sky-50/90">
-		                                {dappTransactionPreview.writable_accounts.slice(0, 8).join("\n")}
+		                                {dappTransactionPreview.writable_accounts.join("\n")}
 		                              </code>
 		                            </div>
 		                          </div>
@@ -30595,11 +30645,13 @@ export default function Home() {
                   {dappEvmSignPreview && (
                     <div className="mt-2 space-y-2">
                       <p className="text-xs text-sky-50/90">{dappEvmSignPreview.summary}</p>
+                      <dl className="space-y-2 text-xs">{dappEvmSignPreview.details?.map(([label, value]) => <div key={label}><dt className="text-sky-100/60">{label}</dt><dd className="break-all whitespace-pre-wrap text-sky-50">{value}</dd></div>)}</dl>
                       {dappEvmSignPreview.warnings.map((warning) => (
                         <p key={warning} className="rounded border border-amber-300/20 bg-amber-300/10 p-2 text-xs text-amber-100">
                           {warning}
                         </p>
                       ))}
+                      {dappEvmSignPreview.warnings.length > 0 && <label className="flex items-start gap-2 text-xs text-amber-100"><input type="checkbox" checked={dappRiskAcknowledged} onChange={event => setDappRiskAcknowledged(event.target.checked)} />我已核对以上签名内容，并了解未验证或未模拟的风险</label>}
                       <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-all rounded bg-black/25 p-2 text-[11px] text-sky-50/80">
                         {formatDappPayloadForDisplay(dappSignRequest.payload_json)}
                       </pre>

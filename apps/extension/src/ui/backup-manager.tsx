@@ -17,13 +17,18 @@ export function BackupManager({ status, onClose, onDone }: { status: WalletStatu
   const [result, setResult] = useState<ExportResult | null>(null), [qr, setQr] = useState(''), [segments, setSegments] = useState(3);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const generation = useRef(0);
-  function clear() { generation.current++; setResult(null); setQr(''); setPassword(''); setBackupPassword(''); setConfirm(''); setNotice(''); }
-  useEffect(() => () => { generation.current++; }, []);
+  const clearClipboard = () => { void api({ type: 'CLEAR_BACKUP_CLIPBOARD' }).catch(() => setError('Clipboard cleanup unavailable. Clear the clipboard manually.')); };
+  function clear() { clearClipboard(); generation.current++; setResult(null); setQr(''); setPassword(''); setBackupPassword(''); setConfirm(''); setNotice(''); }
+  useEffect(() => {
+    const hidden = () => { if (document.visibilityState === 'hidden') clear(); };
+    document.addEventListener('visibilitychange', hidden);
+    return () => { generation.current++; document.removeEventListener('visibilitychange', hidden); void api({ type: 'CLEAR_BACKUP_CLIPBOARD' }).catch(() => undefined); };
+  }, []);
   useEffect(() => { clear(); }, [kind, mode, accountId, wallet.id]);
   useEffect(() => {
     if (!result) return;
     const timer = setTimeout(clear, 90000);
-    const check = setInterval(() => { void api<{ locked: boolean }>({ type: 'SESSION_STATUS' }).then(s => { if (s.locked) clear(); }).catch(clear); }, 1000);
+    const check = setInterval(() => { void api<{ locked: boolean }>({ type: 'SESSION_STATUS' }).then(s => { if (s.locked) clear(); void api<{ failed: boolean }>({ type: 'BACKUP_CLIPBOARD_STATUS' }).then(s => { if (s.failed) setError('Clipboard cleanup unavailable. Clear the clipboard manually.'); }).catch(() => undefined); }).catch(clear); }, 1000);
     return () => { clearTimeout(timer); clearInterval(check); };
   }, [result]);
   async function submit(e: React.FormEvent) {
@@ -40,7 +45,7 @@ export function BackupManager({ status, onClose, onDone }: { status: WalletStatu
     finally { setBusy(false); setPassword(''); setBackupPassword(''); setConfirm(''); }
   }
   async function copy(value: string) {
-    try { await navigator.clipboard.writeText(value); setNotice('Copied'); }
+    try { await api({ type: 'COPY_BACKUP_SECRET', value }); setNotice('Copied. Clipboard clears after 15 seconds if it still contains this backup.'); }
     catch { setError('Copy failed'); }
   }
   function download(value: string, suffix = '') {
@@ -65,7 +70,7 @@ export function BackupManager({ status, onClose, onDone }: { status: WalletStatu
     </>}
     </form>
     {result && <div className="backup-result">
-      <p className="fine-print">{t("Hidden automatically after 90 seconds. Clear the clipboard after saving.")}</p>
+      <p className="fine-print">{t("Hidden automatically after 90 seconds. Copied backups clear after 15 seconds while Chrome is running. Clipboard history and synced copies cannot be erased.")}</p>
       {result.address && <dl><dt>{t("Address")}</dt><dd>{result.address}</dd><dt>{t("Derivation path")}</dt><dd>{result.derivationPath ?? t('Imported key')}</dd></dl>}
       {mode === 'qr' && <img className="receive-qr" src={qr} alt={t("Secret QR code")} />}
       {mode === 'segments' ? <div className="backup-segments">{splitBackupSecret(result.value, segments).map((part, i) => <div key={i}><strong>{i + 1} / {segments}</strong><code>{part}</code><div className="modal-actions"><button onClick={() => void copy(part)}><Copy size={16} />{t("Copy")}</button><button onClick={() => download(part, `-part-${i + 1}-of-${segments}`)}><Download size={16} />{t("Download")}</button></div></div>)}</div> : <><textarea aria-label={t("Backup string")} readOnly rows={mode === 'encrypted' ? 5 : 3} value={result.value} spellCheck={false} /><div className="modal-actions"><button onClick={() => void copy(result.value)}><Copy size={16} />{t("Copy string")}</button><button onClick={() => download(result.value)}><Download size={16} />{t("Download file")}</button></div></>}

@@ -105,7 +105,7 @@ commands.allow = ["dapp_poll_sign_request"]
 [[permission]]
 identifier = "allow-resolve-dapp-sign-request"
 description = "Allow the main FnzSafe window to approve or reject a pending DApp signing request."
-commands.allow = ["resolve_dapp_sign_request"]
+commands.allow = ["resolve_dapp_sign_request", "dapp_claim_sign_request"]
 
 [[permission]]
 identifier = "allow-resolve-dapp-connect-request"
@@ -126,3 +126,8 @@ commands.allow = ["dapp_pause_connections", "dapp_resume_connections", "dapp_dis
 identifier = "allow-dapp-evm-rpc"
 description = "Allow read-only EVM RPC through the endpoint bound by the trusted wallet window. Signing and broadcasting remain separate."
 commands.allow = ["dapp_evm_rpc_request"]
+
+[[permission]]
+identifier = "allow-lock-wallet-security-state"
+description = "Allow only the main wallet window to lock backend keys or stop its owned backend on lock failure."
+commands.allow = ["lock_wallet_security_state"]

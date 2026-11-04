@@ -8,12 +8,12 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-bip32 = { version = "0.5", features = ["secp256k1"] }
+bip32 = { version = "0.6", features = ["secp256k1", "alloc"] }
 bip39 = { version = "2", features = ["zeroize"] }
 bs58 = { version = "0.5", features = ["check"] }
 fnzero-safe-chain-core = { workspace = true }
 hex = "0.4"
-k256 = { version = "0.13", features = ["ecdsa", "sha256"] }
+k256 = { version = "0.14", features = ["ecdsa", "sha256"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

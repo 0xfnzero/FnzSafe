@@ -32,6 +32,7 @@
     "allow-biometric-wallet-delete-password",
     "allow-pick-source-directory",
     "allow-save-download-file",
-    "allow-open-download-file-location"
+    "allow-open-download-file-location",
+    "allow-lock-wallet-security-state"
   ]
 }

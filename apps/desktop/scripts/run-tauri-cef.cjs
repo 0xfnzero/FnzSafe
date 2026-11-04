@@ -1,6 +1,7 @@
 const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
+const os = require("node:os");
 
 const TAURI_REPOSITORY = "https://github.com/tauri-apps/tauri.git";
 const TAURI_TAG = "tauri-cef-v3.0.0-alpha.25";
@@ -66,4 +67,24 @@ if (!fs.existsSync(binaryPath) || installedVersion !== TAURI_TAG) {
   fs.writeFileSync(versionMarker, `${TAURI_TAG}\n`, "utf8");
 }
 
-run(binaryPath, process.argv.slice(2));
+const args = process.argv.slice(2);
+let entitlementDirectory;
+try {
+  if (process.platform === "darwin") {
+    const { macosKeychainOverride } = require("./macos-keychain-config.cjs");
+    const override = macosKeychainOverride(args, path.resolve(__dirname, ".."));
+    if (override) {
+      // The pinned CEF CLI accepts an entitlement file path, not an inline map.
+      entitlementDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "fnzsafe-entitlements-"));
+      const filename = path.join(entitlementDirectory, "entitlements.plist");
+      fs.writeFileSync(filename, JSON.stringify(override.bundle.macOS.entitlements), { mode: 0o600 });
+      const converted = spawnSync("/usr/bin/plutil", ["-convert", "xml1", filename], { encoding: "utf8" });
+      if (converted.error || converted.status !== 0) throw new Error("Unable to generate macOS signing entitlements");
+      override.bundle.macOS.entitlements = filename;
+      args.push("--config", JSON.stringify(override));
+    }
+  }
+  run(binaryPath, args);
+} finally {
+  if (entitlementDirectory) fs.rmSync(entitlementDirectory, { recursive: true, force: true });
+}

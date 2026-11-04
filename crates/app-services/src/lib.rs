@@ -837,6 +837,7 @@ pub struct EvmDappSignPreview {
     pub app_url: String,
     pub method: String,
     pub summary: String,
+    pub details: Vec<(String, String)>,
     pub warnings: Vec<String>,
 }
 
@@ -1432,6 +1433,7 @@ impl From<evm::EvmDappSignPreview> for EvmDappSignPreview {
             app_url: value.app_url,
             method: value.method,
             summary: value.summary,
+            details: value.details,
             warnings: value.warnings,
         }
     }
@@ -2164,6 +2166,17 @@ pub fn evm_wallet_export_private_key(
     .map_err(map_evm_error)
 }
 
+pub fn evm_wallet_export_private_key_keystore(
+    req: EvmUnlockWalletRequest,
+) -> AppServiceResult<EvmWalletKeystore> {
+    evm::export_private_key_keystore(evm::EvmUnlockWalletRequest {
+        keystore_json: req.keystore_json,
+        password: req.password,
+    })
+    .map(Into::into)
+    .map_err(map_evm_error)
+}
+
 pub fn import_keystore(req: ImportKeystoreRequest) -> AppServiceResult<WalletKeystore> {
     let name = require_non_empty(&req.name, "wallet name")?;
     require_non_empty(&req.keystore_json, "keystore json")?;
@@ -2586,6 +2599,18 @@ pub fn preview_pump_trade(req: PumpPreviewRequest) -> AppServiceResult<SigningPr
     })
 }
 
+pub fn validate_solana_message_bytes(payload: &[u8]) -> AppServiceResult<()> {
+    if let Ok(message) = bincode::deserialize::<solana_sdk::message::VersionedMessage>(payload) {
+        if message.serialize() == payload {
+            return Err(AppServiceError::mobile(
+                MobileErrorCode::InvalidInput,
+                "Transaction messages must use transaction approval, not message signing",
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub fn preview_dapp_signing(req: DappSignPreviewRequest) -> AppServiceResult<SigningPreview> {
     let wallet_public_key = require_pubkey(&req.wallet_public_key, "wallet public key")?;
     let app_name = require_non_empty(&req.app_name, "dApp name")?;
@@ -2593,6 +2618,12 @@ pub fn preview_dapp_signing(req: DappSignPreviewRequest) -> AppServiceResult<Sig
     let method = require_non_empty(&req.method, "dApp method")?;
     let payload_base64 = require_non_empty(&req.payload_base64, "signing payload")?;
     let wallet_public_key = wallet_public_key.to_string();
+    if matches!(method.as_str(), "signMessage" | "personal_sign") {
+        let bytes = BASE64.decode(&payload_base64).map_err(|_| {
+            AppServiceError::mobile(MobileErrorCode::InvalidInput, "Invalid message encoding")
+        })?;
+        validate_solana_message_bytes(&bytes)?;
+    }
     let preview_id = solana_dapp_preview_id(&SolanaDappPreviewIdInput {
         network: req.network,
         wallet_public_key: &wallet_public_key,
@@ -2665,6 +2696,7 @@ pub fn submit_dapp_signing(req: DappSignSubmitRequest) -> AppServiceResult<DappS
                 ));
             }
 
+            validate_solana_message_bytes(&payload)?;
             let signature = keypair.try_sign_message(&payload).map_err(|_| {
                 AppServiceError::mobile(MobileErrorCode::InvalidInput, "Message signing failed")
             })?;
@@ -3969,5 +4001,14 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.to_mobile_error().code, MobileErrorCode::TotpInvalid);
+    }
+    #[test]
+    fn message_signing_rejects_transaction_messages() {
+        let legacy = solana_sdk::message::Message::default();
+        assert!(validate_solana_message_bytes(&legacy.serialize()).is_err());
+        let versioned =
+            solana_sdk::message::VersionedMessage::V0(solana_sdk::message::v0::Message::default());
+        assert!(validate_solana_message_bytes(&versioned.serialize()).is_err());
+        assert!(validate_solana_message_bytes(b"Sign in to example.invalid").is_ok());
     }
 }

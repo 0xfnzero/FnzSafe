@@ -14,6 +14,7 @@ await Promise.all([
   cp(resolve(root, 'manifest.json'), resolve(dist, 'manifest.json')),
   cp(resolve(root, 'popup.html'), resolve(dist, 'popup.html')),
   cp(resolve(root, 'approval.html'), resolve(dist, 'approval.html')),
+  cp(resolve(root, 'clipboard.html'), resolve(dist, 'clipboard.html')),
   cp(resolve(root, 'passkey.html'), resolve(dist, 'passkey.html')),
   cp(resolve(root, 'src/ui/styles.css'), resolve(dist, 'styles.css')),
   // Toolbar icons have their own crop; desktop app padding makes 16px icons too small.
@@ -23,6 +24,7 @@ await Promise.all([
 
 const options = {
   entryPoints: {
+    clipboard: resolve(root, 'src/clipboard-offscreen.ts'),
     background: resolve(root, 'src/background.ts'),
     content: resolve(root, 'src/content.ts'),
     inpage: resolve(root, 'src/inpage.ts'),

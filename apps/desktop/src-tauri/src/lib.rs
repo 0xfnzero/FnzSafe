@@ -15,7 +15,7 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{
-    atomic::{AtomicBool, AtomicU16, Ordering},
+    atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering},
     Mutex,
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -148,6 +148,7 @@ struct DappConnectRequestEvent {
 
 #[derive(Clone)]
 struct DappPendingRequest {
+    claimed: bool,
     webview_label: String,
     event: DappSignRequestEvent,
     result: Option<DappSignResult>,
@@ -428,6 +429,9 @@ fn terminate_recorded_process(path: &Path) -> Result<(), String> {
 }
 
 struct DesktopApiProcess {
+    request_gate: tokio::sync::RwLock<()>,
+    security_epoch: AtomicU64,
+    lock_pending: AtomicBool,
     child: Mutex<Option<Child>>,
     port: AtomicU16,
     pid_file: PathBuf,
@@ -457,6 +461,9 @@ impl DesktopApiProcess {
             env::remove_var(name);
         }
         Self {
+            request_gate: tokio::sync::RwLock::new(()),
+            security_epoch: AtomicU64::new(0),
+            lock_pending: AtomicBool::new(false),
             child: Mutex::new(None),
             port: AtomicU16::new(FNZERO_SAFE_API_PORT),
             pid_file,
@@ -906,13 +913,18 @@ fn biometric_touch_id_authenticate() -> Result<(), String> {
 #[cfg(target_os = "macos")]
 mod biometric_wallet_keychain {
     use super::{biometric_error_message, BIOMETRIC_WALLET_PASSWORD_SERVICE};
+    use core_foundation::data::CFData;
     use security_framework::{
-        item::{ItemClass, ItemSearchOptions},
+        access_control::{ProtectionMode, SecAccessControl},
+        item::{update_item, ItemClass, ItemSearchOptions, ItemUpdateOptions, ItemUpdateValue},
         passwords::{
-            delete_generic_password, generic_password, set_generic_password, PasswordOptions,
+            delete_generic_password, delete_generic_password_options, generic_password,
+            set_generic_password_options, AccessControlOptions, PasswordOptions,
         },
     };
+    use zeroize::Zeroizing;
 
+    const PROTECTED_SERVICE: &str = "dev.fnzero-safe.wallet.password.v8.biometry";
     const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
     const ERR_SEC_AUTH_FAILED: i32 = -25293;
     const ERR_SEC_INTERACTION_NOT_ALLOWED: i32 = -25308;
@@ -928,6 +940,9 @@ mod biometric_wallet_keychain {
             // ad-hoc-signed build may own this item, so never let a metadata
             // lookup display a macOS password prompt during application start.
             .skip_authenticated_items(true);
+        if service == PROTECTED_SERVICE {
+            query.ignore_legacy_keychains();
+        }
         match query.search() {
             Ok(items) => Ok(!items.is_empty()),
             Err(error)
@@ -942,40 +957,96 @@ mod biometric_wallet_keychain {
         }
     }
 
+    fn protected_options(account: &str) -> PasswordOptions {
+        let mut options = PasswordOptions::new_generic_password(PROTECTED_SERVICE, account);
+        options.use_protected_keychain();
+        options.set_access_synchronized(Some(false));
+        options
+    }
+
     pub fn configured(primary_account: &str) -> Result<bool, String> {
-        exists(BIOMETRIC_WALLET_PASSWORD_SERVICE, primary_account)
+        Ok(exists(PROTECTED_SERVICE, primary_account)?
+            || exists(BIOMETRIC_WALLET_PASSWORD_SERVICE, primary_account)?)
     }
 
-    pub fn store(primary_account: &str, password: &str) -> Result<(), String> {
-        let _ = delete_generic_password(BIOMETRIC_WALLET_PASSWORD_SERVICE, primary_account);
-        set_generic_password(
-            BIOMETRIC_WALLET_PASSWORD_SERVICE,
-            primary_account,
-            password.as_bytes(),
-        )
-        .map_err(biometric_error_message)?;
-        if !configured(primary_account)? {
-            return Err("Touch ID 凭据保存后无法在 Keychain 中确认".to_string());
-        }
-        Ok(())
-    }
-
-    pub fn load(primary_account: &str) -> Result<String, String> {
-        let options = PasswordOptions::new_generic_password(
-            BIOMETRIC_WALLET_PASSWORD_SERVICE,
-            primary_account,
-        );
-        let password = generic_password(options).map_err(biometric_error_message)?;
-        String::from_utf8(password)
-            .map_err(|_| "Keychain 凭据不是有效的 UTF-8 钱包密码".to_string())
-    }
-
-    pub fn delete(primary_account: &str) -> Result<(), String> {
-        match delete_generic_password(BIOMETRIC_WALLET_PASSWORD_SERVICE, primary_account) {
+    fn remove_legacy(account: &str) -> Result<(), String> {
+        match delete_generic_password(BIOMETRIC_WALLET_PASSWORD_SERVICE, account) {
             Ok(()) => Ok(()),
             Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(()),
             Err(error) => Err(biometric_error_message(error)),
         }
+    }
+
+    pub fn store(primary_account: &str, password: &str) -> Result<(), String> {
+        let mut query = ItemSearchOptions::new();
+        query
+            .class(ItemClass::generic_password())
+            .service(PROTECTED_SERVICE)
+            .account(primary_account)
+            .ignore_legacy_keychains();
+        let mut update = ItemUpdateOptions::new();
+        update.set_value(ItemUpdateValue::Data(CFData::from_buffer(
+            password.as_bytes(),
+        )));
+        // Update only existing items, preserving their ACL. Never use an upsert
+        // without an ACL: a deletion between lookup and write could create an
+        // unprotected credential.
+        match update_item(&query, &update) {
+            Ok(()) => return remove_legacy(primary_account),
+            Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => {}
+            Err(error) => return Err(biometric_error_message(error)),
+        }
+        let control = SecAccessControl::create_with_protection(
+            Some(ProtectionMode::AccessibleWhenUnlockedThisDeviceOnly),
+            AccessControlOptions::BIOMETRY_CURRENT_SET.bits(),
+        )
+        .map_err(biometric_error_message)?;
+        let mut options = protected_options(primary_account);
+        options.set_access_control(control);
+        // Commit the protected replacement before removing legacy convenience credentials.
+        set_generic_password_options(password.as_bytes(), options)
+            .map_err(biometric_error_message)?;
+        remove_legacy(primary_account)?;
+        Ok(())
+    }
+
+    // Called only after the existing Touch ID prompt. New credentials additionally
+    // require OS-enforced biometric authorization on the actual Keychain read.
+    pub fn load(primary_account: &str) -> Result<Zeroizing<String>, String> {
+        let bytes = match generic_password(protected_options(primary_account)) {
+            Ok(bytes) => {
+                let bytes = Zeroizing::new(bytes);
+                remove_legacy(primary_account)?;
+                bytes
+            }
+            Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => {
+                let bytes = Zeroizing::new(
+                    generic_password(PasswordOptions::new_generic_password(
+                        BIOMETRIC_WALLET_PASSWORD_SERVICE,
+                        primary_account,
+                    ))
+                    .map_err(biometric_error_message)?,
+                );
+                let password =
+                    std::str::from_utf8(&bytes).map_err(|_| "Keychain 凭据格式无效".to_string())?;
+                store(primary_account, password)?;
+                bytes
+            }
+            // A cancelled/failed protected read must never fall back to the old item.
+            Err(error) => return Err(biometric_error_message(error)),
+        };
+        let password =
+            std::str::from_utf8(&bytes).map_err(|_| "Keychain 凭据格式无效".to_string())?;
+        Ok(Zeroizing::new(password.to_owned()))
+    }
+
+    pub fn delete(primary_account: &str) -> Result<(), String> {
+        match delete_generic_password_options(protected_options(primary_account)) {
+            Ok(()) => {}
+            Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => {}
+            Err(error) => return Err(biometric_error_message(error)),
+        }
+        remove_legacy(primary_account)
     }
 }
 
@@ -1043,18 +1114,22 @@ async fn biometric_wallet_unlock_all(
     process: tauri::State<'_, DesktopApiProcess>,
     req: BiometricWalletRequest,
 ) -> Result<ProxyResponse, String> {
+    let security_epoch = process.security_epoch.load(Ordering::Acquire);
     let accounts = biometric_wallet_accounts(&req.wallet_id, &req.public_key)?;
     #[cfg(target_os = "macos")]
     {
         biometric_touch_id_authenticate()?;
-        let password = Zeroizing::new(biometric_wallet_keychain::load(&accounts.primary)?);
+        let password = biometric_wallet_keychain::load(&accounts.primary)?;
         let body = Zeroizing::new(
             serde_json::to_string(&BiometricUnlockAllBody {
                 password: password.as_str(),
             })
             .map_err(|error| format!("failed to encode biometric unlock request: {error}"))?,
         );
-        let response = proxy_api_request_inner(
+        if process.security_epoch.load(Ordering::Acquire) != security_epoch {
+            return Err("Unlock cancelled by wallet lock".into());
+        }
+        let response = guarded_proxy_api_request(
             process.inner(),
             "POST".to_string(),
             "wallets/unlock-all".to_string(),
@@ -1190,6 +1265,80 @@ async fn fetch_secure_session(
     Ok(session)
 }
 
+// Lock acknowledgement comes from the key-holding backend. If it cannot
+// acknowledge promptly, terminate only the child this application owns.
+#[tauri::command]
+async fn lock_wallet_security_state(
+    process: tauri::State<'_, DesktopApiProcess>,
+    state: tauri::State<'_, DappBridgeState>,
+) -> Result<String, String> {
+    lock_wallet_security_state_inner(process.inner(), state.inner()).await
+}
+
+async fn lock_wallet_security_state_inner(
+    process: &DesktopApiProcess,
+    state: &DappBridgeState,
+) -> Result<String, String> {
+    if process.lock_pending.swap(true, Ordering::AcqRel) {
+        return Err("Wallet lock is already in progress".into());
+    }
+    struct PendingLock<'a>(&'a AtomicBool);
+    impl Drop for PendingLock<'_> {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::Release);
+        }
+    }
+    let _pending = PendingLock(&process.lock_pending);
+    process.security_epoch.fetch_add(1, Ordering::AcqRel);
+    pause_dapp_connections(state)?;
+    // Drain in-flight signing/unlock calls before clearing sessions. If a call
+    // hangs, fall back to terminating the owned backend instead of acknowledging.
+    let exclusive =
+        tokio::time::timeout(Duration::from_secs(3), process.request_gate.write()).await;
+    for _ in 0..if exclusive.is_ok() { 2 } else { 0 } {
+        let response = tokio::time::timeout(
+            Duration::from_secs(3),
+            proxy_api_request_inner(
+                process,
+                "POST".into(),
+                "wallet/session/lock-all".into(),
+                None,
+                None,
+                Some(Zeroizing::new("{}".into())),
+                Some(true),
+            ),
+        )
+        .await;
+        if let Ok(Ok(response)) = response {
+            let body = serde_json::from_str::<serde_json::Value>(&response.body).ok();
+            if response.status == 200
+                && body
+                    .as_ref()
+                    .and_then(|v| v.get("status"))
+                    .and_then(|v| v.as_str())
+                    == Some("locked")
+            {
+                return Ok("locked".into());
+            }
+        }
+    }
+    let mut guard = process
+        .child
+        .lock()
+        .map_err(|_| "Cannot confirm lock: backend process lock failed")?;
+    let child = guard.as_mut().ok_or("Cannot confirm lock of externally managed backend. Stop the development backend and retry.")?;
+    let pid = child.id();
+    child
+        .kill()
+        .map_err(|e| format!("Cannot terminate backend to protect wallet: {e}"))?;
+    child
+        .wait()
+        .map_err(|e| format!("Cannot confirm backend termination: {e}"))?;
+    guard.take();
+    remove_owned_pid_file(&process.pid_file, pid);
+    Ok("backend-stopped".into())
+}
+
 /// HTTP from Rust → avoids WKWebView `fetch` URL issues with localhost /api.
 #[tauri::command]
 async fn proxy_api_request(
@@ -1201,7 +1350,7 @@ async fn proxy_api_request(
     body: Option<String>,
     secure_proxy: Option<bool>,
 ) -> Result<ProxyResponse, String> {
-    proxy_api_request_inner(
+    guarded_proxy_api_request(
         process.inner(),
         method,
         path,
@@ -1211,6 +1360,28 @@ async fn proxy_api_request(
         secure_proxy,
     )
     .await
+}
+
+async fn guarded_proxy_api_request(
+    process: &DesktopApiProcess,
+    method: String,
+    path: String,
+    query: Option<Vec<ProxyRequestQuery>>,
+    headers: Option<Vec<ProxyRequestHeader>>,
+    body: Option<Zeroizing<String>>,
+    secure_proxy: Option<bool>,
+) -> Result<ProxyResponse, String> {
+    let epoch = process.security_epoch.load(Ordering::Acquire);
+    if process.lock_pending.load(Ordering::Acquire) {
+        return Err("Wallet lock is in progress".into());
+    }
+    let _request = process.request_gate.read().await;
+    if process.lock_pending.load(Ordering::Acquire)
+        || process.security_epoch.load(Ordering::Acquire) != epoch
+    {
+        return Err("Request cancelled by wallet lock".into());
+    }
+    proxy_api_request_inner(process, method, path, query, headers, body, secure_proxy).await
 }
 
 async fn proxy_api_request_inner(
@@ -2397,6 +2568,7 @@ fn enqueue_dapp_sign_request(
     requests.insert(
         event.request_id.clone(),
         DappPendingRequest {
+            claimed: false,
             webview_label,
             event: event.clone(),
             result: None,
@@ -2491,7 +2663,7 @@ fn oldest_pending_dapp_sign_event(
     prune_expired_dapp_sign_requests(&mut requests, now_ms());
     Ok(requests
         .values()
-        .filter(|pending| pending.result.is_none())
+        .filter(|pending| pending.result.is_none() && !pending.claimed)
         .map(|pending| pending.event.clone())
         .min_by_key(|event| event.created_at_ms))
 }
@@ -4253,16 +4425,14 @@ async fn dapp_navigate_tab(
         .get(&label)
         .cloned();
     if let Some(session) = dapp_session.as_ref() {
-        if session.wallet_family == "solana" {
-            if allowed_dapp(&session.app_id)
+        if session.wallet_family == "solana"
+            && allowed_dapp(&session.app_id)
                 .as_ref()
                 .is_some_and(|dapp| !is_allowed_dapp_url(dapp, &url))
-            {
-                return Err(
-                    "connected Solana DApp tabs can only navigate inside their DApp domain"
-                        .to_string(),
-                );
-            }
+        {
+            return Err(
+                "connected Solana DApp tabs can only navigate inside their DApp domain".to_string(),
+            );
         }
     }
     let webview = app
@@ -5819,6 +5989,8 @@ async fn dapp_evm_rpc_request(
 }
 
 #[tauri::command]
+// Keep the published IPC argument shape; Tauri injects the first three handles.
+#[allow(clippy::too_many_arguments)]
 fn dapp_submit_sign_request(
     webview: DesktopWebview,
     app: DesktopAppHandle,
@@ -6020,6 +6192,67 @@ fn dapp_pending_connect_request(
     oldest_pending_dapp_connect_event(state.inner())
 }
 
+// The UI must claim the exact native record before any signing/broadcast side
+// effect. Events are wake-up notifications, never authorization data.
+fn claim_dapp_sign_request(
+    state: &DappBridgeState,
+    request_id: &str,
+    expected: &serde_json::Value,
+    current_time: u64,
+) -> Result<DappSignRequestEvent, String> {
+    ensure_dapp_connections_active(state)?;
+    let sessions = state
+        .sessions
+        .lock()
+        .map_err(|_| "dapp session lock poisoned")?;
+    let mut requests = state
+        .requests
+        .lock()
+        .map_err(|_| "dapp request lock poisoned")?;
+    ensure_dapp_connections_active(state)?;
+    let pending = requests
+        .get_mut(request_id)
+        .ok_or("dapp signing request is no longer pending")?;
+    ensure_dapp_result_pending(&pending.result, "dapp signing request")?;
+    if pending.claimed {
+        return Err("dapp signing request is already being processed".into());
+    }
+    if current_time.saturating_sub(pending.event.created_at_ms) > DAPP_REQUEST_TTL_MS {
+        return Err("dapp signing request expired".into());
+    }
+    if serde_json::to_value(&pending.event).map_err(|e| e.to_string())? != *expected {
+        return Err("dapp approval does not match the native pending request".into());
+    }
+    if pending.webview_label != "deep-link" {
+        let session = sessions
+            .get(&pending.webview_label)
+            .ok_or("dapp session no longer exists")?;
+        let same_origin = tauri::Url::parse(&session.url)
+            .ok()
+            .zip(tauri::Url::parse(&pending.event.app_url).ok())
+            .is_some_and(|(a, b)| a.origin() == b.origin());
+        if !same_origin
+            || session.wallet_public_key != pending.event.wallet_public_key
+            || session.wallet_family != pending.event.wallet_family
+            || session.network != pending.event.network
+            || session.opened_at_ms > pending.event.created_at_ms
+        {
+            return Err("dapp origin, account or network changed; request approval again".into());
+        }
+    }
+    pending.claimed = true;
+    Ok(pending.event.clone())
+}
+
+#[tauri::command]
+fn dapp_claim_sign_request(
+    state: tauri::State<'_, DappBridgeState>,
+    request_id: String,
+    expected: serde_json::Value,
+) -> Result<DappSignRequestEvent, String> {
+    claim_dapp_sign_request(state.inner(), &request_id, &expected, now_ms())
+}
+
 #[tauri::command]
 fn resolve_dapp_sign_request(
     state: tauri::State<'_, DappBridgeState>,
@@ -6042,6 +6275,9 @@ fn resolve_dapp_sign_request(
         return Err("dapp signing request expired".to_string());
     }
     ensure_dapp_result_pending(&pending.result, "dapp signing request")?;
+    if result.approved && !pending.claimed {
+        return Err("dapp signing request was not claimed before signing".into());
+    }
     if let Some(callback_url) = pending.event.callback_url.as_deref() {
         callback_target = Some(append_dapp_result_to_callback_url(
             callback_url,
@@ -6692,37 +6928,39 @@ fn desktop_api_binary_candidates(app: &DesktopApp) -> Vec<PathBuf> {
     let binary_name = desktop_api_binary_name();
     let mut candidates = Vec::new();
 
-    if let Ok(path) = env::var("FNZERO_SAFE_DESKTOP_API_BIN") {
-        let path = path.trim();
-        if !path.is_empty() {
-            candidates.push(PathBuf::from(path));
+    if cfg!(debug_assertions) {
+        if let Ok(path) = env::var("FNZERO_SAFE_DESKTOP_API_BIN") {
+            let path = path.trim();
+            if !path.is_empty() {
+                candidates.push(PathBuf::from(path));
+            }
         }
     }
-
     if let Ok(resource_dir) = app.path().resource_dir() {
         candidates.push(resource_dir.join(&binary_name));
         candidates.push(resource_dir.join("bin").join(&binary_name));
     }
 
-    if let Ok(exe) = env::current_exe() {
-        for ancestor in exe.ancestors() {
-            candidates.push(ancestor.join(&binary_name));
-            candidates.push(
-                ancestor
-                    .join("build-cache-fnzsafe/release")
-                    .join(&binary_name),
-            );
-            candidates.push(ancestor.join("build-cache/release").join(&binary_name));
-            candidates.push(ancestor.join("target/release").join(&binary_name));
+    if cfg!(debug_assertions) {
+        if let Ok(exe) = env::current_exe() {
+            for ancestor in exe.ancestors() {
+                candidates.push(ancestor.join(&binary_name));
+                candidates.push(
+                    ancestor
+                        .join("build-cache-fnzsafe/release")
+                        .join(&binary_name),
+                );
+                candidates.push(ancestor.join("build-cache/release").join(&binary_name));
+                candidates.push(ancestor.join("target/release").join(&binary_name));
+            }
+        }
+
+        for root in repository_root_candidates() {
+            candidates.push(root.join("build-cache-fnzsafe/release").join(&binary_name));
+            candidates.push(root.join("build-cache/release").join(&binary_name));
+            candidates.push(root.join("target/release").join(&binary_name));
         }
     }
-
-    for root in repository_root_candidates() {
-        candidates.push(root.join("build-cache-fnzsafe/release").join(&binary_name));
-        candidates.push(root.join("build-cache/release").join(&binary_name));
-        candidates.push(root.join("target/release").join(&binary_name));
-    }
-
     candidates.into_iter().filter(|path| path.is_file()).fold(
         Vec::<PathBuf>::new(),
         |mut unique, path| {
@@ -6732,6 +6970,69 @@ fn desktop_api_binary_candidates(app: &DesktopApp) -> Vec<PathBuf> {
             unique
         },
     )
+}
+
+fn ensure_bundled_backend_path(binary: &Path, resources: &Path) -> Result<(), String> {
+    let binary = binary
+        .canonicalize()
+        .map_err(|e| format!("无法验证后端路径: {e}"))?;
+    let resources = resources
+        .canonicalize()
+        .map_err(|e| format!("无法验证资源目录: {e}"))?;
+    if !binary.starts_with(resources) {
+        return Err("拒绝启动应用资源目录之外的后端".into());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn macos_signing_team(binary: &Path) -> Result<String, String> {
+    let status = Command::new("/usr/bin/codesign")
+        .args(["--verify", "--deep", "--strict"])
+        .arg(binary)
+        .output()
+        .map_err(|e| format!("无法验证后端签名: {e}"))?;
+    if !status.status.success() {
+        return Err("应用或后端的代码签名验证失败".into());
+    }
+    let details = Command::new("/usr/bin/codesign")
+        .args(["-d", "--verbose=4"])
+        .arg(binary)
+        .output()
+        .map_err(|e| format!("无法读取应用签名: {e}"))?;
+    if !details.status.success() {
+        return Err("无法读取应用签名".into());
+    }
+    String::from_utf8_lossy(&details.stderr)
+        .lines()
+        .find_map(|line| line.strip_prefix("TeamIdentifier="))
+        .filter(|team| !team.is_empty() && *team != "not set")
+        .map(str::to_owned)
+        .ok_or_else(|| "正式构建需要带开发者身份的应用和后端签名".into())
+}
+
+fn verify_desktop_backend(app: &DesktopApp, binary: &Path) -> Result<(), String> {
+    if cfg!(debug_assertions) {
+        return Ok(());
+    }
+    let resources = app.path().resource_dir().map_err(|e| e.to_string())?;
+    ensure_bundled_backend_path(binary, &resources)?;
+    #[cfg(target_os = "macos")]
+    {
+        let executable = env::current_exe().map_err(|e| e.to_string())?;
+        let bundle = executable
+            .parent()
+            .and_then(Path::parent)
+            .and_then(Path::parent)
+            .filter(|path| path.extension().is_some_and(|ext| ext == "app"))
+            .ok_or("正式构建必须从已签名的应用包启动")?;
+        // Tauri packages the API as a resource, not an independently signed
+        // sidecar. Verify the outer app's resource seal (including this API),
+        // rather than checking only the main executable or demanding a second
+        // signature the bundler does not produce.
+        macos_signing_team(bundle)?;
+    }
+    Ok(())
 }
 
 fn start_desktop_api_if_needed(
@@ -6758,6 +7059,7 @@ fn start_desktop_api_if_needed(
                 "未找到本地后端程序 {DESKTOP_API_BIN_NAME}，请先运行 npm run desktop:build 或 npm run desktop:dev"
             )
         })?;
+    verify_desktop_backend(app, &binary)?;
     let database_path = preferred_wallet_database_path(app);
     if let Some(parent) = database_path.parent() {
         std::fs::create_dir_all(parent)
@@ -6899,6 +7201,7 @@ pub fn run() {
         .manage(DesktopApiProcess::new(desktop_api_pid_file.clone()))
         .invoke_handler(tauri::generate_handler![
             proxy_api_request,
+            lock_wallet_security_state,
             translate_signal_text,
             open_external_url,
             open_url_in_chrome,
@@ -6962,6 +7265,7 @@ pub fn run() {
             dapp_poll_sign_request,
             dapp_pending_sign_request,
             dapp_pending_connect_request,
+            dapp_claim_sign_request,
             resolve_dapp_sign_request,
             resolve_dapp_connect_request,
             dapp_pause_connections,
@@ -7122,11 +7426,19 @@ mod tests {
         // deadlocks: pause/resume must also use async command dispatch.
         let source = include_str!("lib.rs");
         for command in [
-            "dapp_open_tab", "dapp_navigate_tab", "dapp_reload_tab",
-            "dapp_set_active_tab", "dapp_close_tab", "dapp_request_tab_text",
-            "dapp_pause_connections", "dapp_resume_connections",
+            "dapp_open_tab",
+            "dapp_navigate_tab",
+            "dapp_reload_tab",
+            "dapp_set_active_tab",
+            "dapp_close_tab",
+            "dapp_request_tab_text",
+            "dapp_pause_connections",
+            "dapp_resume_connections",
         ] {
-            assert!(source.contains(&format!("async fn {command}(")), "{command} must dispatch asynchronously");
+            assert!(
+                source.contains(&format!("async fn {command}(")),
+                "{command} must dispatch asynchronously"
+            );
         }
     }
 
@@ -8013,6 +8325,7 @@ mod tests {
         state.requests.lock().unwrap().insert(
             event.request_id.clone(),
             DappPendingRequest {
+                claimed: false,
                 webview_label: "deep-link".to_string(),
                 event: event.clone(),
                 result: None,
@@ -8316,5 +8629,260 @@ mod tests {
         assert!(callback.contains("public_key=11111111111111111111111111111111"));
         assert!(callback.contains("signature=sig123"));
         assert!(callback.contains("recent_blockhash=hash123"));
+    }
+    #[test]
+    fn dapp_claim_requires_exact_live_native_request_and_is_single_use() {
+        let state = DappBridgeState::default();
+        state.paused.store(false, Ordering::Release);
+        let now = now_ms();
+        let event = DappSignRequestEvent {
+            request_id: "claim-fixture".into(),
+            app_id: "fixture".into(),
+            app_name: "Fixture".into(),
+            app_url: "https://example.invalid".into(),
+            request_purpose: None,
+            method: "personal_sign".into(),
+            wallet_family: "evm".into(),
+            wallet_public_key: "fixture-account".into(),
+            network: "evm:1".into(),
+            transaction_base64: String::new(),
+            transaction_format: "evm-json".into(),
+            message_base64: None,
+            payload_json: Some("{\"message\":\"hello\"}".into()),
+            callback_url: None,
+            known_programs: Vec::new(),
+            created_at_ms: now,
+        };
+        let expected = serde_json::to_value(&event).unwrap();
+        assert!(claim_dapp_sign_request(&state, &event.request_id, &expected, now).is_err());
+        state.requests.lock().unwrap().insert(
+            event.request_id.clone(),
+            DappPendingRequest {
+                claimed: false,
+                webview_label: "dapp-tab-fixture".into(),
+                event: event.clone(),
+                result: None,
+            },
+        );
+        let mut session = DappSession {
+            app_id: event.app_id.clone(),
+            app_name: event.app_name.clone(),
+            url: event.app_url.clone(),
+            wallet_family: event.wallet_family.clone(),
+            wallet_public_key: event.wallet_public_key.clone(),
+            network: event.network.clone(),
+            opened_at_ms: now,
+            evm_rpc: None,
+        };
+        state
+            .sessions
+            .lock()
+            .unwrap()
+            .insert("dapp-tab-fixture".into(), session.clone());
+        let mut forged = expected.clone();
+        forged["payload_json"] = serde_json::json!("changed payload");
+        assert!(claim_dapp_sign_request(&state, &event.request_id, &forged, now).is_err());
+        assert!(claim_dapp_sign_request(
+            &state,
+            &event.request_id,
+            &expected,
+            now + DAPP_REQUEST_TTL_MS + 1
+        )
+        .is_err());
+        state.paused.store(true, Ordering::Release);
+        assert!(claim_dapp_sign_request(&state, &event.request_id, &expected, now).is_err());
+        state.paused.store(false, Ordering::Release);
+        session.network = "evm:137".into();
+        state
+            .sessions
+            .lock()
+            .unwrap()
+            .insert("dapp-tab-fixture".into(), session.clone());
+        assert!(claim_dapp_sign_request(&state, &event.request_id, &expected, now).is_err());
+        session.network = event.network.clone();
+        session.url = "https://other.invalid".into();
+        state
+            .sessions
+            .lock()
+            .unwrap()
+            .insert("dapp-tab-fixture".into(), session.clone());
+        assert!(claim_dapp_sign_request(&state, &event.request_id, &expected, now).is_err());
+        session.url = event.app_url.clone();
+        state
+            .sessions
+            .lock()
+            .unwrap()
+            .insert("dapp-tab-fixture".into(), session);
+        assert!(claim_dapp_sign_request(&state, &event.request_id, &expected, now).is_ok());
+        assert!(claim_dapp_sign_request(&state, &event.request_id, &expected, now).is_err());
+        assert!(oldest_pending_dapp_sign_event(&state).unwrap().is_none());
+    }
+
+    #[test]
+    fn remote_dapps_have_no_event_or_wallet_security_permissions() {
+        for raw in [
+            include_str!("../capabilities/dapp.json"),
+            include_str!("../capabilities/fomo.json"),
+        ] {
+            let cap: serde_json::Value = serde_json::from_str(raw).unwrap();
+            for permission in cap["permissions"].as_array().unwrap() {
+                let permission = permission.as_str().unwrap();
+                assert!(!permission.starts_with("core:"));
+                assert!(!permission.contains("resolve-dapp"));
+                assert!(!permission.contains("proxy-api"));
+                assert!(!permission.contains("lock-wallet"));
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn security_lock_requires_acknowledgement_or_terminates_owned_backend() {
+        use std::io::{Read, Write};
+        fn read_request(stream: &mut TcpStream) -> String {
+            let mut bytes = Vec::new();
+            let mut buffer = [0; 4096];
+            loop {
+                let count = stream.read(&mut buffer).unwrap();
+                assert!(
+                    count > 0,
+                    "fixture peer closed before completing the request"
+                );
+                bytes.extend_from_slice(&buffer[..count]);
+                assert!(bytes.len() < 64 * 1024);
+                if let Some(end) = bytes.windows(4).position(|b| b == b"\r\n\r\n") {
+                    let headers = std::str::from_utf8(&bytes[..end])
+                        .unwrap()
+                        .to_ascii_lowercase();
+                    let length = headers
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length:"))
+                        .map(|value| value.trim().parse::<usize>().unwrap())
+                        .unwrap_or(0);
+                    if bytes.len() >= end + 4 + length {
+                        return String::from_utf8(bytes).unwrap();
+                    }
+                }
+            }
+        }
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        for (status, body, expected, calls) in [
+            (200, "{\"status\":\"locked\"}", "locked", 1),
+            (500, "{\"error\":\"fixture failure\"}", "backend-stopped", 2),
+            (200, "{\"status\":\"unlocked\"}", "backend-stopped", 2),
+        ] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let key = PrivateDecryptingKey::generate(KeySize::Rsa2048).unwrap();
+            let der = AsDer::<PublicKeyX509Der<'static>>::as_der(&key.public_key()).unwrap();
+            let pem =
+                pem_rfc7468::encode_string("PUBLIC KEY", pem_rfc7468::LineEnding::LF, der.as_ref())
+                    .unwrap();
+            let session_body = serde_json::json!({"version":"1","public_key_pem":pem}).to_string();
+            let server = std::thread::spawn(move || {
+                for _ in 0..calls {
+                    let (mut session, _) = listener.accept().unwrap();
+                    session
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
+                    assert!(read_request(&mut session).starts_with("GET /api/secure/session"));
+                    write!(session, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", session_body.len(), session_body).unwrap();
+                    drop(session);
+                    let (mut stream, _) = listener.accept().unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
+                    // Drain the complete POST before closing. Closing with unread
+                    // request bytes can reset TCP and discard the fixture response.
+                    let request = read_request(&mut stream).to_ascii_lowercase();
+                    assert!(request.starts_with("post /api/wallet/session/lock-all"));
+                    assert!(request.contains("x-fnzero-safe-secure-body: 1"));
+                    assert!(request.contains("x-fnzero-safe-token:"));
+                    write!(stream, "HTTP/1.1 {status} Fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+                }
+            });
+            let process = DesktopApiProcess::new(
+                std::env::temp_dir().join(format!("fnzsafe-lock-fixture-{port}.pid")),
+            );
+            process.set_port(port);
+            *process.child.lock().unwrap() =
+                Some(Command::new("/bin/sleep").arg("30").spawn().unwrap());
+            let state = DappBridgeState::default();
+            state.paused.store(false, Ordering::Release);
+            assert_eq!(
+                runtime
+                    .block_on(lock_wallet_security_state_inner(&process, &state))
+                    .unwrap(),
+                expected
+            );
+            assert!(state.paused.load(Ordering::Acquire));
+            assert_eq!(
+                process.child.lock().unwrap().is_none(),
+                expected == "backend-stopped"
+            );
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn lock_rejects_inflight_and_future_requests_until_backend_acknowledges() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let process =
+                DesktopApiProcess::new(std::env::temp_dir().join("fnzsafe-unused-lock.pid"));
+            let state = DappBridgeState::default();
+            let held = process.request_gate.read().await;
+            let lock = lock_wallet_security_state_inner(&process, &state);
+            tokio::pin!(lock);
+            // Poll the lock until it waits for the already-running request.
+            assert!(tokio::time::timeout(Duration::from_millis(20), &mut lock)
+                .await
+                .is_err());
+            assert!(process.lock_pending.load(Ordering::Acquire));
+            assert!(guarded_proxy_api_request(
+                &process,
+                "POST".into(),
+                "wallets/unlock-all".into(),
+                None,
+                None,
+                None,
+                None
+            )
+            .await
+            .err()
+            .unwrap()
+            .contains("lock"));
+            drop(held);
+            // No owned child: an unreachable external backend must never count as locked.
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            process.set_port(listener.local_addr().unwrap().port());
+            drop(listener);
+            assert!(lock.await.unwrap_err().contains("externally managed"));
+            assert!(!process.lock_pending.load(Ordering::Acquire));
+        });
+    }
+    #[test]
+    fn backend_resource_boundary_rejects_external_paths_and_symlinks() {
+        let root = tempfile::tempdir().unwrap();
+        let resources = root.path().join("resources");
+        std::fs::create_dir(&resources).unwrap();
+        let bundled = resources.join("api");
+        std::fs::write(&bundled, b"fixture").unwrap();
+        assert!(ensure_bundled_backend_path(&bundled, &resources).is_ok());
+        let outside = root.path().join("outside");
+        std::fs::write(&outside, b"fixture").unwrap();
+        assert!(ensure_bundled_backend_path(&outside, &resources).is_err());
+        #[cfg(unix)]
+        {
+            let symlink = resources.join("link");
+            std::os::unix::fs::symlink(&outside, &symlink).unwrap();
+            assert!(ensure_bundled_backend_path(&symlink, &resources).is_err());
+        }
     }
 }

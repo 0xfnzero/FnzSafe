@@ -1,4 +1,4 @@
-import { formatUnits, getAddress, isAddress, type TransactionRequest } from 'ethers';
+import { formatUnits, getAddress, isAddress, TypedDataEncoder, type TypedDataDomain, type TypedDataField, type TransactionRequest } from 'ethers';
 import { isArcChain } from './chains';
 
 export const ARC_MIN_FEE_PER_GAS = 20_000_000_000n;
@@ -198,40 +198,98 @@ export function normalizeAndInspectTransaction(
   return { transaction, details, warnings: [...new Set(warnings)], danger };
 }
 
+interface InspectedTypedPayload {
+  domain: TypedDataDomain;
+  types: Record<string, TypedDataField[]>;
+  message: Record<string, unknown>;
+}
+
+function typedRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Typed data must contain an object');
+  return value as Record<string, unknown>;
+}
+
+/** Reject data that the signer would silently omit, including nested structs/arrays. */
+function validateTypedFields(types: Record<string, TypedDataField[]>, primaryType: string, message: unknown): void {
+  let remaining = 4096;
+  function visit(type: string, value: unknown, depth: number): void {
+    if (depth > 32 || --remaining < 0) throw new Error('Typed data is too complex');
+    const array = /^(.*)\[([0-9]*)\]$/.exec(type);
+    if (array) {
+      if (!Array.isArray(value) || (array[2] && value.length !== Number(array[2]))) throw new Error('Invalid typed-data array');
+      for (const member of value) visit(array[1], member, depth + 1);
+    } else if (Object.hasOwn(types, type)) {
+      const object = typedRecord(value);
+      const fields = types[type];
+      const names = new Set(fields.map(field => field.name));
+      if (Object.keys(object).some(name => !names.has(name)) || fields.some(field => !Object.hasOwn(object, field.name))) {
+        throw new Error('Typed data contains missing or unsigned fields');
+      }
+      for (const field of fields) visit(field.type, object[field.name], depth + 1);
+    }
+  }
+  visit(primaryType, message, 0);
+}
+
 export function inspectTypedData(
   value: unknown,
   expectedChainId: number,
-): { details: Array<{ label: string; value: string }>; warnings: string[]; danger: boolean } {
+): { payload: InspectedTypedPayload; details: Array<{ label: string; value: string }>; warnings: string[]; danger: boolean } {
   const text = typeof value === 'string' ? value : JSON.stringify(value);
   if (!text || text.length > 128 * 1024) throw new Error('Typed data is missing or too large');
-  const payload = JSON.parse(text) as {
-    primaryType?: unknown;
-    domain?: { name?: unknown; verifyingContract?: unknown; chainId?: unknown };
-    message?: Record<string, unknown>;
-  };
-  const suppliedChainId = parseQuantity(payload.domain?.chainId, 'Typed data chainId');
+  const input = typedRecord(JSON.parse(text));
+  if (Object.keys(input).some(key => !['primaryType', 'domain', 'types', 'message'].includes(key))) throw new Error('Unknown typed-data payload field');
+  const domain = typedRecord(input.domain);
+  const message = typedRecord(input.message);
+  const inputTypes = typedRecord(input.types);
+  for (const [name, fields] of Object.entries(inputTypes)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || ['__proto__', 'constructor', 'prototype'].includes(name) || !Array.isArray(fields)) throw new Error('Invalid typed-data schema');
+    const names = new Set<string>();
+    for (const value of fields) {
+      const field = typedRecord(value);
+      if (Object.keys(field).some(key => key !== 'name' && key !== 'type') || typeof field.name !== 'string' || typeof field.type !== 'string' ||
+          !/^[A-Za-z_][A-Za-z0-9_]*$/.test(field.name) || ['__proto__', 'constructor', 'prototype'].includes(field.name) || names.has(field.name)) throw new Error('Invalid typed-data field');
+      names.add(field.name);
+    }
+  }
+  const { EIP712Domain: declaredDomain, ...types } = inputTypes as Record<string, TypedDataField[]>;
+  const encoder = TypedDataEncoder.from(types);
+  if (input.primaryType !== encoder.primaryType) throw new Error('Typed data primaryType does not match the signing schema');
+  validateTypedFields(types, encoder.primaryType, message);
+  // Ethers validates primitive values and generates the exact domain schema it hashes.
+  const normalized = TypedDataEncoder.getPayload(domain, types, message);
+  if (declaredDomain && JSON.stringify(declaredDomain) !== JSON.stringify(normalized.types.EIP712Domain)) {
+    throw new Error('Typed data domain schema does not match the signing domain');
+  }
+  const payload: InspectedTypedPayload = { domain: normalized.domain, types, message: normalized.message };
+  const suppliedChainId = parseQuantity(payload.domain.chainId, 'Typed data chainId');
   if (suppliedChainId !== undefined && suppliedChainId !== BigInt(expectedChainId)) {
     throw new Error(`Typed data chainId ${suppliedChainId} does not match selected chain ${expectedChainId}`);
   }
-  const primaryType = typeof payload.primaryType === 'string' ? payload.primaryType : 'Unknown';
+  const primaryType = encoder.primaryType;
   const details = [{ label: 'Typed data type', value: primaryType }];
-  if (typeof payload.domain?.name === 'string') details.push({ label: 'Domain', value: payload.domain.name.slice(0, 128) });
-  if (typeof payload.domain?.verifyingContract === 'string' && isAddress(payload.domain.verifyingContract)) {
-    details.push({ label: 'Verifying contract', value: getAddress(payload.domain.verifyingContract) });
-  }
-  const spender = payload.message?.spender;
+  if (typeof payload.domain.name === 'string') details.push({ label: 'Domain', value: payload.domain.name });
+  if (typeof payload.domain.verifyingContract === 'string') details.push({ label: 'Verifying contract', value: getAddress(payload.domain.verifyingContract) });
+  if (suppliedChainId !== undefined) details.push({ label: 'Signing chain ID', value: suppliedChainId.toString() });
+  const spender = payload.message.spender;
   if (typeof spender === 'string' && isAddress(spender)) details.push({ label: 'Spender', value: getAddress(spender) });
   const warnings: string[] = [];
+  if (suppliedChainId === undefined) warnings.push('This signature is not bound to a chain ID. It may be usable on another chain.');
   const isPermit = /permit/i.test(primaryType);
   let danger = isPermit;
   if (isPermit) warnings.push('This signature may grant token spending permission without sending an on-chain transaction now.');
-  const amount = parseQuantity(payload.message?.value ?? payload.message?.amount, 'Typed data amount');
-  if (amount !== undefined) details.push({ label: 'Amount (raw)', value: approvalAmount(amount) });
-  if (isPermit && amount !== undefined && amount >= EFFECTIVELY_UNLIMITED) {
-    danger = true;
-    warnings.push('This typed-data signature grants an unlimited token allowance.');
+  for (const name of ['value', 'amount']) {
+    const field = types[primaryType].find(field => field.name === name);
+    if (!field || !/^uint(?:[0-9]+)?$/.test(field.type)) continue;
+    const amount = parseQuantity(payload.message[name], 'Typed data amount');
+    if (amount !== undefined) details.push({ label: name === 'value' && Object.hasOwn(payload.message, 'amount') ? 'Value (raw)' : 'Amount (raw)', value: approvalAmount(amount) });
+    if (isPermit && amount !== undefined && amount >= EFFECTIVELY_UNLIMITED) {
+      danger = true;
+      warnings.push('This typed-data signature grants an unlimited token allowance.');
+    }
   }
-  return { details, warnings, danger };
+  details.push({ label: 'Signing digest', value: TypedDataEncoder.hash(payload.domain, payload.types, payload.message) });
+  return { payload, details, warnings, danger };
 }
 
 export const securityConstants = Object.freeze({ MAX_UINT256 });

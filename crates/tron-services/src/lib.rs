@@ -235,7 +235,7 @@ fn derived_account(
     derivation_path: &str,
 ) -> ChainResult<DerivedAccount> {
     let verifying_key = signing_key.verifying_key();
-    let encoded = verifying_key.to_encoded_point(false);
+    let encoded = verifying_key.to_sec1_point(false);
     let public_key = encoded.as_bytes();
     let digest = Keccak256::digest(&public_key[1..]);
     let mut payload = Vec::with_capacity(21);
@@ -626,9 +626,7 @@ fn sign_transaction(
     }
     let raw_data = transaction_raw_data(transaction)?;
     let digest = Sha256::digest(raw_data.as_slice());
-    let (signature, recovery_id): (Signature, _) = signing_key
-        .sign_prehash_recoverable(&digest)
-        .map_err(|error| TronServiceError::Signing(error.to_string()))?;
+    let (signature, recovery_id): (Signature, _) = signing_key.sign_prehash_recoverable(&digest);
     let mut signature_bytes = Zeroizing::new(Vec::with_capacity(65));
     signature_bytes.extend_from_slice(&signature.to_bytes());
     signature_bytes.push(recovery_id.to_byte());
@@ -707,7 +705,7 @@ pub async fn submit_prepared_transfer_with_private_key(
     let recipient = normalize_tron_address(recipient)?;
     let txid = sign_transaction(
         &mut transaction,
-        private_key.as_ref(),
+        private_key,
         &sender,
         &recipient,
         amount_sun,

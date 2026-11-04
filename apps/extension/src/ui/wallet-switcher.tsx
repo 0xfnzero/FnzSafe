@@ -1,16 +1,18 @@
 import { useEffect, useState } from 'react';
-import { Check, Copy, Plus, Download } from 'lucide-react';
+import { Check, Copy, Plus, Download, Pencil, LoaderCircle } from 'lucide-react';
 import type { PublicAccount, WalletStatus } from './api';
 import type { ChainInfo } from '../types';
 import { t } from './i18n';
 
-export function WalletSwitcher({ status, search, busy, onSelect, onCreate, onImport }: {
+export function WalletSwitcher({ status, search, busy, onSelect, onCreate, onImport, onRename }: {
   status: WalletStatus; search: string; busy: boolean;
   onSelect: (account: PublicAccount, chain: ChainInfo, close: boolean) => void;
-  onCreate: (name: string) => void; onImport: () => void;
+  onCreate: (name: string) => Promise<void>; onImport: () => void;
+  onRename: (walletId: string, name: string) => Promise<void>;
 }) {
   const [copied, setCopied] = useState(''), [error, setError] = useState('');
   const [name, setName] = useState(status.suggestedWalletName);
+  const [creating, setCreating] = useState(false);
   useEffect(() => setName(status.suggestedWalletName), [status.suggestedWalletName]);
   const active = status.accounts.find(a => a.id === status.settings.activeAccountId) ?? status.accounts[0];
   const wallet = status.wallets.find(w => w.id === active.walletId)!;
@@ -32,7 +34,7 @@ export function WalletSwitcher({ status, search, busy, onSelect, onCreate, onImp
       onSelect(next, currentChain(next), false); setCopied(''); setError('');
     }}><strong title={w.name}>{w.name}</strong></button>)}
     {!matches.length && <p className="fine-print">{t('No matching wallets')}</p>}
-  </div><section id="wallet-chain-list" className="wallet-chain-panel" role="tabpanel" aria-labelledby={`wallet-tab-${wallet.id}`}><header><h3>{wallet.name}</h3><p>{t(wallet.hasRecoveryPhrase ? 'One phrase · all chains' : 'Imported chain account')}</p></header><div className="wallet-chain-list">
+  </div><section id="wallet-chain-list" className="wallet-chain-panel" role="tabpanel" aria-labelledby={`wallet-tab-${wallet.id}`}><header><WalletNameEditor key={wallet.id} wallet={wallet} busy={busy} onRename={onRename} /><p>{t(wallet.hasRecoveryPhrase ? 'One phrase · all chains' : 'Imported chain account')}</p></header><div className="wallet-chain-list">
     {rows.map(({ chain, account }) => {
       const selected = account.id === active.id && currentChain(active).key === chain.key;
       const key = `${chain.key}:${account.id}`;
@@ -41,8 +43,25 @@ export function WalletSwitcher({ status, search, busy, onSelect, onCreate, onImp
     })}
   </div></section></div>
     <label className="wallet-create-name">{t('New wallet name')}<input value={name} placeholder={status.suggestedWalletName} maxLength={80} disabled={busy} onChange={e => setName(e.target.value)} /></label>
-    <footer className="wallet-browser-actions"><button className="primary" disabled={busy} onClick={() => onCreate(name.trim() || status.suggestedWalletName)}><Plus size={18} />{t(busy ? 'Creating wallet…' : 'Create wallet')}</button><button disabled={busy} onClick={onImport}><Download size={17} />{t('Import wallet')}</button></footer>
+    <footer className="wallet-browser-actions"><button className="primary" disabled={busy} onClick={async () => { setCreating(true); try { await onCreate(name.trim() || status.suggestedWalletName); } finally { setCreating(false); } }}>{creating ? <LoaderCircle size={18} className="spin" /> : <Plus size={18} />}{t(creating ? 'Creating wallet…' : 'Create wallet')}</button><button disabled={busy} onClick={onImport}><Download size={17} />{t('Import wallet')}</button></footer>
     <p className="fine-print">{t('One recovery phrase for all supported chains. Back up later in Settings.')}</p>
     {copied && <p role="status" className="success-note">{t('Address copied')}</p>}{error && <p role="alert" className="error">{t(error)}</p>}
   </div>;
+}
+
+function WalletNameEditor({ wallet, busy, onRename }: { wallet: WalletStatus['wallets'][number]; busy: boolean; onRename: (id: string, name: string) => Promise<void> }) {
+  const [editing, setEditing] = useState(false), [name, setName] = useState(wallet.name);
+  const [saving, setSaving] = useState(false), [error, setError] = useState('');
+  async function submit(e: React.FormEvent) {
+    e.preventDefault(); setSaving(true); setError('');
+    try { await onRename(wallet.id, name); setEditing(false); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Unable to rename wallet'); }
+    finally { setSaving(false); }
+  }
+  if (!editing) return <div className="wallet-name-heading"><h3>{wallet.name}</h3><button type="button" className="icon-button" disabled={busy} aria-label={t('Rename wallet')} title={t('Rename wallet')} onClick={() => { setName(wallet.name); setError(''); setEditing(true); }}><Pencil size={16} /></button></div>;
+  return <form className="wallet-rename-form" onSubmit={submit}>
+    <label>{t('Wallet name')}<input autoFocus value={name} maxLength={80} required autoComplete="off" disabled={busy || saving} onChange={e => { setName(e.target.value); setError(''); }} /></label>
+    {error && <p className="error" role="alert">{t(error)}</p>}
+    <div className="modal-actions"><button type="button" disabled={busy || saving} onClick={() => setEditing(false)}>{t('Cancel')}</button><button className="primary" disabled={busy || saving || !name.trim()}>{saving ? <><LoaderCircle size={14} className="spin" />{t('Saving…')}</> : t('Save')}</button></div>
+  </form>;
 }

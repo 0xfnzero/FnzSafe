@@ -1,6 +1,6 @@
 {
   "name": "@fnzero/safe",
-  "version": "0.6.9",
+  "version": "0.6.10",
   "private": true,
   "engines": {
     "node": ">=22 <25"
@@ -20,7 +20,7 @@
     "build": "next build",
     "build:desktop-api": "cargo build --release -p fnzero-safe-desktop-api",
     "start": "next start",
-    "test:dependency-compat": "node scripts/test-dependency-compat.cjs",
+    "test:dependency-compat": "node scripts/test-dependency-compat.cjs && node scripts/test-macos-keychain-config.cjs",
     "test:devnet-airdrop": "node scripts/test-devnet-airdrop.cjs",
     "test:program-close": "node --experimental-strip-types --test src/lib/programClose.test.mjs",
     "test:program-deploy": "node scripts/test-program-deploy.cjs",
@@ -39,7 +39,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.577.0",
-    "next": "^15.5.24",
+    "next": "^15.5.29",
     "next-intl": "^4.13.0",
     "next-themes": "^0.4.6",
     "qrcode": "^1.5.4",
@@ -58,7 +58,7 @@
     "brace-expansion": "file:vendor/brace-expansion-compat",
     "brace-expansion-upstream": "npm:brace-expansion@5.0.12",
     "eslint": "^9",
-    "eslint-config-next": "^15.5.21",
+    "eslint-config-next": "^15.5.29",
     "ethers": "6.17.0",
     "postcss": "^8.5.23",
     "source-map-js": "^1.2.2",
@@ -71,6 +71,9 @@
     "postcss": "$postcss",
     "next": {
       "sharp": "0.35.5"
+    },
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "11.0.1"
     }
   }
 }

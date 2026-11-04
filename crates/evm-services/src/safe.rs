@@ -384,7 +384,7 @@ fn verified_signatures(p: &SafeProposal, owners: &[String]) -> EvmResult<Vec<Saf
         }
         let sig =
             Signature::from_slice(&bytes[..64]).map_err(|_| invalid("Invalid Safe signature"))?;
-        if sig.normalize_s().is_some() {
+        if sig.normalize_s() != sig {
             return Err(invalid("Noncanonical Safe signature"));
         }
         let key = VerifyingKey::recover_from_prehash(
@@ -393,7 +393,7 @@ fn verified_signatures(p: &SafeProposal, owners: &[String]) -> EvmResult<Vec<Saf
             RecoveryId::from_byte(bytes[64] - 27).unwrap(),
         )
         .map_err(|_| invalid("Cannot recover Safe signature"))?;
-        let pubkey = key.to_encoded_point(false);
+        let pubkey = key.to_sec1_point(false);
         let recovered = hex_bytes(&keccak256(&pubkey.as_bytes()[1..])[12..]);
         if owner != recovered || !owners.contains(&owner) {
             return Err(invalid("Signature is not from a current Safe owner"));

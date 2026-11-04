@@ -38,7 +38,6 @@
     ]
   },
   "permissions": [
-    "core:default",
     "allow-submit-dapp-page-text",
     "allow-submit-dapp-connect-request",
     "allow-poll-dapp-connect-request",

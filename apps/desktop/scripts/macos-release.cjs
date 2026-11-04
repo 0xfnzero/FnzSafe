@@ -30,6 +30,11 @@ function requireCompleteGroup(names) {
   return present.length === names.length;
 }
 
+function isRegularFile(filename) {
+  try { return typeof filename === "string" && fs.statSync(filename).isFile(); }
+  catch { return false; }
+}
+
 function preflight() {
   if (process.platform !== "darwin") {
     fail("macOS release packages must be built on macOS");
@@ -69,7 +74,7 @@ function preflight() {
   if (!hasAppleIdAuth && !hasApiKeyAuth) {
     fail("notarization credentials are required (Apple ID triplet or App Store Connect API key triplet)");
   }
-  if (hasApiKeyAuth && !fs.isFileSync(process.env.APPLE_API_KEY_PATH)) {
+  if (hasApiKeyAuth && !isRegularFile(process.env.APPLE_API_KEY_PATH)) {
     fail(`APPLE_API_KEY_PATH does not point to a file: ${process.env.APPLE_API_KEY_PATH}`);
   }
 
@@ -109,6 +114,17 @@ function verify(root) {
     if (!details.includes("Authority=Developer ID Application:") || details.includes("Signature=adhoc")) {
       fail(`${app} is not signed with Developer ID Application`);
     }
+    const team = /^TeamIdentifier=(.+)$/m.exec(details)?.[1];
+    const identifier = /^Identifier=(.+)$/m.exec(details)?.[1];
+    const entitlements = run("codesign", ["-d", "--entitlements", ":-", app]);
+    if (!team || !identifier || !entitlements.includes("<key>keychain-access-groups</key>")
+        || !entitlements.includes(`<string>${team}.${identifier}</string>`)) {
+      fail(`${app} is missing its protected Keychain access entitlement`);
+    }
+    const backend = path.join(app, "Contents", "Resources", "fnzero-safe-desktop-api");
+    if (!isRegularFile(backend)) fail(`${app} is missing its bundled wallet backend`);
+    // The backend is a sealed app resource; the full bundle verification above
+    // authenticates its bytes even when it has no separate Developer ID signature.
     run("xcrun", ["stapler", "validate", app]);
     run("spctl", ["--assess", "--type", "execute", "-vv", app]);
   }

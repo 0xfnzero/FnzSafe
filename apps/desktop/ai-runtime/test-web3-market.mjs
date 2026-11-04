@@ -301,35 +301,15 @@ try {
   await new Promise((resolve) => oversizedServer.close(resolve));
 }
 
-const rsaKeyPair = await crypto.subtle.generateKey(
-  { name: 'RSA-OAEP', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' },
-  true,
-  ['encrypt', 'decrypt'],
-);
-const publicKeyDer = Buffer.from(await crypto.subtle.exportKey('spki', rsaKeyPair.publicKey));
-const publicKeyPem = `-----BEGIN PUBLIC KEY-----\n${publicKeyDer.toString('base64').match(/.{1,64}/gu).join('\n')}\n-----END PUBLIC KEY-----\n`;
-let encryptedTradeBody = '';
+let walletApiRequests = 0;
 const walletApiServer = http.createServer((request, response) => {
-  response.setHeader('content-type', 'application/json');
-  if (request.url === '/api/secure/session') {
-    response.end(JSON.stringify({ version: '1', algorithm: 'RSA-OAEP-256+A256GCM', public_key_pem: publicKeyPem }));
-    return;
-  }
+  walletApiRequests++;
+  assert.equal(request.method, 'GET', 'AI runtime must never mutate the wallet');
+  assert.equal(request.url, `/api/wallets/${'a'.repeat(32)}/session`);
   assert.equal(request.headers['x-fnzero-safe-token'], 'test-wallet-api-token');
   assert.equal(request.headers.origin, 'tauri://localhost');
-  if (request.method === 'GET') {
-    response.end(JSON.stringify({ wallet_id: 'a'.repeat(32), public_key: 'public-key', unlocked: true, expires_in_seconds: 60 }));
-    return;
-  }
-  request.setEncoding('utf8');
-  request.on('data', (chunk) => { encryptedTradeBody += chunk; });
-  request.on('end', () => {
-    assert.equal(request.headers['x-fnzero-safe-secure-body'], '1');
-    response.end(JSON.stringify({
-      status: 'success', signature: 'signature', dex: 'pumpfun', market: 'inner',
-      sold_raw_amount: '42', decimals: 6, source_account: 'source',
-    }));
-  });
+  response.setHeader('content-type', 'application/json');
+  response.end(JSON.stringify({ wallet_id: 'a'.repeat(32), public_key: 'public-key', unlocked: true, expires_in_seconds: 60 }));
 });
 await new Promise((resolve) => walletApiServer.listen(0, '127.0.0.1', resolve));
 const previousWalletApiUrl = process.env.FNZSAFE_WALLET_API_URL;
@@ -341,6 +321,7 @@ try {
   process.env.FNZSAFE_WALLET_API_TOKEN = 'test-wallet-api-token';
   const status = await web3MarketHandlers.wallet_session_status({ walletId: 'a'.repeat(32) });
   assert.equal(JSON.parse(status.content[0].text).unlocked, true);
+  const requestsBeforeProposal = walletApiRequests;
   const trade = await web3MarketHandlers.automated_token_sell({
     walletId: 'a'.repeat(32),
     mint: '1'.repeat(32),
@@ -348,11 +329,10 @@ try {
     sellPercentBps: 1_000,
     slippageBps: 100,
   });
-  assert.equal(JSON.parse(trade.content[0].text).signature, 'signature');
-  assert.doesNotMatch(encryptedTradeBody, /sell_percent_bps|11111111111111111111111111111111/u);
-  const envelope = JSON.parse(encryptedTradeBody);
-  assert.equal(envelope.version, 1);
-  assert.ok(envelope.encrypted_key && envelope.iv && envelope.ciphertext);
+  assert.equal(JSON.parse(trade.content[0].text).status, 'requires_wallet_confirmation');
+  assert.equal(JSON.parse(trade.content[0].text).submitted, false);
+  assert.equal(walletApiRequests, requestsBeforeProposal, 'proposal must never contact the wallet API');
+  assert.equal(JSON.parse(trade.content[0].text).signature, undefined);
 } finally {
   if (previousWalletApiUrl === undefined) delete process.env.FNZSAFE_WALLET_API_URL;
   else process.env.FNZSAFE_WALLET_API_URL = previousWalletApiUrl;

@@ -18,7 +18,7 @@ use fnzero_safe_chain_core::{
 };
 use k256::{
     ecdsa::{RecoveryId, Signature, SigningKey},
-    elliptic_curve::rand_core::OsRng,
+    elliptic_curve::Generate,
 };
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
@@ -432,8 +432,11 @@ pub struct EvmDappSignPreview {
     pub app_url: String,
     pub method: String,
     pub summary: String,
+    pub details: Vec<(String, String)>,
     pub warnings: Vec<String>,
 }
+
+type DappPreviewDetails = (Vec<(String, String)>, Vec<String>);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EvmDappSignSubmitRequest {
@@ -696,23 +699,38 @@ pub fn builtin_chain_adapters() -> ChainResult<Vec<EvmChainAdapter>> {
         .collect()
 }
 
+fn validate_new_wallet_password(password: &str) -> EvmResult<()> {
+    if password.len() > MAX_KEYSTORE_PASSWORD_BYTES {
+        return Err(EvmServiceError::InvalidInput(
+            "EVM keystore password is too long".into(),
+        ));
+    }
+    if password.chars().count() < 10 {
+        return Err(EvmServiceError::InvalidInput(
+            "New wallet password must contain at least 10 characters".into(),
+        ));
+    }
+    Ok(())
+}
+
 pub fn create_wallet(req: EvmCreateWalletRequest) -> EvmResult<EvmWalletKeystore> {
     let name = require_non_empty(&req.name, "wallet name")?;
-    require_non_empty(&req.password, "wallet password")?;
-    let signing_key = SigningKey::random(&mut OsRng);
+    validate_new_wallet_password(&req.password)?;
+    let signing_key = SigningKey::try_generate()
+        .map_err(|_| EvmServiceError::InvalidInput("Secure randomness unavailable".into()))?;
     wallet_from_signing_key(name, signing_key, &req.password, None)
 }
 
 pub fn import_private_key(req: EvmImportPrivateKeyRequest) -> EvmResult<EvmWalletKeystore> {
     let name = require_non_empty(&req.name, "wallet name")?;
-    require_non_empty(&req.password, "wallet password")?;
+    validate_new_wallet_password(&req.password)?;
     let signing_key = signing_key_from_hex(&req.private_key_hex)?;
     wallet_from_signing_key(name, signing_key, &req.password, None)
 }
 
 pub fn import_mnemonic(req: EvmImportMnemonicRequest) -> EvmResult<EvmWalletKeystore> {
     let name = require_non_empty(&req.name, "wallet name")?;
-    require_non_empty(&req.password, "wallet password")?;
+    validate_new_wallet_password(&req.password)?;
     let mnemonic = Zeroizing::new(normalize_mnemonic_phrase(&req.mnemonic)?);
     let derivation_path = req
         .derivation_path
@@ -855,6 +873,19 @@ pub fn export_private_key(
         address: address_from_signing_key(&signing_key),
         private_key_hex: format!("0x{}", hex::encode(signing_key.to_bytes())),
     })
+}
+
+/// Convert an authenticated existing wallet to a private-key-only backup with
+/// the same password. Historical passwords remain valid for this operation;
+/// new wallet creation still enforces the current password policy.
+pub fn export_private_key_keystore(req: EvmUnlockWalletRequest) -> EvmResult<EvmWalletKeystore> {
+    let decrypted = decrypt_keystore(&req.keystore_json, &req.password)?;
+    wallet_from_signing_key(
+        decrypted.keystore.metadata.wallet_name,
+        decrypted.signing_key,
+        &req.password,
+        None,
+    )
 }
 
 pub fn load_asset_snapshot(req: EvmAssetQueryRequest) -> EvmResult<EvmAssetSnapshot> {
@@ -1125,6 +1156,8 @@ pub fn preview_dapp_signing(req: EvmDappSignPreviewRequest) -> EvmResult<EvmDapp
     let app_url = require_non_empty(&req.app_url, "dApp URL")?;
     let method = require_non_empty(&req.method, "dApp method")?;
     let payload_json = require_non_empty(&req.payload_json, "dApp payload")?;
+    let (details, warnings) =
+        validate_dapp_payload(&req.chain, &wallet_address, &method, &payload_json)?;
     let preview_id = dapp_sign_preview_id(&DappSignPreviewIdInput {
         chain: &req.chain,
         wallet_address: &wallet_address,
@@ -1141,7 +1174,8 @@ pub fn preview_dapp_signing(req: EvmDappSignPreviewRequest) -> EvmResult<EvmDapp
         app_url: app_url.clone(),
         method: method.clone(),
         summary: format!("{app_url} requested {method}"),
-        warnings: vec!["Only approve EVM dApp requests from sites you trust.".to_string()],
+        details,
+        warnings,
     })
 }
 
@@ -1201,6 +1235,7 @@ where
             "EVM dApp preview is stale or mismatched".to_string(),
         ));
     }
+    validate_dapp_payload(&req.chain, &wallet_address, &method, &payload_json)?;
     let signing_key = load_signing_key()?;
     let signing_address = address_from_signing_key(&signing_key);
     if !address_eq(&signing_address, &wallet_address) {
@@ -1210,7 +1245,7 @@ where
     }
     match method.as_str() {
         "personal_sign" | "eth_sign" => {
-            let message = evm_message_from_payload(&payload_json, &wallet_address)?;
+            let message = evm_message_from_payload(&method, &payload_json, &wallet_address)?;
             Ok(EvmDappSignSubmitResult {
                 signature: Some(sign_personal_message(&signing_key, &message)?),
                 signed_transaction: None,
@@ -1723,7 +1758,7 @@ fn signing_key_from_bytes(private_key: &[u8]) -> EvmResult<SigningKey> {
 
 fn address_from_signing_key(signing_key: &SigningKey) -> String {
     let verifying_key = signing_key.verifying_key();
-    let encoded = verifying_key.to_encoded_point(false);
+    let encoded = verifying_key.to_sec1_point(false);
     let public_key = encoded.as_bytes();
     let hash = keccak256(&public_key[1..]);
     format!("0x{}", hex::encode(&hash[12..]))
@@ -3190,35 +3225,250 @@ fn sign_digest(signing_key: &SigningKey, digest: &[u8]) -> EvmResult<(Signature,
             "Signing digest must be 32 bytes".to_string(),
         ));
     }
-    signing_key
-        .sign_prehash_recoverable(digest)
-        .map_err(|_| EvmServiceError::InvalidInput("EVM signing failed".to_string()))
+    Ok(signing_key.sign_prehash_recoverable(digest))
 }
 
-fn evm_message_from_payload(payload_json: &str, wallet_address: &str) -> EvmResult<Vec<u8>> {
-    let value: serde_json::Value = serde_json::from_str(payload_json)
-        .map_err(|_| EvmServiceError::InvalidInput("EVM dApp payload must be JSON".to_string()))?;
-    if let Some(message) = value.get("message").and_then(serde_json::Value::as_str) {
-        return evm_message_bytes(message);
-    }
-    if let Some(params) = value.get("params").and_then(serde_json::Value::as_array) {
-        for item in params {
-            if let Some(message) = item.as_str() {
-                if normalize_address(message, "signing account").is_ok() {
-                    if !address_eq(message, wallet_address) {
-                        return Err(EvmServiceError::InvalidInput(
-                            "EVM signing account does not match the selected wallet".to_string(),
-                        ));
-                    }
-                    continue;
+fn validate_dapp_payload(
+    chain: &EvmChainConfig,
+    signer: &str,
+    method: &str,
+    payload: &str,
+) -> EvmResult<DappPreviewDetails> {
+    let value: serde_json::Value = serde_json::from_str(payload)
+        .map_err(|_| EvmServiceError::InvalidInput("EVM dApp payload must be JSON".into()))?;
+    let mut details = vec![
+        ("Signing account".into(), signer.into()),
+        ("Chain ID".into(), chain.chain_id.to_string()),
+    ];
+    let mut warnings = Vec::new();
+    match method {
+        "personal_sign" | "eth_sign" => {
+            let bytes = evm_message_from_payload(method, payload, signer)?;
+            details.push((
+                "Message (UTF-8)".into(),
+                String::from_utf8_lossy(&bytes).into_owned(),
+            ));
+            details.push(("Message (hex)".into(), format!("0x{}", hex::encode(bytes))));
+            warnings.push(
+                "A message signature can authorize login or off-chain actions. Verify every field."
+                    .into(),
+            );
+        }
+        "eth_signTypedData" | "eth_signTypedData_v4" => {
+            if let Some(params) = value.get("params") {
+                let params = params
+                    .as_array()
+                    .filter(|p| p.len() == 2)
+                    .ok_or(EvmServiceError::InvalidTypedData)?;
+                validate_dapp_account(&params[0], signer)?;
+            }
+            let typed = extract_typed_data(&value)?;
+            validate_dapp_chain(typed.domain().get("chainId"), chain)?;
+            // Validate the full typed schema before approval or loading a private key.
+            typed_data_digest(payload)?;
+            details.push(("Typed operation".into(), typed.primary_type()?.into()));
+            details.push(("Domain".into(), typed.domain().to_string()));
+            details.push(("Signed fields".into(), typed.message().to_string()));
+            for field in [
+                "owner",
+                "holder",
+                "spender",
+                "value",
+                "amount",
+                "nonce",
+                "deadline",
+                "expiry",
+                "expiration",
+                "permitted",
+                "details",
+            ] {
+                if let Some(v) = typed.message().get(field) {
+                    details.push((field.into(), v.to_string()));
                 }
-                return evm_message_bytes(message);
+            }
+            warnings.push("Typed signatures may grant spending rights without an immediate transaction. Verify spender, amount, contract and expiry; arbitrary typed operations are not fully interpreted.".into());
+            if typed.domain().get("chainId").is_none() {
+                warnings.push("No chain ID in the signed domain: this signature may be replayed on another network.".into());
             }
         }
+        "eth_sendTransaction" | "eth_signTransaction" => {
+            let tx = extract_dapp_transaction_value(&value)?;
+            validate_dapp_chain(tx.get("chainId"), chain)?;
+            if let Some(from) = tx.get("from") {
+                validate_dapp_account(from, signer)?;
+            }
+            let to = normalize_address(
+                tx.get("to")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| {
+                        EvmServiceError::InvalidInput("Transaction recipient is required".into())
+                    })?,
+                "transaction to",
+            )?;
+            let amount =
+                evm_quantity_field(tx.get("value"), "value")?.unwrap_or_else(|| "0".into());
+            let data = evm_data_field(
+                tx.get("data")
+                    .or_else(|| tx.get("input"))
+                    .and_then(serde_json::Value::as_str),
+            )?;
+            if tx.get("data").is_some_and(|v| !v.is_string())
+                || tx.get("input").is_some_and(|v| !v.is_string())
+            {
+                return Err(EvmServiceError::InvalidInput(
+                    "Transaction data must be hex".into(),
+                ));
+            }
+            if let (Some(a), Some(b)) = (
+                tx.get("data").and_then(serde_json::Value::as_str),
+                tx.get("input").and_then(serde_json::Value::as_str),
+            ) {
+                if hex_data_to_bytes(a)? != hex_data_to_bytes(b)? {
+                    return Err(EvmServiceError::InvalidInput(
+                        "Conflicting transaction data and input".into(),
+                    ));
+                }
+            }
+            for field in [
+                "gas",
+                "gasLimit",
+                "gasPrice",
+                "nonce",
+                "maxFeePerGas",
+                "maxPriorityFeePerGas",
+            ] {
+                evm_quantity_field(tx.get(field), field)?;
+            }
+            details.push(("Recipient / contract".into(), to));
+            details.push(("Native value (wei)".into(), amount));
+            let bytes = hex_data_to_bytes(&data)?;
+            if bytes.is_empty() {
+                details.push((
+                    "Action".into(),
+                    "Native transfer or recipient contract call".into(),
+                ));
+            } else {
+                let selector = bytes.get(..4).map(hex::encode).unwrap_or_default();
+                let word_address =
+                    |offset: usize| format!("0x{}", hex::encode(&bytes[offset + 12..offset + 32]));
+                let word_amount = |offset: usize| {
+                    hex_quantity_to_decimal(&format!(
+                        "0x{}",
+                        hex::encode(&bytes[offset..offset + 32])
+                    ))
+                };
+                if bytes.len() == 68
+                    && ["a9059cbb", "095ea7b3", "a22cb465"].contains(&selector.as_str())
+                    && bytes[4..16].iter().all(|b| *b == 0)
+                {
+                    let action = match selector.as_str() {
+                        "a9059cbb" => "Token transfer",
+                        "095ea7b3" => "Token spending approval",
+                        _ => "Operator approval for all NFTs",
+                    };
+                    details.push(("Requested ABI action".into(), action.into()));
+                    details.push((
+                        (if selector == "a9059cbb" {
+                            "Token recipient"
+                        } else {
+                            "Spender / operator"
+                        })
+                        .into(),
+                        word_address(4),
+                    ));
+                    details.push(("Raw amount / flag".into(), word_amount(36)?));
+                    if selector != "a9059cbb" {
+                        warnings.push("This grants asset permissions. An unlimited amount or operator approval can expose all matching assets.".into());
+                    }
+                } else if selector == "23b872dd"
+                    && bytes.len() == 100
+                    && bytes[4..16]
+                        .iter()
+                        .chain(bytes[36..48].iter())
+                        .all(|b| *b == 0)
+                {
+                    details.push((
+                        "Requested ABI action".into(),
+                        "transferFrom (token units or NFT ID)".into(),
+                    ));
+                    details.push(("From".into(), word_address(4)));
+                    details.push(("Recipient".into(), word_address(36)));
+                    details.push(("Raw amount / token ID".into(), word_amount(68)?));
+                } else {
+                    warnings.push("Unknown contract operation. Asset transfers and authority changes cannot be fully decoded.".into());
+                }
+                details.push(("Calldata".into(), data));
+                warnings.push("ABI labels describe requested bytes, not verified contract behavior. Token decimals and token identity are unverified.".into());
+            }
+            warnings.push("This preview has not simulated state changes. Verify network, recipient, value and calldata before signing.".into());
+        }
+        _ => {
+            return Err(EvmServiceError::InvalidInput(
+                "Unsupported EVM signing method".into(),
+            ))
+        }
     }
-    Err(EvmServiceError::InvalidInput(
-        "EVM message payload must include a message string".to_string(),
-    ))
+    Ok((details, warnings))
+}
+
+fn validate_dapp_account(value: &serde_json::Value, signer: &str) -> EvmResult<()> {
+    let account = value.as_str().ok_or_else(|| {
+        EvmServiceError::InvalidInput("Signing account must be an address".into())
+    })?;
+    let account = normalize_address(account, "signing account")?;
+    if !address_eq(&account, signer) {
+        return Err(EvmServiceError::InvalidInput(
+            "EVM signing account does not match the selected wallet".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_dapp_chain(value: Option<&serde_json::Value>, chain: &EvmChainConfig) -> EvmResult<()> {
+    if let Some(id) = evm_quantity_field(value, "chainId")? {
+        if id != chain.chain_id.to_string() {
+            return Err(EvmServiceError::InvalidInput(
+                "Requested chain ID does not match the selected EVM network".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn evm_message_from_payload(
+    method: &str,
+    payload_json: &str,
+    wallet_address: &str,
+) -> EvmResult<Vec<u8>> {
+    let value: serde_json::Value = serde_json::from_str(payload_json)
+        .map_err(|_| EvmServiceError::InvalidInput("EVM dApp payload must be JSON".into()))?;
+    if let Some(params) = value.get("params") {
+        let params = params.as_array().filter(|p| p.len() == 2).ok_or_else(|| {
+            EvmServiceError::InvalidInput("Signing requires message and account parameters".into())
+        })?;
+        let (message_index, account_index) = if method == "personal_sign" {
+            (0, 1)
+        } else {
+            (1, 0)
+        };
+        validate_dapp_account(&params[account_index], wallet_address)?;
+        return evm_message_bytes(params[message_index].as_str().ok_or_else(|| {
+            EvmServiceError::InvalidInput("Signing message must be a string".into())
+        })?);
+    }
+    if let Some(account) = value.get("from").or_else(|| value.get("account")) {
+        validate_dapp_account(account, wallet_address)?;
+    }
+    evm_message_bytes(
+        value
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                EvmServiceError::InvalidInput(
+                    "EVM message payload must include a message string".into(),
+                )
+            })?,
+    )
 }
 
 fn evm_message_bytes(value: &str) -> EvmResult<Vec<u8>> {
@@ -3250,6 +3500,7 @@ fn parse_dapp_transaction(
     let value: serde_json::Value = serde_json::from_str(payload_json)
         .map_err(|_| EvmServiceError::InvalidInput("EVM dApp payload must be JSON".to_string()))?;
     let tx = extract_dapp_transaction_value(&value)?;
+    validate_dapp_chain(tx.get("chainId"), chain)?;
     let from = tx
         .get("from")
         .and_then(serde_json::Value::as_str)
@@ -3535,9 +3786,30 @@ fn hash_typed_struct(
 ) -> EvmResult<[u8; 32]> {
     let mut encoded = Vec::with_capacity(32);
     encoded.extend_from_slice(&keccak256(encode_type(type_name, typed_data)?.as_bytes()));
-    let object = data.as_object();
-    for field in typed_data.fields(type_name)? {
-        let value = object.and_then(|object| object.get(&field.name));
+    let fields = typed_data.fields(type_name)?;
+    let object = data.as_object().ok_or(EvmServiceError::InvalidTypedData)?;
+    let names: std::collections::HashSet<_> = fields.iter().map(|f| f.name.as_str()).collect();
+    // Preview and hash must describe exactly the same fields, including nested structs.
+    if names.len() != fields.len()
+        || names.contains("")
+        || object.len() != fields.len()
+        || object.keys().any(|key| !names.contains(key.as_str()))
+    {
+        return Err(EvmServiceError::InvalidInput(
+            "Typed data contains missing, duplicate or unsigned fields".into(),
+        ));
+    }
+    if type_name == "EIP712Domain"
+        && fields
+            .iter()
+            .any(|f| f.name == "chainId" && f.ty != "uint256")
+    {
+        return Err(EvmServiceError::InvalidInput(
+            "EIP-712 domain chainId must be uint256".into(),
+        ));
+    }
+    for field in fields {
+        let value = object.get(&field.name);
         encoded.extend_from_slice(&encode_typed_value(&field.ty, value, typed_data)?);
     }
     Ok(keccak256(&encoded))
@@ -4680,6 +4952,53 @@ mod tests {
     }
 
     #[test]
+    fn new_password_policy_does_not_break_existing_short_passwords() {
+        for password in ["", "short", "123456789", "密码密码"] {
+            assert!(create_wallet(EvmCreateWalletRequest {
+                name: "Test".into(),
+                password: password.into(),
+            })
+            .is_err());
+            assert!(import_private_key(EvmImportPrivateKeyRequest {
+                name: "Test".into(),
+                private_key_hex: DEV_PRIVATE_KEY.into(),
+                password: password.into(),
+            })
+            .is_err());
+        }
+        assert!(validate_new_wallet_password("1234567890").is_ok());
+        assert!(validate_new_wallet_password("密".repeat(10).as_str()).is_ok());
+        // Build an old-policy fixture directly, without weakening the public creation API.
+        let key = signing_key_from_hex(DEV_PRIVATE_KEY).unwrap();
+        let stored = wallet_from_signing_key("Existing".into(), key, "old", None).unwrap();
+        assert!(export_private_key_keystore(EvmUnlockWalletRequest {
+            keystore_json: stored.keystore_json.clone(),
+            password: "wrong".into(),
+        })
+        .is_err());
+        let backup = export_private_key_keystore(EvmUnlockWalletRequest {
+            keystore_json: stored.keystore_json.clone(),
+            password: "old".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            unlock_wallet(EvmUnlockWalletRequest {
+                keystore_json: backup.keystore_json,
+                password: "old".into(),
+            })
+            .unwrap()
+            .address,
+            stored.wallet.address
+        );
+        let wallet = unlock_wallet(EvmUnlockWalletRequest {
+            keystore_json: stored.keystore_json,
+            password: "old".into(),
+        })
+        .unwrap();
+        assert_eq!(wallet.address, "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf");
+    }
+
+    #[test]
     fn encrypts_and_unlocks_evm_keystore() {
         let created = import_private_key(EvmImportPrivateKeyRequest {
             name: "EVM".to_string(),
@@ -5470,7 +5789,7 @@ mod tests {
         })
         .to_string();
         assert_eq!(
-            evm_message_from_payload(&payload, wallet_address).unwrap(),
+            evm_message_from_payload("personal_sign", &payload, wallet_address).unwrap(),
             b"hello"
         );
 
@@ -5481,7 +5800,7 @@ mod tests {
             ]
         })
         .to_string();
-        let error = evm_message_from_payload(&mismatched, wallet_address).unwrap_err();
+        let error = evm_message_from_payload("eth_sign", &mismatched, wallet_address).unwrap_err();
         assert!(error.to_string().contains("does not match"));
     }
 
@@ -5624,5 +5943,106 @@ mod tests {
             read_etherscan_response(oversized),
             Err(EvmServiceError::RpcUnavailable)
         ));
+    }
+    #[test]
+    fn dapp_chain_and_signer_validation_precedes_key_access() {
+        let chain = chain(1, "Ethereum", "ETH", "http://127.0.0.1:1", None, false);
+        let signer = "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf";
+        for (method, payload) in [
+            ("eth_sendTransaction", serde_json::json!({"params":[{"from":signer,"to":signer,"chainId":"0x89"}]}).to_string()),
+            ("personal_sign", serde_json::json!({"params":["hello","0x000000000000000000000000000000000000dead"]}).to_string()),
+            ("eth_sign", serde_json::json!({"params":["0x000000000000000000000000000000000000dead","hello"]}).to_string()),
+            ("eth_sendTransaction", "not JSON".into()),
+        ] {
+            let preview = EvmDappSignPreviewRequest { chain:chain.clone(), wallet_address:signer.into(), app_name:"Fixture".into(), app_url:"https://example.invalid".into(), method:method.into(), payload_json:payload.clone() };
+            assert!(preview_dapp_signing(preview).is_err());
+            // Even a caller supplying a matching preview hash cannot bypass validation.
+            let id = dapp_sign_preview_id(&DappSignPreviewIdInput {chain:&chain, wallet_address:signer, app_name:"Fixture", app_url:"https://example.invalid", method, payload_json:&payload});
+            let req = EvmDappSignSubmitRequest { preview_id:id, approved:true, chain:chain.clone(), wallet_address:signer.into(), app_name:"Fixture".into(), app_url:"https://example.invalid".into(), method:method.into(), payload_json:payload, keystore_json:String::new(), password:String::new() };
+            assert!(submit_dapp_signing_with_private_key_loader(req, || panic!("invalid payload must not load a private key")).is_err());
+        }
+    }
+
+    #[test]
+    fn typed_data_chain_and_account_are_bound_at_preview() {
+        let chain = chain(1, "Ethereum", "ETH", "http://127.0.0.1:1", None, false);
+        let signer = "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf";
+        let mut typed = serde_json::json!({"types":{"EIP712Domain":[{"name":"chainId","type":"uint256"}],"Permit":[{"name":"spender","type":"address"},{"name":"value","type":"uint256"}]},"primaryType":"Permit","domain":{"chainId":137},"message":{"spender":signer,"value":"100"}});
+        assert!(
+            validate_dapp_payload(&chain, signer, "eth_signTypedData_v4", &typed.to_string())
+                .is_err()
+        );
+        typed["domain"]["chainId"] = serde_json::json!("0x1");
+        let payload = serde_json::json!({"params":[signer,typed.to_string()]}).to_string();
+        let (details, _) =
+            validate_dapp_payload(&chain, signer, "eth_signTypedData_v4", &payload).unwrap();
+        assert!(details.iter().any(|(label, _)| label == "spender"));
+        let wrong =
+            serde_json::json!({"params":["0x000000000000000000000000000000000000dead",typed]})
+                .to_string();
+        assert!(validate_dapp_payload(&chain, signer, "eth_signTypedData_v4", &wrong).is_err());
+    }
+
+    #[test]
+    fn personal_sign_address_shaped_message_is_not_confused_with_signer() {
+        let signer = "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf";
+        let message = "0x000000000000000000000000000000000000dead";
+        let payload = serde_json::json!({"params":[message, signer]}).to_string();
+        assert_eq!(
+            evm_message_from_payload("personal_sign", &payload, signer).unwrap(),
+            hex::decode(&message[2..]).unwrap()
+        );
+    }
+
+    #[test]
+    fn transaction_preview_decodes_approval_and_warns_for_unknown_calls() {
+        let chain = chain(1, "Ethereum", "ETH", "http://127.0.0.1:1", None, false);
+        let signer = "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf";
+        let data = format!("0x095ea7b3{:0>64}{}", &signer[2..], "f".repeat(64));
+        let payload =
+            serde_json::json!({"params":[{"from":signer,"to":signer,"chainId":1,"data":data}]})
+                .to_string();
+        let (details, warnings) =
+            validate_dapp_payload(&chain, signer, "eth_signTransaction", &payload).unwrap();
+        assert!(details
+            .iter()
+            .any(|(k, v)| k == "Spender / operator" && v == signer));
+        assert!(warnings.iter().any(|v| v.contains("unlimited")));
+        let payload = serde_json::json!({"to":signer,"data":"0xdeadbeef"}).to_string();
+        let (_, warnings) =
+            validate_dapp_payload(&chain, signer, "eth_signTransaction", &payload).unwrap();
+        assert!(warnings.iter().any(|v| v.contains("Unknown contract")));
+    }
+    #[test]
+    fn typed_preview_rejects_unsigned_domain_and_message_fields() {
+        let chain = chain(1, "Fixture", "ETH", "https://example.invalid", None, true);
+        let signer = "0x0000000000000000000000000000000000000001";
+        let mut typed = serde_json::json!({"types":{"EIP712Domain":[],"Note":[{"name":"text","type":"string"}]},"primaryType":"Note","domain":{"chainId":1},"message":{"text":"Fixture"}});
+        assert!(
+            validate_dapp_payload(&chain, signer, "eth_signTypedData_v4", &typed.to_string())
+                .is_err()
+        );
+        typed["domain"] = serde_json::json!({});
+        let (_, warnings) =
+            validate_dapp_payload(&chain, signer, "eth_signTypedData_v4", &typed.to_string())
+                .unwrap();
+        assert!(warnings.iter().any(|w| w.contains("No chain ID")));
+        typed["types"]["EIP712Domain"] = serde_json::json!([{"name":"chainId","type":"uint256"}]);
+        typed["domain"] = serde_json::json!({"chainId":1});
+        assert!(
+            validate_dapp_payload(&chain, signer, "eth_signTypedData_v4", &typed.to_string())
+                .is_ok()
+        );
+        typed["message"]["spender"] = serde_json::json!(signer);
+        assert!(
+            validate_dapp_payload(&chain, signer, "eth_signTypedData_v4", &typed.to_string())
+                .is_err()
+        );
+        typed["message"] = serde_json::json!({});
+        assert!(typed_data_digest(&typed.to_string()).is_err());
+        typed["message"] = serde_json::json!({"text":"Fixture"});
+        typed["types"]["Note"] =
+            serde_json::json!([{"name":"text","type":"string"},{"name":"text","type":"string"}]);
+        assert!(typed_data_digest(&typed.to_string()).is_err());
     }
 }

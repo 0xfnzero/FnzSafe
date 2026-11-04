@@ -167,7 +167,7 @@ export const web3MarketTools = [
   },
   {
     name: 'automated_token_sell',
-    description: 'Execute a bounded Solana mainnet Pump.fun or PumpSwap token sale with an already-unlocked saved wallet. This submits a real transaction.',
+    description: 'Prepare a bounded Solana Pump.fun or PumpSwap sale proposal for manual review in FnzSafe. This NEVER signs or submits a transaction; the user must execute it in the wallet trading screen.',
     inputSchema: {
       type: 'object',
       properties: {

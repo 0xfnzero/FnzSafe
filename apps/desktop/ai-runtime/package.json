@@ -7,7 +7,7 @@
     "node": ">=22 <25"
   },
   "scripts": {
-    "test": "node test-web3-market.mjs && node run.mjs --self-test && node test-dsh-compat.mjs && node binance-connection.mjs --self-test",
+    "test": "node test-web3-market.mjs && node run.mjs --self-test && node test-dsh-compat.mjs && node binance-connection.mjs --self-test && node test-binance-dependency-compat.mjs",
     "test:live": "node test-live.mjs"
   },
   "dependencies": {
@@ -24,6 +24,9 @@
   },
   "overrides": {
     "@modelcontextprotocol/client": "2.3.1",
-    "fflate": "0.8.3"
+    "fflate": "0.8.3",
+    "@binance/agentic-wallet": {
+      "zod": "4.6.7"
+    }
   }
 }

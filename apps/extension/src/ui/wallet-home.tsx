@@ -1,3 +1,4 @@
+import { PendingRequests } from './pending-requests';
 import { WalletSwitcher } from './wallet-switcher';
 import { t } from './i18n';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
@@ -73,6 +74,7 @@ export function WalletHome({ status, refresh }: { status: WalletStatus; refresh:
       <div className="wallet-title-row"><button className="account-trigger" onClick={() => openDrawer('accounts')} aria-label={t("Switch wallet")}><span className="identicon">{status.wallets.findIndex(w => w.id === wallet?.id) + 1}</span><span>{wallet?.name ?? 'Wallet 1'}</span><ChevronDown size={18} /></button><button className="icon-button" aria-label={t("Wallet settings")} onClick={() => setTab(tab === 'settings' ? 'wallet' : 'settings')}><Menu size={23} /></button></div>
       <div className="wallet-address-row"><button className="address-pill" aria-label={t("Wallet addresses")} onClick={() => openDrawer('addresses')}><img alt="" src={`chain-icons/${chain.icon}`} /><span>{copied ? t("Copied") : compact(account.address)}</span>{copied ? <Check size={13} /> : <Copy size={13} />}</button><ThemeControl /></div>
     </header>
+    <PendingRequests />
     {tab === 'wallet' && <section className="portfolio-home">
       <div className="portfolio-card"><div className="portfolio-total"><div className="portfolio-label">{t("Total balance")}<button className="icon-button" aria-label={hidden ? t("Show balances") : t("Hide balances")} onClick={() => setHidden(!hidden)}>{hidden ? <EyeOff size={16} /> : <Eye size={16} />}</button></div><h1>{totalLabel}</h1><div className="portfolio-subline">{hidden ? t("Balances hidden") : loading && !portfolio ? t("Updating balances…") : native ? `${amount(native.balance)} ${native.symbol}` : portfolioError ? t("Balance unavailable · try refreshing") : t("Select a network to view your assets")}{loading && <RefreshCw size={12} className="spin" />}</div></div>
       <div className="wallet-actions"><Action icon={<ArrowUpRight />} label={t("Send")} disabled={!chain.transactionSupport} onClick={() => startSend()} /><Action icon={<ArrowDownLeft />} label={t("Receive")} onClick={() => openDrawer('receive')} /><Action icon={<ShieldCheck />} label={t("Multisig")} onClick={() => setTab('safe')} /><Action icon={<Globe2 />} label={t("DApps")} disabled={!['evm', 'solana'].includes(family)} onClick={() => void chrome.tabs.create({ url: family === 'solana' ? 'https://jup.ag' : 'https://app.uniswap.org' })} /></div></div>
@@ -99,7 +101,11 @@ export function WalletHome({ status, refresh }: { status: WalletStatus; refresh:
       {(drawer === 'accounts' || drawer === 'addresses' || drawer === 'networks') && <label className="search-field"><Search size={18} /><input autoFocus placeholder={drawer !== 'networks' ? t("Search wallets") : t("Search networks")} value={search} onChange={e => setSearch(e.target.value)} /></label>}
       {(drawer === 'accounts' || drawer === 'addresses') && <WalletSwitcher status={status} search={search} busy={busy} onSelect={(next, network, close) => void run(async () => {
         await api({ type: 'SELECT_WALLET_ACCOUNT', accountId: next.id, chainKey: network.key }); await refresh(); setTab('wallet'); if (close) setDrawer(null);
-      })} onCreate={name => void run(async () => { await api({ type: 'CREATE_WALLET', name }); await refresh(); setTab('wallet'); })} onImport={protectOrImport} />}
+      })} onCreate={name => run(async () => { await api({ type: 'CREATE_WALLET', name }); await refresh(); setTab('wallet'); })} onRename={async (walletId, name) => {
+        setBusy(true); setNotice('');
+        try { await api({ type: 'RENAME_WALLET', walletId, name }); await refresh(); setNotice('Wallet renamed'); }
+        finally { setBusy(false); }
+      }} onImport={protectOrImport} />}
       {drawer === 'networks' && <div className="selection-list">{status.chains.filter(c => `${c.name} ${c.symbol} ${c.chainId ?? ''}`.toLowerCase().includes(search.toLowerCase())).map(c => <button key={c.key} disabled={busy} aria-pressed={c.key === chain.key} onClick={() => void chooseNetwork(c)}><img alt="" src={`chain-icons/${c.icon}`} /><span><strong>{c.name}</strong><small>{c.testnet ? t("Test network") : c.family.toUpperCase()}{!c.transactionSupport ? t(" · Address only") : ''}</small></span>{c.key === chain.key && <Check size={19} />}</button>)}</div>}
       {drawer === 'receive' && <ReceiveAddress address={account.address} chain={chain} copied={copied} onCopy={() => void copy()} protectedWallet={status.passwordProtected} onProtect={() => { setDrawer(null); setSecurity(true); }} />}
       {drawer === 'import' && <RecoverySettings status={status} onRefresh={refresh} initialMode="import" onClose={() => setDrawer(null)} onBusyChange={setBusy} />}

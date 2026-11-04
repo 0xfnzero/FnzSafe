@@ -13,7 +13,6 @@
     ]
   },
   "permissions": [
-    "core:default",
     "allow-submit-fomo-alerts",
     "allow-submit-fomo-auth",
     "allow-submit-fomo-stream",

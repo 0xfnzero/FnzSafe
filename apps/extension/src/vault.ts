@@ -211,11 +211,47 @@ export function validateVaultPayload(payload: VaultPayload): void {
           typeof w.recoveryMnemonic !== 'string' || w.recoveryMnemonic.length > 512 ||
           (w.recoveryMnemonic !== '' && !validateMnemonic(w.recoveryMnemonic, wordlist)) ||
           !payload.accounts.some(a => a.walletId === w.id)) throw new Error('Invalid wallet groups');
+      if (w.recoveryMnemonic) {
+        const seed = mnemonicToSeedSync(w.recoveryMnemonic);
+        try {
+          for (const account of payload.accounts.filter(a => a.walletId === w.id)) {
+            if (!accountMatchesSeed(account, seed)) throw new Error('Recovery phrase does not match wallet accounts; import these keys separately');
+          }
+        } finally { seed.fill(0); }
+      }
       walletIds.add(w.id);
     }
     if (payload.accounts.some(a => !a.walletId || !walletIds.has(a.walletId)) ||
         payload.recoveryMnemonic !== payload.wallets[0].recoveryMnemonic) throw new Error('Invalid wallet groups');
   } else if (payload.accounts.some(a => a.walletId !== undefined)) throw new Error('Invalid wallet groups');
+}
+
+/** Verify recovery coverage independently of the backup's walletId claims. */
+function accountMatchesSeed(account: VaultPayload['accounts'][number], seed: Uint8Array): boolean {
+  let secret: Uint8Array | undefined;
+  try {
+    if (account.family === 'evm') {
+      return HDNodeWallet.fromSeed(seed).derivePath(account.derivationPath ?? "m/44'/60'/0'/0/0").address === account.address;
+    }
+    if (account.family === 'solana') {
+      secret = deriveEd25519Path(seed, account.derivationPath ?? "m/44'/501'/0'/0'");
+      const keypair = Keypair.fromSeed(secret);
+      try { return keypair.publicKey.toBase58() === account.address; }
+      finally { keypair.secretKey.fill(0); }
+    }
+    const path = account.derivationPath ?? (account.family === 'tron' ? "m/44'/195'/0'/0/0" : BITCOIN_TAPROOT_PATH);
+    const root = HDKey.fromMasterSeed(seed);
+    try {
+      const node = root.derive(path);
+      try {
+        if (!node.privateKey) return false;
+        secret = account.family === 'bitcoin' && path === BITCOIN_TAPROOT_PATH
+          ? taprootAccountPrivateKey(node.privateKey) : Uint8Array.from(node.privateKey);
+        return addressFromAccountKey(account.family, `0x${toHex(secret)}`, path) === account.address;
+      } finally { node.wipePrivateData(); }
+    } finally { root.wipePrivateData(); }
+  } catch { return false; }
+  finally { secret?.fill(0); }
 }
 
 function addressFromAccountKey(family: string, privateKey: string, derivationPath?: string): string {
@@ -439,7 +475,10 @@ export function createPrivateKeyVault(family: VaultPayload['accounts'][number]['
 /** Group legacy imports only when their exact keys are recoverable from the recorded root. */
 export function walletGroups(payload: VaultPayload) { return groupedVault(payload).wallets!; }
 export function groupedVault(payload: VaultPayload): VaultPayload {
-  if (payload.wallets) return { ...payload, wallets: payload.wallets.map(w => ({ ...w })), accounts: payload.accounts.map(a => ({ ...a })) };
+  if (payload.wallets) {
+    validateVaultPayload(payload);
+    return { ...payload, wallets: payload.wallets.map(w => ({ ...w })), accounts: payload.accounts.map(a => ({ ...a })) };
+  }
   const derived = payload.recoveryMnemonic ? createInitialVault(payload.recoveryMnemonic).accounts : [];
   const matched = new Set(payload.accounts.filter(a => derived.some(d => d.family === a.family && d.address === a.address && d.privateKey === a.privateKey)).map(a => a.id));
   if (payload.recoveryMnemonic) {
@@ -487,6 +526,20 @@ export function mergeVaultAccounts(existing: VaultPayload, imported: VaultPayloa
   }
   if (!firstNew) throw new Error('These accounts are already imported');
   result.selectedAccountId = firstNew;
+  validateVaultPayload(result);
+  return result;
+}
+
+/** Change only a wallet label; IDs, account selection and secret material stay intact. */
+export function renameVaultWallet(payload: VaultPayload, walletId: string, name: unknown): VaultPayload {
+  if (typeof name !== 'string' || !name.trim()) throw new Error('Enter a wallet name');
+  if (name.length > 80) throw new Error('Wallet name is too long');
+  const result = groupedVault(payload);
+  const wallet = result.wallets!.find(w => w.id === walletId);
+  if (!wallet) throw new Error('Unknown wallet');
+  const trimmed = name.trim();
+  if (result.wallets!.some(w => w.id !== walletId && w.name.toLowerCase() === trimmed.toLowerCase())) throw new Error('A wallet with this name already exists');
+  wallet.name = trimmed;
   validateVaultPayload(result);
   return result;
 }

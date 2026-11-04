@@ -38,7 +38,7 @@ import type {
   VaultPayload,
 } from './types';
 import { importWallet, type WalletImport } from './import-wallet';
-import { createInitialVault, decryptVaultWithMigration, encryptVault, mergeVaultAccounts, walletGroups, groupedVault } from './vault';
+import { createInitialVault, decryptVaultWithMigration, encryptVault, mergeVaultAccounts, renameVaultWallet, walletGroups, groupedVault } from './vault';
 import {
   attachUsdPrices,
   discoverEvmTokens,
@@ -63,7 +63,7 @@ import {
   safeProviderOrigin,
   validateProviderRequest,
 } from './provider-security';
-import { inspectSolanaTransaction } from './solana-security';
+import { inspectSolanaTransaction, validateSolanaMessage, decodeSolanaTransaction } from './solana-security';
 import {
   decryptSessionVault,
   destroyVaultSession,
@@ -107,6 +107,20 @@ let unlockedVault: UnlockedVaultSession | null = null;
 let sessionDeadline = 0;
 let sessionKeepAlive: ReturnType<typeof setInterval> | undefined;
 const pending = new Map<string, PendingRequest>();
+const processing = new Map<string, PendingRequest>();
+let badgeUpdate: Promise<void> = Promise.resolve();
+function syncRequestBadge(): void {
+  // Serialize browser writes so a slower earlier update cannot restore a stale count.
+  badgeUpdate = badgeUpdate.catch(() => undefined).then(async () => {
+    const count = pending.size + processing.size;
+    await chrome.action.setBadgeBackgroundColor({ color: '#2563eb' });
+    await chrome.action.setBadgeTextColor({ color: '#ffffff' });
+    await chrome.action.setBadgeText({ text: count ? String(count) : '' });
+    await chrome.action.setTitle({ title: count ? `FnzSafe Wallet (${count})` : 'FnzSafe Wallet' });
+  }).catch(() => undefined);
+}
+// Requests are tied to live provider ports; a fresh worker must clear any old badge.
+syncRequestBadge();
 const approvalGuard = new ApprovalRequestGuard();
 const portfolioCache = new Map<string, { snapshot: PortfolioSnapshot; expiresAt: number }>();
 
@@ -163,7 +177,21 @@ function errorMessage(error: unknown): string {
 
 async function encryptedVault(): Promise<EncryptedVault | null> {
   const result = await chrome.storage.local.get(VAULT_KEY);
-  return (result[VAULT_KEY] as EncryptedVault | undefined) ?? null;
+  const vault = (result[VAULT_KEY] as EncryptedVault | undefined) ?? null;
+  // A persisted password vault is also a resumable migration marker. Retry on
+  // every open/unlock after a crash or failed IndexedDB deletion.
+  if (vault) await finishDeviceProtection();
+  return vault;
+}
+
+async function finishDeviceProtection(): Promise<void> {
+  try {
+    if (await hasDeviceWallet()) await removeDeviceWallet();
+    if (await hasDeviceWallet()) throw new Error('Device wallet still exists');
+  } catch {
+    lockVault();
+    throw new Error('Wallet protection cleanup failed. The encrypted backup is saved; reopen FnzSafe to retry before unlocking.');
+  }
 }
 
 async function settings(): Promise<WalletSettings> {
@@ -195,12 +223,19 @@ function normalizedSettings(value: WalletSettings): WalletSettings {
   };
 }
 
-async function updateSettings(patch: Partial<WalletSettings>): Promise<WalletSettings> {
+async function updateSettings(patch: Partial<WalletSettings>, approval?: { context: string }): Promise<WalletSettings> {
   const next = normalizedSettings({ ...(await settings()), ...patch });
+  if (approval) assertContextRevision(approval.context);
   contextRevision++;
+  cancelPendingApprovals();
+  const revision = contextRevision;
   reviews.clear();
   portfolioCache.clear();
   await chrome.storage.local.set({ [SETTINGS_KEY]: next });
+  if (approval) {
+    if (!unlockedVault || revision !== contextRevision) throw new Error('Wallet changed during network switch');
+    approval.context = encodeSigningContext(next, revision);
+  }
   return normalizedSettings(next);
 }
 
@@ -219,7 +254,20 @@ function touchSession(): void {
   }).catch(() => undefined);
 }
 
+let clipboardDocument: Promise<void> | undefined;
+async function secretClipboard(action: 'copy' | 'clear', value?: string): Promise<void> {
+  if (!chrome.offscreen) { if (action === 'clear') return; throw new Error('Secure clipboard cleanup is unavailable'); }
+  if (!await chrome.offscreen.hasDocument()) {
+    if (action === 'clear') return;
+    clipboardDocument ??= chrome.offscreen.createDocument({ url: 'clipboard.html', reasons: [chrome.offscreen.Reason.CLIPBOARD], justification: 'Clear copied wallet secrets after 15 seconds even after the wallet window closes.' }).finally(() => { clipboardDocument = undefined; });
+    await clipboardDocument;
+  }
+  const result = await chrome.runtime.sendMessage({ target: 'secret-clipboard', action, value });
+  if (!result?.ok) throw new Error(result?.error ?? 'Clipboard cleanup unavailable. Clear the clipboard manually.');
+}
+
 function lockVault(): void {
+  void secretClipboard('clear').catch(() => chrome.storage.local.set({ clipboardCleanupFailed: true }));
   if (sessionKeepAlive) clearInterval(sessionKeepAlive);
   sessionKeepAlive = undefined; sessionDeadline = 0;
   if (unlockedVault) {
@@ -227,6 +275,7 @@ function lockVault(): void {
   }
   unlockedVault = null;
   contextRevision++;
+  cancelPendingApprovals();
   reviews.clear();
   portfolioCache.clear();
   void chrome.alarms.clear(LOCK_ALARM);
@@ -235,13 +284,16 @@ function lockVault(): void {
 async function decryptUnlockedVault(): Promise<VaultPayload> {
   const session = unlockedVault;
   if (!session) throw new Error('Wallet is locked');
-  return decryptSessionVault(session);
+  const revision = contextRevision;
+  const payload = await decryptSessionVault(session);
+  if (session !== unlockedVault || revision !== contextRevision) throw new Error('Wallet changed during secret access');
+  return payload;
 }
 
 async function unlockVault(password: string): Promise<void> {
+  const generation = contextRevision;
   const stored = await encryptedVault();
   if (!stored) throw new Error('Create a FnzSafe wallet first');
-  const generation = contextRevision;
   const { payload, migrated } = await decryptVaultWithMigration(stored, password);
   if (migrated) {
     await chrome.storage.local.set({ [VAULT_KEY]: await encryptVault(payload, password) });
@@ -285,11 +337,23 @@ async function hasPermission(origin: string, family: 'evm' | 'solana', accountId
   return hasOriginPermission(await permissionStore(), origin, family, accountId, network);
 }
 
-async function grantPermission(origin: string, family: 'evm' | 'solana', account: VaultAccount): Promise<void> {
-  const state = await settings();
-  const network = family === 'evm' ? state.evmChainId : state.solanaCluster;
-  const permissions = grantOriginPermission(await permissionStore(), origin, family, account.id, network);
-  await chrome.storage.local.set({ [PERMISSIONS_KEY]: permissions });
+let permissionMutation: Promise<unknown> = Promise.resolve();
+function mutatePermissions<T>(action: () => Promise<T>): Promise<T> {
+  const next = permissionMutation.then(action);
+  permissionMutation = next.catch(() => undefined);
+  return next;
+}
+
+async function grantPermission(origin: string, family: 'evm' | 'solana', account: VaultAccount, context: string): Promise<void> {
+  return mutatePermissions(async () => {
+    const state = await settings();
+    const network = family === 'evm' ? state.evmChainId : state.solanaCluster;
+    const permissions = grantOriginPermission(await permissionStore(), origin, family, account.id, network);
+    await assertSigningContext(context);
+    assertContextRevision(context);
+    await chrome.storage.local.set({ [PERMISSIONS_KEY]: permissions });
+    await assertSigningContext(context);
+  });
 }
 
 async function approvalView(item: PendingRequest): Promise<ApprovalView> {
@@ -360,6 +424,10 @@ async function approvalView(item: PendingRequest): Promise<ApprovalView> {
       const inspection = inspectSolanaTransaction(String(request.params?.[0] ?? ''), account.address);
       details.push(...inspection.details);
       warnings.push(...inspection.warnings);
+      const simulation = await previewSolanaSimulation(String(request.params?.[0] ?? ''));
+      details.push({ label: 'Simulation', value: simulation.status });
+      warnings.push(...simulation.warnings); blocking ||= simulation.failed;
+
     } else {
       warnings.push('Unlock is required before FnzSafe can validate the transaction signer.');
     }
@@ -371,15 +439,19 @@ async function approvalView(item: PendingRequest): Promise<ApprovalView> {
     const account = unlockedVault ? await activeAccount('solana') : undefined;
     details.push({ label: 'Transaction count', value: String(transactions.length) });
     if (account) {
-      transactions.forEach((transaction, index) => {
+      await Promise.all(transactions.map(async (transaction, index) => {
         const inspection = inspectSolanaTransaction(String(transaction), account.address);
-        details.push({ label: `Transaction ${index + 1} programs`, value: inspection.details.find((detail) => detail.label === 'Programs')?.value ?? 'Unknown' });
-        warnings.push(...inspection.warnings);
-      });
+        details.push(...inspection.details.map(detail => ({ label: `Transaction ${index + 1} · ${detail.label}`, value: detail.value })));
+        warnings.push(...inspection.warnings.map(warning => `Transaction ${index + 1}: ${warning}`));
+        const simulation = await previewSolanaSimulation(String(transaction));
+        details.push({ label: `Transaction ${index + 1} · Simulation`, value: simulation.status });
+        warnings.push(...simulation.warnings.map(warning => `Transaction ${index + 1}: ${warning}`)); blocking ||= simulation.failed;
+      }));
     } else {
       warnings.push('Unlock is required before FnzSafe can validate transaction signers.');
     }
   } else if (request.method === 'solana_signMessage' || request.method === 'personal_sign' || request.method === 'eth_sign') {
+    if (request.method === 'solana_signMessage') validateSolanaMessage(String(request.params?.[0] ?? ''));
     details.push({ label: 'Message to sign', value: displaySignedMessage(request.method, request.params ?? []) });
   } else {
     const first = request.params?.[0];
@@ -400,6 +472,19 @@ async function approvalView(item: PendingRequest): Promise<ApprovalView> {
     locked: unlockedVault === null,
     blocking,
   };
+}
+
+async function previewSolanaSimulation(encoded: string): Promise<{ status: string; warnings: string[]; failed: boolean }> {
+  try {
+    const state = await settings();
+    const chain = configuredChain(chains.find(item => item.key === `solana:${state.solanaCluster}`)!, state.rpcOverrides ?? {});
+    const connection = await solanaConnection(chain);
+    const result = await withTimeout(connection.simulateTransaction(VersionedTransaction.deserialize(decodeSolanaTransaction(encoded)), { sigVerify: false, replaceRecentBlockhash: true }), 8000);
+    if (result.value.err) return { status: `Failed: ${JSON.stringify(result.value.err)}`, warnings: ['Transaction simulation failed. Ask the DApp for a new transaction.'], failed: true };
+    return { status: `Executed without an RPC error · ${result.value.unitsConsumed ?? 'unknown'} compute units`, warnings: ['Simulation is not a security guarantee and does not enumerate every asset or authority change.'], failed: false };
+  } catch {
+    return { status: 'Unavailable', warnings: ['Simulation unavailable. Asset and authority changes have not been verified.'], failed: false };
+  }
 }
 
 async function simulateEvmTransaction(
@@ -438,19 +523,41 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
   });
 }
 
+function assertContextRevision(context: string): void {
+  if (unlockedVault && sessionDeadline && Date.now() >= sessionDeadline) lockVault();
+  if (!unlockedVault || JSON.parse(context)[4] !== contextRevision) throw new Error('Wallet selection changed. Review the request again.');
+}
+
 async function assertSigningContext(context: string): Promise<void> {
-  if (!unlockedVault || context !== await signingContext()) throw new Error('Wallet selection changed. Review the request again.');
+  if (context !== await signingContext()) throw new Error('Wallet selection changed. Review the request again.');
+  assertContextRevision(context);
+}
+
+function encodeSigningContext(state: WalletSettings, revision: number): string {
+  return JSON.stringify([state.activeAccountId, state.evmChainId, state.solanaCluster, state.rpcOverrides, revision]);
 }
 
 async function signingContext(): Promise<string> {
+  const revision = contextRevision;
   const state = await settings();
-  return JSON.stringify([state.activeAccountId, state.evmChainId, state.solanaCluster, state.rpcOverrides, contextRevision]);
+  if (revision !== contextRevision) throw new Error('Wallet selection changed. Review the request again.');
+  return encodeSigningContext(state, revision);
+}
+
+function cancelPendingApprovals(): void {
+  for (const id of pending.keys()) {
+    try { rejectPending(id, 'Wallet locked or changed. Request approval again.'); }
+    catch { /* A disconnected port must not prevent locking the wallet. */ }
+  }
+  // Processing requests retain their original revision and are rejected at the
+  // next boundary. Keep them counted until any in-flight operation has settled.
 }
 
 async function openApproval(item: PendingRequest): Promise<void> {
   approvalGuard.assertAllowed(item.request.id, item.origin, pending);
   item.context = await signingContext();
   pending.set(item.request.id, item);
+  syncRequestBadge();
   item.timeoutId = setTimeout(() => rejectPending(item.request.id, 'Wallet confirmation timed out'), 5 * 60_000);
   try {
     // Anchor to the requesting tab, not a different window the user focused meanwhile.
@@ -486,6 +593,7 @@ function removePending(id: string): PendingRequest | undefined {
   const item = pending.get(id);
   if (!item) return undefined;
   pending.delete(id);
+  syncRequestBadge();
   if (item.timeoutId) clearTimeout(item.timeoutId);
   return item;
 }
@@ -497,36 +605,38 @@ function rejectPending(id: string, message: string): void {
   if (item.windowId) void chrome.windows.remove(item.windowId).catch(() => undefined);
 }
 
-async function executeProviderRequest(request: ProviderRequest, origin: string, reviewed?: PreparedTransaction): Promise<unknown> {
+async function executeProviderRequest(request: ProviderRequest, origin: string, approval: { context: string }, reviewed?: PreparedTransaction): Promise<unknown> {
+  await assertSigningContext(approval.context);
   if (request.method === 'eth_requestAccounts') {
     const account = await activeAccount('evm');
-    await grantPermission(origin, 'evm', account);
+    await grantPermission(origin, 'evm', account, approval.context);
     return [account.address];
   }
   if (request.method === 'solana_connect') {
     const account = await activeAccount('solana');
-    await grantPermission(origin, 'solana', account);
+    await grantPermission(origin, 'solana', account, approval.context);
     return { publicKey: account.address };
   }
 
   const account = await activeAccount(request.family);
   if (!(await hasPermission(origin, request.family, account.id))) throw new Error('Connect this site to the selected account before signing');
+  await assertSigningContext(approval.context);
   if (request.method === 'wallet_addEthereumChain') {
     requestedBuiltinChain(request.params);
     return null;
   }
   if (request.method === 'wallet_switchEthereumChain') {
     const chainId = requestedBuiltinChain(request.params).chainId!;
-    await updateSettings({ evmChainId: chainId });
-    await grantPermission(origin, 'evm', account);
+    await updateSettings({ evmChainId: chainId }, approval);
+    await grantPermission(origin, 'evm', account, approval.context);
     return null;
   }
-  if (request.family === 'evm') return executeEvm(request, reviewed);
-  return executeSolana(request);
+  if (request.family === 'evm') return executeEvm(request, approval.context, reviewed);
+  return executeSolana(request, approval.context);
 }
 
-async function executeEvm(request: ProviderRequest, reviewed?: PreparedTransaction): Promise<unknown> {
-  const context = await signingContext();
+async function executeEvm(request: ProviderRequest, context: string, reviewed?: PreparedTransaction): Promise<unknown> {
+  await assertSigningContext(context);
   const account = await activeAccount('evm', true);
   const wallet = new Wallet(account.privateKey);
   const state = await settings();
@@ -546,17 +656,9 @@ async function executeEvm(request: ProviderRequest, reviewed?: PreparedTransacti
     case 'eth_signTypedData_v4': {
       assertRequestedAccount(params[0], account.address);
       const rawPayload = params[1] ?? params[0];
-      inspectTypedData(rawPayload, chain.chainId!);
-      const payload = (typeof rawPayload === 'string' ? JSON.parse(rawPayload) : rawPayload) as {
-        domain: Record<string, unknown>;
-        types: Record<string, Array<{ name: string; type: string }>>;
-        message: Record<string, unknown>;
-      };
-      if (!payload || typeof payload !== 'object' || !payload.domain || !payload.types || !payload.message) {
-        throw new Error('Typed data payload is invalid');
-      }
-      const { EIP712Domain: _, ...types } = payload.types;
-      return wallet.signTypedData(payload.domain, types, payload.message);
+      const { payload } = inspectTypedData(rawPayload, chain.chainId!);
+      assertContextRevision(context);
+      return wallet.signTypedData(payload.domain, payload.types, payload.message);
     }
     case 'eth_signTransaction':
     case 'eth_sendTransaction': {
@@ -580,56 +682,59 @@ function assertRequestedAccount(value: unknown, expectedAddress: string): void {
   }
 }
 
-async function executeSolana(request: ProviderRequest): Promise<unknown> {
-  const context = await signingContext();
-  const account = await activeAccount('solana', true);
-  const keypair = Keypair.fromSecretKey(bs58.decode(account.privateKey));
+async function executeSolana(request: ProviderRequest, context: string): Promise<unknown> {
   await assertSigningContext(context);
-  if (request.method === 'solana_signMessage') {
-    const encoded = String(request.params?.[0] ?? '');
-    const signature = nacl.sign.detached(Uint8Array.from(atob(encoded), (char) => char.charCodeAt(0)), keypair.secretKey);
-    return { signature: bs58.encode(signature), publicKey: account.address };
-  }
-  if (request.method === 'solana_signAllTransactions') {
-    const encodedTransactions = request.params?.[0];
-    if (!Array.isArray(encodedTransactions) || encodedTransactions.length === 0 || encodedTransactions.length > 10) {
-      throw new Error('A batch must contain between 1 and 10 transactions');
-    }
-    encodedTransactions.forEach((encoded) => inspectSolanaTransaction(String(encoded), account.address));
-    return {
-      signedTransactions: encodedTransactions.map((encoded) =>
-        signSolanaTransaction(String(encoded), keypair).signedBase64,
-      ),
-    };
-  }
-  const encoded = String(request.params?.[0] ?? '');
-  inspectSolanaTransaction(encoded, account.address);
-  const { signed, signedBase64 } = signSolanaTransaction(encoded, keypair);
-  if (request.method === 'solana_signTransaction') {
-    return { signedTransaction: signedBase64 };
-  }
-  if (request.method === 'solana_signAndSendTransaction') {
-    const state = await settings();
-    const chain = configuredChain(chains.find((item) => item.key === `solana:${state.solanaCluster}`)!, state.rpcOverrides ?? {});
-    const connection = await solanaConnection(chain);
-    let simulation;
-    try {
-      simulation = await withTimeout(
-        connection.simulateTransaction(VersionedTransaction.deserialize(signed), { sigVerify: true }),
-        10_000,
-      );
-    } catch {
-      simulation = await withTimeout(connection.simulateTransaction(Transaction.from(signed)), 10_000);
-    }
-    if (simulation.value.err) {
-      throw new Error(`Transaction simulation failed: ${JSON.stringify(simulation.value.err)}`);
-    }
+  const account = await activeAccount('solana', true);
+  const secretKey = bs58.decode(account.privateKey);
+  try {
+    const keypair = Keypair.fromSecretKey(secretKey);
     await assertSigningContext(context);
-    const signature = await connection.sendRawTransaction(signed);
-    await recordActivity({ hash: signature, from: account.address, chainKey: chain.key, kind: 'dapp' });
-    return { signature, signedTransaction: signedBase64 };
-  }
-  throw new Error(`Unsupported Solana signing method: ${request.method}`);
+    if (request.method === 'solana_signMessage') {
+      const encoded = String(request.params?.[0] ?? '');
+      const signature = nacl.sign.detached(validateSolanaMessage(encoded), secretKey);
+      return { signature: bs58.encode(signature), publicKey: account.address };
+    }
+    if (request.method === 'solana_signAllTransactions') {
+      const encodedTransactions = request.params?.[0];
+      if (!Array.isArray(encodedTransactions) || encodedTransactions.length === 0 || encodedTransactions.length > 10) {
+        throw new Error('A batch must contain between 1 and 10 transactions');
+      }
+      encodedTransactions.forEach((encoded) => inspectSolanaTransaction(String(encoded), account.address));
+      return {
+        signedTransactions: encodedTransactions.map((encoded) =>
+          signSolanaTransaction(String(encoded), keypair).signedBase64,
+        ),
+      };
+    }
+    const encoded = String(request.params?.[0] ?? '');
+    inspectSolanaTransaction(encoded, account.address);
+    const { signed, signedBase64 } = signSolanaTransaction(encoded, keypair);
+    if (request.method === 'solana_signTransaction') {
+      return { signedTransaction: signedBase64 };
+    }
+    if (request.method === 'solana_signAndSendTransaction') {
+      const state = await settings();
+      const chain = configuredChain(chains.find((item) => item.key === `solana:${state.solanaCluster}`)!, state.rpcOverrides ?? {});
+      const connection = await solanaConnection(chain);
+      let simulation;
+      try {
+        simulation = await withTimeout(
+          connection.simulateTransaction(VersionedTransaction.deserialize(signed), { sigVerify: true }),
+          10_000,
+        );
+      } catch {
+        simulation = await withTimeout(connection.simulateTransaction(Transaction.from(signed)), 10_000);
+      }
+      if (simulation.value.err) {
+        throw new Error(`Transaction simulation failed: ${JSON.stringify(simulation.value.err)}`);
+      }
+      await assertSigningContext(context);
+      const signature = await connection.sendRawTransaction(signed);
+      await recordActivity({ hash: signature, from: account.address, chainKey: chain.key, kind: 'dapp' });
+      return { signature, signedTransaction: signedBase64 };
+    }
+    throw new Error(`Unsupported Solana signing method: ${request.method}`);
+  } finally { secretKey.fill(0); }
 }
 
 function signSolanaTransaction(
@@ -885,9 +990,13 @@ chrome.runtime.onConnect.addListener((port) => {
 });
 
 let uiMutation: Promise<unknown> = Promise.resolve();
-const SERIAL_UI_ACTIONS = new Set(['SELECT_WALLET_ACCOUNT', 'SET_AUTO_LOCK', 'CREATE_WALLET', 'OPEN_WALLET', 'PROTECT_DEFAULT_WALLET', 'CONFIRM_BACKUP', 'CREATE_VAULT', 'IMPORT_ACCOUNTS', 'IMPORT_TOKEN', 'SET_RPC', 'SET_NETWORK', 'SET_ACTIVE_ACCOUNT', 'SET_ENHANCED_ASSET_DETECTION', 'SAFE_IMPORT', 'SAFE_IMPORT_TRANSACTIONS', 'SAFE_PROPOSE', 'SAFE_ACCOUNT', 'EXECUTE_REVIEW', 'REFRESH_ACTIVITY', 'SEND_NATIVE']);
+const SERIAL_UI_ACTIONS = new Set(['SELECT_WALLET_ACCOUNT', 'SET_AUTO_LOCK', 'CREATE_WALLET', 'RENAME_WALLET', 'OPEN_WALLET', 'PROTECT_DEFAULT_WALLET', 'CONFIRM_BACKUP', 'CREATE_VAULT', 'IMPORT_ACCOUNTS', 'IMPORT_TOKEN', 'SET_RPC', 'SET_NETWORK', 'SET_ACTIVE_ACCOUNT', 'SET_ENHANCED_ASSET_DETECTION', 'SAFE_IMPORT', 'SAFE_IMPORT_TRANSACTIONS', 'SAFE_PROPOSE', 'SAFE_ACCOUNT', 'EXECUTE_REVIEW', 'REFRESH_ACTIVITY', 'SEND_NATIVE']);
 
 chrome.runtime.onMessage.addListener((message: Record<string, unknown>, sender, sendResponse) => {
+  if (message.target === 'secret-clipboard') return false;
+  if (message.type === 'CLIPBOARD_CLEANUP_FAILED' && sender.id === chrome.runtime.id && sender.url === chrome.runtime.getURL('clipboard.html')) {
+    void chrome.storage.local.set({ clipboardCleanupFailed: true }); return false;
+  }
   if (sender.id !== chrome.runtime.id || !sender.url || ![chrome.runtime.getURL('popup.html'), chrome.runtime.getURL('approval.html')].includes(sender.url.split('?')[0])) {
     sendResponse({ ok: false, error: 'Untrusted wallet UI caller' });
     return false;
@@ -905,6 +1014,17 @@ chrome.runtime.onMessage.addListener((message: Record<string, unknown>, sender, 
 async function handleUiMessage(message: Record<string, unknown>): Promise<unknown> {
   if (unlockedVault && sessionDeadline && Date.now() >= sessionDeadline) lockVault();
   switch (message.type) {
+    case 'COPY_BACKUP_SECRET': {
+      if (!unlockedVault || deviceMode || typeof message.value !== 'string' || message.value.length > 1024 * 1024) throw new Error('Unlock before copying a backup');
+      const generation = contextRevision;
+      await secretClipboard('copy', message.value);
+      if (!unlockedVault || generation !== contextRevision) { await secretClipboard('clear'); throw new Error('Wallet locked during copy'); }
+      await chrome.storage.local.set({ clipboardCleanupFailed: false });
+      return true;
+    }
+    case 'CLEAR_BACKUP_CLIPBOARD': await secretClipboard('clear'); return true;
+    case 'BACKUP_CLIPBOARD_STATUS': return { failed: !!(await chrome.storage.local.get('clipboardCleanupFailed')).clipboardCleanupFailed };
+
     case 'IMPORT_TOKEN': {
       if (!unlockedVault) throw new Error('Unlock the wallet first');
       const context = await signingContext();
@@ -1089,9 +1209,29 @@ async function handleUiMessage(message: Record<string, unknown>): Promise<unknow
         return true;
       } catch (e) { if (unlockedVault !== session) destroyVaultSession(session); throw e; }
     }
-    case 'OPEN_WALLET': {
-      if (await encryptedVault()) return true;
+    case 'RENAME_WALLET': {
+      if (!unlockedVault) throw new Error('Unlock the wallet first');
       const generation = contextRevision;
+      const password = deviceMode ? undefined : await sessionAuthorization(unlockedVault);
+      const stored = await encryptedVault();
+      const existing = deviceMode ? await loadDeviceWallet() : stored ? (await decryptVaultWithMigration(stored, password!)).payload : null;
+      if (!existing) throw new Error('Wallet not found');
+      const renamed = renameVaultWallet(existing, String(message.walletId ?? ''), message.name);
+      const session = await protectVaultInMemory(renamed, password, true);
+      try {
+        const encrypted = password !== undefined ? await encryptVault(renamed, password) : null;
+        if (generation !== contextRevision || !unlockedVault) throw new Error('Wallet changed during rename');
+        if (encrypted) await chrome.storage.local.set({ [VAULT_KEY]: encrypted });
+        else await saveDeviceWallet(renamed);
+        if (generation !== contextRevision || !unlockedVault) throw new Error('Wallet changed during rename');
+        destroyVaultSession(unlockedVault); unlockedVault = session;
+        touchSession();
+        return true;
+      } catch (e) { if (unlockedVault !== session) destroyVaultSession(session); throw e; }
+    }
+    case 'OPEN_WALLET': {
+      const generation = contextRevision;
+      if (await encryptedVault()) return true;
       const payload = await ensureDeviceWallet();
       const savedSettings = (await chrome.storage.local.get(SETTINGS_KEY))[SETTINGS_KEY];
       if (!savedSettings) await chrome.storage.local.set({ [SETTINGS_KEY]: {
@@ -1115,11 +1255,11 @@ async function handleUiMessage(message: Record<string, unknown>): Promise<unknow
       if (generation !== contextRevision || !unlockedVault) throw new Error('Wallet changed during password setup');
       // Persist the password vault first: a crash must never destroy the only copy.
       await chrome.storage.local.set({ [VAULT_KEY]: encrypted, passkeyConfig: passkey, backupConfirmed: false });
+      await finishDeviceProtection();
       const session = await protectVaultInMemory(payload, String(message.password), true);
       if (generation !== contextRevision || !unlockedVault) { destroyVaultSession(session); throw new Error('Wallet changed during protection'); }
       destroyVaultSession(unlockedVault); unlockedVault = session;
       deviceMode = false;
-      await removeDeviceWallet().catch(() => undefined);
       contextRevision++; reviews.clear();
       return true;
     }
@@ -1154,6 +1294,7 @@ async function handleUiMessage(message: Record<string, unknown>): Promise<unknow
       const { payload } = await decryptVaultWithMigration(stored, String(message.password ?? ''));
       if (!unlockedVault || generation !== contextRevision) throw new Error('Wallet changed during backup');
       const activeId = (await settings()).activeAccountId;
+      if (!unlockedVault || generation !== contextRevision) throw new Error('Wallet changed during backup');
       const walletId = message.walletId ?? unlockedVault.accounts.find(a => a.id === activeId)?.walletId;
       const wallet = walletGroups(payload).find(w => w.id === walletId) ?? (!message.walletId ? walletGroups(payload)[0] : undefined);
       if (!wallet?.recoveryMnemonic) throw new Error('Imported private keys require an encrypted backup');
@@ -1198,13 +1339,17 @@ async function handleUiMessage(message: Record<string, unknown>): Promise<unknow
       };
     }
     case 'CREATE_VAULT': {
+      const generation = contextRevision;
+      const assertCurrent = () => { if (generation !== contextRevision) throw new Error('Wallet creation cancelled by lock'); };
       if (await encryptedVault() || await loadDeviceWallet()) throw new Error('A wallet already exists; import accounts from Settings');
       const password = String(message.password ?? '');
       const payload = message.import ? await importWallet(message.import as WalletImport) : createInitialVault(
         typeof message.mnemonic === 'string' ? message.mnemonic : undefined,
       );
+      const encrypted = await encryptVault(payload, password);
+      assertCurrent();
       await chrome.storage.local.set({
-        [VAULT_KEY]: await encryptVault(payload, password),
+        [VAULT_KEY]: encrypted,
         [SETTINGS_KEY]: {
           activeAccountId: payload.selectedAccountId,
           evmChainId: payload.selectedEvmChainId,
@@ -1213,10 +1358,12 @@ async function handleUiMessage(message: Record<string, unknown>): Promise<unknow
         } satisfies WalletSettings,
         backupConfirmed: false,
       });
-      const recoveryMnemonic = payload.recoveryMnemonic;
-      unlockedVault = await protectVaultInMemory(payload, password, true);
+      assertCurrent();
+      const session = await protectVaultInMemory(payload, password, true);
+      try { assertCurrent(); } catch (error) { destroyVaultSession(session); throw error; }
+      unlockedVault = session;
       touchSession();
-      return { recoveryMnemonic };
+      return { recoveryMnemonic: payload.recoveryMnemonic };
     }
     case 'IMPORT_ACCOUNTS': {
       if (!unlockedVault) throw new Error('Unlock the wallet first');
@@ -1242,13 +1389,14 @@ async function handleUiMessage(message: Record<string, unknown>): Promise<unknow
     }
     case 'EXPORT_BACKUP': {
       if (!unlockedVault) throw new Error('Unlock the wallet first');
+      const generation = contextRevision;
       const stored = await encryptedVault();
       if (!stored) throw new Error('Wallet not found');
       const { payload } = await decryptVaultWithMigration(stored, String(message.password ?? ''));
-      if ((await chrome.storage.local.get('passkeyConfig')).passkeyConfig) {
-        return encryptVault(payload, String(message.backupPassword ?? ''));
-      }
-      return stored;
+      const passkey = (await chrome.storage.local.get('passkeyConfig')).passkeyConfig;
+      const backup = passkey ? await encryptVault(payload, String(message.backupPassword ?? '')) : stored;
+      if (!unlockedVault || generation !== contextRevision) throw new Error('Wallet changed during backup');
+      return backup;
     }
     case 'GET_BALANCE': {
       if (!unlockedVault) throw new Error('Wallet is locked');
@@ -1352,14 +1500,18 @@ async function handleUiMessage(message: Record<string, unknown>): Promise<unknow
       lockVault();
       return true;
     case 'CLEAR_PERMISSIONS':
-      await chrome.storage.local.remove(PERMISSIONS_KEY);
+      contextRevision++; cancelPendingApprovals(); reviews.clear();
+      await mutatePermissions(() => chrome.storage.local.remove(PERMISSIONS_KEY));
       return true;
     case 'REVOKE_PERMISSION': {
       const origin = String(message.origin ?? '');
-      const permissions = await permissionStore();
-      if (!(origin in permissions)) throw new Error('Connected site was not found');
-      delete permissions[origin];
-      await chrome.storage.local.set({ [PERMISSIONS_KEY]: permissions });
+      contextRevision++; cancelPendingApprovals(); reviews.clear();
+      await mutatePermissions(async () => {
+        const permissions = await permissionStore();
+        if (!(origin in permissions)) throw new Error('Connected site was not found');
+        delete permissions[origin];
+        await chrome.storage.local.set({ [PERMISSIONS_KEY]: permissions });
+      });
       return true;
     }
     case 'TOUCH_SESSION':
@@ -1408,6 +1560,20 @@ async function handleUiMessage(message: Record<string, unknown>): Promise<unknow
     case 'SET_ENHANCED_ASSET_DETECTION':
       await updateSettings({ enhancedAssetDetection: message.enabled === true });
       return true;
+    case 'GET_PENDING_REQUESTS': {
+      for (const [id, item] of pending) if (item.expiresAt <= Date.now()) rejectPending(id, 'Wallet confirmation timed out');
+      return [...pending.values(), ...processing.values()].map(item => ({
+        id: item.request.id, origin: item.origin, method: item.request.method,
+        processing: processing.has(item.request.id),
+      }));
+    }
+    case 'FOCUS_PENDING': {
+      const item = pending.get(String(message.id ?? ''));
+      if (!item || item.expiresAt <= Date.now()) throw new Error('This request expired or was already handled');
+      if (item.windowId === undefined) throw new Error('Confirmation window is opening');
+      await chrome.windows.update(item.windowId, { focused: true });
+      return true;
+    }
     case 'GET_PENDING': {
       const item = pending.get(String(message.id ?? ''));
       if (!item) throw new Error('This request expired or was already handled');
@@ -1416,12 +1582,15 @@ async function handleUiMessage(message: Record<string, unknown>): Promise<unknow
         throw new Error('This request expired or was already handled');
       }
       if (item.context !== await signingContext()) throw new Error('Account or network changed. Request approval again.');
-      return approvalView(item);
+      const view = await approvalView(item);
+      if (item.context !== await signingContext() || pending.get(item.request.id) !== item) throw new Error('Account or network changed. Request approval again.');
+      return view;
     }
     case 'RESOLVE_PENDING': {
       const id = String(message.id ?? '');
       const item = pending.get(id);
       if (!item) throw new Error('This request expired or was already handled');
+      processing.set(id, item);
       removePending(id);
       try {
         if (!message.approved) {
@@ -1430,13 +1599,25 @@ async function handleUiMessage(message: Record<string, unknown>): Promise<unknow
         }
         if (!unlockedVault) throw new Error('Unlock and review this request before approving');
         if (item.expiresAt <= Date.now() || item.context !== await signingContext()) throw new Error('Account or network changed. Request approval again.');
-        const result = await executeProviderRequest(item.request, item.origin, item.evmTransaction);
+        const approval = { context: item.context! };
+        const result = await executeProviderRequest(item.request, item.origin, approval, item.evmTransaction);
+        try {
+          await assertSigningContext(approval.context);
+          assertContextRevision(approval.context);
+        } catch (error) {
+          if (['eth_sendTransaction', 'solana_signAndSendTransaction'].includes(item.request.method)) {
+            throw new Error('Wallet changed after submission. The transaction may already be sent; check transaction history before retrying.');
+          }
+          throw error;
+        }
         item.port.postMessage({ id, result });
         return true;
       } catch (error) {
         item.port.postMessage({ id, error: { code: -32603, message: errorMessage(error) } });
         throw error;
       } finally {
+        processing.delete(id);
+        syncRequestBadge();
         if (item.windowId) void chrome.windows.remove(item.windowId).catch(() => undefined);
       }
     }
@@ -1457,3 +1638,7 @@ chrome.windows.onRemoved.addListener((windowId) => {
 });
 
 chrome.runtime.onSuspend.addListener(lockVault);
+
+// Resume interrupted protection when the service worker starts. UI open/unlock
+// retries again and surfaces cleanup failures without enabling signing.
+void encryptedVault().catch(() => console.warn('Wallet protection cleanup needs retry; unlock remains blocked.'));

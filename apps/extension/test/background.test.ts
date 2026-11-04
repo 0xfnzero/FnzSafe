@@ -6,6 +6,9 @@ let connectListener: (port: any) => void;
 let listener: (message: Record<string, unknown>, sender: unknown, respond: (r: any) => void) => unknown;
 const storage: Record<string, unknown> = {};
 let failWrite = false;
+let holdWrite: (() => Promise<void>) | undefined;
+let badgeText = 'stale';
+let removedListener: (id: number) => void;
 let lastAlarm = 0;
 let alarmListener: (alarm: { name: string }) => void;
 const noopEvent = { addListener() {} };
@@ -14,16 +17,48 @@ Object.assign(globalThis, { chrome: {
     onConnect: { addListener(fn: typeof connectListener) { connectListener = fn; } }, onMessage: { addListener(fn: typeof listener) { listener = fn; } }, onSuspend: noopEvent },
   storage: { local: {
     async get(keys: string | string[]) { const list = Array.isArray(keys) ? keys : [keys]; return Object.fromEntries(list.map(k => [k, storage[k]])); },
-    async set(values: Record<string, unknown>) { if (failWrite) { failWrite = false; throw new Error('Simulated storage failure'); } Object.assign(storage, values); },
+    async set(values: Record<string, unknown>) { if (holdWrite) await holdWrite(); if (failWrite) { failWrite = false; throw new Error('Simulated storage failure'); } Object.assign(storage, values); },
     async remove(key: string) { delete storage[key]; },
   } }, alarms: { async create(_name: string, options: { when: number }) { lastAlarm = options.when; }, async clear() { lastAlarm = 0; }, onAlarm: { addListener(fn: typeof alarmListener) { alarmListener = fn; } } },
-  windows: { onRemoved: noopEvent },
+  action: {
+    async setBadgeBackgroundColor() {}, async setBadgeTextColor() {},
+    async setBadgeText({ text }: { text: string }) { badgeText = text; }, async setTitle() {},
+  },
+  windows: { onRemoved: { addListener(fn: typeof removedListener) { removedListener = fn; } } },
 } });
 await import('../src/background');
 test.after(async () => { await send({ type: 'LOCK' }); });
 function send(message: Record<string, unknown>, url = 'chrome-extension://fixture-extension/popup.html'): Promise<any> {
   return new Promise(r => listener(message, { id: 'fixture-extension', url }, r));
 }
+test('initial vault creation cannot restore an unlocked session or return secrets after LOCK', async () => {
+  const subtle = crypto.subtle as any;
+  for (const stage of ['deriveKey', 'storage', 'generateKey']) {
+    let release!: () => void, reached!: () => void;
+    const held = new Promise<void>(r => { release = r; });
+    const started = new Promise<void>(r => { reached = r; });
+    const original = stage === 'storage' ? undefined : subtle[stage];
+    const pause = async () => { reached(); await held; };
+    if (stage === 'storage') holdWrite = pause;
+    else subtle[stage] = async (...args: any[]) => { await pause(); return original.apply(subtle, args); };
+    try {
+      const creating = send({ type: 'CREATE_VAULT', password: 'fixture-password', mnemonic: 'test test test test test test test test test test test junk' });
+      await started;
+      assert.equal((await send({ type: 'LOCK' })).ok, true);
+      assert.equal((await send({ type: 'SESSION_STATUS' })).result.locked, true);
+      release();
+      const result = await creating;
+      assert.equal(result.ok, false, stage);
+      assert.equal(result.result, undefined, 'never return a recovery phrase after lock');
+      assert.equal((await send({ type: 'SESSION_STATUS' })).result.locked, true, stage);
+    } finally {
+      release(); holdWrite = undefined;
+      if (original) subtle[stage] = original;
+      for (const key of Object.keys(storage)) delete storage[key];
+    }
+  }
+});
+
 test('background rejects website callers and serializes imports without losing existing wallet secrets', async () => {
   assert.equal((await send({ type: 'STATUS' }, 'https://dapp.example/')).ok, false);
   assert.equal((await send({ type: 'CREATE_VAULT', password: 'fixture-password', mnemonic: 'test test test test test test test test test test test junk' })).ok, true);
@@ -244,5 +279,164 @@ test('DApp network switching requires approval; unknown networks return 4902 wit
   assert.equal((await send({ type: 'RESOLVE_PENDING', id, approved: true })).ok, true);
   assert.equal((await response).result, null);
   assert.equal((await provider('eth_chainId')).result, '0x61');
+  await send({ type: 'LOCK' });
+});
+
+async function badge(expected: string) {
+  await new Promise(r => setImmediate(r));
+  assert.equal(badgeText, expected);
+}
+
+test('request badge tracks concurrent approvals, processing, rejection, close, disconnect, expiry and popup failure', async () => {
+  await badge('');
+  await send({ type: 'UNLOCK', password: 'multi-wallet-password' });
+  let sequence = 500, failPopup = false;
+  const windows = new Map<string, number>();
+  Object.assign(chrome.windows, {
+    async get() { return { left: 0, top: 0, width: 1200, height: 800 }; },
+    async create(options: chrome.windows.CreateData) {
+      if (failPopup) throw new Error('Popup failed');
+      const id = ++sequence; windows.set(new URL(options.url as string).searchParams.get('id')!, id); return { id };
+    },
+    async update(id: number) { assert.ok([...windows.values()].includes(id)); },
+    async remove() {},
+  });
+  function connect(host: string) {
+    let receive!: (r: any) => void, disconnect!: () => void;
+    const responses: any[] = [];
+    connectListener({ name: 'fnzsafe-provider', sender: { url: `https://${host}/`, frameId: 0, tab: { windowId: 321 } },
+      onMessage: { addListener(fn: typeof receive) { receive = fn; } },
+      onDisconnect: { addListener(fn: typeof disconnect) { disconnect = fn; } },
+      postMessage(message: any) { responses.push(message); }, disconnect() {} });
+    const id = crypto.randomUUID();
+    receive({ channel: 'fnzsafe:provider', id, family: 'evm', method: 'eth_requestAccounts', params: [] });
+    return { id, responses, disconnect: () => disconnect() };
+  }
+  async function ready(request: ReturnType<typeof connect>) {
+    for (let i = 0; i < 100 && !windows.has(request.id) && !request.responses.length; i++) await new Promise(r => setImmediate(r));
+    await new Promise(r => setImmediate(r));
+  }
+  const first = connect('badge-one.example'), second = connect('badge-two.example');
+  await ready(first); await ready(second); await badge('2');
+  assert.equal((await send({ type: 'GET_PENDING_REQUESTS' })).result.length, 2);
+  assert.equal((await send({ type: 'FOCUS_PENDING', id: first.id })).ok, true);
+  let release!: () => void, entered!: () => void;
+  const started = new Promise<void>(r => { entered = r; });
+  const gate = new Promise<void>(r => { release = r; });
+  holdWrite = async () => { entered(); await gate; };
+  const resolving = send({ type: 'RESOLVE_PENDING', id: first.id, approved: true });
+  await started;
+  await badge('2');
+  assert.equal((await send({ type: 'GET_PENDING_REQUESTS' })).result.find((r: any) => r.id === first.id).processing, true);
+  assert.equal((await send({ type: 'RESOLVE_PENDING', id: first.id, approved: true })).ok, false);
+  holdWrite = undefined; release(); assert.equal((await resolving).ok, true);
+  await badge('1');
+  assert.equal((await send({ type: 'RESOLVE_PENDING', id: second.id, approved: false })).ok, true);
+  await badge('');
+  const closing = connect('badge-close.example'); await ready(closing); await badge('1');
+  removedListener(windows.get(closing.id)!); await badge('');
+  assert.equal(closing.responses.at(-1).error.code, 4001);
+  const disconnected = connect('badge-disconnect.example'); await ready(disconnected); await badge('1');
+  disconnected.disconnect(); await badge('');
+  const expired = connect('badge-expiry.example'); await ready(expired); await badge('1');
+  const now = Date.now; Date.now = () => now() + 6 * 60_000;
+  try { assert.equal((await send({ type: 'GET_PENDING_REQUESTS' })).result.length, 0); }
+  finally { Date.now = now; }
+  await badge(''); assert.equal(expired.responses.at(-1).error.code, 4001);
+  failPopup = true;
+  const failed = connect('badge-failure.example'); await ready(failed); await badge('');
+  assert.ok(failed.responses.at(-1).error);
+  await send({ type: 'LOCK' });
+});
+
+test('renaming persists in device and protected wallets and never changes account secrets or selection', async () => {
+  await send({ type: 'LOCK' });
+  for (const key of Object.keys(storage)) delete storage[key];
+  await send({ type: 'OPEN_WALLET' });
+  const before = (await send({ type: 'STATUS' })).result;
+  const walletId = before.activeWalletId;
+  assert.equal((await send({ type: 'RENAME_WALLET', walletId, name: '  Main wallet  ' })).ok, true);
+  await send({ type: 'LOCK' }); await send({ type: 'OPEN_WALLET' });
+  let status = (await send({ type: 'STATUS' })).result;
+  assert.equal(status.wallets[0].name, 'Main wallet');
+  assert.deepEqual(status.accounts, before.accounts);
+  assert.deepEqual(status.settings, before.settings);
+  await send({ type: 'PROTECT_DEFAULT_WALLET', password: 'rename-password' });
+  await send({ type: 'CREATE_WALLET', name: 'Other wallet' });
+  const initial = await decryptVault(storage.encryptedVault as any, 'rename-password');
+  for (const name of ['', '  ', 'OTHER WALLET', 'x'.repeat(81), 123]) {
+    assert.equal((await send({ type: 'RENAME_WALLET', walletId, name })).ok, false);
+  }
+  assert.equal((await send({ type: 'RENAME_WALLET', walletId: 'missing', name: 'New name' })).ok, false);
+  const previous = JSON.stringify(storage.encryptedVault);
+  failWrite = true;
+  assert.equal((await send({ type: 'RENAME_WALLET', walletId, name: 'Must not persist' })).ok, false);
+  assert.equal(JSON.stringify(storage.encryptedVault), previous);
+  assert.equal((await send({ type: 'STATUS' })).result.wallets[0].name, 'Main wallet');
+  const secondId = initial.wallets![1].id;
+  assert.ok((await Promise.all([
+    send({ type: 'RENAME_WALLET', walletId, name: 'Savings' }),
+    send({ type: 'RENAME_WALLET', walletId: secondId, name: 'Spending' }),
+  ])).every(result => result.ok));
+  const restored = await decryptVault(storage.encryptedVault as any, 'rename-password');
+  assert.deepEqual(restored.accounts, initial.accounts);
+  assert.equal(restored.selectedAccountId, initial.selectedAccountId);
+  assert.deepEqual(restored.wallets!.map(w => w.recoveryMnemonic), initial.wallets!.map(w => w.recoveryMnemonic));
+  await send({ type: 'LOCK' });
+  assert.equal((await send({ type: 'RENAME_WALLET', walletId, name: 'Locked rename' })).ok, false);
+  await send({ type: 'UNLOCK', password: 'rename-password' });
+  status = (await send({ type: 'STATUS' })).result;
+  assert.deepEqual(status.wallets.map((w: any) => w.name), ['Savings', 'Spending']);
+  await send({ type: 'LOCK' });
+});
+
+test('protection fails closed on cleanup failure and resumes from the encrypted copy', async () => {
+  await send({ type: 'LOCK' });
+  for (const key of Object.keys(storage)) delete storage[key];
+  await send({ type: 'OPEN_WALLET' });
+  const before = (await send({ type: 'STATUS' })).result.accounts;
+  const originalDelete = IDBObjectStore.prototype.delete;
+  IDBObjectStore.prototype.delete = function(key) {
+    if (this.name === 'vault') throw new Error('Injected deletion failure');
+    return originalDelete.call(this, key);
+  };
+  try {
+    const failed = await send({ type: 'PROTECT_DEFAULT_WALLET', password: 'cleanup-fixture-password' });
+    assert.equal(failed.ok, false); assert.match(failed.error, /cleanup failed/);
+    assert.ok(storage.encryptedVault, 'encrypted recovery copy must survive');
+    assert.equal((await send({ type: 'SESSION_STATUS' })).result.locked, true);
+    assert.equal((await send({ type: 'OPEN_WALLET' })).ok, false);
+    assert.equal((await send({ type: 'UNLOCK', password: 'cleanup-fixture-password' })).ok, false);
+  } finally { IDBObjectStore.prototype.delete = originalDelete; }
+  assert.equal((await send({ type: 'OPEN_WALLET' })).ok, true);
+  const { hasDeviceWallet } = await import('../src/device-vault');
+  assert.equal(await hasDeviceWallet(), false);
+  assert.equal((await send({ type: 'UNLOCK', password: 'cleanup-fixture-password' })).ok, true);
+  assert.deepEqual((await send({ type: 'STATUS' })).result.accounts, before);
+  await send({ type: 'LOCK' });
+});
+
+test('Solana transaction bytes cannot be approved through message signing even without opening a preview', async () => {
+  await send({ type: 'UNLOCK', password: 'cleanup-fixture-password' });
+  const account = (await send({ type: 'STATUS' })).result.accounts.find((a: any) => a.family === 'solana');
+  await send({ type: 'SET_ACTIVE_ACCOUNT', accountId: account.id });
+  storage.originPermissions = { 'https://solana-fixture.example': { families: ['solana'], accountIds: [account.id], evmChainIds: [], solanaClusters: ['mainnet-beta'], grantedAt: Date.now() } };
+  const { Transaction, SystemProgram, PublicKey, Keypair } = await import('@solana/web3.js');
+  const tx = new Transaction({ feePayer: new PublicKey(account.address), recentBlockhash: Keypair.fromSeed(new Uint8Array(32).fill(2)).publicKey.toBase58() }).add(SystemProgram.transfer({ fromPubkey: new PublicKey(account.address), toPubkey: Keypair.fromSeed(new Uint8Array(32).fill(3)).publicKey, lamports: 1 }));
+  let request: (r: any) => void = () => {};
+  let opened: (id: string) => void = () => {};
+  let received: (r: any) => void = () => {};
+  Object.assign(chrome.windows, { async get() { return { width: 1200, height: 800, left: 0, top: 0 }; }, async create(options: any) { opened(new URL(options.url).searchParams.get('id')!); return { id: 456 }; }, async remove() {} });
+  connectListener({ name: 'fnzsafe-provider', sender: { url: 'https://solana-fixture.example/', frameId: 0, tab: { windowId: 1 } }, onMessage: { addListener(fn: any) { request = fn; } }, onDisconnect: noopEvent, postMessage(r: any) { received(r); }, disconnect() {} });
+  for (const preview of [true, false]) {
+    const ready = new Promise<string>(r => { opened = r; });
+    const result = new Promise<any>(r => { received = r; });
+    request({ channel: 'fnzsafe:provider', id: crypto.randomUUID(), family: 'solana', method: 'solana_signMessage', params: [tx.serializeMessage().toString('base64')] });
+    const id = await ready;
+    if (preview) { const response = await send({ type: 'GET_PENDING', id }); assert.equal(response.ok, false); assert.match(response.error, /transaction approval/); }
+    const response = await send({ type: 'RESOLVE_PENDING', id, approved: true });
+    assert.equal(response.ok, false); assert.match(response.error, /transaction approval/);
+    assert.equal((await result).result, undefined);
+  }
   await send({ type: 'LOCK' });
 });

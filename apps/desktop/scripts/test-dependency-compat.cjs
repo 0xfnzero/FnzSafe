@@ -44,7 +44,7 @@ async function main() {
   const modernMinimatchPackagePath = typescriptEstreeRequire.resolve(
     "minimatch/package.json",
   );
-  assert.equal(typescriptEstreeRequire(modernMinimatchPackagePath).version, "10.2.4");
+  assert.equal(typescriptEstreeRequire(modernMinimatchPackagePath).version, "11.0.1");
   assert.equal(typeof modernMinimatch.minimatch, "function");
   assert.deepEqual(modernMinimatch.braceExpand(pattern), expected);
   assert.deepEqual(modernMinimatch.braceExpand(numericPattern), numericExpected);

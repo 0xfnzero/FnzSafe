@@ -1,5 +1,14 @@
 # Extension changelog
 
+## 0.3.10 Preview — 2026-11-05
+
+- Bind approvals to the reviewed account and network across asynchronous execution; cancel stale requests on lock, selection change and permission revocation.
+- Prevent delayed unlocks and recovery exports from completing after lock. Serialize permission writes and revocation.
+- Validate EIP-712 types, domains, nested fields and arrays; preview and sign the same normalized payload.
+- Add persisted wallet renaming, pending-request badges, stronger backup validation, Solana instruction details and offscreen clipboard cleanup.
+- Include the compiled extension with desktop 0.6.10 and matching checksums. Existing extension IDs and wallet storage must be retained on update.
+- Validate with 98 extension tests, TypeScript checking and production compilation.
+
 ## 0.3.9 Preview — 2026-11-04
 
 - Add editable wallet names to plaintext private-key and recovery-phrase imports, with duplicate/length validation and encrypted persistence.

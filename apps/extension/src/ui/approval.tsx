@@ -17,6 +17,7 @@ function Approval() {
   const [walletStatus, setWalletStatus] = useState<WalletStatus | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [riskAcknowledged, setRiskAcknowledged] = useState(false);
 
   useEffect(() => {
     void api<WalletStatus>({ type: 'STATUS' }).then(setWalletStatus).catch(() => undefined);
@@ -35,6 +36,7 @@ function Approval() {
         await api({ type: 'UNLOCK', password: authorization });
         setPassword('');
         setView(await api<ApprovalView>({ type: 'GET_PENDING', id }));
+        setRiskAcknowledged(false);
         setBusy(false);
         return;
       }
@@ -53,9 +55,10 @@ function Approval() {
       <section className="approval-heading"><span className="site-icon">{new URL(view.origin).hostname.slice(0, 1).toUpperCase()}</span><h1>{t(view.summary)}</h1><p>{new URL(view.origin).hostname}</p></section>
       <section className="request-details">{view.details.map((detail) => <div key={t(detail.label)}><span>{t(detail.label)}</span><strong>{detail.value}</strong></div>)}</section>
       {view.warnings.map((warning) => <div className="warning" key={t(warning)}><AlertTriangle size={18} /><span>{t(warning)}</span></div>)}
+      {!view.locked && view.warnings.length > 0 && <label className="warning"><input type="checkbox" checked={riskAcknowledged} onChange={event => setRiskAcknowledged(event.target.checked)} />{t('I reviewed the warnings and understand the unverified transaction risks.')}</label>}
       {view.locked && !walletStatus?.passkey && <label className="unlock-field"><span><Lock size={16} /> {t("Unlock to approve")}</span><input autoFocus type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>}
       {error && <p className="error panel-error">{t(error)}</p>}
-      <footer className="approval-actions"><button disabled={busy} onClick={() => void decide(false)}>{t("Reject")}</button><button className="primary" disabled={busy || view.blocking || (view.locked && !walletStatus?.passkey && !password)} onClick={() => void decide(true)}>{busy ? t("Processing...") : view.blocking ? t("Blocked") : view.locked ? walletStatus?.passkey ? t("Passkey & review") : t("Unlock & review") : t("Approve")}</button></footer>
+      <footer className="approval-actions"><button disabled={busy} onClick={() => void decide(false)}>{t("Reject")}</button><button className="primary" disabled={busy || view.blocking || (!view.locked && view.warnings.length > 0 && !riskAcknowledged) || (view.locked && !walletStatus?.passkey && !password)} onClick={() => void decide(true)}>{busy ? t("Processing...") : view.blocking ? t("Blocked") : view.locked ? walletStatus?.passkey ? t("Passkey & review") : t("Unlock & review") : t("Approve")}</button></footer>
     </>}
   </main>;
 }

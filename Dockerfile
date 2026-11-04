@@ -1,4 +1,4 @@
-FROM node:20.19.5-bookworm-slim AS frontend
+FROM node:22.22.2-bookworm-slim AS frontend
 
 WORKDIR /app/apps/desktop
 
@@ -9,7 +9,7 @@ RUN npm ci
 COPY apps/desktop/ ./
 RUN npm run build
 
-FROM rust:1.89.0-bookworm AS builder
+FROM rust:1.95.0-bookworm AS builder
 
 WORKDIR /app
 
@@ -32,7 +32,7 @@ RUN apt-get update \
   && useradd --uid 10001 --gid 10001 --home-dir /app --no-create-home --no-log-init --shell /usr/sbin/nologin fnzero-safe \
   && install -d -o 10001 -g 10001 /app/data
 
-COPY --from=builder /app/build-cache/release/fnzero-safe-desktop-api /usr/local/bin/fnzero-safe-desktop-api
+COPY --from=builder /app/build-cache-fnzsafe/release/fnzero-safe-desktop-api /usr/local/bin/fnzero-safe-desktop-api
 
 # The wallet API is intentionally local-only. Run with host networking when a
 # container is required; publishing this loopback port with -p will not work.

@@ -558,7 +558,7 @@ async fn fetch_confirmed_utxos(
         .await
         .map_err(|error| BitcoinServiceError::Network(error.to_string()))?;
     utxos.retain(|utxo| utxo.status.confirmed);
-    utxos.sort_by(|left, right| right.value.cmp(&left.value));
+    utxos.sort_by_key(|item| std::cmp::Reverse(item.value));
     if utxos.len() > MAX_TRANSACTION_INPUTS {
         utxos.truncate(MAX_TRANSACTION_INPUTS);
     }
@@ -1014,12 +1014,7 @@ pub async fn submit_prepared_transfer_with_private_key(
     let (network, _, endpoint) = network_config(chain_id)?;
     let sender = checked_address(sender, network)?;
     let recipient = checked_address(recipient, network)?;
-    validate_sender_key(
-        private_key.as_ref(),
-        chain_id,
-        derivation_path,
-        &sender.to_string(),
-    )?;
+    validate_sender_key(private_key, chain_id, derivation_path, &sender.to_string())?;
     let bytes = BASE64.decode(psbt_base64).map_err(|_| {
         BitcoinServiceError::InvalidInput("Bitcoin preview PSBT is invalid".to_string())
     })?;
@@ -1027,7 +1022,7 @@ pub async fn submit_prepared_transfer_with_private_key(
         BitcoinServiceError::InvalidInput("Bitcoin preview PSBT is invalid".to_string())
     })?;
     validate_prepared_psbt(&psbt, &sender, &recipient, amount_sats)?;
-    let transaction = sign_psbt(psbt, private_key.as_ref(), &sender.to_string(), network)?;
+    let transaction = sign_psbt(psbt, private_key, &sender.to_string(), network)?;
     let expected_txid = transaction.compute_txid().to_string();
     let response = http_client()?
         .post(format!("{endpoint}/tx"))

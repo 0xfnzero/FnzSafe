@@ -3,6 +3,8 @@ import test from 'node:test';
 import { socialRecoveryConfig } from '../src/chains';
 import {
   createInitialVault,
+  groupedVault,
+  validateVaultPayload,
   decryptVault,
   encryptVault,
   migrateLegacyBitcoinAddresses,
@@ -120,4 +122,19 @@ test('a full legacy vault remains unlockable when migration cannot append a comp
 test('social recovery remains disabled without audited MPC configuration', () => {
   assert.equal(socialRecoveryConfig.enabled, false);
   assert.match(socialRecoveryConfig.reason, /MPC/);
+});
+
+test('grouped vault verifies recovery coverage for every chain and rejects foreign members', async () => {
+  const valid = groupedVault(createInitialVault('test test test test test test test test test test test junk'));
+  const other = createInitialVault('abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about');
+  validateVaultPayload(valid);
+  const stored = await encryptVault(valid, 'fixture-password');
+  assert.deepEqual(await decryptVault(stored, 'fixture-password'), valid);
+  for (let index = 0; index < valid.accounts.length; index++) {
+    const invalid = structuredClone(valid);
+    invalid.accounts[index] = { ...other.accounts[index], id: valid.accounts[index].id, walletId: valid.wallets![0].id };
+    assert.throws(() => validateVaultPayload(invalid), /Recovery phrase does not match/);
+    assert.throws(() => groupedVault(invalid), /Recovery phrase does not match/);
+    await assert.rejects(() => encryptVault(invalid, 'fixture-password'), /Recovery phrase does not match/);
+  }
 });
