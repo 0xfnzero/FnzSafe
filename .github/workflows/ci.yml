@@ -35,7 +35,7 @@ jobs:
       - name: Set up Node.js for embedded desktop assets
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 20.19.5
+          node-version: 22.22.2
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
 
@@ -61,7 +61,7 @@ jobs:
         run: cargo audit
 
   frontend:
-    name: Node 20 release gate
+    name: Node 22 release gate
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     defaults:
@@ -74,14 +74,14 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 20.19.5
+          node-version: 22.22.2
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
 
       - name: Install locked dependencies
         run: |
-          test "$(node -p 'process.versions.node')" = "20.19.5"
-          test "$(npm --version)" = "10.8.2"
+          test "$(node -p 'process.versions.node')" = "22.22.2"
+          test "$(npm --version)" = "10.9.7"
           npm ci
 
       - name: Test dependency compatibility
@@ -102,8 +102,35 @@ jobs:
       - name: Build static UI
         run: npm run build
 
-      - name: Audit all Node dependencies
-        run: npm audit --audit-level=high
+      - name: Test AI runtime
+        run: npm run test:ai-runtime
+
+      - name: Audit Node dependencies
+        run: |
+          npm audit --audit-level=high
+          npm audit --prefix ai-runtime --omit=dev --audit-level=high
+
+  extension:
+    name: Extension release gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: apps/extension
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.22.2
+          cache: npm
+          cache-dependency-path: apps/extension/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm audit --audit-level=high
+      - run: npm run package
 
   mobile:
     name: Flutter mobile release gate
@@ -133,7 +160,7 @@ jobs:
 
   container:
     name: Linux container build
-    needs: [rust, frontend, mobile]
+    needs: [rust, frontend, extension, mobile]
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
