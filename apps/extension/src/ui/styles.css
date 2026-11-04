@@ -513,3 +513,40 @@ body.passkey-page { width: 100%; min-width: 0; min-height: 100vh; }
 .pending-request strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
 .pending-request small { color:var(--muted); font-size:11px; }
 .pending-request button { flex-shrink:0; font-size:12px; padding:7px 10px; }
+
+/* Approval windows keep the decision controls visible without covering request content. */
+.approval-page { min-width: 280px; }
+.approval-page .approval-shell { height: 100dvh; min-height: 0; max-width: 520px; padding: 0; display: flex; flex-direction: column; overflow: hidden; }
+.approval-shell > .brand { height: 62px; flex-shrink: 0; border-bottom: 1px solid var(--border); padding: 0 18px; }
+.approval-content { flex: 1; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; padding: 0 18px 18px; }
+.approval-heading { display: flex; align-items: center; gap: 12px; padding: 22px 0 18px; text-align: left; }
+.approval-heading > div { min-width: 0; }
+.approval-heading .site-icon { width: 42px; height: 42px; flex-shrink: 0; border: 1px solid var(--border); border-radius: 13px; font-size: 19px; }
+.approval-heading h1 { margin: 5px 0 0; font-size: 19px; line-height: 1.4; letter-spacing: -.4px; }
+.approval-heading p { margin: 0; font-size: 12px; line-height: 1.5; }
+.approval-shell .request-details { margin: 0; border-radius: 14px; }
+.approval-shell .request-detail { padding: 11px 14px; grid-template-columns: 78px minmax(0, 1fr); align-items: baseline; gap: 10px; }
+.approval-shell .request-message, .approval-shell .request-account { grid-template-columns: minmax(0, 1fr); gap: 5px; }
+.approval-shell .request-detail > span { font-size: 11px; }
+.approval-shell .request-detail > strong { font-size: 12px; line-height: 1.65; font-weight: 500; }
+.approval-shell .request-message { background: var(--surface-2); }
+.approval-shell .request-message > strong { font-weight: 400; unicode-bidi: plaintext; }
+.request-raw { margin-top: 12px; border: 1px solid var(--border); background: var(--surface); border-radius: 12px; overflow: hidden; }
+.request-raw summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer; padding: 12px 14px; color: var(--muted); font-size: 12px; list-style: none; }
+.request-raw summary::-webkit-details-marker { display: none; }
+.request-raw summary:hover { color: var(--text); background: var(--surface-hover); }
+.request-raw summary svg { transition: transform .15s; }
+.request-raw[open] summary svg { transform: rotate(180deg); }
+.request-raw pre { margin: 0; padding: 12px 14px; border-top: 1px solid var(--border); background: var(--surface-2); font: 11px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow-y: auto; }
+.approval-warnings { display: grid; gap: 8px; margin-top: 14px; }
+.approval-warnings .warning { margin: 0; align-items: flex-start; border-color: var(--warning-border); padding: 11px 12px; font-size: 12px; line-height: 1.65; }
+.approval-warnings .warning svg { margin-top: 2px; }
+.approval-shell .unlock-field, .approval-shell .panel-error { margin: 14px 0 0; }
+.approval-page .approval-actions { position: static; transform: none; width: 100%; max-width: none; flex-shrink: 0; display: flex; flex-direction: column; gap: 13px; padding: 14px 18px max(16px, env(safe-area-inset-bottom)); border: 0; border-top: 1px solid var(--border); border-radius: 0; background: var(--surface); }
+.approval-risk-check { display: flex; align-items: flex-start; gap: 10px; padding: 2px 0; color: var(--muted); font-size: 12px; font-weight: 400; line-height: 1.65; cursor: pointer; }
+.approval-risk-check input[type="checkbox"] { appearance: auto; flex: 0 0 18px; width: 18px; height: 18px; min-width: 18px; margin: 1px 0 0; padding: 0; border-radius: 4px; cursor: pointer; }
+.approval-risk-check input:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.approval-risk-check:has(input:checked) { color: var(--text); }
+.approval-action-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.approval-action-buttons button { min-height: 44px; font-size: 13px; border-radius: 11px; }
+@media (max-height: 420px) { .approval-shell > .brand { height: 48px; } .approval-page .approval-actions { gap: 8px; padding-top: 10px; padding-bottom: 10px; } }

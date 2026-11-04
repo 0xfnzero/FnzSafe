@@ -532,5 +532,6 @@
   "I reviewed the warnings and understand the unverified transaction risks.": "我已閱讀警告，並了解尚未驗證的交易風險。",
   "Hidden automatically after 90 seconds. Copied backups clear after 15 seconds while Chrome is running. Clipboard history and synced copies cannot be erased.": "備份將在 90 秒後隱藏。Chrome 執行期間，複製的備份將在 15 秒後清理。無法清除剪貼簿歷史和同步副本。",
   "Copied. Clipboard clears after 15 seconds if it still contains this backup.": "已複製。如果剪貼簿仍是此備份，將在 15 秒後清理。",
-  "Clipboard cleanup unavailable. Clear the clipboard manually.": "無法自動清理剪貼簿，請手動清除。"
+  "Clipboard cleanup unavailable. Clear the clipboard manually.": "無法自動清理剪貼簿，請手動清除。",
+  "I have reviewed and understand the risks above.": "我已閱讀並了解上述風險，確認繼續。"
 }
