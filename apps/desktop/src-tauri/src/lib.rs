@@ -1010,9 +1010,9 @@ mod biometric_wallet_keychain {
         Ok(())
     }
 
-    // Called only after the existing Touch ID prompt. New credentials additionally
-    // require OS-enforced biometric authorization on the actual Keychain read.
-    pub fn load(primary_account: &str) -> Result<Zeroizing<String>, String> {
+    // Protected credentials authenticate on the Keychain read itself. Only legacy
+    // entries need an explicit LA prompt; avoid asking twice for protected entries.
+    pub fn authenticate_and_load(primary_account: &str) -> Result<Zeroizing<String>, String> {
         let bytes = match generic_password(protected_options(primary_account)) {
             Ok(bytes) => {
                 let bytes = Zeroizing::new(bytes);
@@ -1020,6 +1020,7 @@ mod biometric_wallet_keychain {
                 bytes
             }
             Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => {
+                super::biometric_touch_id_authenticate()?;
                 let bytes = Zeroizing::new(
                     generic_password(PasswordOptions::new_generic_password(
                         BIOMETRIC_WALLET_PASSWORD_SERVICE,
@@ -1118,8 +1119,7 @@ async fn biometric_wallet_unlock_all(
     let accounts = biometric_wallet_accounts(&req.wallet_id, &req.public_key)?;
     #[cfg(target_os = "macos")]
     {
-        biometric_touch_id_authenticate()?;
-        let password = biometric_wallet_keychain::load(&accounts.primary)?;
+        let password = biometric_wallet_keychain::authenticate_and_load(&accounts.primary)?;
         let body = Zeroizing::new(
             serde_json::to_string(&BiometricUnlockAllBody {
                 password: password.as_str(),
@@ -1151,6 +1151,126 @@ async fn biometric_wallet_unlock_all(
         let _ = process;
         let _ = accounts;
         Err("Touch ID 只支持 macOS 桌面客户端".to_string())
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BiometricExportItem {
+    endpoint: String,
+    #[serde(default)]
+    fields: serde_json::Map<String, serde_json::Value>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BiometricExportRequest {
+    wallet_id: String,
+    public_key: String,
+    credential_wallet_id: String,
+    credential_public_key: String,
+    items: Vec<BiometricExportItem>,
+}
+fn validate_biometric_export(req: &BiometricExportRequest) -> Result<(), String> {
+    biometric_wallet_accounts(&req.wallet_id, &req.public_key)?;
+    biometric_wallet_accounts(&req.credential_wallet_id, &req.credential_public_key)?;
+    if req.items.is_empty() || req.items.len() > 4 {
+        return Err("Invalid export selection".into());
+    }
+    for item in &req.items {
+        if !matches!(
+            item.endpoint.as_str(),
+            "export" | "export-private-key" | "export-mnemonic"
+        ) || item.fields.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "secret_type" | "family" | "chain_id" | "expected_address" | "derivation_path"
+            )
+        }) {
+            return Err("Invalid biometric export operation".into());
+        }
+    }
+    Ok(())
+}
+
+/// Authenticate once for this exact export batch. No password or reusable
+/// authorization token is returned to the renderer or accepted from it.
+#[tauri::command]
+async fn biometric_wallet_export(
+    process: tauri::State<'_, DesktopApiProcess>,
+    req: BiometricExportRequest,
+) -> Result<Vec<ProxyResponse>, String> {
+    validate_biometric_export(&req)?;
+    #[cfg(target_os = "macos")]
+    {
+        let epoch = process.security_epoch.load(Ordering::Acquire);
+        let accounts =
+            biometric_wallet_accounts(&req.credential_wallet_id, &req.credential_public_key)?;
+        let password = biometric_wallet_keychain::authenticate_and_load(&accounts.primary)?;
+        if process.lock_pending.load(Ordering::Acquire)
+            || process.security_epoch.load(Ordering::Acquire) != epoch
+        {
+            return Err("Export cancelled by wallet lock".into());
+        }
+        let _gate = process.request_gate.read().await;
+        if process.lock_pending.load(Ordering::Acquire)
+            || process.security_epoch.load(Ordering::Acquire) != epoch
+        {
+            return Err("Export cancelled by wallet lock".into());
+        }
+        let mut responses: Vec<ProxyResponse> = Vec::new();
+        for item in req.items {
+            let mut fields = item.fields;
+            fields.insert(
+                "password".into(),
+                serde_json::Value::String(password.to_string()),
+            );
+            let encoded = serde_json::to_string(&fields);
+            if let Some(serde_json::Value::String(secret)) = fields.get_mut("password") {
+                secret.zeroize();
+            }
+            let body = Zeroizing::new(encoded.map_err(|_| "Invalid export body")?);
+            let result = proxy_api_request_inner(
+                process.inner(),
+                "POST".into(),
+                format!("wallets/{}/{}", req.wallet_id, item.endpoint),
+                None,
+                None,
+                Some(body),
+                Some(true),
+            )
+            .await;
+            let mut response = match result {
+                Ok(response) => response,
+                Err(error) => {
+                    for r in &mut responses {
+                        r.body.zeroize();
+                    }
+                    return Err(error);
+                }
+            };
+            if process.security_epoch.load(Ordering::Acquire) != epoch
+                || process.lock_pending.load(Ordering::Acquire)
+            {
+                response.body.zeroize();
+                for r in &mut responses {
+                    r.body.zeroize();
+                }
+                return Err("Export cancelled by wallet lock".into());
+            }
+            if response.status >= 400 {
+                for r in &mut responses {
+                    r.body.zeroize();
+                }
+                return Err(response.body);
+            }
+            responses.push(response);
+        }
+        Ok(responses)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = process;
+        Err("Touch ID is available only on macOS".into())
     }
 }
 
@@ -7277,6 +7397,7 @@ pub fn run() {
             biometric_wallet_status,
             biometric_wallet_store_password,
             biometric_wallet_unlock_all,
+            biometric_wallet_export,
             biometric_wallet_delete_password,
             pick_source_directory,
             save_download_file,
@@ -7443,10 +7564,36 @@ mod tests {
     }
 
     #[test]
+    fn biometric_export_rejects_non_export_routes_and_password_injection() {
+        let mut request = BiometricExportRequest {
+            wallet_id: "a".repeat(32),
+            public_key: "11111111111111111111111111111111".into(),
+            credential_wallet_id: "b".repeat(32),
+            credential_public_key: "11111111111111111111111111111111".into(),
+            items: vec![BiometricExportItem {
+                endpoint: "export-private-key".into(),
+                fields: serde_json::Map::new(),
+            }],
+        };
+        assert!(validate_biometric_export(&request).is_ok());
+        request.items[0].endpoint = "../change-password".into();
+        assert!(validate_biometric_export(&request).is_err());
+        request.items[0].endpoint = "export".into();
+        request.items[0]
+            .fields
+            .insert("password".into(), serde_json::json!("injected"));
+        assert!(validate_biometric_export(&request).is_err());
+        request.items.clear();
+        assert!(validate_biometric_export(&request).is_err());
+    }
+
+    #[test]
     fn biometric_unlock_command_and_permissions_stay_in_sync() {
         let permissions = include_str!("../permissions/biometric_wallet.toml");
         let capabilities = include_str!("../capabilities/default.json");
         assert!(permissions.contains("biometric_wallet_unlock_all"));
+        assert!(permissions.contains("biometric_wallet_export"));
+        assert!(capabilities.contains("allow-biometric-wallet-export"));
         assert!(!permissions.contains("biometric_wallet_get_password"));
         assert!(capabilities.contains("allow-biometric-wallet-unlock-all"));
         assert!(!capabilities.contains("allow-biometric-wallet-get-password"));

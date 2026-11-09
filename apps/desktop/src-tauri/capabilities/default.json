@@ -29,6 +29,7 @@
     "allow-biometric-wallet-status",
     "allow-biometric-wallet-store-password",
     "allow-biometric-wallet-unlock-all",
+    "allow-biometric-wallet-export",
     "allow-biometric-wallet-delete-password",
     "allow-pick-source-directory",
     "allow-save-download-file",

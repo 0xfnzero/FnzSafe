@@ -17,3 +17,8 @@ commands.allow = ["biometric_wallet_unlock_all"]
 identifier = "allow-biometric-wallet-delete-password"
 description = "Allow the main wallet UI to remove a saved wallet Touch ID password from macOS Keychain."
 commands.allow = ["biometric_wallet_delete_password"]
+
+[[permission]]
+identifier = "allow-biometric-wallet-export"
+description = "Allow the main wallet UI to export a bounded batch after fresh native Touch ID authentication."
+commands.allow = ["biometric_wallet_export"]

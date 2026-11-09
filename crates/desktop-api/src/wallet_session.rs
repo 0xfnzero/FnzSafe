@@ -330,7 +330,18 @@ impl WalletSessionVault {
         }))
     }
 
+    /// Used after a successful library unlock so a previous password group
+    /// cannot silently remain authorized when switching to another group.
+    pub fn retain_wallets(&self, wallet_ids: &[String]) -> Result<(), String> {
+        self.sessions
+            .lock()
+            .map_err(|_| "wallet session vault lock is poisoned")?
+            .retain(|id, _| wallet_ids.contains(id));
+        Ok(())
+    }
+
     pub fn lock(&self, wallet_id: &str) -> Result<bool, String> {
+        crate::wallet_library::library_session().invalidate()?;
         Ok(self
             .sessions
             .lock()
@@ -345,6 +356,7 @@ impl WalletSessionVault {
         if idle_ttl.is_zero() {
             return Err("wallet idle timeout must be positive".into());
         }
+        crate::wallet_library::library_session().touch(idle_ttl)?;
         let now = Instant::now();
         let mut sessions = self
             .sessions
@@ -359,6 +371,7 @@ impl WalletSessionVault {
     }
 
     pub fn lock_all(&self) -> Result<usize, String> {
+        crate::wallet_library::library_session().invalidate()?;
         let mut sessions = self
             .sessions
             .lock()
@@ -369,6 +382,7 @@ impl WalletSessionVault {
     }
 
     pub fn purge_expired(&self) -> Result<usize, String> {
+        crate::wallet_library::library_session().purge_expired()?;
         let now = Instant::now();
         let mut sessions = self
             .sessions

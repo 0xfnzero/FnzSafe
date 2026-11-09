@@ -1155,6 +1155,8 @@ type ExportBundleItem =
   | "mnemonic";
 
 type ExportBundleSelection = Record<ExportBundleItem, boolean>;
+type WalletExportAuthorization = string | Map<string, { status: number; body: string }>;
+
 
 type PasswordPromptRequest =
   | { kind: "form"; formId: string; formState: FormState; fields?: PasswordPromptField[] }
@@ -1167,6 +1169,7 @@ type PasswordPromptRequest =
   | { kind: "export-private-key"; wallet: SavedWallet; context: WalletExportContext; formState: FormState }
   | { kind: "export-mnemonic"; wallet: SavedWallet; context: WalletExportContext; formState: FormState }
   | { kind: "rotate-bitcoin-account"; wallet: SavedWallet; formState: FormState }
+  | { kind: "adopt-library"; wallet: SavedWallet; formState: FormState }
   | { kind: "migrate-keystore"; wallet: SavedWallet; formState: FormState };
 
 interface ExportedPrivateKeyPreview {
@@ -5128,6 +5131,49 @@ export default function Home() {
     };
   }, [applicationLocked, currentWalletId, lockApplication]);
 
+  const setCurrentWallet = useCallback((walletId: string) => {
+    const walletChanged = currentWalletIdRef.current !== walletId;
+    if (walletChanged) {
+      evmAssetRequestIdRef.current += 1;
+      evmPortfolioRequestIdRef.current += 1;
+      evmTokenLookupRequestIdRef.current += 1;
+      evmPreviewRequestIdRef.current += 1;
+      currentWalletIdRef.current = walletId;
+      setCurrentWalletId(walletId);
+      saveCurrentWalletId(walletId);
+    }
+    setFormData((prev) => {
+      const formId = selectedFormRef.current;
+      if (!formId || !authFormsWithWallets.has(formId)) return prev;
+      return walletId ? { ...prev, wallet_id: walletId } : prev;
+    });
+    if (!walletChanged) return;
+    if (!walletId) {
+      applicationLockedRef.current = false;
+      setApplicationLocked(false);
+      return;
+    }
+    applicationLockedRef.current = true;
+    setApplicationLocked(true);
+    const epoch = securityLockEpochRef.current;
+    void apiFetch(`wallets/${walletId}/session`, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+    })
+      .then(async (response) => ({ response, session: await response.json() }))
+      .then(({ response, session }) => {
+        if (currentWalletIdRef.current !== walletId || securityLockEpochRef.current !== epoch || securityLockPendingRef.current) return;
+        const unlocked = response.ok && session.unlocked === true;
+        applicationLockedRef.current = !unlocked;
+        setApplicationLocked(!unlocked);
+      })
+      .catch(() => {
+        if (currentWalletIdRef.current !== walletId || securityLockEpochRef.current !== epoch || securityLockPendingRef.current) return;
+        applicationLockedRef.current = true;
+        setApplicationLocked(true);
+      });
+  }, []);
+
   const unlockWithPassword = useCallback(async () => {
     if (wallets.length === 0 || !unlockPassword || securityLockPendingRef.current || securityLockState !== "locked") return;
     const securityEpoch = securityLockEpochRef.current;
@@ -5140,7 +5186,7 @@ export default function Home() {
         body: JSON.stringify({ password: unlockPassword }),
       });
       const data = await response.json();
-      if (!response.ok || !data.verified || data.unlocked_wallets !== wallets.length) {
+      if (!response.ok || !data.verified || !(Number(data.unlocked_wallets) > 0)) {
         throw new Error(walletUnlockErrorMessage(
           data.error,
           tf("features.settings.unlockFailed", "钱包密码错误"),
@@ -5148,6 +5194,9 @@ export default function Home() {
         ));
       }
       if (securityEpoch !== securityLockEpochRef.current) throw new Error("解锁已被后续锁定取消");
+      const unlockedIds = Array.isArray(data.unlocked_wallet_ids) ? data.unlocked_wallet_ids.filter((id: unknown): id is string => typeof id === "string") : [];
+      if (unlockedIds.length && !unlockedIds.includes(currentWalletIdRef.current || "")) setCurrentWallet(unlockedIds[0]);
+      if (Array.isArray(data.locked_wallet_ids) && data.locked_wallet_ids.length) toast.info(t("features.walletLibrary.legacyUnlocked"));
       // Clear the lock gate before resume so deferred connect/sign events are shown.
       applicationLockedRef.current = false;
       try {
@@ -5172,7 +5221,7 @@ export default function Home() {
     } finally {
       setUnlockBusy(false);
     }
-  }, [appPreferences.autoLockMinutes, tf, unlockPassword, wallets, securityLockState]);
+  }, [appPreferences.autoLockMinutes, tf, unlockPassword, wallets, securityLockState, setCurrentWallet, t]);
 
   const saveAddressBookEntry = useCallback(async () => {
     if (!addressBookEditor) return;
@@ -5518,14 +5567,16 @@ export default function Home() {
     }
   }, [biometricStatusFor, refreshBiometricWalletStatus, supportsBiometricWallet, t]);
 
+  const libraryBiometricWallet = (effectiveWallet && biometricConfiguredFor(effectiveWallet) ? effectiveWallet : wallets.find(biometricConfiguredFor));
+
   const unlockWithBiometric = useCallback(async () => {
     if (!effectiveWallet || securityLockPendingRef.current || securityLockState !== "locked") return;
     const securityEpoch = securityLockEpochRef.current;
     setUnlockError(null);
     setUnlockBusy(true);
     try {
-      const data = await unlockAllWithBiometricNative(effectiveWallet);
-      if (data.verified !== true || data.unlocked_wallets !== wallets.length) {
+      const data = await unlockAllWithBiometricNative(libraryBiometricWallet || effectiveWallet);
+      if (data.verified !== true || !(Number(data.unlocked_wallets) > 0)) {
         throw new Error(walletUnlockErrorMessage(
           typeof data.error === "string" ? data.error : undefined,
           tf("features.settings.unlockFailed", "Touch ID 解锁失败"),
@@ -5533,6 +5584,9 @@ export default function Home() {
         ));
       }
       if (securityEpoch !== securityLockEpochRef.current) throw new Error("解锁已被后续锁定取消");
+      const unlockedIds = Array.isArray(data.unlocked_wallet_ids) ? data.unlocked_wallet_ids.filter((id: unknown): id is string => typeof id === "string") : [];
+      if (unlockedIds.length && !unlockedIds.includes(currentWalletIdRef.current || "")) setCurrentWallet(unlockedIds[0]);
+      if (Array.isArray(data.locked_wallet_ids) && data.locked_wallet_ids.length) toast.info(t("features.walletLibrary.legacyUnlocked"));
       // Clear the lock gate before resume so deferred connect/sign events are shown.
       applicationLockedRef.current = false;
       try {
@@ -5555,7 +5609,7 @@ export default function Home() {
     } finally {
       setUnlockBusy(false);
     }
-  }, [appPreferences.autoLockMinutes, effectiveWallet, tf, unlockAllWithBiometricNative, wallets.length, securityLockState]);
+  }, [appPreferences.autoLockMinutes, effectiveWallet, tf, unlockAllWithBiometricNative, securityLockState, setCurrentWallet, t, libraryBiometricWallet]);
 
   const deleteBiometricWalletPassword = useCallback(async (wallet: SavedWallet, options: { quiet?: boolean } = {}) => {
     if (!isTauriWebview()) return;
@@ -6207,48 +6261,6 @@ export default function Home() {
     return t(`features.${fallbackFormId}.success`);
   };
 
-  const setCurrentWallet = useCallback((walletId: string) => {
-    const walletChanged = currentWalletIdRef.current !== walletId;
-    if (walletChanged) {
-      evmAssetRequestIdRef.current += 1;
-      evmPortfolioRequestIdRef.current += 1;
-      evmTokenLookupRequestIdRef.current += 1;
-      evmPreviewRequestIdRef.current += 1;
-      currentWalletIdRef.current = walletId;
-      setCurrentWalletId(walletId);
-      saveCurrentWalletId(walletId);
-    }
-    setFormData((prev) => {
-      const formId = selectedFormRef.current;
-      if (!formId || !authFormsWithWallets.has(formId)) return prev;
-      return walletId ? { ...prev, wallet_id: walletId } : prev;
-    });
-    if (!walletChanged) return;
-    if (!walletId) {
-      applicationLockedRef.current = false;
-      setApplicationLocked(false);
-      return;
-    }
-    applicationLockedRef.current = true;
-    setApplicationLocked(true);
-    void apiFetch(`wallets/${walletId}/session`, {
-      method: "GET",
-      headers: { "Content-Type": "application/json" },
-    })
-      .then(async (response) => ({ response, session: await response.json() }))
-      .then(({ response, session }) => {
-        if (currentWalletIdRef.current !== walletId) return;
-        const unlocked = response.ok && session.unlocked === true;
-        applicationLockedRef.current = !unlocked;
-        setApplicationLocked(!unlocked);
-      })
-      .catch(() => {
-        if (currentWalletIdRef.current !== walletId) return;
-        applicationLockedRef.current = true;
-        setApplicationLocked(true);
-      });
-  }, []);
-
   const setAppRpc = useCallback((profileId: string) => {
     const profile = rpcProfiles.find((item) => item.id === profileId);
     if (!profile) return;
@@ -6439,7 +6451,7 @@ export default function Home() {
       toast.error(t("formUi.walletNameRequired"));
       return;
     }
-    if (password.length < 10 || new TextEncoder().encode(password).byteLength > 1024) {
+    if (wallets.length === 0 && (Array.from(password).length < 10 || new TextEncoder().encode(password).byteLength > 1024)) {
       toast.error(t("features.create-keystore.passwordError"));
       return;
     }
@@ -6448,7 +6460,7 @@ export default function Home() {
       const response = await apiFetch("wallets/create-universal", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, password }),
+        body: JSON.stringify(wallets.length === 0 ? { name, password } : { name }),
       });
       const data = await response.json();
       if (!response.ok) {
@@ -6463,18 +6475,9 @@ export default function Home() {
       setEvmSubmitResult(null);
       setCurrentWallet(createdWallet.id);
       setWalletChainView("all");
-      if (!applicationLockedRef.current) {
-        setPrivateKeyExportMode("simple");
-        setPrivateKeySegmentCount(DEFAULT_PRIVATE_KEY_SEGMENTS);
-        setPrivateKeyQrRevealed(false);
-        setSensitivePlaintextRevealed(false);
-        setExportedPrivateKey(null);
-        setExportedMnemonic({
-          walletName: name,
-          publicKey: String(data.wallet.public_key),
-          mnemonic: String(data.mnemonic),
-        });
-      }
+      // Secrets are only returned by the separately authenticated export flow.
+      setExportedPrivateKey(null);
+      setExportedMnemonic(null);
       setCreateWalletPassword("");
       setFormData((previous) => ({
         ...previous,
@@ -6486,7 +6489,10 @@ export default function Home() {
       void loadWallets();
     } catch (error) {
       const message = errorMessage(error, tf("features.create-wallet.failed", "Failed to create wallet"));
-      toast.error(message);
+      if (message.includes("Wallet library is locked")) {
+        lockApplication();
+        toast.error(t("features.walletLibrary.unlockAgain"));
+      } else toast.error(message);
     } finally {
       setLoading(false);
     }
@@ -8043,20 +8049,29 @@ export default function Home() {
     });
   };
 
+  const requestWalletExport = async (wallet: SavedWallet, authorization: WalletExportAuthorization, endpoint: string, fields: Record<string, unknown>) => {
+    if (typeof authorization === "string") return apiFetch(`wallets/${wallet.id}/${endpoint}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...fields, password: authorization }),
+    });
+    const key = `${endpoint}:${fields.secret_type || ""}`;
+    const response = authorization.get(key);
+    if (!response) throw new Error("Missing authenticated export response");
+    authorization.delete(key);
+    return new Response(response.body, { status: response.status, headers: { "Content-Type": "application/json" } });
+  };
+
   const exportKeystoreWithPassword = async (
     wallet: SavedWallet,
-    password: string,
+    password: WalletExportAuthorization,
     secretType: "private_key" | "mnemonic",
   ) => {
-    const response = await apiFetch(`wallets/${wallet.id}/export`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password, secret_type: secretType }),
-    });
+    const response = await requestWalletExport(wallet, password, "export", { secret_type: secretType });
     const data = await response.json();
     if (!response.ok) {
       throw new Error(data.error || t("features.settings.exportFailed"));
     }
+    if (applicationLockedRef.current) return;
     void downloadFile(
       data.keystore_json,
       `${safeFilename(wallet.name)}-${wallet.public_key.slice(0, 8)}-${
@@ -8067,19 +8082,12 @@ export default function Home() {
 
   const exportPrivateKeyWithPassword = async (
     wallet: SavedWallet,
-    password: string,
+    password: WalletExportAuthorization,
     context: WalletExportContext,
   ): Promise<ExportedPrivateKeyPreview> => {
-    const response = await apiFetch(`wallets/${wallet.id}/export-private-key`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        password,
-        family: context.family,
-        chain_id: context.chainId,
-        expected_address: context.expectedAddress,
-        derivation_path: context.derivationPath,
-      }),
+    const response = await requestWalletExport(wallet, password, "export-private-key", {
+        family: context.family, chain_id: context.chainId,
+        expected_address: context.expectedAddress, derivation_path: context.derivationPath,
     });
     const data = await response.json();
     if (!response.ok) {
@@ -8106,19 +8114,12 @@ export default function Home() {
 
   const exportMnemonicWithPassword = async (
     wallet: SavedWallet,
-    password: string,
+    password: WalletExportAuthorization,
     context: WalletExportContext,
   ): Promise<ExportedMnemonicPreview> => {
-    const response = await apiFetch(`wallets/${wallet.id}/export-mnemonic`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        password,
-        family: context.family,
-        chain_id: context.chainId,
-        expected_address: context.expectedAddress,
-        derivation_path: context.derivationPath,
-      }),
+    const response = await requestWalletExport(wallet, password, "export-mnemonic", {
+        family: context.family, chain_id: context.chainId,
+        expected_address: context.expectedAddress, derivation_path: context.derivationPath,
     });
     const data = await response.json();
     if (!response.ok) {
@@ -8150,9 +8151,9 @@ export default function Home() {
     setSensitiveExportTab(tab);
   };
 
-  const handleExportKeystore = async (wallet: SavedWallet, passwordValue: string) => {
+  const handleExportKeystore = async (wallet: SavedWallet, passwordValue: WalletExportAuthorization) => {
     const password = passwordValue;
-    if (password.length === 0) {
+    if (typeof password === "string" && password.length === 0) {
       toast.error(t("features.settings.exportPasswordRequired"));
       return;
     }
@@ -8170,11 +8171,11 @@ export default function Home() {
 
   const handleExportPrivateKey = async (
     wallet: SavedWallet,
-    passwordValue: string,
+    passwordValue: WalletExportAuthorization,
     context: WalletExportContext,
   ) => {
     const password = passwordValue;
-    if (password.length === 0) {
+    if (typeof password === "string" && password.length === 0) {
       toast.error(t("features.settings.exportPasswordRequired"));
       return;
     }
@@ -8196,11 +8197,11 @@ export default function Home() {
 
   const handleExportMnemonic = async (
     wallet: SavedWallet,
-    passwordValue: string,
+    passwordValue: WalletExportAuthorization,
     context: WalletExportContext,
   ) => {
     const password = passwordValue;
-    if (password.length === 0) {
+    if (typeof password === "string" && password.length === 0) {
       toast.error(t("features.settings.exportPasswordRequired"));
       return;
     }
@@ -8222,12 +8223,12 @@ export default function Home() {
 
   const handleExportBundle = async (
     wallet: SavedWallet,
-    passwordValue: string,
+    passwordValue: WalletExportAuthorization,
     selection: ExportBundleSelection,
     context: WalletExportContext,
   ) => {
     const password = passwordValue;
-    if (password.length === 0) {
+    if (typeof password === "string" && password.length === 0) {
       toast.error(t("features.settings.exportPasswordRequired"));
       return;
     }
@@ -8369,6 +8370,7 @@ export default function Home() {
         }
       }
       await loadWallets();
+      lockApplication();
       toast.success(t("features.settings.migrateSuccess"));
       return true;
     } catch (error) {
@@ -14241,7 +14243,7 @@ export default function Home() {
     !isPlaintextImportPasswordPrompt;
 
   const passwordPromptTitle =
-    isPlaintextImportPasswordPrompt
+    passwordPrompt?.kind === "adopt-library" ? t("features.walletLibrary.adoptTitle") : isPlaintextImportPasswordPrompt
       ? t(wallets.length > 0
         ? "features.import-keystore.encryptExistingTitle"
         : "features.import-keystore.encryptNewTitle")
@@ -14499,6 +14501,17 @@ export default function Home() {
         }
         const biometricStored = await storeBiometricWalletPassword(wallet, password);
         if (!biometricStored) return;
+      } else if (passwordPrompt.kind === "adopt-library") {
+        const response = await apiFetch(`wallets/${passwordPrompt.wallet.id}/adopt-unified-password`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ current_password: password }),
+        });
+        const result = await response.json();
+        if (!response.ok) { toast.error(result.error || t("features.settings.migrateFailed")); return; }
+        await deleteBiometricWalletPassword(passwordPrompt.wallet, { quiet: true });
+        await loadWallets();
+        lockApplication();
+        toast.success(t("features.walletLibrary.adoptSuccess"));
       } else if (passwordPrompt.kind === "export-bundle") {
         await handleExportBundle(
           passwordPrompt.wallet,
@@ -14532,6 +14545,45 @@ export default function Home() {
       passwordConfirmationInFlightRef.current = false;
       setPasswordConfirmationBusy(false);
     }
+  };
+
+  const confirmExportWithBiometric = async () => {
+    const prompt = passwordPrompt;
+    if (!prompt || !["export-bundle", "export-keystore", "export-private-key", "export-mnemonic"].includes(prompt.kind) || !("wallet" in prompt) || passwordConfirmationInFlightRef.current) return;
+    const credentialWallet = biometricConfiguredFor(prompt.wallet) ? prompt.wallet : libraryBiometricWallet;
+    if (!credentialWallet) return;
+    const context = "context" in prompt ? prompt.context : undefined;
+    const fields = context ? { family: context.family, chain_id: context.chainId, expected_address: context.expectedAddress, derivation_path: context.derivationPath } : {};
+    const selection = prompt.kind === "export-bundle" ? exportBundleSelection : {
+      "private-key-keystore": prompt.kind === "export-keystore", "mnemonic-keystore": false,
+      "private-key": prompt.kind === "export-private-key", mnemonic: prompt.kind === "export-mnemonic",
+    };
+    const items: { endpoint: string; fields: Record<string, unknown> }[] = [];
+    if (selection["private-key-keystore"]) items.push({ endpoint: "export", fields: { secret_type: "private_key" } });
+    if (selection["mnemonic-keystore"]) items.push({ endpoint: "export", fields: { secret_type: "mnemonic" } });
+    if (selection["private-key"]) items.push({ endpoint: "export-private-key", fields });
+    if (selection.mnemonic) items.push({ endpoint: "export-mnemonic", fields });
+    if (!items.length) { toast.error(t("features.settings.exportBundleSelectRequired")); return; }
+    passwordConfirmationInFlightRef.current = true;
+    setPasswordConfirmationBusy(true);
+    const epoch = securityLockEpochRef.current;
+    const responses = new Map<string, { status: number; body: string }>();
+    try {
+      await waitForBiometricPromptReadiness();
+      const result = await invoke<{ status: number; body: string }[]>("biometric_wallet_export", { req: {
+        wallet_id: prompt.wallet.id, public_key: prompt.wallet.public_key,
+        credential_wallet_id: credentialWallet.id, credential_public_key: credentialWallet.public_key, items,
+      } });
+      if (epoch !== securityLockEpochRef.current || applicationLockedRef.current) return;
+      if (result.length !== items.length) throw new Error("Invalid biometric export response");
+      items.forEach((item, i) => responses.set(`${item.endpoint}:${item.fields.secret_type || ""}`, result[i]));
+      if (prompt.kind === "export-bundle" && context) await handleExportBundle(prompt.wallet, responses, selection, context);
+      else if (prompt.kind === "export-keystore") await handleExportKeystore(prompt.wallet, responses);
+      else if (prompt.kind === "export-private-key" && context) await handleExportPrivateKey(prompt.wallet, responses, context);
+      else if (prompt.kind === "export-mnemonic" && context) await handleExportMnemonic(prompt.wallet, responses, context);
+      setPasswordPrompt(null); clearPasswordPromptSecrets();
+    } catch (error) { toast.error(errorMessage(error, t("features.biometric.authFailed"))); }
+    finally { responses.clear(); passwordConfirmationInFlightRef.current = false; setPasswordConfirmationBusy(false); }
   };
 
   const handleBack = () => {
@@ -18155,6 +18207,10 @@ export default function Home() {
                               <Pencil className="h-3.5 w-3.5" />
                               {t("formUi.editWalletMetadata")}
                             </button>
+                            <button type="button" disabled={loading} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-gray-200 hover:bg-white/10"
+                              onClick={(event) => { event.stopPropagation(); setWalletActionsMenuOpen(null); setPasswordPromptValue(""); setPasswordPrompt({ kind: "adopt-library", wallet, formState: {} }); }}>
+                              <ShieldCheck className="h-3.5 w-3.5" />{t("features.walletLibrary.adoptTitle")}
+                            </button>
                             <button
                                 type="button"
                                 onClick={(event) => {
@@ -21728,7 +21784,7 @@ export default function Home() {
                 className="h-11 w-full rounded-lg border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:ring-2 focus:ring-emerald-400/40"
               />
             </label>
-            <label className="block space-y-1.5 text-sm text-gray-300">
+            {wallets.length === 0 ? <label className="block space-y-1.5 text-sm text-gray-300">
               {tf("features.create-wallet.password", "Password (at least 10 characters)")}
               <input
                 type="password"
@@ -21739,7 +21795,7 @@ export default function Home() {
                 autoComplete="new-password"
                 className="h-11 w-full rounded-lg border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:ring-2 focus:ring-emerald-400/40"
               />
-            </label>
+            </label> : <p className="text-sm text-emerald-300">{t("features.walletLibrary.createHint")}</p>}
             <button
               type="button"
               onClick={() => void createUniversalWallet()}
@@ -29991,7 +30047,7 @@ export default function Home() {
             </label>
             <button type="submit" disabled={unlockBusy || !unlockPassword || securityLockState !== "locked"} className="h-11 w-full rounded-lg bg-white text-sm font-semibold text-black hover:bg-gray-200 disabled:opacity-40">{unlockBusy ? <span className="inline-flex items-center gap-2"><LoaderCircle className="h-4 w-4 animate-spin" />{t("common.loading")}</span> : tf("features.settings.unlock", "解锁")}</button>
             {securityLockState === "failed" && <button type="button" onClick={lockApplication} className="h-11 w-full rounded-lg border border-red-400/40">重试锁定</button>}
-            {biometricConfiguredFor(effectiveWallet) && (
+            {libraryBiometricWallet && (
               <button type="button" onClick={() => void unlockWithBiometric()} disabled={unlockBusy || securityLockState !== "locked"} className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg border border-white/10 text-sm text-gray-200 hover:bg-white/10 disabled:opacity-40"><Fingerprint className="h-4 w-4" />Touch ID</button>
             )}
           </form>
@@ -30996,6 +31052,7 @@ export default function Home() {
                 </button>
               </div>
               <div className="space-y-3">
+                {passwordPrompt?.kind === "adopt-library" && <p className="text-sm text-gray-300">{t("features.walletLibrary.adoptHint")}</p>}
                 {showWalletPasswordPrompt && (
                   <div>
                     <div className="mb-2 flex items-center gap-1.5">
@@ -31173,6 +31230,12 @@ export default function Home() {
                   </div>
                 )}
               </div>
+              {passwordPrompt && ["export-bundle", "export-keystore", "export-private-key", "export-mnemonic"].includes(passwordPrompt.kind) && (libraryBiometricWallet || biometricConfiguredFor(passwordPromptWallet)) && (
+                <button type="button" disabled={passwordPromptIsBusy} onClick={() => void confirmExportWithBiometric()}
+                  className="w-full rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-4 py-3 text-sm font-semibold text-emerald-200 disabled:opacity-50">
+                  {t("features.walletLibrary.exportTouchId")}
+                </button>
+              )}
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"

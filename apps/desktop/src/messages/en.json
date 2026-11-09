@@ -173,6 +173,15 @@
     "squads": "🛡️ Squads Multisig"
   },
   "features": {
+    "walletLibrary": {
+      "unlockAgain": "Unlock the wallet library again to create a wallet.",
+      "createHint": "This wallet will use your unlocked wallet library. No password is needed to create it; exporting secrets requires verification again.",
+      "legacyUnlocked": "Matching wallets are unlocked. Wallets with another password remain available: unlock with their original password or add them to unified management.",
+      "adoptTitle": "Use unified wallet password",
+      "adoptHint": "Enter this wallet’s current password. Its local encryption will use the password of the library you just unlocked. Addresses, recovery phrases, and existing backup files stay unchanged.",
+      "adoptSuccess": "Wallet added to unified management. Unlock again with your library password.",
+      "exportTouchId": "Verify with Touch ID and export"
+},
     "program-close": {
       "discoverHelp": "Only have a private key? Import the wallet, select the deployment network, then find programs whose current upgrade authority is this wallet. No Program ID, source code or deployment record is required.",
       "discover": "Find programs this wallet can close",
