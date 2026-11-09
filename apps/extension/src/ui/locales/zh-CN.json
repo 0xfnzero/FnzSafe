@@ -533,5 +533,12 @@
   "Hidden automatically after 90 seconds. Copied backups clear after 15 seconds while Chrome is running. Clipboard history and synced copies cannot be erased.": "备份将在 90 秒后隐藏。Chrome 运行期间，复制的备份将在 15 秒后清理。无法清除剪贴板历史和同步副本。",
   "Copied. Clipboard clears after 15 seconds if it still contains this backup.": "已复制。如果剪贴板仍是此备份，将在 15 秒后清理。",
   "Clipboard cleanup unavailable. Clear the clipboard manually.": "无法自动清理剪贴板，请手动清除。",
-  "I have reviewed and understand the risks above.": "我已阅读并了解上述风险，确认继续。"
+  "I have reviewed and understand the risks above.": "我已阅读并了解上述风险，确认继续。",
+  "Last known balance": "上次余额",
+  "Some token balances could not be refreshed. Last known balances are shown.": "部分代币余额暂时无法更新，已保留上次余额。",
+  "USD prices are temporarily unavailable.": "美元价格暂时不可用。",
+  "Invalid token discovery response": "代币发现服务返回了无效数据，请稍后重试。",
+  "Invalid token service JSON response": "代币服务暂时无法返回有效数据，请稍后重试。",
+  "Token discovery response exceeds the token limit": "代币列表超出查询上限，已保留现有数据。",
+  "Robinhood automatic token discovery is currently unavailable. Add known ERC-20 contracts manually to query your RPC.": "Robinhood 自动代币发现暂不可用。可通过“添加代币”输入 ERC-20 合约地址并查询余额。"
 }

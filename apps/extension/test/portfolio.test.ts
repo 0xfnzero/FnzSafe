@@ -7,6 +7,7 @@ import {
   discoverEvmTokens,
   nativeAsset,
   parseBlockscoutTokenBalances,
+  retainUnrefreshedTokens,
   visiblePortfolioAssets,
 } from '../src/portfolio';
 
@@ -143,4 +144,62 @@ test('Arc automatic discovery is explicitly unsupported rather than querying an 
   for (const id of [5042, 5042002]) {
     await assert.rejects(discoverEvmTokens(evmChain(id), '0x1111111111111111111111111111111111111111'), /Automatic token discovery is unavailable/);
   }
+});
+
+test('Robinhood does not query broken explorers, pay for APIs, or scan chain history', async context => {
+  const fetchMock = context.mock.method(globalThis, 'fetch', async () => { throw new Error('Unexpected network request'); });
+  await assert.rejects(discoverEvmTokens(evmChain(4663), '0x1111111111111111111111111111111111111111'), /Robinhood automatic token discovery is currently unavailable/);
+  assert.equal(fetchMock.mock.callCount(), 0);
+});
+
+test('discovery distinguishes a valid empty result from HTTP, HTML and envelope failures', async context => {
+  const address = '0x1111111111111111111111111111111111111111';
+  for (const response of [
+    new Response('<html>Just a moment...</html>', { status: 403 }),
+    new Response('<html>Just a moment...</html>'),
+    Response.json({ error: 'indexer unavailable' }),
+    Response.json({ data: [], next_cursor: 'next-page' }),
+    Response.json(null),
+  ]) {
+    const mock = context.mock.method(globalThis, 'fetch', async () => response);
+    await assert.rejects(discoverEvmTokens(ethereum, address));
+    mock.mock.restore();
+  }
+  context.mock.method(globalThis, 'fetch', async (url: string | URL | Request, init?: RequestInit) => {
+    assert.equal(String(url), `https://eth.blockscout.com/api/v2/addresses/${address}/token-balances`);
+    assert.equal(init?.credentials, 'omit');
+    assert.equal(init?.redirect, 'error');
+    return Response.json([]);
+  });
+  assert.deepEqual(await discoverEvmTokens(ethereum, address), []);
+});
+
+test('oversized discovery results fail instead of silently truncating the portfolio', async context => {
+  assert.throws(() => parseBlockscoutTokenBalances(Array(501).fill(null), ethereum), /token limit/);
+  let cancelled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) { controller.enqueue(new Uint8Array(1024 * 1024)); },
+    cancel() { cancelled = true; },
+  });
+  context.mock.method(globalThis, 'fetch', async () => new Response(stream));
+  await assert.rejects(discoverEvmTokens(ethereum, '0x1111111111111111111111111111111111111111'), /too large/);
+  assert.equal(cancelled, true);
+});
+
+test('failed token refresh preserves cached balances with a stale marker and respects fresh zero', () => {
+  const [oldToken, zeroToken] = parseBlockscoutTokenBalances([
+    { value: '123456789012345678901', token: { address_hash: '0x1111111111111111111111111111111111111111', decimals: '18', type: 'ERC-20', symbol: 'OLD' } },
+    { value: '1000', token: { address_hash: '0x2222222222222222222222222222222222222222', decimals: '6', type: 'ERC-20', symbol: 'ZERO' } },
+  ], ethereum);
+  const native = nativeAsset(ethereum, '123', 18);
+  const foreign = { ...oldToken, id: 'evm:8453:foreign', chainKey: 'evm:8453' };
+  const current = [native, { ...zeroToken, balance: '0.0', rawBalance: '0' }];
+  const result = retainUnrefreshedTokens(current, [native, oldToken, zeroToken, foreign], ethereum.key);
+  assert.equal(result.length, 3);
+  assert.equal(result[1].rawBalance, '0');
+  assert.equal(result[1].balanceStale, undefined);
+  assert.equal(result[2].rawBalance, '123456789012345678901');
+  assert.equal(result[2].balanceStale, true);
+  assert.equal(oldToken.balanceStale, undefined);
+  assert.deepEqual(retainUnrefreshedTokens(current, [], ethereum.key), current);
 });

@@ -6,6 +6,7 @@ import {
   requiredText,
   sourceEnvelope,
 } from '../lib/web3-utils.mjs';
+import { greyRidgePreview } from './greyridge-preview.mjs';
 
 function pairSummary(item) {
   return {
@@ -70,13 +71,17 @@ async function tokenSecurityScan(args) {
   const address = requiredText(args, 'address');
   const network = requiredText(args, 'network').toLowerCase();
   validateSecurityAddress(address, network);
+  const secondSignal = args.secondSignal ?? 'none';
+  if (!['none', 'greyridge-preview'].includes(secondSignal)) throw new Error('Invalid secondSignal');
+  if (secondSignal !== 'none' && network !== '8453') throw new Error('Grey Ridge preview is only available for Base (8453)');
   if (network === 'solana') {
     const report = await fetchJson(`https://api.rugcheck.xyz/v1/tokens/${encodeURIComponent(address)}/report/summary`);
     return jsonContent(sourceEnvelope('Rugcheck', { network, address, report, limitation: 'Automated snapshot only; not a complete source-code audit.' }));
   }
   const normalizedAddress = address.toLowerCase();
   const data = await fetchJson(`https://api.gopluslabs.io/api/v1/token_security/${network}?contract_addresses=${encodeURIComponent(normalizedAddress)}`);
-  const record = data?.result?.[normalizedAddress] ?? Object.values(data?.result ?? {})[0] ?? null;
+  // A record for a different contract must never stand in for the requested one.
+  const record = data?.result?.[normalizedAddress] ?? null;
   const security = record ? {
     tokenName: record.token_name,
     tokenSymbol: record.token_symbol,
@@ -103,7 +108,10 @@ async function tokenSecurityScan(args) {
     topHolders: Array.isArray(record.holders) ? record.holders.slice(0, 10) : [],
     dex: Array.isArray(record.dex) ? record.dex.slice(0, 10) : [],
   } : null;
-  return jsonContent(sourceEnvelope('GoPlus', { network, address, security, limitation: 'Automated snapshot only; not a complete source-code audit.' }));
+  const extra = secondSignal === 'greyridge-preview'
+    ? { secondSignal: await greyRidgePreview(normalizedAddress) }
+    : {};
+  return jsonContent(sourceEnvelope('GoPlus', { network, address, security, ...extra, limitation: 'Automated snapshot only; not a complete source-code audit. Independent signals may disagree; a positive second signal never overrides primary warnings or missing coverage.' }));
 }
 
 export const dexSecurityHandlers = {

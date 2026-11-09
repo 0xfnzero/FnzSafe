@@ -302,12 +302,13 @@ export const web3MarketTools = [
   },
   {
     name: 'token_security_scan',
-    description: 'Run a read-only GoPlus EVM token or Rugcheck Solana security snapshot. Use numeric EVM chain ID or "solana" as network.',
+    description: 'Run a read-only GoPlus EVM token or Rugcheck Solana security snapshot. Use numeric EVM chain ID or "solana" as network. On Base (8453), optionally request the Grey Ridge free preview as a second signal; it is quota-limited, never pays, and cannot authorize trades or override primary warnings.',
     inputSchema: {
       type: 'object',
       properties: {
         address: { type: 'string', minLength: 20, maxLength: 128 },
         network: { type: 'string', pattern: '^(solana|[1-9][0-9]{0,7})$' },
+        secondSignal: { type: 'string', enum: ['none', 'greyridge-preview'], default: 'none' },
       },
       required: ['address', 'network'],
       additionalProperties: false,
