@@ -34,6 +34,7 @@
     "allow-pick-source-directory",
     "allow-save-download-file",
     "allow-open-download-file-location",
-    "allow-lock-wallet-security-state"
+    "allow-lock-wallet-security-state",
+    "allow-read-dapp-network"
   ]
 }

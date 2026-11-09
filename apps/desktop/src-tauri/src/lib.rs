@@ -28,6 +28,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 mod app_store;
 mod browser_profile;
+mod dapp_network;
 mod evm_dapp_rpc;
 mod research_store;
 mod secure_input;
@@ -98,6 +99,7 @@ struct DappSession {
     network: String,
     opened_at_ms: u64,
     evm_rpc: Option<std::sync::Arc<evm_dapp_rpc::ReadRpc>>,
+    available_networks: Vec<dapp_network::NetworkContext>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -2941,10 +2943,11 @@ fn solana_dapp_provider_script(
 		    return invoke(command, args || {{}});
 		  }}
 	  async function requestConnection() {{
-	    if (connected) return {{ publicKey }};
 	    if (connectionPromise) return connectionPromise;
 	    connectionPromise = (async () => {{
-	      const requestId = await tauriInvoke("dapp_submit_connect_request");
+      await tauriInvoke("dapp_switch_network", {{ network }});
+      if (connected) return {{ publicKey }};
+	      const requestId = await tauriInvoke("dapp_submit_connect_request", {{ expectedFamily: "solana", expectedNetwork: network }});
 	      const started = Date.now();
 	      while (Date.now() - started < 180000) {{
 	        const poll = await tauriInvoke("dapp_poll_connect_request", {{ requestId }});
@@ -3062,8 +3065,11 @@ fn solana_dapp_provider_script(
     return bytes;
   }}
   async function requestSignature(method, transaction) {{
+    await requestConnection();
     const payload = transactionPayload(transaction);
     const requestId = await tauriInvoke("dapp_submit_sign_request", {{
+      expectedFamily: "solana",
+      expectedNetwork: network,
       method,
       transactionBase64: payload.base64,
       transactionFormat: payload.format,
@@ -3079,6 +3085,7 @@ fn solana_dapp_provider_script(
     throw new Error("FnzSafe signing request timed out");
   }}
   async function requestMessageSignature(message) {{
+    await requestConnection();
     let messageBytes;
     if (message instanceof Uint8Array) {{
       messageBytes = message;
@@ -3092,6 +3099,8 @@ fn solana_dapp_provider_script(
       throw new Error("Invalid Solana message");
     }}
     const requestId = await tauriInvoke("dapp_submit_sign_request", {{
+      expectedFamily: "solana",
+      expectedNetwork: network,
       method: "signMessage",
       messageBase64: bytesToBase64(messageBytes),
     }});
@@ -3258,6 +3267,8 @@ fn solana_dapp_provider_script(
             let resolved = false;
             const payload = transactionPayload(input.transaction ?? input);
             const requestId = await tauriInvoke("dapp_submit_sign_request", {{
+              expectedFamily: "solana",
+              expectedNetwork: network,
               method: "signTransaction",
               transactionBase64: payload.base64,
               transactionFormat: payload.format,
@@ -3290,6 +3301,8 @@ fn solana_dapp_provider_script(
 	            let resolved = false;
 	            const payload = transactionPayload(input.transaction ?? input);
 	            const requestId = await tauriInvoke("dapp_submit_sign_request", {{
+              expectedFamily: "solana",
+              expectedNetwork: network,
 	              method: "signAndSendTransaction",
 	              transactionBase64: payload.base64,
 	              transactionFormat: payload.format,
@@ -3513,12 +3526,13 @@ fn evm_dapp_provider_script(wallet_address: &str, network: &str) -> Result<Strin
 (function () {
   if (window.__FNZSAFE_EVM_PROVIDER__) return;
   const walletAddress = __WALLET_ADDRESS__;
-  const chainId = __CHAIN_ID_HEX__;
-  const networkVersion = __CHAIN_ID_DECIMAL__;
+  let chainId = __CHAIN_ID_HEX__;
+  let networkVersion = __CHAIN_ID_DECIMAL__;
   const walletName = __WALLET_NAME__;
   const walletIcon = __WALLET_ICON__;
   const listeners = new Map();
   let connected = false;
+  const approvedNetworks = new Set();
   let connectionPromise = null;
 
   function providerError(code, message, data) {
@@ -3540,9 +3554,29 @@ fn evm_dapp_provider_script(wallet_address: &str, network: &str) -> Result<Strin
     if (typeof invoke !== "function") throw providerError(4900, "FnzSafe bridge is unavailable");
     return invoke(command, args || {});
   }
+  function applyNetwork(network) {
+    const value = String(network).match(/^eip155:([1-9][0-9]*)$/);
+    if (!value) throw providerError(-32603, "Invalid wallet network");
+    const next = "0x" + BigInt(value[1]).toString(16);
+    if (next !== chainId) {
+      chainId = next;
+      networkVersion = value[1];
+      emit("chainChanged", chainId);
+    }
+  }
+  async function refreshNetwork() {
+    try { applyNetwork(await tauriInvoke("dapp_provider_network", { walletFamily: "evm" })); }
+    catch (error) { throw providerError(error?.code || 4900, error?.message || String(error)); }
+  }
+  async function switchNetwork(network) {
+    try { applyNetwork(await tauriInvoke("dapp_switch_network", { network })); }
+    catch (error) { throw providerError(error?.code || 4900, error?.message || String(error)); }
+  }
   async function requestSignature(method, params) {
     const requestId = await tauriInvoke("dapp_submit_sign_request", {
       method,
+      expectedFamily: "evm",
+      expectedNetwork: "eip155:" + networkVersion,
       payloadJson: JSON.stringify({ method, params: params ?? [] }),
     });
     const started = Date.now();
@@ -3565,10 +3599,12 @@ fn evm_dapp_provider_script(wallet_address: &str, network: &str) -> Result<Strin
     throw providerError(4900, "FnzSafe signing request timed out");
   }
   async function requestConnection() {
-    if (connected) return [walletAddress];
     if (connectionPromise) return connectionPromise;
     connectionPromise = (async () => {
-      const requestId = await tauriInvoke("dapp_submit_connect_request");
+      await refreshNetwork();
+      await switchNetwork("eip155:" + networkVersion);
+      if (connected && approvedNetworks.has(networkVersion)) return [walletAddress];
+      const requestId = await tauriInvoke("dapp_submit_connect_request", { expectedFamily: "evm", expectedNetwork: "eip155:" + networkVersion });
       const started = Date.now();
       while (Date.now() - started < 180000) {
         const poll = await tauriInvoke("dapp_poll_connect_request", { requestId });
@@ -3578,6 +3614,7 @@ fn evm_dapp_provider_script(wallet_address: &str, network: &str) -> Result<Strin
             throw providerError(-32603, "FnzSafe returned a different wallet account");
           }
           connected = true;
+          approvedNetworks.add(networkVersion);
           emit("connect", { chainId });
           emit("accountsChanged", [walletAddress]);
           return [walletAddress];
@@ -3607,8 +3644,8 @@ fn evm_dapp_provider_script(wallet_address: &str, network: &str) -> Result<Strin
       const method = args.method;
       const params = args.params ?? [];
       switch (method) {
-        case "eth_chainId": return chainId;
-        case "net_version": return networkVersion;
+        case "eth_chainId": await refreshNetwork(); return chainId;
+        case "net_version": await refreshNetwork(); return networkVersion;
         case "eth_accounts": return connected ? [walletAddress] : [];
         case "eth_coinbase": return connected ? walletAddress : null;
         case "eth_requestAccounts": return requestConnection();
@@ -3619,13 +3656,19 @@ fn evm_dapp_provider_script(wallet_address: &str, network: &str) -> Result<Strin
           return connected ? [{ parentCapability: "eth_accounts" }] : [];
         case "wallet_switchEthereumChain": {
           const requested = String(params?.[0]?.chainId || "").toLowerCase();
-          if (requested === chainId.toLowerCase()) return null;
-          throw providerError(4902, "Switch the active EVM network in FnzSafe first");
+          if (!/^0x[0-9a-f]+$/.test(requested) || BigInt(requested) <= 0n || BigInt(requested) > BigInt(Number.MAX_SAFE_INTEGER)) {
+            throw providerError(-32602, "Invalid EVM chain ID");
+          }
+          await switchNetwork("eip155:" + BigInt(requested).toString());
+          return null;
         }
         case "wallet_addEthereumChain": {
           const requested = String(params?.[0]?.chainId || "").toLowerCase();
-          if (requested === chainId.toLowerCase()) return null;
-          throw providerError(4200, "Add the network in FnzSafe settings first");
+          if (!/^0x[0-9a-f]+$/.test(requested) || BigInt(requested) <= 0n || BigInt(requested) > BigInt(Number.MAX_SAFE_INTEGER)) {
+            throw providerError(-32602, "Invalid EVM chain ID");
+          }
+          await switchNetwork("eip155:" + BigInt(requested).toString());
+          return null;
         }
         case "personal_sign":
         case "eth_sign":
@@ -3633,14 +3676,14 @@ fn evm_dapp_provider_script(wallet_address: &str, network: &str) -> Result<Strin
         case "eth_signTypedData_v4":
         case "eth_sendTransaction":
         case "eth_signTransaction":
-          if (!connected) await requestConnection();
+          await requestConnection();
           return requestSignature(method, params);
         case "eth_blockNumber": case "eth_gasPrice": case "eth_maxPriorityFeePerGas":
         case "eth_feeHistory": case "eth_getBalance": case "eth_getCode":
         case "eth_getTransactionCount": case "eth_getTransactionReceipt":
         case "eth_getTransactionByHash": case "eth_getBlockByNumber": case "eth_getBlockByHash":
         case "eth_call": case "eth_estimateGas": case "eth_getLogs": case "eth_getStorageAt":
-          try { return await tauriInvoke("dapp_evm_rpc_request", { method, params }); }
+          try { return await tauriInvoke("dapp_evm_rpc_request", { method, params, expectedNetwork: "eip155:" + networkVersion }); }
           catch (error) { throw providerError(Number.isInteger(error?.code) ? error.code : -32603,
             error?.message || "FnzSafe RPC request failed", error?.data); }
         default:
@@ -4238,6 +4281,7 @@ async fn dapp_open_tab(
     wallet_family: Option<String>,
     network: String,
     evm_rpc_url: Option<String>,
+    available_networks: Option<Vec<dapp_network::NetworkContext>>,
     x: f64,
     y: f64,
     width: f64,
@@ -4296,6 +4340,8 @@ async fn dapp_open_tab(
     } else {
         None
     };
+    let available_networks = available_networks.unwrap_or_default();
+    dapp_network::validate_contexts(&available_networks)?;
     let app_id = dapp
         .as_ref()
         .map(|value| value.id.to_string())
@@ -4447,6 +4493,8 @@ async fn dapp_open_tab(
         });
 
     builder = builder.initialization_script(fomo_alert_capture_script());
+    // A multichain wallet advertises both providers, regardless of the selected UI chain.
+    // Merely discovering a provider does not switch networks or authorize an account.
     if let Some(wallet_public_key) = wallet_public_key.as_ref() {
         let init_script = if wallet_family == "evm" {
             evm_dapp_provider_script(wallet_public_key, &network)?
@@ -4454,6 +4502,22 @@ async fn dapp_open_tab(
             solana_dapp_provider_script(&app_id, &app_name, wallet_public_key, &network)?
         };
         builder = builder.initialization_script(&init_script);
+        if let Some(other) = available_networks
+            .iter()
+            .find(|c| c.wallet_family != wallet_family)
+        {
+            let script = if other.wallet_family == "evm" {
+                evm_dapp_provider_script(&other.wallet_public_key, &other.network)?
+            } else {
+                solana_dapp_provider_script(
+                    &app_id,
+                    &app_name,
+                    &other.wallet_public_key,
+                    &other.network,
+                )?
+            };
+            builder = builder.initialization_script(&script);
+        }
     }
 
     let _visibility = state.webview_visibility.lock().await;
@@ -4484,6 +4548,7 @@ async fn dapp_open_tab(
                     network: network.clone(),
                     opened_at_ms: now_ms(),
                     evm_rpc,
+                    available_networks,
                 },
             );
             log::info!(
@@ -5919,12 +5984,28 @@ fn dapp_submit_fomo_profile(
     Ok(())
 }
 
+fn validate_dapp_provider_context(
+    session: &DappSession,
+    family: Option<&str>,
+    network: Option<&str>,
+) -> Result<(), String> {
+    if family.is_some_and(|value| value != session.wallet_family)
+        || network.is_some_and(|value| value != session.network)
+    {
+        return Err("DApp network changed; reconnect before continuing".into());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn dapp_submit_connect_request(
     webview: DesktopWebview,
     app: DesktopAppHandle,
     state: tauri::State<'_, DappBridgeState>,
+    expected_family: Option<String>,
+    expected_network: Option<String>,
 ) -> Result<String, String> {
+    ensure_dapp_connections_active(state.inner())?;
     let webview_label = webview.label().to_string();
     log::info!("received dapp connect request from webview {webview_label}");
     if dapp_tab_id_from_label(&webview_label).is_none() {
@@ -5945,6 +6026,11 @@ fn dapp_submit_connect_request(
         };
         session
     };
+    validate_dapp_provider_context(
+        &session,
+        expected_family.as_deref(),
+        expected_network.as_deref(),
+    )?;
     if session.wallet_family != "evm" && session.wallet_family != "solana" {
         log::warn!(
             "rejected dapp connect request from {webview_label}: unsupported wallet family {}",
@@ -6051,6 +6137,7 @@ async fn dapp_evm_rpc_request(
     state: tauri::State<'_, DappBridgeState>,
     method: String,
     params: serde_json::Value,
+    expected_network: Option<String>,
 ) -> Result<serde_json::Value, evm_dapp_rpc::RpcError> {
     use evm_dapp_rpc::RpcError;
     ensure_dapp_connections_active(state.inner())
@@ -6068,6 +6155,15 @@ async fn dapp_evm_rpc_request(
         let session = sessions
             .get(label)
             .ok_or_else(|| RpcError::new(4100, "DApp session is closed"))?;
+        if expected_network
+            .as_deref()
+            .is_some_and(|value| value != session.network)
+        {
+            return Err(RpcError::new(
+                4901,
+                "DApp network changed; retry on the current chain",
+            ));
+        }
         if session.wallet_family != "evm"
             || now_ms().saturating_sub(session.opened_at_ms) > 12 * 60 * 60 * 1000
         {
@@ -6120,7 +6216,10 @@ fn dapp_submit_sign_request(
     transaction_format: Option<String>,
     message_base64: Option<String>,
     payload_json: Option<String>,
+    expected_family: Option<String>,
+    expected_network: Option<String>,
 ) -> Result<String, String> {
+    ensure_dapp_connections_active(state.inner())?;
     let webview_label = webview.label().to_string();
     log::info!("received dapp signing request from webview {webview_label}: method={method}");
     let Some(_tab_id) = dapp_tab_id_from_label(&webview_label) else {
@@ -6141,6 +6240,11 @@ fn dapp_submit_sign_request(
         };
         session
     };
+    validate_dapp_provider_context(
+        &session,
+        expected_family.as_deref(),
+        expected_network.as_deref(),
+    )?;
     if now_ms().saturating_sub(session.opened_at_ms) > 12 * 60 * 60 * 1000 {
         log::warn!("rejected dapp signing request from {webview_label}: session expired");
         return Err("dapp session expired".to_string());
@@ -6421,6 +6525,10 @@ fn resolve_dapp_connect_request(
 ) -> Result<(), String> {
     ensure_dapp_connections_active(state.inner())?;
     let request_id = request_id.trim();
+    let sessions = state
+        .sessions
+        .lock()
+        .map_err(|_| "dapp session lock poisoned")?;
     let mut requests = state
         .connect_requests
         .lock()
@@ -6435,6 +6543,28 @@ fn resolve_dapp_connect_request(
     }
     ensure_dapp_result_pending(&pending.result, "dapp connect request")?;
     if result.approved {
+        if let Some(label) = pending.webview_label.as_deref() {
+            let session = sessions.get(label).ok_or("DApp session is closed")?;
+            validate_dapp_provider_context(
+                session,
+                Some(&pending.event.wallet_family),
+                Some(&pending.event.network),
+            )?;
+            if session.opened_at_ms > pending.event.created_at_ms
+                || !dapp_session_matches_permission(
+                    session,
+                    &tauri::Url::parse(&pending.event.app_url)
+                        .map_err(|_| "Invalid DApp origin")?
+                        .origin()
+                        .ascii_serialization(),
+                    pending.event.wallet_public_key.as_deref().unwrap_or(""),
+                    &pending.event.network,
+                )
+            {
+                return Err("DApp session changed; request connection again".into());
+            }
+        }
+
         let approved_wallet = result
             .public_key
             .as_deref()
@@ -7382,6 +7512,9 @@ pub fn run() {
             dapp_poll_connect_request,
             dapp_submit_sign_request,
             dapp_evm_rpc_request,
+            dapp_network::dapp_provider_network,
+            dapp_network::dapp_switch_network,
+            dapp_network::dapp_current_network,
             dapp_poll_sign_request,
             dapp_pending_sign_request,
             dapp_pending_connect_request,
@@ -8133,6 +8266,7 @@ mod tests {
             network: "mainnet".to_string(),
             opened_at_ms: now_ms(),
             evm_rpc: None,
+            available_networks: Vec::new(),
         };
 
         assert!(dapp_session_matches_permission(
@@ -8317,6 +8451,7 @@ mod tests {
             network: "mainnet".to_string(),
             opened_at_ms: now_ms(),
             evm_rpc: None,
+            available_networks: Vec::new(),
         };
         {
             let mut sessions = state.sessions.lock().unwrap();
@@ -8343,6 +8478,7 @@ mod tests {
                 network: "mainnet".to_string(),
                 opened_at_ms: now_ms(),
                 evm_rpc: None,
+                available_networks: Vec::new(),
             },
         );
 
@@ -8372,6 +8508,7 @@ mod tests {
                 network: "mainnet".to_string(),
                 opened_at_ms: now_ms(),
                 evm_rpc: None,
+                available_networks: Vec::new(),
             },
         );
 
@@ -8397,6 +8534,7 @@ mod tests {
                 network: "mainnet".to_string(),
                 opened_at_ms: now_ms(),
                 evm_rpc: None,
+                available_networks: Vec::new(),
             },
         );
         assert!(ensure_dapp_connections_active(&state).is_err());
@@ -8534,6 +8672,7 @@ mod tests {
             network: "mainnet".to_string(),
             opened_at_ms: now_ms(),
             evm_rpc: None,
+            available_networks: Vec::new(),
         };
         let target = "https://app.uniswap.org/swap".parse().unwrap();
 
@@ -8820,6 +8959,7 @@ mod tests {
             network: event.network.clone(),
             opened_at_ms: now,
             evm_rpc: None,
+            available_networks: Vec::new(),
         };
         state
             .sessions

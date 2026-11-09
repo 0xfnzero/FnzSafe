@@ -8989,6 +8989,48 @@ export default function Home() {
     twitterLoginRequiredOpen,
   ]);
 
+  const dappAvailableNetworks = useMemo(() => {
+    if (!effectiveWallet) return [];
+    const solanaAddress = dappWalletAddress(effectiveWallet, "solana");
+    const evmAddress = dappWalletAddress(effectiveWallet, "evm");
+    const chains = evmChains.filter((chain) => visibleEvmChainIds(evmChains, appPreferences).includes(chain.chain_id));
+    chains.sort((a, b) => Number(String(b.chain_id) === evmChainId) - Number(String(a.chain_id) === evmChainId));
+    return [
+      ...(solanaAddress ? [{wallet_family: "solana", wallet_public_key: solanaAddress, network: effectiveRpcRequest, rpc_url: null}] : []),
+      ...(evmAddress ? chains.map((chain) => ({wallet_family: "evm", wallet_public_key: evmAddress, network: `eip155:${chain.chain_id}`, rpc_url: chain.rpc_url})) : []),
+    ];
+  }, [appPreferences, effectiveRpcRequest, effectiveWallet, evmChainId, evmChains]);
+
+  useEffect(() => {
+    if (!isTauriWebview()) return;
+    let disposed = false;
+    let unlisten: UnlistenFn | undefined;
+    void listen<string>("dapp://network-changed", (event) => {
+      const tabId = event.payload;
+      if (tabId !== activeDappTabIdRef.current && tabId !== activeTwitterBrowserTabId) return;
+      // Fetch native state; page-emitted event payloads are never authoritative.
+      void invoke<{wallet_family: "evm" | "solana"; wallet_public_key: string; network: string}>("dapp_current_network", {tabId}).then((selection) => {
+        if (disposed || applicationLockedRef.current || !effectiveWallet) return;
+        const address = dappWalletAddress(effectiveWallet, selection.wallet_family);
+        if (!address || (selection.wallet_family === "evm"
+          ? address.toLowerCase() !== selection.wallet_public_key.toLowerCase()
+          : address !== selection.wallet_public_key)) return;
+        if (selection.wallet_family === "evm") {
+          const chainId = Number(selection.network.replace(/^eip155:/, ""));
+          if (!evmChains.some((chain) => chain.chain_id === chainId)) return;
+          // Native has already switched this tab. Preserve the page and its pending promise.
+          dappProviderContextRef.current = `evm:${selection.network}:${effectiveWallet.id}:${address}`;
+          selectEvmChain(String(chainId), {openChainView: false});
+        } else if (selection.network === effectiveRpcRequest) {
+          dappProviderContextRef.current = `solana:${selection.network}:${effectiveWallet.id}:${address}`;
+          setCurrentWalletNetwork("solana");
+          saveCurrentWalletNetwork("solana");
+        }
+      }).catch(() => undefined);
+    }).then((cleanup) => { if (disposed) cleanup(); else unlisten = cleanup; });
+    return () => { disposed = true; unlisten?.(); };
+  }, [activeTwitterBrowserTabId, effectiveRpcRequest, effectiveWallet, evmChains, selectEvmChain]);
+
   const createDappWebview = useCallback(async (
     tabId: string,
     url: string,
@@ -9010,7 +9052,7 @@ export default function Home() {
     const solanaMode = Boolean(dapp) || currentWalletNetwork === "solana";
     const walletFamily = evmMode ? "evm" : solanaMode ? "solana" : undefined;
     const wallet = walletFamily ? effectiveWallet : undefined;
-    const walletAddress = evmMode ? wallet?.evm_address?.trim() : wallet?.public_key.trim();
+    const walletAddress = wallet && walletFamily ? dappWalletAddress(wallet, walletFamily) : undefined;
     if (walletFamily && (!wallet || !walletAddress)) {
       toast.error(tf("features.dapp-store.noWallet", "请先选择一个钱包。"));
       return;
@@ -9030,6 +9072,7 @@ export default function Home() {
         walletFamily: walletFamily ?? null,
         network: dappNetwork,
         evmRpcUrl: evmMode ? activeEvmChain?.rpc_url : null,
+        availableNetworks: dappAvailableNetworks,
         x: bounds.x,
         y: bounds.y,
         width: bounds.width,
@@ -9063,7 +9106,7 @@ export default function Home() {
       ));
       toast.error(errorMessage(error, tf("features.dapp-store.openFailed", "打开 DApp 失败")));
     }
-  }, [activeEvmChain, currentWalletNetwork, dappBrowserBounds, effectiveRpcRequest, effectiveWallet, tf]);
+  }, [activeEvmChain, currentWalletNetwork, dappAvailableNetworks, dappBrowserBounds, effectiveRpcRequest, effectiveWallet, tf]);
 
   const prepareDappWalletChain = useCallback((chain: string): boolean => {
     const target = walletNetworkForChain(chain);
@@ -9163,6 +9206,7 @@ export default function Home() {
         url,
         appId: dapp?.id ?? null,
         walletPublicKey: wallet?.public_key ?? null,
+        availableNetworks: wallet ? dappAvailableNetworks : [],
         network: effectiveRpcRequest,
         x: bounds.x,
         y: bounds.y,
@@ -9196,7 +9240,7 @@ export default function Home() {
       if (tabId === FOMO_ALERTS_TAB_ID) updateFomoAuthStatus("error");
       toast.error(errorMessage(error, tf("features.dapp-store.openFailed", "打开页面失败")));
     }
-  }, [effectiveRpcRequest, effectiveWallet, tf, twitterBrowserBounds, updateFomoAuthStatus]);
+  }, [dappAvailableNetworks, effectiveRpcRequest, effectiveWallet, tf, twitterBrowserBounds, updateFomoAuthStatus]);
 
   const ensureFomoAlertsWebview = useCallback(async () => {
     const existing = twitterBrowserTabs.find((tab) => tab.id === FOMO_ALERTS_TAB_ID);

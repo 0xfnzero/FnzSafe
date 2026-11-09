@@ -131,3 +131,13 @@ commands.allow = ["dapp_evm_rpc_request"]
 identifier = "allow-lock-wallet-security-state"
 description = "Allow only the main wallet window to lock backend keys or stop its owned backend on lock failure."
 commands.allow = ["lock_wallet_security_state"]
+
+[[permission]]
+identifier = "allow-dapp-network-selection"
+description = "Read provider networks and switch only to wallet-configured networks from the visible DApp."
+commands.allow = ["dapp_provider_network", "dapp_switch_network"]
+
+[[permission]]
+identifier = "allow-read-dapp-network"
+description = "Read authoritative native DApp network state from the main wallet window."
+commands.allow = ["dapp_current_network"]

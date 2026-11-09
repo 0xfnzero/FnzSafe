@@ -7,12 +7,18 @@ import {BrowserProvider} from 'ethers';
 const source=readFileSync(new URL('../../src-tauri/src/lib.rs',import.meta.url),'utf8');
 const script=source.slice(source.indexOf('fn evm_dapp_provider_script(')).match(/let script = r#"([\s\S]*?)"#;/)[1];
 const account='0x1111111111111111111111111111111111111111';
-function fixture(read=async method=>method==='eth_blockNumber'?'0x123':method==='eth_estimateGas'?'0x7ee53e':null){
+function fixture(read=async method=>method==='eth_blockNumber'?'0x123':method==='eth_estimateGas'?'0x7ee53e':null, options={}){
+ let nativeNetwork=options.initialNetwork || 'eip155:97';
  const calls=[];
  const window={addEventListener(){},dispatchEvent(){},setTimeout(){},__TAURI_INTERNALS__:{async invoke(command,args){
   calls.push({command,args});
+  if(command==='dapp_provider_network')return nativeNetwork.startsWith('eip155:')?nativeNetwork:'eip155:1';
+  if(command==='dapp_switch_network'){
+   if(!['eip155:1','eip155:97','mainnet'].includes(args.network))throw {code:4902,message:'Unknown network'};
+   nativeNetwork=args.network;return nativeNetwork;
+  }
   if(command==='dapp_submit_connect_request')return 'connect-id';
-  if(command==='dapp_poll_connect_request')return {status:'approved',result:{public_key:account}};
+  if(command==='dapp_poll_connect_request')return {status:'approved',result:{public_key:options.approvedAccount || account}};
   if(command==='dapp_evm_rpc_request')return read(args.method,args.params);
   if(command==='dapp_submit_sign_request')return 'sign-id';
   if(command==='dapp_poll_sign_request')return {status:'rejected',result:{error:'User rejected the request'}};
@@ -21,7 +27,7 @@ function fixture(read=async method=>method==='eth_blockNumber'?'0x123':method===
  const replacements={__WALLET_ADDRESS__:account,__CHAIN_ID_HEX__:'0x61',__CHAIN_ID_DECIMAL__:'97',__WALLET_NAME__:'FnzSafe',__WALLET_ICON__:'data:image/png;base64,AA=='};
  const rendered=script.replace(/__WALLET_ADDRESS__|__CHAIN_ID_HEX__|__CHAIN_ID_DECIMAL__|__WALLET_NAME__|__WALLET_ICON__/g,key=>JSON.stringify(replacements[key]));
  vm.runInNewContext(rendered,{window,console,setTimeout,CustomEvent:class{},Event:class{}});
- return {wallet:window.ethereum,calls};
+ return {wallet:window.ethereum,calls,nativeNetwork:()=>nativeNetwork};
 }
 
 test('ethers reaches wallet confirmation after block-number lookup and gas estimation',async()=>{
@@ -59,4 +65,53 @@ test('unsupported administrative and raw-send requests never enter the native re
   await assert.rejects(wallet.request({method,params:[]}),e=>e.code===4200);
  }
  assert.equal(calls.length,0);
+});
+
+
+test('BSC Testnet request switches a Solana session and returns only its EVM account',async()=>{
+ const {wallet,calls,nativeNetwork}=fixture(undefined,{initialNetwork:'mainnet'});
+ const changed=[];
+ wallet.on('chainChanged',chain=>changed.push(chain));
+ assert.equal(await wallet.request({method:'eth_chainId'}),'0x1');
+ assert.equal(nativeNetwork(),'mainnet','provider discovery must not change the selected chain');
+ assert.deepEqual(Array.from(await wallet.request({method:'eth_accounts'})),[]);
+ await wallet.request({method:'wallet_switchEthereumChain',params:[{chainId:'0x61'}]});
+ assert.equal(nativeNetwork(),'eip155:97');
+ assert.equal(await wallet.request({method:'eth_chainId'}),'0x61');
+ assert.equal(await wallet.request({method:'net_version'}),'97');
+ assert.deepEqual(Array.from(await wallet.request({method:'eth_requestAccounts'})),[account]);
+ assert.equal(wallet.selectedAddress,account);
+ assert.ok(changed.includes('0x61'));
+ const connect=calls.find(c=>c.command==='dapp_submit_connect_request');
+ assert.equal(connect.args.expectedFamily,'evm');
+ assert.equal(connect.args.expectedNetwork,'eip155:97');
+ await assert.rejects(wallet.request({method:'personal_sign',params:['0x6869',account]}),e=>e.code===4001);
+ const sign=calls.find(c=>c.command==='dapp_submit_sign_request');
+ assert.equal(sign.args.expectedNetwork,'eip155:97');
+ assert.equal(sign.args.expectedFamily,'evm');
+});
+
+test('unknown or malformed chain requests preserve the current network',async()=>{
+ const {wallet,nativeNetwork}=fixture();
+ await assert.rejects(wallet.request({method:'wallet_switchEthereumChain',params:[{chainId:'0x9999'}]}),e=>e.code===4902);
+ for(const chainId of ['97','0x0','0xnope','0xffffffffffffffff']){
+  await assert.rejects(wallet.request({method:'wallet_switchEthereumChain',params:[{chainId}]}),e=>e.code===-32602);
+ }
+ assert.equal(nativeNetwork(),'eip155:97');
+ assert.equal(await wallet.request({method:'eth_chainId'}),'0x61');
+});
+
+test('known add-chain requests ignore site-provided RPC endpoints',async()=>{
+ const {wallet,calls}=fixture();
+ await wallet.request({method:'wallet_addEthereumChain',params:[{chainId:'0x1',rpcUrls:['https://untrusted.invalid']} ]});
+ const change=calls.find(c=>c.command==='dapp_switch_network');
+ assert.deepEqual(JSON.parse(JSON.stringify(change.args)),{network:'eip155:1'});
+ assert.equal(await wallet.request({method:'eth_chainId'}),'0x1');
+});
+
+test('an accidental Solana approval cannot become an EVM account',async()=>{
+ const {wallet}=fixture(undefined,{approvedAccount:'11111111111111111111111111111111'});
+ await assert.rejects(wallet.request({method:'eth_requestAccounts'}),e=>e.code===-32603);
+ assert.equal(wallet.selectedAddress,null);
+ assert.deepEqual(Array.from(await wallet.request({method:'eth_accounts'})),[]);
 });
