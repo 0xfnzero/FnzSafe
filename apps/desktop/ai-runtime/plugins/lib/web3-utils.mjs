@@ -48,7 +48,7 @@ function cacheValue(key, value) {
   }
 }
 
-async function requestText(url) {
+async function requestText(url, redirect = 'follow') {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   const host = new URL(url).hostname;
@@ -59,6 +59,7 @@ async function requestText(url) {
         'User-Agent': USER_AGENT,
       },
       signal: controller.signal,
+      redirect,
     });
     const declaredLength = Number(response.headers.get('content-length'));
     if (Number.isFinite(declaredLength) && declaredLength > MAX_UPSTREAM_BYTES) {
@@ -121,6 +122,14 @@ export async function fetchText(url, cacheMs = 0) {
 
 export async function fetchJson(url, cacheMs = 0) {
   const body = await fetchText(url, cacheMs);
+  return parseJsonResponse(url, body);
+}
+
+export async function fetchJsonWithoutRedirects(url) {
+  return parseJsonResponse(url, await requestText(url, 'error'));
+}
+
+function parseJsonResponse(url, body) {
   try {
     return JSON.parse(body);
   } catch {

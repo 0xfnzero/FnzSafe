@@ -52,6 +52,7 @@ export interface PortfolioAsset {
   decimals: number;
   native: boolean;
   risk: 'verified' | 'unknown' | 'spam';
+  balanceStale?: boolean;
   priceUsd?: number;
   valueUsd?: number;
   priceSource?: string;

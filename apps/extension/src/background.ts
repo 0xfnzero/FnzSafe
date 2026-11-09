@@ -42,6 +42,7 @@ import { createInitialVault, decryptVaultWithMigration, encryptVault, mergeVault
 import {
   attachUsdPrices,
   discoverEvmTokens,
+  retainUnrefreshedTokens,
   nativeAsset,
   visiblePortfolioAssets,
 } from './portfolio';
@@ -819,23 +820,31 @@ async function loadPortfolio(family: string, force = false): Promise<PortfolioSn
     const account = await activeAccount('evm');
     const chain = configuredChain(evmChain(state.evmChainId), state.rpcOverrides ?? {});
     const provider = await evmProvider(chain);
-    assets.push(nativeAsset(chain, (await provider.getBalance(account.address)).toString(), 18));
-    const savedTokens = (await chrome.storage.local.get(tokenStorageKey(chain.key, account.address)))[tokenStorageKey(chain.key, account.address)];
-    if (Array.isArray(savedTokens)) {
-      for (const address of savedTokens.slice(0, 100)) {
-        try { assets.push(await tokenAsset(provider, chain, account.address, address)); }
-        catch { partial = true; warnings.push('An imported token could not be queried. Check its contract and RPC.'); }
+    let tokenRefreshFailed = false;
+    try {
+      assets.push(nativeAsset(chain, (await provider.getBalance(account.address)).toString(), 18));
+      const savedTokens = (await chrome.storage.local.get(tokenStorageKey(chain.key, account.address)))[tokenStorageKey(chain.key, account.address)];
+      if (Array.isArray(savedTokens)) {
+        for (const address of savedTokens.slice(0, 100)) {
+          try { assets.push(await tokenAsset(provider, chain, account.address, address)); }
+          catch { partial = true; tokenRefreshFailed = true; warnings.push('An imported token could not be queried. Check its contract and RPC.'); }
+        }
       }
-    }
-    if (state.enhancedAssetDetection) {
-      try {
-        const discovered = await discoverEvmTokens(chain, account.address);
-        assets.push(...discovered.filter(token => !assets.some(a => a.id === token.id)));
-      } catch (error) {
-        partial = true;
-        warnings.push(errorMessage(error));
+      if (state.enhancedAssetDetection) {
+        try {
+          const discovered = await discoverEvmTokens(chain, account.address);
+          assets.push(...discovered.filter(token => !assets.some(a => a.id === token.id)));
+        } catch (error) {
+          partial = true;
+          tokenRefreshFailed = true;
+          warnings.push(errorMessage(error));
+        }
       }
-    }
+      if (tokenRefreshFailed && cached) {
+        assets = retainUnrefreshedTokens(assets, cached.snapshot.assets, chain.key);
+        if (assets.some(asset => asset.balanceStale)) warnings.push('Some token balances could not be refreshed. Last known balances are shown.');
+      }
+    } finally { provider.destroy(); }
   } else if (family === 'solana') {
     const account = await activeAccount('solana');
     const chain = configuredChain(chains.find((item) => item.key === `solana:${state.solanaCluster}`)!, state.rpcOverrides ?? {});
@@ -870,7 +879,7 @@ async function loadPortfolio(family: string, force = false): Promise<PortfolioSn
     assets = await attachUsdPrices(assets);
   } catch {
     partial = true;
-    warnings.push('USD prices are temporarily unavailable. Balances are still current.');
+    warnings.push('USD prices are temporarily unavailable.');
   }
   const flaggedSpamCount = assets.filter((asset) => asset.risk === 'spam').length;
   if (flaggedSpamCount > 0) warnings.push(`${flaggedSpamCount} suspicious token${flaggedSpamCount === 1 ? '' : 's'} flagged and placed last.`);

@@ -440,3 +440,52 @@ test('Solana transaction bytes cannot be approved through message signing even w
   }
   await send({ type: 'LOCK' });
 });
+
+test('portfolio refresh retains failed tokens, clears them after empty success, and isolates wallet/network scopes', async context => {
+  await send({ type: 'UNLOCK', password: 'cleanup-fixture-password' });
+  const account = (await send({ type: 'STATUS' })).result.accounts.find((a: any) => a.family === 'evm');
+  await send({ type: 'SET_ACTIVE_ACCOUNT', accountId: account.id });
+  await send({ type: 'SET_NETWORK', key: 'evm:1' });
+  await send({ type: 'SET_ENHANCED_ASSET_DETECTION', enabled: true });
+  let mode: 'tokens' | 'failure' | 'empty' = 'tokens';
+  let chainId = '0x1';
+  const tokenAddress = '0x1111111111111111111111111111111111111111';
+  context.mock.method(globalThis, 'fetch', async (url: string | URL | Request, init?: RequestInit) => {
+    if (String(url).includes('/token-balances')) {
+      if (mode === 'failure') return Response.json({ error: 'index unavailable' });
+      return Response.json(mode === 'empty' ? [] : [{ value: '1230000', token: { address_hash: tokenAddress, decimals: '6', symbol: 'TEST', type: 'ERC-20' } }]);
+    }
+    if (String(url).includes('coins.llama.fi')) return Response.json({ coins: {} });
+    const body = JSON.parse(typeof init?.body === 'string' ? init.body : new TextDecoder().decode(init?.body as Uint8Array));
+    const result = body.method === 'eth_chainId' ? chainId : body.method === 'eth_getBalance' ? '0x1' : undefined;
+    assert.notEqual(result, undefined, `unexpected RPC ${body.method}`);
+    return Response.json({ jsonrpc: '2.0', id: body.id, result });
+  });
+  const load = async () => {
+    const response = await send({ type: 'GET_PORTFOLIO', family: 'evm', force: true });
+    assert.equal(response.ok, true, response.error);
+    return response.result;
+  };
+  const first = await load();
+  assert.equal(first.assets.find((a: any) => a.address === tokenAddress).rawBalance, '1230000');
+  mode = 'failure';
+  const failed = await load();
+  assert.equal(failed.partial, true);
+  assert.equal(failed.assets.find((a: any) => a.address === tokenAddress).balanceStale, true);
+  assert.match(failed.warnings.join(' '), /Last known balances/);
+  mode = 'empty';
+  assert.equal((await load()).assets.some((a: any) => !a.native), false);
+  mode = 'tokens';
+  await load();
+  mode = 'failure';
+  await send({ type: 'SET_NETWORK', key: 'evm:8453' }); chainId = '0x2105';
+  assert.equal((await load()).assets.some((a: any) => !a.native), false);
+  await send({ type: 'SET_NETWORK', key: 'evm:1' }); chainId = '0x1';
+  mode = 'tokens'; await load();
+  mode = 'failure';
+  assert.equal((await send({ type: 'CREATE_WALLET', name: 'Portfolio scope fixture' })).ok, true);
+  const next = (await send({ type: 'STATUS' })).result.accounts.find((a: any) => a.family === 'evm' && a.id !== account.id);
+  await send({ type: 'SET_ACTIVE_ACCOUNT', accountId: next.id });
+  assert.equal((await load()).assets.some((a: any) => !a.native), false);
+  await send({ type: 'LOCK' });
+});

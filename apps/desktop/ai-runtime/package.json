@@ -7,7 +7,7 @@
     "node": ">=22 <25"
   },
   "scripts": {
-    "test": "node test-web3-market.mjs && node run.mjs --self-test && node test-dsh-compat.mjs && node binance-connection.mjs --self-test && node test-binance-dependency-compat.mjs",
+    "test": "node test-web3-market.mjs && node --test test-token-security.mjs && node run.mjs --self-test && node test-dsh-compat.mjs && node binance-connection.mjs --self-test && node test-binance-dependency-compat.mjs",
     "test:live": "node test-live.mjs"
   },
   "dependencies": {

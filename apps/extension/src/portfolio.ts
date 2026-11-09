@@ -104,10 +104,12 @@ export function parseBlockscoutTokenBalances(
   raw: unknown,
   chain: ChainInfo,
 ): PortfolioAsset[] {
-  if (!Array.isArray(raw) || chain.family !== 'evm') return [];
+  if (chain.family !== 'evm') return [];
+  if (!Array.isArray(raw)) throw new Error('Invalid token discovery response');
+  if (raw.length > MAX_DISCOVERED_TOKENS) throw new Error('Token discovery response exceeds the token limit');
   const seen = new Set<string>();
   const assets: PortfolioAsset[] = [];
-  for (const entry of raw.slice(0, MAX_DISCOVERED_TOKENS) as BlockscoutTokenBalance[]) {
+  for (const entry of raw as BlockscoutTokenBalance[]) {
     const token = entry?.token;
     const address = typeof token?.address_hash === 'string' ? token.address_hash : '';
     const rawBalance = typeof entry?.value === 'string' ? entry.value : '';
@@ -153,14 +155,50 @@ async function fetchJson(url: string): Promise<unknown> {
       cache: 'no-store',
       credentials: 'omit',
       referrerPolicy: 'no-referrer',
+      redirect: 'error',
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const text = await response.text();
-    if (text.length > MAX_RESPONSE_BYTES) throw new Error('response is too large');
-    return JSON.parse(text) as unknown;
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new Error(`HTTP ${response.status}`);
+    }
+    if (Number(response.headers.get('content-length')) > MAX_RESPONSE_BYTES) {
+      await response.body?.cancel();
+      throw new Error('response is too large');
+    }
+    if (!response.body) throw new Error('Empty token service response');
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let bytes = 0;
+    let text = '';
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytes += value.byteLength;
+        if (bytes > MAX_RESPONSE_BYTES) {
+          await reader.cancel();
+          throw new Error('response is too large');
+        }
+        text += decoder.decode(value, { stream: true });
+      }
+      text += decoder.decode();
+    } finally { reader.releaseLock(); }
+    try { return JSON.parse(text) as unknown; }
+    catch { throw new Error('Invalid token service JSON response'); }
   } finally {
     clearTimeout(timeout);
   }
+}
+
+// The caller supplies only the cache entry for this account/network/RPC/privacy
+// scope. Fresh values (including zero) win; a failure is never an empty success.
+export function retainUnrefreshedTokens(
+  current: PortfolioAsset[], previous: PortfolioAsset[], chainKey: string,
+): PortfolioAsset[] {
+  const refreshed = new Set(current.map(asset => asset.id));
+  return [...current, ...previous.filter(asset =>
+    !asset.native && asset.chainKey === chainKey && !refreshed.has(asset.id),
+  ).map(asset => ({ ...asset, balanceStale: true }))];
 }
 
 export async function discoverEvmTokens(
