@@ -2092,7 +2092,7 @@ fn builtin_rpc_fallbacks(chain_id: u64) -> &'static [&'static str] {
         324 => &["https://zksync.drpc.org"],
         4_663 => &[
             "https://robinhood-rpc.publicnode.com",
-            "https://rpc.ordofi.network",
+            "https://robinhood.drpc.org",
         ],
         5_042 => &[
             "https://rpc.drpc.mainnet.arc.io",
