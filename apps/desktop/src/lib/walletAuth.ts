@@ -47,8 +47,10 @@ export const authFormsWithWallets = new Set([
   "squads-approve", "squads-reject", "squads-execute", "squads-set-authority",
 ]);
 
-export function walletLabel(wallet: SavedWallet): string {
-  return `${wallet.name} - ${wallet.public_key.slice(0, 4)}...${wallet.public_key.slice(-4)}`;
+export function walletLabel(wallet: SavedWallet, address = wallet.public_key): string {
+  if (!address) return wallet.name;
+  const prefixLength = address.startsWith("0x") ? 6 : 4;
+  return `${wallet.name} - ${address.slice(0, prefixLength)}...${address.slice(-4)}`;
 }
 
 export function encryptedKeyFromForm(formData: FormState): string {

@@ -11556,6 +11556,10 @@ export default function Home() {
   const selectedDappConnectWalletId = dappConnectWallets.some((wallet) => wallet.id === dappConnectWalletId)
     ? dappConnectWalletId
     : dappConnectWallets[0]?.id || "";
+  const selectedDappConnectWallet = dappConnectWallets.find((wallet) => wallet.id === selectedDappConnectWalletId);
+  const selectedDappConnectAddress = selectedDappConnectWallet && dappConnectRequest
+    ? dappWalletAddress(selectedDappConnectWallet, dappConnectRequest.wallet_family)
+    : "";
 
   const rejectDappConnectRequest = async () => {
     const request = dappConnectRequest;
@@ -23317,7 +23321,7 @@ export default function Home() {
                           <div>
                             <p className="text-sm font-semibold text-white">{tf("features.dapp-store.walletStatus", "Wallet")}</p>
                             <p className="mt-1 max-w-full truncate text-xs text-gray-500">
-                              {effectiveWallet ? walletLabel(effectiveWallet) : tf("features.dapp-store.noWallet", "Select a wallet first.")}
+                              {effectiveWallet ? walletLabel(effectiveWallet, dappWalletAddress(effectiveWallet, currentWalletNetwork.startsWith("evm:") ? "evm" : "solana")) : tf("features.dapp-store.noWallet", "Select a wallet first.")}
                             </p>
                           </div>
                           <Wallet className="h-5 w-5 shrink-0 text-emerald-200" />
@@ -30504,10 +30508,15 @@ export default function Home() {
                 >
                   {dappConnectWallets.map((wallet) => (
                     <option key={wallet.id} value={wallet.id}>
-                      {walletLabel(wallet)}
+                      {walletLabel(wallet, dappWalletAddress(wallet, dappConnectRequest.wallet_family))}
                     </option>
                   ))}
                 </select>
+                {selectedDappConnectAddress && (
+                  <code className="mt-2 block select-text break-all rounded-lg border border-white/10 bg-black/30 p-3 text-xs text-gray-300">
+                    {selectedDappConnectAddress}
+                  </code>
+                )}
                 {dappConnectWallets.length === 0 && (
                   <p className="mt-2 text-xs text-amber-100">
                     {tf("features.dapp-store.noWallet", "Select a wallet first.")}
