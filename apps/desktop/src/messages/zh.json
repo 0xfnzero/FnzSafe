@@ -391,6 +391,9 @@
       "title": "浏览器"
     },
     "dapp-store": {
+      "expandContent": "展开完整内容",
+      "collapseContent": "收起",
+      "fullRequestPayload": "完整请求参数",
       "title": "DApp 应用",
       "currentWallet": "当前连接钱包",
       "noWallet": "请先选择一个钱包。",

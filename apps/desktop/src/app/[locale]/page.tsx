@@ -1,6 +1,7 @@
 "use client";
 
 import { LoadingState, LoadingValue, RefreshStatus, EmptyState } from "@/components/LoadingState";
+import { DappApprovalDialog, DappRequestContent } from "@/components/DappApprovalDialog";
 import { OperationStatus } from "@/components/OperationStatus";
 import { EvmRpcEditor } from "@/components/EvmRpcEditor";
 import { NetworkEnvironmentSelector } from "@/components/NetworkEnvironmentSelector";
@@ -30480,36 +30481,33 @@ export default function Home() {
         </div>
       )}
       {dappSignRequest && (
-        <div className="fixed inset-0 z-[200] flex items-end bg-black/60 sm:items-center sm:justify-center">
-          <button
-            type="button"
-            aria-label={t("common.cancel")}
-            className="absolute inset-0 cursor-default"
-            onClick={() => void rejectDappSignRequest()}
-          />
-          <div className="relative w-full border-t border-white/10 bg-zinc-950 px-4 py-5 shadow-2xl sm:mx-4 sm:max-w-xl sm:rounded-2xl sm:border">
-            <div className="space-y-4">
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <h3 className="text-lg font-semibold">
-                    {isDappMessageSigningMethod(dappSignRequest.method)
-                      ? tf("features.dapp-store.messageSignRequestTitle", "DApp 消息签名确认")
-                      : tf("features.dapp-store.signRequestTitle", "DApp 交易确认")}
-                  </h3>
-                  <p className="mt-1 text-sm text-gray-400">
-                    {dappSignRequest.app_name} · {dappSignRequest.method}
-                  </p>
-                  <p className="mt-1 break-all text-xs text-gray-500">{dappSignRequest.app_url}</p>
-                </div>
+        <DappApprovalDialog
+          key={dappSignRequest.request_id}
+          title={isDappMessageSigningMethod(dappSignRequest.method) ? tf("features.dapp-store.messageSignRequestTitle", "DApp 消息签名确认") : tf("features.dapp-store.signRequestTitle", "DApp 交易确认")}
+          subtitle={`${dappSignRequest.app_name} · ${dappSignRequest.method}`}
+          origin={dappSignRequest.app_url}
+          cancelLabel={t("common.cancel")}
+          busy={dappSignBusy}
+          onReject={() => void rejectDappSignRequest()}
+          actions={<>
                 <button
                   type="button"
                   onClick={() => void rejectDappSignRequest()}
                   disabled={dappSignBusy}
-                  className="rounded-lg bg-white/10 p-2 text-gray-300 hover:bg-white/20 disabled:opacity-50"
+                  className="rounded-lg bg-white/10 px-4 py-3 text-sm font-semibold hover:bg-white/20 disabled:opacity-50"
                 >
-                  <X className="h-4 w-4" />
+                  {t("common.cancel")}
                 </button>
-              </div>
+                <button
+                  type="button"
+                  onClick={() => void approveDappSignRequest()}
+                  disabled={dappSignBusy}
+                  className="rounded-lg bg-gradient-to-r from-purple-500 to-pink-500 px-4 py-3 text-sm font-semibold hover:from-purple-600 hover:to-pink-600 disabled:opacity-50"
+                >
+                  {dappSignBusy ? t("common.processing") : tf("features.dapp-store.approve", "确认签名")}
+                </button>
+          </>}
+        >
 	              <div className="space-y-2 rounded-lg border border-white/10 bg-black/30 p-3">
 	                {[
                   [tf("features.dapp-store.requestApp", "请求网站"), dappSignRequest.app_name],
@@ -30645,16 +30643,18 @@ export default function Home() {
                   {dappEvmSignPreview && (
                     <div className="mt-2 space-y-2">
                       <p className="text-xs text-sky-50/90">{dappEvmSignPreview.summary}</p>
-                      <dl className="space-y-2 text-xs">{dappEvmSignPreview.details?.map(([label, value]) => <div key={label}><dt className="text-sky-100/60">{label}</dt><dd className="break-all whitespace-pre-wrap text-sky-50">{value}</dd></div>)}</dl>
+                      <div className="space-y-2 text-xs">{dappEvmSignPreview.details?.map(([label, value]) =>
+                        value.length > 180 || value.split("\n").length > 3 || /message|hex|data|json/i.test(label)
+                          ? <DappRequestContent key={label} title={label} value={value} expandLabel={tf("features.dapp-store.expandContent", "展开完整内容")} collapseLabel={tf("features.dapp-store.collapseContent", "收起")} />
+                          : <dl key={label}><dt className="text-sky-100/60">{label}</dt><dd className="break-all whitespace-pre-wrap text-sky-50">{value}</dd></dl>
+                      )}</div>
                       {dappEvmSignPreview.warnings.map((warning) => (
                         <p key={warning} className="rounded border border-amber-300/20 bg-amber-300/10 p-2 text-xs text-amber-100">
                           {warning}
                         </p>
                       ))}
                       {dappEvmSignPreview.warnings.length > 0 && <label className="flex items-start gap-2 text-xs text-amber-100"><input type="checkbox" checked={dappRiskAcknowledged} onChange={event => setDappRiskAcknowledged(event.target.checked)} />我已核对以上签名内容，并了解未验证或未模拟的风险</label>}
-                      <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-all rounded bg-black/25 p-2 text-[11px] text-sky-50/80">
-                        {formatDappPayloadForDisplay(dappSignRequest.payload_json)}
-                      </pre>
+                      <DappRequestContent title={tf("features.dapp-store.fullRequestPayload", "完整请求参数")} value={formatDappPayloadForDisplay(dappSignRequest.payload_json)} expandLabel={tf("features.dapp-store.expandContent", "展开完整内容")} collapseLabel={tf("features.dapp-store.collapseContent", "收起")} />
                     </div>
                   )}
                 </div>
@@ -30664,33 +30664,10 @@ export default function Home() {
                   <div className="text-xs font-medium text-amber-100">
                     {tf("features.dapp-store.requestMessage", "待签名消息")}
                   </div>
-                  <pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-amber-50/90">
-                    {dappMessagePreview(dappSignRequest.message_base64)?.text ||
-                      tf("features.dapp-store.messagePreviewUnavailable", "无法预览消息内容")}
-                  </pre>
+                  <div className="mt-2"><DappRequestContent title={tf("features.dapp-store.requestMessage", "待签名消息")} value={dappMessagePreview(dappSignRequest.message_base64)?.text || tf("features.dapp-store.messagePreviewUnavailable", "无法预览消息内容")} expandLabel={tf("features.dapp-store.expandContent", "展开完整内容")} collapseLabel={tf("features.dapp-store.collapseContent", "收起")} /></div>
                 </div>
               )}
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => void rejectDappSignRequest()}
-                  disabled={dappSignBusy}
-                  className="rounded-lg bg-white/10 px-4 py-3 text-sm font-semibold hover:bg-white/20 disabled:opacity-50"
-                >
-                  {t("common.cancel")}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void approveDappSignRequest()}
-                  disabled={dappSignBusy}
-                  className="rounded-lg bg-gradient-to-r from-purple-500 to-pink-500 px-4 py-3 text-sm font-semibold hover:from-purple-600 hover:to-pink-600 disabled:opacity-50"
-                >
-                  {dappSignBusy ? t("common.processing") : tf("features.dapp-store.approve", "确认签名")}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+        </DappApprovalDialog>
       )}
       {sensitiveExport && (
         <div className="fixed inset-0 z-[210] flex items-end bg-black/70">

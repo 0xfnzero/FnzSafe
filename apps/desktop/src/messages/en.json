@@ -391,6 +391,9 @@
       "title": "Browser"
     },
     "dapp-store": {
+      "expandContent": "Show full content",
+      "collapseContent": "Collapse",
+      "fullRequestPayload": "Full request parameters",
       "title": "DApp Store",
       "currentWallet": "Current wallet",
       "noWallet": "Select a wallet first.",
