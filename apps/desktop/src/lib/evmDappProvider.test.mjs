@@ -115,3 +115,15 @@ test('an accidental Solana approval cannot become an EVM account',async()=>{
  assert.equal(wallet.selectedAddress,null);
  assert.deepEqual(Array.from(await wallet.request({method:'eth_accounts'})),[]);
 });
+
+test('switching EVM networks preserves the account and reauthorizes the new signing context',async()=>{
+ const {wallet,calls}=fixture();
+ await wallet.request({method:'eth_requestAccounts'});
+ await wallet.request({method:'wallet_switchEthereumChain',params:[{chainId:'0x1'}]});
+ assert.deepEqual(Array.from(await wallet.request({method:'eth_accounts'})),[account]);
+ assert.equal(wallet.selectedAddress,account);
+ await assert.rejects(wallet.request({method:'personal_sign',params:['0x6869',account]}),e=>e.code===4001);
+ const connects=calls.filter(c=>c.command==='dapp_submit_connect_request');
+ assert.deepEqual(connects.map(c=>c.args.expectedNetwork),['eip155:97','eip155:1']);
+ assert.equal(calls.find(c=>c.command==='dapp_submit_sign_request').args.expectedNetwork,'eip155:1');
+});
